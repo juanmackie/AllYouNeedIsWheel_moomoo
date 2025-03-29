@@ -623,6 +623,9 @@ function addOptionsTableEventListeners() {
                                 tickersData[ticker].putOtmPercentage = otmPercentage;
                                 console.log(`Updated ${ticker} put OTM% to ${otmPercentage}`);
                             }
+                            
+                            // Save OTM settings to localStorage
+                            saveOtmSettings();
                     }
                     
                     // Refresh options with the new OTM percentage
@@ -978,9 +981,33 @@ function addOtmInputEventListeners() {
                     tickersData[ticker].putOtmPercentage = otmPercentage;
                     console.log(`Updated ${ticker} put OTM% to ${otmPercentage}`);
                 }
+                
+                // Save OTM settings to localStorage
+                saveOtmSettings();
             }
         });
     });
+}
+
+/**
+ * Save OTM settings for all tickers to localStorage
+ */
+function saveOtmSettings() {
+    try {
+        const otmSettings = {};
+        Object.keys(tickersData).forEach(ticker => {
+            otmSettings[ticker] = {
+                callOtmPercentage: tickersData[ticker].callOtmPercentage || 10,
+                putOtmPercentage: tickersData[ticker].putOtmPercentage || 10,
+                putQuantity: tickersData[ticker].putQuantity || 1
+            };
+        });
+        
+        localStorage.setItem('otmSettings', JSON.stringify(otmSettings));
+        console.log('Saved OTM settings to localStorage:', otmSettings);
+    } catch (error) {
+        console.error('Error saving OTM settings:', error);
+    }
 }
 
 /**
@@ -997,6 +1024,9 @@ function addPutQtyInputEventListeners() {
             if (tickersData[ticker]) {
                 tickersData[ticker].putQuantity = newQty;
                 console.log(`Updated ${ticker} put quantity to ${newQty}`);
+                
+                // Save OTM settings to localStorage
+                saveOtmSettings();
             }
             
             // Update the rest of the row
@@ -1076,6 +1106,15 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
         const putTabWasActive = document.querySelector('#put-options-tab.active') !== null ||
                                document.querySelector('#put-options-section.active') !== null;
         console.log(`Put tab was active before refreshing ${ticker}:`, putTabWasActive);
+        
+        // Initialize tickersData for this ticker if it doesn't exist yet
+        if (!tickersData[ticker]) {
+            tickersData[ticker] = {
+                callOtmPercentage: 10,
+                putOtmPercentage: 10,
+                putQuantity: 1
+            };
+        }
         
         // Get OTM percentages for calls and puts
         const callOtmPercentage = tickersData[ticker]?.callOtmPercentage || 10;
@@ -1738,6 +1777,9 @@ function removeCustomTicker(ticker) {
             delete tickersData[ticker];
         }
         
+        // Save updated OTM settings to localStorage
+        saveOtmSettings();
+        
         // Update the table
         updateOptionsTable();
         showToast('info', 'Ticker Removed', `${ticker} has been removed from your custom puts list.`);
@@ -1767,6 +1809,9 @@ function excludePositionTicker(ticker) {
     if (tickersData[ticker]) {
         delete tickersData[ticker];
     }
+    
+    // Save updated OTM settings to localStorage
+    saveOtmSettings();
     
     // Update the table
     updateOptionsTable();
@@ -1848,9 +1893,8 @@ function showToast(type, title, message) {
 
 // Now in the initialize function, we need to load custom tickers
 function initialize() {
-    // ... existing code ...
     loadCustomTickers();
-    // ... existing code ...
+    loadOtmSettings();
 }
 
 /**
@@ -2247,6 +2291,9 @@ async function loadTickers() {
     } catch (error) {
         console.error('Error loading custom tickers:', error);
     }
+    
+    // Load saved OTM settings
+    loadOtmSettings();
 
     // Initialize the table structure first
     const optionsTableContainer = document.getElementById('options-table-container');
@@ -2596,4 +2643,32 @@ function displayEarningsSummary(summary) {
     
     // Append the earnings summary to the options table container
     optionsTableContainer.insertAdjacentHTML('beforeend', earningsSummaryHTML);
+}
+
+/**
+ * Load OTM settings from localStorage
+ */
+function loadOtmSettings() {
+    try {
+        const savedSettings = localStorage.getItem('otmSettings');
+        if (savedSettings) {
+            const settings = JSON.parse(savedSettings);
+            console.log('Loaded OTM settings from localStorage:', settings);
+            
+            // Apply settings to tickersData
+            Object.keys(settings).forEach(ticker => {
+                if (!tickersData[ticker]) {
+                    tickersData[ticker] = {};
+                }
+                
+                tickersData[ticker].callOtmPercentage = settings[ticker].callOtmPercentage || 10;
+                tickersData[ticker].putOtmPercentage = settings[ticker].putOtmPercentage || 10;
+                tickersData[ticker].putQuantity = settings[ticker].putQuantity || 1;
+                
+                console.log(`Applied saved settings for ${ticker}: Call OTM=${tickersData[ticker].callOtmPercentage}%, Put OTM=${tickersData[ticker].putOtmPercentage}%, Put Qty=${tickersData[ticker].putQuantity}`);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading OTM settings:', error);
+    }
 } 
