@@ -189,7 +189,7 @@ The application uses SQLite for storage. Two database files are maintained:
 
 ## License
 
-[MIT License](LICENSE)
+[Apache License 2.0](LICENSE)
 
 ## Acknowledgments
 
