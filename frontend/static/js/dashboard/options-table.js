@@ -412,7 +412,7 @@ function updateOptionsTable() {
             <div class="tab-pane fade ${putTabWasActive ? '' : 'show active'}" id="call-options-section" role="tabpanel" aria-labelledby="call-options-tab">
                 <div class="d-flex justify-content-end mb-2">
                     <button class="btn btn-sm btn-outline-success me-2" id="sell-all-calls">
-                        <i class="bi bi-check2-all"></i> Sell All
+                        <i class="bi bi-check2-all"></i> Add All
                     </button>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-calls">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Calls
@@ -454,7 +454,7 @@ function updateOptionsTable() {
                     </div>
                     <div>
                     <button class="btn btn-sm btn-outline-success me-2" id="sell-all-puts">
-                        <i class="bi bi-check2-all"></i> Sell All
+                        <i class="bi bi-check2-all"></i> Add All
                     </button>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Puts
@@ -725,7 +725,7 @@ function addOptionsTableEventListeners() {
     } catch (error) {
                     console.error('Error saving order:', error);
                 } finally {
-                    button.innerHTML = 'Sell';
+                    button.innerHTML = 'Add';
                     button.disabled = false;
                 }
             }
@@ -745,7 +745,7 @@ function addOptionsTableEventListeners() {
                     return;
                 }
                 
-                console.log('Sell all calls button clicked via delegation');
+                console.log('Add all calls button clicked via delegation');
                 try {
                     await sellAllOptions('CALL');
                     // Note: Button state and alerts are handled inside sellAllOptions
@@ -768,7 +768,7 @@ function addOptionsTableEventListeners() {
                     return;
                 }
                 
-                console.log('Sell all puts button clicked via delegation');
+                console.log('Add all puts button clicked via delegation');
                 try {
                     await sellAllOptions('PUT');
                     // Note: Button state and alerts are handled inside sellAllOptions
@@ -1385,7 +1385,7 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
 }
 
 /**
- * Sell all available options of a specific type
+ * Add all available options of a specific type
  * @param {string} optionType - The option type ('CALL' or 'PUT')
  * @returns {Promise<number>} - Number of successfully created orders
  */
@@ -1535,7 +1535,7 @@ async function sellAllOptions(optionType) {
     }
     
     // Log results
-    console.log(`Sell all ${optionType} orders results:`, {
+    console.log(`Add all ${optionType} orders results:`, {
         successful: successOrders.length,
         failed: failedOrders.length,
         successDetails: successOrders,
@@ -1548,7 +1548,7 @@ async function sellAllOptions(optionType) {
         
         // Reset the button state
         if (button) {
-            button.innerHTML = `<i class="bi bi-check2-all"></i> Sell All`;
+            button.innerHTML = `<i class="bi bi-check2-all"></i> Add All`;
             button.disabled = false;
         }
         
@@ -1557,7 +1557,7 @@ async function sellAllOptions(optionType) {
             showAlert(`Successfully created ${successOrders.length} ${optionType.toLowerCase()} option orders`, 'success');
             
             // Ensure the pending orders table is refreshed after successful orders
-            console.log('Refreshing pending orders table after successful sell all operation');
+            console.log('Refreshing pending orders table after successful add all operation');
             
             // Make multiple attempts to refresh pending orders to ensure it works
             // First immediate refresh
@@ -1584,12 +1584,12 @@ async function sellAllOptions(optionType) {
         
         // Reset the button state
         if (button) {
-            button.innerHTML = `<i class="bi bi-check2-all"></i> Sell All`;
+            button.innerHTML = `<i class="bi bi-check2-all"></i> Add All`;
             button.disabled = false;
         }
         
         // Show error alert
-        showAlert(`Error selling ${optionType.toLowerCase()} options: ${error.message}`, 'danger');
+        showAlert(`Error adding ${optionType.toLowerCase()} options: ${error.message}`, 'danger');
         
         return 0;
     }
@@ -2095,7 +2095,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     data-implied-volatility="${option.implied_volatility || 0}"
                     data-volume="${option.volume || 0}"
                     data-open-interest="${option.open_interest || 0}">
-                    <i class="bi bi-check-circle"></i> Sell
+                    <i class="bi bi-check-circle"></i> Add
                 </button>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
                     data-ticker="${ticker}" 
@@ -2167,7 +2167,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     data-implied-volatility="${option.implied_volatility || 0}"
                     data-volume="${option.volume || 0}"
                     data-open-interest="${option.open_interest || 0}">
-                    <i class="bi bi-check-circle"></i> Sell
+                    <i class="bi bi-check-circle"></i> Add
                 </button>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
                     data-ticker="${ticker}" 
@@ -2278,7 +2278,7 @@ async function loadTickers() {
             <div class="tab-pane fade ${putTabWasActive ? '' : 'show active'}" id="call-options-section" role="tabpanel" aria-labelledby="call-options-tab">
                 <div class="d-flex justify-content-end mb-2">
                     <button class="btn btn-sm btn-outline-success me-2" id="sell-all-calls">
-                        <i class="bi bi-check2-all"></i> Sell All
+                        <i class="bi bi-check2-all"></i> Add All
                     </button>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-calls">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Calls
@@ -2327,7 +2327,7 @@ async function loadTickers() {
                     </div>
                     <div>
                     <button class="btn btn-sm btn-outline-success me-2" id="sell-all-puts">
-                        <i class="bi bi-check2-all"></i> Sell All
+                        <i class="bi bi-check2-all"></i> Add All
                     </button>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Puts
