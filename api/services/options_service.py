@@ -38,10 +38,6 @@ class OptionsService:
         Reuses existing connection if already established.
         """
         try:
-            if not is_market_hours():
-                logger.info("Market is closed, skipping TWS connection")
-                return None
-            
             # If we already have a connected instance, just return it
             if self.connection is not None and self.connection.is_connected():
                 logger.debug("Reusing existing TWS connection")

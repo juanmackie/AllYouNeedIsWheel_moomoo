@@ -27,9 +27,6 @@ class PortfolioService:
         Ensure that the IB connection exists and is connected
         """
         try:
-            if not is_market_hours():
-                logger.info("Market is closed, skipping TWS connection")
-                return None
             if self.connection is None or not self.connection.is_connected():
                 # Generate a unique client ID based on current timestamp and random number
                 # to avoid conflicts with other connections
