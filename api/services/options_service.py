@@ -7,10 +7,10 @@ import logging
 import math
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as datetime_time
 import pandas as pd
 from core.connection import IBConnection, Option, Stock, suppress_ib_logs
-from core.utils import get_closest_friday, get_next_monthly_expiration, get_strikes_around_price
+from core.utils import get_closest_friday, get_next_monthly_expiration, is_market_hours
 from config import Config
 from db.database import OptionsDatabase
 import traceback
@@ -38,6 +38,10 @@ class OptionsService:
         Reuses existing connection if already established.
         """
         try:
+            if not is_market_hours():
+                logger.info("Market is closed, skipping TWS connection")
+                return None
+            
             # If we already have a connected instance, just return it
             if self.connection is not None and self.connection.is_connected():
                 logger.debug("Reusing existing TWS connection")
@@ -493,7 +497,7 @@ class OptionsService:
       
     def get_otm_options(self, ticker=None, otm_percentage=10, option_type=None):
         """
-        Get out-of-the-money options based on percentage
+        Get option data based on OTM percentage from current price.
         
         Args:
             ticker (str, optional): Stock ticker symbol
@@ -515,7 +519,7 @@ class OptionsService:
         if not conn:
             logger.error("Failed to establish connection to IB")
         
-        is_market_open = conn._is_market_hours() if conn and conn.is_connected() else False
+        is_market_open = is_market_hours()
         # If no tickers provided, get them from portfolio
         tickers = [ticker]
         if not tickers:

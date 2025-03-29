@@ -11,8 +11,9 @@ import json
 import threading
 import traceback
 from typing import Optional, Dict, Any
-from datetime import datetime, time as datetime_time
+from datetime import datetime
 import pytz
+from core.utils import is_market_hours
 
 # Import ib_insync
 from ib_insync import IB, Stock, Option, Contract, util
@@ -408,7 +409,7 @@ class IBConnection:
             ConnectionError: If connection fails during market hours
             ValueError: If no data available during market hours
         """
-        is_market_open = self._is_market_hours()
+        is_market_open = is_market_hours()
         
         if not self.is_connected():
             if is_market_open:
@@ -686,26 +687,6 @@ class IBConnection:
             'positions': positions,
             'is_mock': True
         }
-
-    def _is_market_hours(self):
-        """
-        Check if it's currently market hours (9:30 AM to 4:00 PM ET, Monday to Friday).
-        Returns: True if it's market hours, False otherwise.
-        """
-        # Get the current time in ET
-        eastern = pytz.timezone('US/Eastern')
-        now = datetime.now(eastern)
-        
-        # Check if it's a weekend
-        if now.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-            return False
-        
-        # Check if it's before market open or after market close
-        market_open = datetime_time(9, 30)
-        market_close = datetime_time(16, 0)
-        
-        current_time = now.time()
-        return market_open <= current_time <= market_close
 
     def create_option_contract(self, symbol, expiry, strike, option_type, exchange='SMART', currency='USD'):
         """

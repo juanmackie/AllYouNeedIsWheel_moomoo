@@ -7,8 +7,9 @@ import logging
 import random
 import time
 from core.connection import IBConnection
-from core.utils import print_stock_summary
+from core.utils import is_market_hours, print_stock_summary
 from config import Config
+import traceback
 
 logger = logging.getLogger('api.services.portfolio')
 
@@ -26,6 +27,9 @@ class PortfolioService:
         Ensure that the IB connection exists and is connected
         """
         try:
+            if not is_market_hours():
+                logger.info("Market is closed, skipping TWS connection")
+                return None
             if self.connection is None or not self.connection.is_connected():
                 # Generate a unique client ID based on current timestamp and random number
                 # to avoid conflicts with other connections
@@ -58,7 +62,7 @@ class PortfolioService:
         
     def get_portfolio_summary(self):
         """
-        Get a summary of the current portfolio
+        Get account summary information including cash balance and account value
         
         Returns:
             dict: Portfolio summary data
@@ -66,483 +70,317 @@ class PortfolioService:
         try:
             conn = self._ensure_connection()
             if not conn:
-                logger.error("Failed to establish connection to TWS")
-                return {
-                    'account_value': 0,
-                    'buying_power': 0,
-                    'cash_balance': 0,
-                    'excess_liquidity': 0,
-                    'initial_margin': 0,
-                    'maintenance_margin': 0,
-                    'leverage_percentage': 0,
-                    'positions_count': 0,
-                    'stock_positions_count': 0,
-                    'option_positions_count': 0,
-                    'unrealized_pnl': 0,
-                    'realized_pnl': 0,
-                    'daily_pnl': 0,
-                    'error': 'Failed to connect to TWS'
-                }
-                
-            # Get portfolio data using the correct method
-            portfolio_data = conn.get_portfolio()
+                logger.warning("No connection available for portfolio summary. Using mock data.")
+                return self._generate_mock_portfolio_summary()
             
-            if not portfolio_data:
-                logger.error("Failed to retrieve portfolio data")
-                return {
-                    'account_value': 0,
-                    'buying_power': 0,
-                    'cash_balance': 0,
-                    'excess_liquidity': 0,
-                    'initial_margin': 0,
-                    'maintenance_margin': 0,
-                    'leverage_percentage': 0,
-                    'positions_count': 0,
-                    'stock_positions_count': 0,
-                    'option_positions_count': 0,
-                    'unrealized_pnl': 0,
-                    'realized_pnl': 0,
-                    'daily_pnl': 0,
-                    'error': 'Failed to retrieve portfolio data'
-                }
+            portfolio = conn.get_portfolio()
             
-            # Calculate total unrealized and realized PnL for all positions
-            positions = portfolio_data.get('positions', {})
-            
-            # Count positions by type
-            stock_positions = [pos for pos in positions.values() if pos.get('security_type') == 'STK']
-            option_positions = [pos for pos in positions.values() if pos.get('security_type') == 'OPT']
-            
-            # Calculate PnL
-            unrealized_pnl = sum(pos.get('unrealized_pnl', 0) for pos in positions.values())
-            realized_pnl = sum(pos.get('realized_pnl', 0) for pos in positions.values())
-            
-            # Log the counts
-            logger.info(f"Portfolio summary: {len(stock_positions)} stock positions, {len(option_positions)} option positions")
-            
-            # Get account value and cash
-            account_value = portfolio_data.get('account_value', 0)
-            cash_balance = portfolio_data.get('available_cash', 0)
-            
-            # Try to get daily PnL from TWS account summary
-            try:
-                # Get account summary data from TWS if available
-                account_id = portfolio_data.get('account_id', 'Unknown')
-                daily_pnl = 0
-                excess_liquidity = 0
-                initial_margin = 0
-                maintenance_margin = 0
-                
-                # Try to get the daily PnL from TWS account summary if connection is active
-                if conn and conn.is_connected():
-                    account_values = conn.ib.accountSummary(account_id)
-                    
-                    # Process each account value from TWS
-                    for av in account_values:
-                        if av.tag == 'DayPnL':
-                            daily_pnl = float(av.value)
-                            # IMPORTANT: TWS returns DayPnL with the correct sign (negative for losses)
-                            # Don't invert the sign - preserve it exactly as TWS reports it
-                            logger.info(f"Found Day PnL from TWS: {daily_pnl} (raw value)")
-                            
-                            # Calculate as percentage of account value
-                            if account_value > 0:
-                                daily_pnl_percent = (daily_pnl / account_value) * 100
-                                logger.info(f"Calculated daily P&L percentage: {daily_pnl_percent}% (using account value {account_value})")
-                            else:
-                                daily_pnl_percent = 0
-                        elif av.tag == 'ExcessLiquidity':
-                            excess_liquidity = float(av.value)
-                            logger.info(f"Found Excess Liquidity from TWS: {excess_liquidity}")
-                        elif av.tag == 'InitMarginReq':
-                            initial_margin = float(av.value)
-                            logger.info(f"Found Initial Margin from TWS: {initial_margin}")
-                        elif av.tag == 'MaintMarginReq':
-                            maintenance_margin = float(av.value)
-                            logger.info(f"Found Maintenance Margin from TWS: {maintenance_margin}")
-                    
-                    # If DayPnL wasn't found, use unrealized PnL as fallback but log a warning
-                    if daily_pnl == 0:
-                        logger.warning("DayPnL not found in TWS account summary, using unrealized PnL as fallback")
-                        daily_pnl_percent = 0  # Use 0 as fallback
-                        if account_value > 0:
-                            daily_pnl_percent = (unrealized_pnl / account_value) * 100
-                            
-                    # Fallback calculations for margin values if not found in TWS
-                    if excess_liquidity == 0:
-                        logger.warning("ExcessLiquidity not found in TWS account summary, using estimate as fallback")
-                        excess_liquidity = cash_balance * 0.9  # Estimate excess liquidity as 90% of cash
-                        
-                    # Calculate total value of positions for fallback calculations
-                    total_position_value = sum(pos.get('market_value', 0) for pos in positions.values())
-                    
-                    if initial_margin == 0:
-                        logger.warning("InitMarginReq not found in TWS account summary, using estimate as fallback")
-                        initial_margin = total_position_value * 0.2  # Assume 20% margin requirement
-                        
-                    if maintenance_margin == 0:
-                        logger.warning("MaintMarginReq not found in TWS account summary, using estimate as fallback")
-                        maintenance_margin = total_position_value * 0.15  # Assume 15% maintenance requirement
-                else:
-                    logger.warning("Not connected to TWS, can't get account values")
-                    daily_pnl_percent = 0
-                    
-                    # Perform fallback calculations when not connected
-                    excess_liquidity = cash_balance * 0.9  # Estimate excess liquidity as 90% of cash
-                    
-                    # Calculate total value of positions
-                    total_position_value = sum(pos.get('market_value', 0) for pos in positions.values())
-                    
-                    # Estimate margin values
-                    initial_margin = total_position_value * 0.2  # Assume 20% margin requirement
-                    maintenance_margin = total_position_value * 0.15  # Assume 15% maintenance requirement
-            except Exception as e:
-                logger.error(f"Error getting account values: {str(e)}")
-                daily_pnl_percent = 0
-                if account_value > 0:
-                    daily_pnl_percent = (unrealized_pnl / account_value) * 100
-                    
-                # Fallback calculations in case of error
-                excess_liquidity = cash_balance * 0.9  # Estimate excess liquidity as 90% of cash
-                
-                # Calculate total value of positions
-                total_position_value = sum(pos.get('market_value', 0) for pos in positions.values())
-                
-                # Estimate margin values
-                initial_margin = total_position_value * 0.2  # Assume 20% margin requirement
-                maintenance_margin = total_position_value * 0.15  # Assume 15% maintenance requirement
-            
-            # Calculate leverage percentage correctly: (Initial Margin / Total Portfolio Value) * 100
-            leverage_percentage = 0
-            if account_value > 0:
-                leverage_percentage = (initial_margin / account_value) * 100
-            
-            # Transform data for API response
-            result = {
-                'account_id': portfolio_data.get('account_id', 'Unknown'),
-                'account_value': account_value,
-                'buying_power': cash_balance * 2,  # Estimate buying power as 2x cash
-                'cash_balance': cash_balance,
-                'excess_liquidity': excess_liquidity,
-                'initial_margin': initial_margin,
-                'maintenance_margin': maintenance_margin,
-                'leverage_percentage': leverage_percentage,
-                'positions_count': len(positions),
-                'stock_positions_count': len(stock_positions),
-                'option_positions_count': len(option_positions),
-                'unrealized_pnl': unrealized_pnl,
-                'realized_pnl': realized_pnl,
-                'daily_pnl': daily_pnl_percent,
-                'daily_pnl_dollar': daily_pnl  # Include the raw dollar value for debugging
-            }
-            
-            return result
-        except Exception as e:
-            logger.error(f"Error in get_portfolio_summary: {str(e)}")
-            # Return a default structure with error information
+            # Extract the relevant information
             return {
-                'account_value': 0,
-                'buying_power': 0,
-                'cash_balance': 0,
-                'excess_liquidity': 0,
-                'initial_margin': 0,
-                'maintenance_margin': 0,
-                'leverage_percentage': 0,
-                'positions_count': 0,
-                'stock_positions_count': 0,
-                'option_positions_count': 0,
-                'unrealized_pnl': 0,
-                'realized_pnl': 0,
-                'daily_pnl': 0,
-                'error': str(e)
+                'account_id': portfolio.get('account_id', ''),
+                'cash_balance': portfolio.get('available_cash', 0),
+                'account_value': portfolio.get('account_value', 0),
+                'is_mock': portfolio.get('is_mock', True)
             }
-        
-    def get_positions(self, position_type=None):
+        except Exception as e:
+            logger.error(f"Error getting portfolio summary: {e}")
+            logger.error(traceback.format_exc())
+            # Return mock data on error
+            return self._generate_mock_portfolio_summary()
+    
+    def _generate_mock_portfolio_summary(self):
         """
-        Get current portfolio positions
+        Generate mock portfolio summary data
+        
+        Returns:
+            dict: Mock portfolio summary
+        """
+        logger.info("Generating mock portfolio summary data")
+        
+        # Create consistent mock portfolio data
+        account_id = "U1234567"
+        cash_balance = 1000000.00  # $1M cash
+        
+        # Add some stock positions value (like we have in the mock portfolio)
+        nvda_price = 900.0
+        nvda_position = 5000
+        nvda_value = nvda_price * nvda_position
+        
+        # Add some option values
+        options_value = 25000.00  # Value of option positions
+        
+        # Total account value
+        account_value = cash_balance + nvda_value + options_value
+        
+        # Return mock summary
+        return {
+            'account_id': account_id,
+            'cash_balance': cash_balance,
+            'account_value': account_value,
+            'is_mock': True
+        }
+    
+    def get_positions(self, security_type=None):
+        """
+        Get portfolio positions, optionally filtered by security type
         
         Args:
-            position_type (str, optional): Filter positions by type. Options: 'STK' for stocks, 
-                                          'OPT' for options, None for all positions
-        
+            security_type (str, optional): Filter by security type (e.g., 'STK', 'OPT')
+            
         Returns:
-            list: List of portfolio positions
+            list: List of position dictionaries
         """
         try:
             conn = self._ensure_connection()
             if not conn:
-                logger.error("Failed to establish connection to TWS")
-                return []
+                logger.warning("No connection available for positions. Using mock data.")
+                return self._generate_mock_positions(security_type)
+            
+            # Get portfolio data from IB connection
+            portfolio = conn.get_portfolio()
+            positions = portfolio.get('positions', {})
+            
+            # Convert positions dict to list format expected by the API
+            positions_list = []
+            for key, pos in positions.items():
+                contract = pos.get('contract')
+                if not contract:
+                    continue
                 
-            # Get portfolio data using the correct method
-            portfolio_data = conn.get_portfolio()
+                # Skip if filtering by security type and this doesn't match
+                pos_type = pos.get('security_type', '')
+                if security_type and pos_type != security_type:
+                    continue
+                
+                # Build position dictionary
+                position_data = {
+                    'symbol': contract.symbol if hasattr(contract, 'symbol') else '',
+                    'position': pos.get('shares', 0),
+                    'market_price': pos.get('market_price', 0),
+                    'market_value': pos.get('market_value', 0),
+                    'avg_cost': pos.get('avg_cost', 0),
+                    'unrealized_pnl': pos.get('unrealized_pnl', 0),
+                    'security_type': pos_type,
+                    'is_mock': portfolio.get('is_mock', False)
+                }
+                
+                # Add option-specific fields if this is an option
+                if pos_type == 'OPT' and hasattr(contract, 'lastTradeDateOrContractMonth') and hasattr(contract, 'strike') and hasattr(contract, 'right'):
+                    position_data.update({
+                        'expiration': contract.lastTradeDateOrContractMonth,
+                        'strike': contract.strike,
+                        'option_type': 'CALL' if contract.right == 'C' else 'PUT'
+                    })
+                
+                positions_list.append(position_data)
             
-            if not portfolio_data:
-                logger.error("Failed to retrieve portfolio data")
-                return []
-            
-            # Transform to API response format
-            result = []
-            positions = portfolio_data.get('positions', {})
-            
-            stock_count = 0
-            option_count = 0
-            other_count = 0
-            
-            logger.info(f"Processing positions with filter: {position_type or 'ALL'}")
-            
-            for position_key, pos in positions.items():
-                try:
-                    # Get security type
-                    security_type = pos.get('security_type')
-                    
-                    # Apply filter if provided
-                    if position_type and security_type != position_type:
-                        continue
-                    
-                    # Create position data based on security type
-                    if security_type == 'STK':
-                        stock_count += 1
-                        if hasattr(pos, 'contract'):  # This is a raw IB position object
-                            position_data = {
-                                'symbol': pos.contract.symbol,
-                                'position': float(pos.position),
-                                'market_price': float(pos.marketPrice),
-                                'market_value': float(pos.marketValue),
-                                'average_cost': float(pos.averageCost),
-                                'unrealized_pnl': float(pos.unrealizedPNL),
-                                'realized_pnl': float(pos.realizedPNL),
-                                'account_name': portfolio_data.get('account_id', 'Unknown'),
-                                'security_type': 'STK'
-                            }
-                        else:  # This is our dictionary format
-                            contract = pos.get('contract')
-                            position_data = {
-                                'symbol': contract.symbol if contract else position_key.split('_')[0],
-                                'position': float(pos.get('shares', 0)),
-                                'market_price': float(pos.get('market_price', 0)),
-                                'market_value': float(pos.get('market_value', 0)),
-                                'average_cost': float(pos.get('avg_cost', 0)),
-                                'unrealized_pnl': float(pos.get('unrealized_pnl', 0)),
-                                'realized_pnl': float(pos.get('realized_pnl', 0)),
-                                'account_name': portfolio_data.get('account_id', 'Unknown'),
-                                'security_type': 'STK'
-                            }
-                    elif security_type == 'OPT':
-                        option_count += 1
-                        # Handle option positions
-                        if hasattr(pos, 'contract'):
-                            contract = pos.contract
-                            position_data = {
-                                'symbol': contract.symbol,
-                                'position': float(pos.position),
-                                'market_price': float(pos.marketPrice),
-                                'market_value': float(pos.marketValue),
-                                'average_cost': float(pos.averageCost),
-                                'unrealized_pnl': float(pos.unrealizedPNL),
-                                'realized_pnl': float(pos.realizedPNL),
-                                'account_name': portfolio_data.get('account_id', 'Unknown'),
-                                'security_type': 'OPT',
-                                'expiration': contract.lastTradeDateOrContractMonth,
-                                'strike': float(contract.strike),
-                                'right': contract.right,
-                                'option_type': 'CALL' if contract.right == 'C' else 'PUT'
-                            }
-                        else:
-                            contract = pos.get('contract')
-                            # Parse position key for option details if contract is missing
-                            if contract:
-                                option_data = {
-                                    'symbol': contract.symbol,
-                                    'expiration': contract.lastTradeDateOrContractMonth,
-                                    'strike': float(contract.strike),
-                                    'right': contract.right,
-                                    'option_type': 'CALL' if contract.right == 'C' else 'PUT'
-                                }
-                            else:
-                                # Try to parse from position key (fallback)
-                                parts = position_key.split('_')
-                                if len(parts) >= 4:
-                                    symbol = parts[0]
-                                    expiration = parts[1]
-                                    strike = float(parts[2])
-                                    right = parts[3]
-                                    option_data = {
-                                        'symbol': symbol,
-                                        'expiration': expiration,
-                                        'strike': strike,
-                                        'right': right,
-                                        'option_type': 'CALL' if right == 'C' else 'PUT'
-                                    }
-                                else:
-                                    # Can't determine option details
-                                    option_data = {
-                                        'symbol': position_key,
-                                        'expiration': 'Unknown',
-                                        'strike': 0.0,
-                                        'right': 'Unknown',
-                                        'option_type': 'Unknown'
-                                    }
-                            
-                            position_data = {
-                                'symbol': option_data['symbol'],
-                                'position': float(pos.get('shares', 0)),
-                                'market_price': float(pos.get('market_price', 0)),
-                                'market_value': float(pos.get('market_value', 0)),
-                                'average_cost': float(pos.get('avg_cost', 0)),
-                                'unrealized_pnl': float(pos.get('unrealized_pnl', 0)),
-                                'realized_pnl': float(pos.get('realized_pnl', 0)),
-                                'account_name': portfolio_data.get('account_id', 'Unknown'),
-                                'security_type': 'OPT',
-                                'expiration': option_data['expiration'],
-                                'strike': option_data['strike'],
-                                'right': option_data['right'],
-                                'option_type': option_data['option_type']
-                            }
-                    else:
-                        # Handle other security types if needed
-                        other_count += 1
-                        continue  # Skip other security types for now
-                    
-                    result.append(position_data)
-                        
-                except Exception as pos_error:
-                    logger.error(f"Error processing position {position_key}: {str(pos_error)}")
-                    # Continue with next position
-            
-            filter_msg = f" (filter: {position_type})" if position_type else ""
-            logger.info(f"Returning {stock_count} stock positions, {option_count} option positions, filtered out {other_count} other positions{filter_msg}")
-            return result
+            return positions_list
         except Exception as e:
-            logger.error(f"Error in get_positions: {str(e)}")
-            return []
+            logger.error(f"Error getting positions: {e}")
+            logger.error(traceback.format_exc())
+            # Return mock data on error
+            return self._generate_mock_positions(security_type)
+    
+    def _generate_mock_positions(self, security_type=None):
+        """
+        Generate mock position data, optionally filtered by security type
+        
+        Args:
+            security_type (str, optional): Filter by security type (e.g., 'STK', 'OPT')
             
+        Returns:
+            list: List of mock position dictionaries
+        """
+        logger.info(f"Generating mock positions data, security_type={security_type}")
+        
+        # Create list to hold mock positions
+        positions = []
+        
+        # Add a stock position for NVDA
+        nvda_stock = {
+            'symbol': 'NVDA',
+            'position': 5000,
+            'market_price': 900.0,
+            'market_value': 5000 * 900.0,
+            'avg_cost': 720.0,  # 20% lower than current price
+            'unrealized_pnl': 5000 * (900.0 - 720.0),
+            'security_type': 'STK',
+            'is_mock': True
+        }
+        
+        # Add if all positions requested or specifically stock positions
+        if not security_type or security_type == 'STK':
+            positions.append(nvda_stock)
+        
+        # Add some option positions
+        if not security_type or security_type == 'OPT':
+            # Generate an expiration date (next Friday)
+            from datetime import datetime, timedelta
+            today = datetime.now()
+            days_until_friday = (4 - today.weekday()) % 7
+            if days_until_friday == 0:  # If today is Friday
+                friday = today
+            else:
+                friday = today + timedelta(days=days_until_friday)
+            expiration = friday.strftime('%Y%m%d')
+            
+            # Add a NVDA short put position
+            nvda_put = {
+                'symbol': 'NVDA',
+                'position': -10,  # Short 10 contracts
+                'market_price': 15.50,
+                'market_value': -15.50 * 100 * 10,  # 10 contracts, 100 shares each
+                'avg_cost': 18.75,
+                'unrealized_pnl': (18.75 - 15.50) * 100 * 10,
+                'security_type': 'OPT',
+                'expiration': expiration,
+                'strike': 850.0,
+                'option_type': 'PUT',
+                'is_mock': True
+            }
+            positions.append(nvda_put)
+            
+            # Add a NVDA short call position
+            nvda_call = {
+                'symbol': 'NVDA',
+                'position': -5,  # Short 5 contracts
+                'market_price': 12.75,
+                'market_value': -12.75 * 100 * 5,  # 5 contracts, 100 shares each
+                'avg_cost': 14.25,
+                'unrealized_pnl': (14.25 - 12.75) * 100 * 5,
+                'security_type': 'OPT',
+                'expiration': expiration,
+                'strike': 950.0,
+                'option_type': 'CALL',
+                'is_mock': True
+            }
+            positions.append(nvda_call)
+        
+        return positions
+    
     def get_weekly_option_income(self):
         """
-        Get all short option positions in the portfolio that expire this coming Friday
-        and calculate potential income.
+        Get expected weekly income from option positions expiring this week
         
         Returns:
-            dict: Dictionary containing weekly option income data
+            dict: Weekly income summary and position details
         """
         try:
-            from datetime import datetime, timedelta
-            
-            # Connect to TWS
             conn = self._ensure_connection()
             if not conn:
-                logger.error("Failed to establish connection to TWS")
-                return {
-                    'positions': [],
-                    'total_income': 0,
-                    'positions_count': 0,
-                    'error': 'Failed to connect to TWS'
-                }
-                
-            # Get portfolio data
-            portfolio_data = conn.get_portfolio()
+                logger.warning("No connection available for weekly income. Using mock data.")
+                return self._generate_mock_weekly_option_income()
             
-            if not portfolio_data:
-                logger.error("Failed to retrieve portfolio data")
-                return {
-                    'positions': [],
-                    'total_income': 0,
-                    'positions_count': 0,
-                    'error': 'Failed to retrieve portfolio data'
-                }
+            # Get all positions from the portfolio
+            positions = self.get_positions('OPT')  # Just option positions
             
-            # Calculate this week's Friday date in YYYYMMDD format
+            # Filter for short option positions expiring this week
+            from datetime import datetime, timedelta
             today = datetime.now()
-            # 4 represents Friday (0 is Monday, 4 is Friday in Python's weekday)
+            # Calculate the end of the week (next Friday if today is after Friday)
             days_until_friday = (4 - today.weekday()) % 7
-            
-            # If today is Friday (days_until_friday == 0), use today
-            # Otherwise, calculate upcoming Friday
-            this_friday = today if days_until_friday == 0 else today + timedelta(days=days_until_friday)
+            this_friday = today + timedelta(days=days_until_friday)
             this_friday_str = this_friday.strftime('%Y%m%d')
             
-            logger.info(f"Looking for options expiring this Friday: {this_friday_str}")
-            
-            # Filter for short option positions expiring this Friday
-            positions = portfolio_data.get('positions', {})
-            weekly_options = []
+            # Filter positions expiring this week that are short options
+            weekly_positions = []
             total_income = 0
             
-            # Process each position
-            for position_key, pos in positions.items():
-                try:
-                    # Check if position is an option and is a short position (negative quantity)
-                    security_type = pos.get('security_type')
-                    position_value = float(pos.get('shares', 0))
+            for pos in positions:
+                # Skip if not a short position (negative position means short)
+                if pos.get('position', 0) >= 0:
+                    continue
                     
-                    # Only process short option positions (negative quantity)
-                    if security_type == 'OPT' and position_value < 0:
-                        # Get the contract object
-                        contract = pos.get('contract')
-                        
-                        if not contract:
-                            logger.warning(f"Option position {position_key} has no contract object, skipping")
-                            continue
-                        
-                        # Get expiration date
-                        expiration = contract.lastTradeDateOrContractMonth
-                            
-                        # Check if this option expires this Friday
-                        if expiration == this_friday_str:
-                            # Get average cost (premium collected per contract)
-                            avg_cost = float(pos.get('avg_cost', 0))
-                            num_contracts = abs(position_value)
-                            
-                            # Calculate income (premium per contract * number of contracts)
-                            # Note: NO multiplication by 100 as avg_cost is already per contract
-                            income = avg_cost * num_contracts
-                            
-                            # Get option details
-                            option_data = {
-                                'symbol': contract.symbol,
-                                'option_type': contract.right,
-                                'strike': float(contract.strike),
-                                'expiration': expiration,
-                                'position': num_contracts,  # Number of contracts (positive for display)
-                                'avg_cost': avg_cost,  # Premium per contract
-                                'current_price': float(pos.get('market_price', 0)),
-                                'income': income  # Total premium collected
-                            }
-                            
-                            # Calculate notional value for PUT options (this is the cash needed if assigned)
-                            if contract.right == 'P':
-                                # Notional value = strike price × number of contracts × 100 shares per contract
-                                notional_value = float(contract.strike) * num_contracts * 100
-                                option_data['notional_value'] = notional_value
-                                logger.debug(f"PUT option notional value if assigned: ${notional_value:.2f}")
-                            
-                            weekly_options.append(option_data)
-                            total_income += income
-                            
-                            logger.debug(f"Found option expiring this Friday: {contract.symbol} {contract.right} {contract.strike} - Income: ${income:.2f}")
-                except Exception as pos_error:
-                    logger.error(f"Error processing option position {position_key}: {str(pos_error)}")
-                    # Continue with next position
+                # Check if option expires this week
+                if pos.get('expiration') <= this_friday_str:
+                    # Calculate the income for this position
+                    # For short options, we receive premium, so we use absolute value
+                    contracts = abs(pos.get('position', 0))
+                    premium_per_contract = pos.get('avg_cost', 0) * 100  # Each contract is 100 shares
+                    income = premium_per_contract * contracts
+                    
+                    # Add income to total
+                    total_income += income
+                    
+                    # Add position details to the result
+                    weekly_positions.append({
+                        'symbol': pos.get('symbol', ''),
+                        'option_type': pos.get('option_type', ''),
+                        'strike': pos.get('strike', 0),
+                        'expiration': pos.get('expiration', ''),
+                        'position': pos.get('position', 0),
+                        'premium_per_contract': pos.get('avg_cost', 0),
+                        'income': income,
+                        'is_mock': pos.get('is_mock', False)
+                    })
             
-            # Calculate total notional value for all PUT options
-            total_put_notional = sum(opt.get('notional_value', 0) for opt in weekly_options if opt.get('option_type') == 'P')
-            logger.info(f"Total notional value for PUT options: ${total_put_notional:.2f}")
-            
-            logger.info(f"Found {len(weekly_options)} short option positions expiring this Friday with total income: ${total_income:.2f}")
-            
-            return {
-                'positions': weekly_options,
+            # Build result dictionary
+            result = {
+                'positions': weekly_positions,
                 'total_income': total_income,
-                'positions_count': len(weekly_options),
-                'this_friday': this_friday_str,
-                'total_put_notional': total_put_notional
+                'positions_count': len(weekly_positions),
+                'is_mock': any(pos.get('is_mock', False) for pos in weekly_positions)
             }
             
+            return result
         except Exception as e:
-            logger.error(f"Error in get_weekly_option_income: {str(e)}")
-            return {
-                'positions': [],
-                'total_income': 0,
-                'positions_count': 0,
-                'error': str(e)
+            logger.error(f"Error getting weekly option income: {e}")
+            logger.error(traceback.format_exc())
+            # Return mock data on error
+            return self._generate_mock_weekly_option_income()
+    
+    def _generate_mock_weekly_option_income(self):
+        """
+        Generate mock weekly option income data
+        
+        Returns:
+            dict: Mock weekly income data
+        """
+        logger.info("Generating mock weekly option income data")
+        
+        # Generate an expiration date (this Friday)
+        from datetime import datetime, timedelta
+        today = datetime.now()
+        days_until_friday = (4 - today.weekday()) % 7
+        if days_until_friday == 0:  # If today is Friday
+            friday = today
+        else:
+            friday = today + timedelta(days=days_until_friday)
+        expiration = friday.strftime('%Y%m%d')
+        
+        # Create mock short positions expiring this week
+        positions = [
+            {
+                'symbol': 'NVDA',
+                'option_type': 'PUT',
+                'strike': 850.0,
+                'expiration': expiration,
+                'position': -10,  # Short 10 contracts
+                'premium_per_contract': 18.75,
+                'income': 18.75 * 100 * 10,  # 10 contracts, 100 shares each
+                'is_mock': True
+            },
+            {
+                'symbol': 'NVDA',
+                'option_type': 'CALL',
+                'strike': 950.0,
+                'expiration': expiration,
+                'position': -5,  # Short 5 contracts
+                'premium_per_contract': 14.25,
+                'income': 14.25 * 100 * 5,  # 5 contracts, 100 shares each
+                'is_mock': True
             }
+        ]
+        
+        # Calculate total income
+        total_income = sum(pos['income'] for pos in positions)
+        
+        # Build result dictionary
+        result = {
+            'positions': positions,
+            'total_income': total_income,
+            'positions_count': len(positions),
+            'is_mock': True
+        }
+        
+        return result

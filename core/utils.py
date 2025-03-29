@@ -5,8 +5,9 @@ Utility functions for the autotrader package
 import os
 import glob
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as datetime_time
 import math
+import pytz
 
 # Configure logger
 logger = logging.getLogger('autotrader.utils')
@@ -310,24 +311,91 @@ def print_stock_summary(stock_data):
 
 def get_strikes_around_price(price, interval, num_strikes):
     """
-    Get a list of strike prices around a given price
+    Generate a list of strikes around a given price with specific interval
     
     Args:
-        price (float): Current price
+        price (float): The current price
         interval (float): Strike price interval
-        num_strikes (int): Number of strikes to return (in each direction)
+        num_strikes (int): Number of strikes to generate (half above, half below)
         
     Returns:
         list: List of strike prices
     """
-    # Round price to nearest interval
-    base_strike = round(price / interval) * interval
-    
-    # Generate strikes above and below
     strikes = []
-    for i in range(-num_strikes, num_strikes + 1):
-        strike = base_strike + (i * interval)
-        if strike > 0:
-            strikes.append(strike)
-            
-    return strikes 
+    
+    # Find the nearest strike below the current price
+    nearest_strike_below = math.floor(price / interval) * interval
+    
+    # Generate strikes below the price
+    for i in range(num_strikes // 2, 0, -1):
+        strikes.append(nearest_strike_below - (i * interval))
+    
+    # Add the nearest strike below
+    strikes.append(nearest_strike_below)
+    
+    # Generate strikes above the price
+    for i in range(1, num_strikes // 2 + 1):
+        strikes.append(nearest_strike_below + (i * interval))
+    
+    return strikes
+
+def is_market_hours(include_after_hours=False):
+    """
+    Check if the current time is within market hours.
+    
+    Standard market hours are 9:30 AM to 4:00 PM ET, Monday to Friday.
+    After hours trading is from 4:00 PM to 8:00 PM ET.
+    Pre-market trading is from 4:00 AM to 9:30 AM ET.
+    
+    Args:
+        include_after_hours (bool): Whether to consider after-hours and pre-market as market hours
+        
+    Returns:
+        bool: True if it's currently market hours, False otherwise
+        
+    Examples:
+        >>> # Check if it's regular market hours
+        >>> is_market_hours()
+        True
+        
+        >>> # Check if it's regular market hours or extended hours
+        >>> is_market_hours(include_after_hours=True)
+        True
+    """
+    # Get the current time in ET
+    eastern = pytz.timezone('US/Eastern')
+    now = datetime.now(eastern)
+    
+    # Check if it's a weekend
+    if now.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
+        return False
+    
+    # Current time
+    current_time = now.time()
+    
+    # Regular market hours check (9:30 AM to 4:00 PM ET)
+    market_open = datetime_time(9, 30)
+    market_close = datetime_time(16, 0)
+    
+    # Regular market hours
+    if market_open <= current_time <= market_close:
+        return True
+    
+    # If we're not including after-hours, then we're done
+    if not include_after_hours:
+        return False
+    
+    # Extended hours check
+    pre_market_open = datetime_time(4, 0)
+    after_hours_close = datetime_time(20, 0)
+    
+    # Pre-market (4:00 AM - 9:30 AM ET)
+    if pre_market_open <= current_time < market_open:
+        return True
+    
+    # After-hours (4:00 PM - 8:00 PM ET)
+    if market_close < current_time <= after_hours_close:
+        return True
+    
+    # Not market hours
+    return False 
