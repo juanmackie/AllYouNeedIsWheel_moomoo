@@ -120,6 +120,22 @@ The web interface consists of four main pages:
 3. **Options** (http://localhost:5000/options?ticker=SYMBOL): Option chain analysis
 4. **Recommendations** (http://localhost:5000/recommendations): Trade recommendations
 
+### Mock Data
+
+The application automatically uses mock data in the following scenarios:
+- When the market is closed (outside of 9:30 AM - 4:00 PM ET, Monday-Friday)
+- On weekends and market holidays
+- When no connection to Interactive Brokers TWS/IB Gateway is available
+- When API requests fail for any reason
+
+This ensures that the application remains functional for development, testing, and demonstration purposes even when real-time market data is unavailable. Mock data includes:
+- Portfolio summary with realistic account values
+- Stock positions (primarily NVDA)
+- Option positions with appropriate strikes and expiration dates
+- Weekly option income calculations
+
+Mock data is clearly labeled in the UI with an indicator showing "Mock Data" to avoid confusion with real trading data.
+
 ## Project Structure
 
 ```
