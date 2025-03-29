@@ -371,37 +371,105 @@ class OptionsService:
                     "error": "Missing option details (expiry, strike, or option_type)"
                 }, 400
                 
-            # Get limit price - direct access from flattened structure
+            # Get limit price with improved handling to avoid zero values
             try:
-                # Get bid and ask directly from order fields
-                bid = float(order.get('bid', 0))
-                ask = float(order.get('ask', 0))
+                # Log all price-related fields for diagnostic purposes
+                price_fields = {
+                    'bid': order.get('bid'),
+                    'ask': order.get('ask'),
+                    'last': order.get('last'),
+                    'premium': order.get('premium'),
+                    'strike': strike
+                }
+                logger.info(f"Price fields in order: {price_fields}")
                 
-                # Calculate appropriate limit price
+                # Get price values, with more thorough validation
+                bid = float(order.get('bid', 0) or 0)
+                ask = float(order.get('ask', 0) or 0)
+                last = float(order.get('last', 0) or 0)
+                premium = float(order.get('premium', 0) or 0)
+                
+                # If bid is zero or very low, try to get real-time price if market is open
+                if bid < 0.01 and is_market_hours() and conn and ticker and expiry and strike and option_type:
+                    logger.info(f"Bid price is zero or very low ({bid}). Attempting to get real-time market data.")
+                    try:
+                        # Create contract for the option
+                        contract = conn.create_option_contract(
+                            symbol=ticker,
+                            expiry=expiry,
+                            strike=float(strike),
+                            option_type=option_type
+                        )
+                        
+                        # Get real-time market data
+                        if contract:
+                            option_data = conn.get_option_market_data(contract)
+                            if option_data:
+                                logger.info(f"Retrieved real-time option data: {option_data}")
+                                # Update bid and ask if available
+                                if 'bid' in option_data and option_data['bid'] > 0:
+                                    bid = float(option_data['bid'])
+                                    logger.info(f"Updated bid from real-time data: {bid}")
+                                if 'ask' in option_data and option_data['ask'] > 0:
+                                    ask = float(option_data['ask'])
+                                    logger.info(f"Updated ask from real-time data: {ask}")
+                                if 'last' in option_data and option_data['last'] > 0:
+                                    last = float(option_data['last'])
+                                    logger.info(f"Updated last from real-time data: {last}")
+                    except Exception as e:
+                        logger.warning(f"Error getting real-time option data: {e}")
+                
+                # Calculate appropriate limit price using all available price information
+                logger.info(f"Calculating limit price from: bid={bid}, ask={ask}, last={last}, premium={premium}")
+                
                 if bid > 0 and ask > 0:
+                    # Use mid-price if both bid and ask are valid
                     limit_price = (bid + ask) / 2
+                    logger.info(f"Using mid-price between bid and ask: {limit_price}")
                 elif bid > 0:
+                    # Use bid if only bid is valid
                     limit_price = bid
+                    logger.info(f"Using bid price: {limit_price}")
                 elif ask > 0:
-                    limit_price = ask
+                    # Use 90% of ask if only ask is valid (more conservative)
+                    limit_price = ask * 0.9
+                    logger.info(f"Using 90% of ask price: {limit_price}")
+                elif last > 0:
+                    # Use last price if available
+                    limit_price = last
+                    logger.info(f"Using last price: {limit_price}")
+                elif premium > 0:
+                    # Use premium as fallback
+                    limit_price = premium
+                    logger.info(f"Using premium price: {limit_price}")
                 else:
-                    # Try premium as fallback
-                    premium = float(order.get('premium', 0))
-                    if premium > 0:
-                        limit_price = premium
-                    else:
-                        limit_price = 0.05
+                    # Last resort - calculate a minimum price based on strike
+                    # For safety, use at least 1% of strike price or $0.05, whichever is higher
+                    min_price_from_strike = max(float(strike) * 0.01, 0.05)
+                    limit_price = min_price_from_strike
+                    logger.warning(f"No valid price data found, using fallback minimum: {limit_price}")
                     
                 # Ensure minimum price and round properly
-                if limit_price < 0.01:
+                if limit_price < 0.05:
+                    logger.info(f"Limit price {limit_price} below minimum, using $0.05")
                     limit_price = 0.05
+                
+                # Round to nearest cent
                 limit_price = round(limit_price, 2)
                 
             except (ValueError, TypeError) as e:
                 logger.warning(f"Error calculating limit price: {e}. Using default.")
-                limit_price = 0.05
+                # Calculate a reasonable default based on strike price
+                try:
+                    # Use 1% of strike price or $0.05, whichever is higher
+                    default_price = max(float(strike) * 0.01, 0.05)
+                    limit_price = round(default_price, 2)
+                    logger.info(f"Using calculated default price: {limit_price}")
+                except:
+                    limit_price = 0.05
+                    logger.warning(f"Failed to calculate default price, using absolute minimum: {limit_price}")
             
-            logger.debug(f"Final limit price: {limit_price}")
+            logger.info(f"Final limit price for order execution: {limit_price}")
             
             # Create contract
             contract = conn.create_option_contract(
@@ -450,6 +518,7 @@ class OptionsService:
                 "filled": result.get('filled'),
                 "remaining": result.get('remaining'),
                 "avg_fill_price": result.get('avg_fill_price'),
+                "limit_price": limit_price,  # Store the calculated limit price
                 "is_mock": result.get('is_mock', False)
             }
             

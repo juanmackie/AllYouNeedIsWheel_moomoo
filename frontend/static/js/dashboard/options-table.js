@@ -82,6 +82,51 @@ async function refreshPendingOrders() {
 }
 
 /**
+ * Calculate premium based on bid and ask prices with proper fallbacks
+ * @param {string|number} bid - Bid price
+ * @param {string|number} ask - Ask price
+ * @param {string|number} last - Last price (fallback)
+ * @returns {number} - Calculated premium
+ */
+function calculatePremium(bid, ask, last) {
+    // Parse all inputs to ensure they're numbers
+    const bidNum = parseFloat(bid || 0);
+    const askNum = parseFloat(ask || 0);
+    const lastNum = parseFloat(last || 0);
+    
+    console.log(`Calculating premium - bid: ${bidNum}, ask: ${askNum}, last: ${lastNum}`);
+    
+    // Both bid and ask are valid - use midpoint
+    if (bidNum > 0 && askNum > 0) {
+        const midPrice = (bidNum + askNum) / 2;
+        console.log(`Using mid price for premium: ${midPrice}`);
+        return midPrice;
+    }
+    
+    // Only bid is valid
+    if (bidNum > 0) {
+        console.log(`Only bid is valid, using: ${bidNum}`);
+        return bidNum;
+    }
+    
+    // Only ask is valid
+    if (askNum > 0) {
+        console.log(`Only ask is valid, using: ${askNum}`);
+        return askNum;
+    }
+    
+    // Fallback to last price
+    if (lastNum > 0) {
+        console.log(`Using last price as fallback: ${lastNum}`);
+        return lastNum;
+    }
+    
+    // No valid price data, return minimum
+    console.log('No valid price data, using minimum 0.05');
+    return 0.05;
+}
+
+/**
  * Calculate the Out of The Money percentage
  * @param {number} strikePrice - The option strike price
  * @param {number} currentPrice - The current stock price
@@ -383,7 +428,7 @@ function updateOptionsTable() {
                                 <th>OTM %</th>
                                 <th>Strike</th>
                                 <th>Expiration</th>
-                                <th>Premium</th>
+                                <th>Mid Price</th>
                                 <th>Delta</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
@@ -425,7 +470,7 @@ function updateOptionsTable() {
                                 <th>OTM %</th>
                                 <th>Strike</th>
                                 <th>Expiration</th>
-                                <th>Premium</th>
+                                <th>Mid Price</th>
                                 <th>Delta</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
@@ -621,16 +666,46 @@ function addOptionsTableEventListeners() {
                     quantity: optionType === 'CALL' ? 
                         Math.floor(tickersData[ticker]?.data?.data?.[ticker]?.position / 100) || 1 :
                             (tickersData[ticker]?.putQuantity || 1),
-                        // Include additional data if available
-                        bid: button.dataset.bid || 0,
-                        ask: button.dataset.ask || 0,
-                        last: button.dataset.last || 0,
-                        delta: button.dataset.delta || 0,
-                        gamma: button.dataset.gamma || 0,
-                        theta: button.dataset.theta || 0,
-                        vega: button.dataset.vega || 0,
-                        implied_volatility: button.dataset.implied_volatility || 0
+                    // Include all price fields with proper fallbacks
+                    bid: parseFloat(button.dataset.bid || 0),
+                    ask: parseFloat(button.dataset.ask || 0),
+                    last: parseFloat(button.dataset.last || 0),
+                    // Calculate premium as mid price of bid and ask with fallbacks
+                    premium: calculatePremium(button.dataset.bid, button.dataset.ask, button.dataset.last),
+                    delta: parseFloat(button.dataset.delta || 0),
+                    gamma: parseFloat(button.dataset.gamma || 0),
+                    theta: parseFloat(button.dataset.theta || 0),
+                    vega: parseFloat(button.dataset.vega || 0),
+                    implied_volatility: parseFloat(button.dataset.implied_volatility || 0),
+                    // Add timestamp
+                    timestamp: new Date().toISOString(),
+                    // Add market data reference
+                    stock_price: tickersData[ticker]?.data?.data?.[ticker]?.stock_price || 0
                 };
+                
+                // Safety check for critical price fields
+                if (orderData.bid <= 0 && button.closest('tr')) {
+                    // Try to get data from the table row
+                    const row = button.closest('tr');
+                    const bidCell = row.querySelector('td[data-field="bid"]');
+                    const askCell = row.querySelector('td[data-field="ask"]');
+                    const lastCell = row.querySelector('td[data-field="last"]');
+                    
+                    if (bidCell) orderData.bid = parseFloat(bidCell.textContent) || orderData.bid;
+                    if (askCell) orderData.ask = parseFloat(askCell.textContent) || orderData.ask;
+                    if (lastCell) orderData.last = parseFloat(lastCell.textContent) || orderData.last;
+                    
+                    console.log(`Updated order price fields from table row - bid: ${orderData.bid}, ask: ${orderData.ask}, last: ${orderData.last}`);
+                }
+                
+                // Final sanity check - ensure we have some price reference
+                if (orderData.bid <= 0 && orderData.ask <= 0 && orderData.last <= 0 && orderData.premium <= 0) {
+                    console.warn('No valid price information for order - using fallback minimum price');
+                    // Use 1% of strike as a minimum
+                    orderData.premium = Math.max(orderData.strike * 0.01, 0.05);
+                }
+                
+                console.log('Submitting order with data:', orderData);
                 
                 try {
                     // Proceed directly without confirmation dialog
@@ -1379,20 +1454,52 @@ async function sellAllOptions(optionType) {
             quantity: optionType === 'CALL' ? 
                 Math.floor(sharesOwned / 100) : 
                     (tickerData.putQuantity || 1),
-                // Include additional data if available
-                bid: option.bid || 0,
-                ask: option.ask || 0,
-                last: option.last || 0,
-                delta: option.delta || 0,
-                gamma: option.gamma || 0,
-                theta: option.theta || 0,
-                vega: option.vega || 0,
-                implied_volatility: option.implied_volatility || 0
+                // Include all price fields with proper fallbacks
+                bid: parseFloat(button.dataset.bid || 0),
+                ask: parseFloat(button.dataset.ask || 0),
+                last: parseFloat(button.dataset.last || 0),
+                // Calculate premium as mid price of bid and ask with fallbacks
+                premium: calculatePremium(button.dataset.bid, button.dataset.ask, button.dataset.last),
+                delta: parseFloat(button.dataset.delta || 0),
+                gamma: parseFloat(button.dataset.gamma || 0),
+                theta: parseFloat(button.dataset.theta || 0),
+                vega: parseFloat(button.dataset.vega || 0),
+                implied_volatility: parseFloat(button.dataset.implied_volatility || 0),
+                // Add timestamp
+                timestamp: new Date().toISOString(),
+                // Add market data reference
+                stock_price: tickersData[ticker]?.data?.data?.[ticker]?.stock_price || 0
         };
         
-        console.log(`Order data:`, orderData);
+        // Safety check for critical price fields
+        if (orderData.bid <= 0 && button.closest('tr')) {
+            // Try to get data from the table row
+            const row = button.closest('tr');
+            const bidCell = row.querySelector('td[data-field="bid"]');
+            const askCell = row.querySelector('td[data-field="ask"]');
+            const lastCell = row.querySelector('td[data-field="last"]');
+            
+            if (bidCell) orderData.bid = parseFloat(bidCell.textContent) || orderData.bid;
+            if (askCell) orderData.ask = parseFloat(askCell.textContent) || orderData.ask;
+            if (lastCell) orderData.last = parseFloat(lastCell.textContent) || orderData.last;
+            
+            console.log(`Updated order price fields from table row - bid: ${orderData.bid}, ask: ${orderData.ask}, last: ${orderData.last}`);
+        }
+        
+        // Final sanity check - ensure we have some price reference
+        if (orderData.bid <= 0 && orderData.ask <= 0 && orderData.last <= 0 && orderData.premium <= 0) {
+            console.warn('No valid price information for order - using fallback minimum price');
+            // Use 1% of strike as a minimum
+            orderData.premium = Math.max(orderData.strike * 0.01, 0.05);
+        }
+        
+        console.log('Submitting order with data:', orderData);
         
         try {
+            // Proceed directly without confirmation dialog
+            button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+            button.disabled = true;
+            
             // Save the order
             const result = await saveOptionOrder(orderData);
             
@@ -1925,7 +2032,8 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         const maxContracts = Math.floor(sharesOwned / 100);
         
         // Calculate premium and return values
-        const premiumPerContract = (option.ask || 0) * 100; // Premium per contract (100 shares)
+        const midPrice = calculatePremium(option.bid, option.ask, option.last);
+        const premiumPerContract = midPrice * 100; // Use midPrice instead of option.ask
         const totalPremium = premiumPerContract * maxContracts;
         
         // Calculate return on capital
@@ -1951,7 +2059,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.expiration || 'N/A'}</td>
-            <td class="align-middle">${option.ask ? '$ ' + option.ask.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${maxContracts}</td>
             <td class="align-middle">$ ${totalPremium.toFixed(2)}</td>
@@ -1961,7 +2069,17 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     data-ticker="${ticker}" 
                     data-option-type="CALL" 
                     data-strike="${option.strike || 0}" 
-                    data-expiration="${option.expiration || ''}">
+                    data-expiration="${option.expiration || ''}"
+                    data-bid="${option.bid || 0}"
+                    data-ask="${option.ask || 0}"
+                    data-last="${option.last || 0}"
+                    data-delta="${option.delta || 0}"
+                    data-gamma="${option.gamma || 0}"
+                    data-theta="${option.theta || 0}"
+                    data-vega="${option.vega || 0}"
+                    data-implied-volatility="${option.implied_volatility || 0}"
+                    data-volume="${option.volume || 0}"
+                    data-open-interest="${option.open_interest || 0}">
                     <i class="bi bi-check-circle"></i> Sell
                 </button>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
@@ -1978,6 +2096,9 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     // For PUT options
     else {
         const putQuantity = tickerData.putQuantity || 1;
+        
+        // Calculate mid price between bid and ask
+        const midPrice = calculatePremium(option.bid, option.ask, option.last);
         
         row.innerHTML = `
             <td class="align-middle">
@@ -1998,7 +2119,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.expiration || 'N/A'}</td>
-            <td class="align-middle">${option.ask ? '$ ' + option.ask.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <input type="number" class="form-control form-control-sm put-qty-input" 
@@ -2007,10 +2128,10 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     min="1" max="100" step="1" style="width: 70px;">
             </td>
             <td class="align-middle total-premium">
-                $ ${((option.ask || 0) * 100 * putQuantity).toFixed(2)}
+                $ ${(midPrice * 100 * putQuantity).toFixed(2)}
             </td>
             <td class="align-middle return-on-cash">
-                ${(((option.ask || 0) * 100) / (option.strike || 1) * 100).toFixed(2)}%
+                ${((midPrice * 100) / (option.strike || 1) * 100).toFixed(2)}%
             </td>
             <td class="align-middle cash-required">
                 $ ${((option.strike || 0) * 100 * putQuantity).toFixed(2)}
@@ -2020,7 +2141,17 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     data-ticker="${ticker}" 
                     data-option-type="PUT" 
                     data-strike="${option.strike || 0}" 
-                    data-expiration="${option.expiration || ''}">
+                    data-expiration="${option.expiration || ''}"
+                    data-bid="${option.bid || 0}"
+                    data-ask="${option.ask || 0}"
+                    data-last="${option.last || 0}"
+                    data-delta="${option.delta || 0}"
+                    data-gamma="${option.gamma || 0}"
+                    data-theta="${option.theta || 0}"
+                    data-vega="${option.vega || 0}"
+                    data-implied-volatility="${option.implied_volatility || 0}"
+                    data-volume="${option.volume || 0}"
+                    data-open-interest="${option.open_interest || 0}">
                     <i class="bi bi-check-circle"></i> Sell
                 </button>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
@@ -2148,7 +2279,7 @@ async function loadTickers() {
                                 <th>OTM %</th>
                                 <th>Strike</th>
                                 <th>Expiration</th>
-                                <th>Premium</th>
+                                <th>Mid Price</th>
                                 <th>Delta</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
@@ -2197,7 +2328,7 @@ async function loadTickers() {
                                 <th>OTM %</th>
                                 <th>Strike</th>
                                 <th>Expiration</th>
-                                <th>Premium</th>
+                                <th>Mid Price</th>
                                 <th>Delta</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
