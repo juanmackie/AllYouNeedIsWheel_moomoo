@@ -82,20 +82,18 @@ def portfolio():
 @app.route('/options')
 def options():
     """
-    Render the options analysis page
+    Temporarily redirect options page to home
     """
-    # Get ticker from query params
-    ticker = request.args.get('ticker', None)
-    logger.info(f"Rendering options page with ticker: {ticker}")
-    return render_template('options.html', ticker=ticker)
+    logger.info("Options page accessed but currently unavailable - redirecting to home")
+    return redirect(url_for('index'))
 
 @app.route('/recommendations')
 def recommendations():
     """
-    Render the recommendations page
+    Temporarily redirect recommendations page to home
     """
-    logger.info("Rendering recommendations page")
-    return render_template('recommendations.html')
+    logger.info("Recommendations page accessed but currently unavailable - redirecting to home")
+    return redirect(url_for('index'))
 
 @app.errorhandler(404)
 def page_not_found(e):
