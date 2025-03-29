@@ -860,6 +860,21 @@ function addOptionsTableEventListeners() {
                     button.disabled = false;
                 }
             }
+            
+            // Handle delete ticker button click
+            if (event.target.classList.contains('delete-ticker') || 
+                event.target.closest('.delete-ticker')) {
+                
+                const button = event.target.classList.contains('delete-ticker') ? 
+                               event.target : 
+                               event.target.closest('.delete-ticker');
+                
+                const ticker = button.dataset.ticker;
+                if (ticker) {
+                    console.log(`Delete ticker button clicked for ${ticker}`);
+                    removeTicker(ticker);
+                }
+            }
         });
         
         // Mark container event listeners as initialized
