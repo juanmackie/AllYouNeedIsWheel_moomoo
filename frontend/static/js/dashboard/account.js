@@ -140,6 +140,13 @@ function populateStockPositionsTable(stockPositions) {
         return;
     }
     
+    // Sort positions by market value (descending)
+    stockPositions.sort((a, b) => {
+        const marketValueA = a.market_value || 0;
+        const marketValueB = b.market_value || 0;
+        return marketValueB - marketValueA;
+    });
+    
     // Add stock positions
     stockPositions.forEach(position => {
         const row = document.createElement('tr');
@@ -207,22 +214,11 @@ function populateOptionPositionsTable(optionPositions) {
         }
     });
     
-    // Sort each group by symbol, then by expiration, then by strike
+    // Sort each group by market value (descending)
     const sortOptions = (a, b) => {
-        // First by symbol
-        const symbolCompare = a.symbol.localeCompare(b.symbol);
-        if (symbolCompare !== 0) return symbolCompare;
-        
-        // Then by expiration
-        const expA = a.contract?.lastTradeDateOrContractMonth || a.expiration || '';
-        const expB = b.contract?.lastTradeDateOrContractMonth || b.expiration || '';
-        const expirationCompare = expA.localeCompare(expB);
-        if (expirationCompare !== 0) return expirationCompare;
-        
-        // Then by strike
-        const strikeA = a.contract?.strike || a.strike || 0;
-        const strikeB = b.contract?.strike || b.strike || 0;
-        return strikeA - strikeB;
+        const marketValueA = a.market_value || 0;
+        const marketValueB = b.market_value || 0;
+        return marketValueB - marketValueA;
     };
     
     callOptions.sort(sortOptions);
@@ -259,7 +255,9 @@ function addOptionsToTable(options, tableBody) {
         const row = document.createElement('tr');
         
         const avgCost = position.avg_cost || position.average_cost || 0;
-        const marketValue = position.market_value || 0;
+        const rawMarketValue = position.market_value || 0;
+        // For short options (negative position), show market value as positive
+        const marketValue = position.position < 0 ? Math.abs(rawMarketValue) : rawMarketValue;
         const unrealizedPnL = position.unrealized_pnl || 0;
         
         // Calculate the P&L percentage based on the position's cost basis
