@@ -2647,12 +2647,8 @@ function displayEarningsSummary(summary) {
                             <td width="14%" class="fw-bold text-success">Annual: ${formatPercentage(summary.projectedAnnualReturn)}</td>
                         </tr>
                         <tr>
-                            <td class="fw-bold">Portfolio:</td>
-                            <td>Stock: ${formatCurrency(summary.portfolioValue)}</td>
-                            <td>Cash: ${formatCurrency(summary.cashBalance)}</td>
-                            <td>CSP Requirement: ${formatCurrency(summary.totalPutExerciseCost)}</td>
-                            <td class="fw-bold">Annual Income:</td>
-                            <td colspan="2">${formatCurrency(summary.projectedAnnualEarnings)}</td>
+                            <td class="fw-bold">Projected Income:</td>
+                            <td colspan="6">${formatCurrency(summary.projectedAnnualEarnings)}</td>
                         </tr>
                     </tbody>
                 </table>
