@@ -22,12 +22,12 @@ async function initializePortfolio() {
             }
         }
         
-        // Add event listener for the refresh positions button
-        const refreshPositionsButton = document.getElementById('refresh-positions');
-        if (refreshPositionsButton) {
-            refreshPositionsButton.addEventListener('click', async () => {
+        // Add event listener for the global refresh button
+        const refreshPortfolioButton = document.getElementById('refresh-portfolio');
+        if (refreshPortfolioButton) {
+            refreshPortfolioButton.addEventListener('click', async () => {
                 await loadPositionsTable();
-                showAlert('Positions refreshed successfully', 'success');
+                showAlert('Portfolio refreshed successfully', 'success');
             });
         }
         

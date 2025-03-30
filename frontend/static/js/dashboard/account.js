@@ -97,23 +97,10 @@ function updateAccountSummary() {
 }
 
 /**
- * Populate positions table
+ * Populate positions tables
  */
 function populatePositionsTable() {
     if (!positionsData) return;
-    
-    const positionsTableBody = document.getElementById('positions-table-body');
-    if (!positionsTableBody) return;
-    
-    // Clear table
-    positionsTableBody.innerHTML = '';
-    
-    if (positionsData.length === 0) {
-        const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = '<td colspan="6" class="text-center">No positions found</td>';
-        positionsTableBody.appendChild(noDataRow);
-        return;
-    }
     
     // Debug log to see what data we're working with
     console.log('Position data received:', positionsData);
@@ -128,126 +115,197 @@ function populatePositionsTable() {
     console.log('Stock positions identified:', stockPositions.length);
     console.log('Option positions identified:', optionPositions.length);
     
-    // First, add stock positions with a header
-    if (stockPositions.length > 0) {
-        // Add a header row for stock positions
-        const stockHeader = document.createElement('tr');
-        stockHeader.className = 'table-primary';
-        stockHeader.innerHTML = `
-            <td colspan="6" class="fw-bold">Stock Positions (${stockPositions.length})</td>
-        `;
-        positionsTableBody.appendChild(stockHeader);
-        
-        // Add stock positions
-        stockPositions.forEach(position => {
-            const row = document.createElement('tr');
-            
-            const marketValue = position.market_value || 0;
-            const unrealizedPnL = position.unrealized_pnl || 0;
-            const unrealizedPnLPercent = position.unrealized_pnl_percent || 0;
-            
-            const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
-            
-            row.innerHTML = `
-                <td>${position.symbol}</td>
-                <td>${position.position}</td>
-                <td>${formatCurrency(position.average_cost || 0)}</td>
-                <td>${formatCurrency(position.market_price || 0)}</td>
-                <td>${formatCurrency(marketValue)}</td>
-                <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
-            `;
-            
-            positionsTableBody.appendChild(row);
-        });
+    // Populate stock positions table
+    populateStockPositionsTable(stockPositions);
+    
+    // Populate option positions table
+    populateOptionPositionsTable(optionPositions);
+}
+
+/**
+ * Populate stock positions table
+ * @param {Array} stockPositions - Array of stock positions
+ */
+function populateStockPositionsTable(stockPositions) {
+    const stockTableBody = document.getElementById('stock-positions-table-body');
+    if (!stockTableBody) return;
+    
+    // Clear table
+    stockTableBody.innerHTML = '';
+    
+    if (stockPositions.length === 0) {
+        const noDataRow = document.createElement('tr');
+        noDataRow.innerHTML = '<td colspan="6" class="text-center">No stock positions found</td>';
+        stockTableBody.appendChild(noDataRow);
+        return;
     }
     
-    // Then, add option positions with a header
-    if (optionPositions.length > 0) {
-        // Add a header row for option positions
-        const optionHeader = document.createElement('tr');
-        optionHeader.className = 'table-info';
-        optionHeader.innerHTML = `
-            <td colspan="6" class="fw-bold">Option Positions (${optionPositions.length})</td>
-        `;
-        positionsTableBody.appendChild(optionHeader);
+    // Add stock positions
+    stockPositions.forEach(position => {
+        const row = document.createElement('tr');
         
-        // Add option positions
-        optionPositions.forEach(position => {
-            const row = document.createElement('tr');
-            
-            const marketValue = position.market_value || 0;
-            const unrealizedPnL = position.unrealized_pnl || 0;
-            const unrealizedPnLPercent = position.unrealized_pnl_percent || 0;
-            
-            // For options, show contract details in symbol (expiration, strike, etc.)
-            let symbolDisplay = position.symbol;
-            if (position.contract && position.contract.right) {
-                const right = position.contract.right; // P for Put, C for Call
-                const strike = position.contract.strike || 0;
-                const expiry = position.contract.lastTradeDateOrContractMonth || '';
-                
-                symbolDisplay = `${position.symbol} ${expiry} ${strike} ${right === 'P' ? 'Put' : 'Call'}`;
-            }
-            
-            const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
-            
-            row.innerHTML = `
-                <td>${symbolDisplay}</td>
-                <td>${position.position}</td>
-                <td>${formatCurrency(position.average_cost || 0)}</td>
-                <td>${formatCurrency(position.market_price || 0)}</td>
-                <td>${formatCurrency(marketValue)}</td>
-                <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
-            `;
-            
-            positionsTableBody.appendChild(row);
-        });
+        const avgCost = position.avg_cost || position.average_cost || 0;
+        const marketValue = position.market_value || 0;
+        const unrealizedPnL = position.unrealized_pnl || 0;
+        
+        // Calculate the P&L percentage based on the position's cost basis
+        let unrealizedPnLPercent = 0;
+        const totalCostBasis = Math.abs(position.position) * avgCost;
+        if (totalCostBasis > 0) {
+            unrealizedPnLPercent = (unrealizedPnL / totalCostBasis) * 100;
+        }
+        
+        const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
+        
+        row.innerHTML = `
+            <td>${position.symbol}</td>
+            <td>${position.position}</td>
+            <td>${formatCurrency(avgCost)}</td>
+            <td>${formatCurrency(position.market_price || 0)}</td>
+            <td>${formatCurrency(marketValue)}</td>
+            <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
+        `;
+        
+        stockTableBody.appendChild(row);
+    });
+}
+
+/**
+ * Populate option positions table
+ * @param {Array} optionPositions - Array of option positions
+ */
+function populateOptionPositionsTable(optionPositions) {
+    const optionTableBody = document.getElementById('option-positions-table-body');
+    if (!optionTableBody) return;
+    
+    // Clear table
+    optionTableBody.innerHTML = '';
+    
+    if (optionPositions.length === 0) {
+        const noDataRow = document.createElement('tr');
+        noDataRow.innerHTML = '<td colspan="9" class="text-center">No option positions found</td>';
+        optionTableBody.appendChild(noDataRow);
+        return;
     }
     
-    // If no stocks or options were identified but we have positions data,
-    // show all positions as unclassified
-    if (stockPositions.length === 0 && optionPositions.length === 0 && positionsData.length > 0) {
-        const fallbackHeader = document.createElement('tr');
-        fallbackHeader.className = 'table-warning';
-        fallbackHeader.innerHTML = `
-            <td colspan="6" class="fw-bold">All Positions (${positionsData.length})</td>
-        `;
-        positionsTableBody.appendChild(fallbackHeader);
+    // Group options by type (CALL/PUT)
+    const callOptions = optionPositions.filter(position => {
+        if (position.contract && position.contract.right) {
+            return position.contract.right === 'C';
+        } else {
+            const optType = position.option_type || '';
+            return optType === 'CALL' || optType === 'C' || optType === 'Call';
+        }
+    });
+    
+    const putOptions = optionPositions.filter(position => {
+        if (position.contract && position.contract.right) {
+            return position.contract.right === 'P';
+        } else {
+            const optType = position.option_type || '';
+            return optType === 'PUT' || optType === 'P' || optType === 'Put';
+        }
+    });
+    
+    // Sort each group by symbol, then by expiration, then by strike
+    const sortOptions = (a, b) => {
+        // First by symbol
+        const symbolCompare = a.symbol.localeCompare(b.symbol);
+        if (symbolCompare !== 0) return symbolCompare;
         
-        // Show all positions without categorization
-        positionsData.forEach(position => {
-            const row = document.createElement('tr');
-            
-            // Try to display full option info if it looks like an option
-            let symbolDisplay = position.symbol;
-            if (position.contract && position.contract.right) {
-                const right = position.contract.right;
-                const strike = position.contract.strike || 0;
-                const expiry = position.contract.lastTradeDateOrContractMonth || '';
-                symbolDisplay = `${position.symbol} ${expiry} ${strike} ${right === 'P' ? 'Put' : 'Call'}`;
-            }
-            
-            const marketValue = position.market_value || 0;
-            const unrealizedPnL = position.unrealized_pnl || 0;
-            const unrealizedPnLPercent = position.unrealized_pnl_percent || 0;
-            
-            const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
-            
-            row.innerHTML = `
-                <td>${symbolDisplay}</td>
-                <td>${position.position}</td>
-                <td>${formatCurrency(position.average_cost || 0)}</td>
-                <td>${formatCurrency(position.market_price || 0)}</td>
-                <td>${formatCurrency(marketValue)}</td>
-                <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
-            `;
-            
-            positionsTableBody.appendChild(row);
-        });
+        // Then by expiration
+        const expA = a.contract?.lastTradeDateOrContractMonth || a.expiration || '';
+        const expB = b.contract?.lastTradeDateOrContractMonth || b.expiration || '';
+        const expirationCompare = expA.localeCompare(expB);
+        if (expirationCompare !== 0) return expirationCompare;
+        
+        // Then by strike
+        const strikeA = a.contract?.strike || a.strike || 0;
+        const strikeB = b.contract?.strike || b.strike || 0;
+        return strikeA - strikeB;
+    };
+    
+    callOptions.sort(sortOptions);
+    putOptions.sort(sortOptions);
+    
+    // Add CALL options with header if there are any
+    if (callOptions.length > 0) {
+        const callHeader = document.createElement('tr');
+        callHeader.className = 'table-primary';
+        callHeader.innerHTML = `<td colspan="9" class="fw-bold">CALL OPTIONS (${callOptions.length})</td>`;
+        optionTableBody.appendChild(callHeader);
+        
+        addOptionsToTable(callOptions, optionTableBody);
     }
     
-    // Remove the "no positions found" notices since they're not needed
-    // with our new fallback display for unclassified positions
+    // Add PUT options with header if there are any
+    if (putOptions.length > 0) {
+        const putHeader = document.createElement('tr');
+        putHeader.className = 'table-warning';
+        putHeader.innerHTML = `<td colspan="9" class="fw-bold">PUT OPTIONS (${putOptions.length})</td>`;
+        optionTableBody.appendChild(putHeader);
+        
+        addOptionsToTable(putOptions, optionTableBody);
+    }
+}
+
+/**
+ * Add options to the table
+ * @param {Array} options - Array of option positions
+ * @param {HTMLElement} tableBody - Table body element
+ */
+function addOptionsToTable(options, tableBody) {
+    options.forEach(position => {
+        const row = document.createElement('tr');
+        
+        const avgCost = position.avg_cost || position.average_cost || 0;
+        const marketValue = position.market_value || 0;
+        const unrealizedPnL = position.unrealized_pnl || 0;
+        
+        // Calculate the P&L percentage based on the position's cost basis
+        let unrealizedPnLPercent = 0;
+        const totalCostBasis = Math.abs(position.position) * avgCost;
+        if (totalCostBasis > 0) {
+            unrealizedPnLPercent = (unrealizedPnL / totalCostBasis) * 100;
+        }
+        
+        // Extract option details
+        let optionType = '-';
+        let strike = '-';
+        let expiry = '-';
+        
+        // Get option details from either contract object or direct properties
+        if (position.contract && position.contract.right) {
+            optionType = position.contract.right === 'P' ? 'PUT' : 'CALL';
+            strike = position.contract.strike ? formatCurrency(position.contract.strike) : '-';
+            expiry = position.contract.lastTradeDateOrContractMonth || '-';
+        } else {
+            // Try to get from direct properties
+            optionType = position.option_type || '-';
+            strike = position.strike ? formatCurrency(position.strike) : '-';
+            expiry = position.expiration || '-';
+        }
+        
+        // Convert price to per-contract (multiply by 100)
+        const perSharePrice = position.market_price || 0;
+        const perContractPrice = perSharePrice * 100;
+        
+        const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
+        
+        row.innerHTML = `
+            <td>${position.symbol}</td>
+            <td>${position.position}</td>
+            <td>${optionType}</td>
+            <td>${strike}</td>
+            <td>${expiry}</td>
+            <td>${formatCurrency(avgCost)}</td>
+            <td>${formatCurrency(perContractPrice)}</td>
+            <td>${formatCurrency(marketValue)}</td>
+            <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
+        `;
+        
+        tableBody.appendChild(row);
+    });
 }
 
 /**
