@@ -535,7 +535,10 @@ class IBConnection:
             account_info = {
                 'account_id': account_id,
                 'available_cash': 0,
-                'account_value': 0
+                'account_value': 0,
+                'excess_liquidity': 0,
+                'initial_margin': 0,
+                'leverage_percentage': 0
             }
             
             for av in account_values:
@@ -543,6 +546,14 @@ class IBConnection:
                     account_info['available_cash'] = float(av.value)
                 elif av.tag == 'NetLiquidation':
                     account_info['account_value'] = float(av.value)
+                elif av.tag == 'ExcessLiquidity':
+                    account_info['excess_liquidity'] = float(av.value)
+                elif av.tag == 'FullInitMarginReq':
+                    account_info['initial_margin'] = float(av.value)
+            
+            # Calculate leverage percentage
+            if account_info['account_value'] > 0 and account_info['initial_margin'] > 0:
+                account_info['leverage_percentage'] = (account_info['initial_margin'] / account_info['account_value']) * 100
             
             # Get positions
             portfolio = self.ib.portfolio()
@@ -607,6 +618,9 @@ class IBConnection:
                 'account_id': account_id,
                 'available_cash': account_info.get('available_cash', 0),
                 'account_value': account_info.get('account_value', 0),
+                'excess_liquidity': account_info.get('excess_liquidity', 0),
+                'initial_margin': account_info.get('initial_margin', 0),
+                'leverage_percentage': account_info.get('leverage_percentage', 0),
                 'positions': positions,
                 'is_frozen': not is_market_open  # Indicate if data is frozen
             }
@@ -733,6 +747,9 @@ class IBConnection:
             'available_cash': total_cash,
             'account_value': total_value,
             'positions': positions,
+            'excess_liquidity': total_cash * 0.7,  # Mock 70% of cash as excess liquidity
+            'initial_margin': total_value * 0.25,  # Mock 25% initial margin requirement
+            'leverage_percentage': 25.0,  # Mock 25% leverage percentage
             'is_mock': True
         }
 

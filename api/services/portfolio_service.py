@@ -76,6 +76,9 @@ class PortfolioService:
                 'account_id': portfolio.get('account_id', ''),
                 'cash_balance': portfolio.get('available_cash', 0),
                 'account_value': portfolio.get('account_value', 0),
+                'excess_liquidity': portfolio.get('excess_liquidity', 0),
+                'initial_margin': portfolio.get('initial_margin', 0),
+                'leverage_percentage': portfolio.get('leverage_percentage', 0),
                 'is_mock': portfolio.get('is_mock', True)
             }
         except Exception as e:
