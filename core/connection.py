@@ -70,7 +70,7 @@ class IBConnection:
         self.port = port
         self.client_id = client_id
         self.timeout = timeout
-        self.readonly = False
+        self.readonly = readonly
         self.ib = IB()
         self._connected = False
         

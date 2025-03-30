@@ -1234,11 +1234,11 @@ async function refreshAllOptions(optionType) {
         console.log("Put tab was active before refresh:", putTabWasActive);
         
         // Get list of tickers to refresh
-    const tickers = Object.keys(tickersData);
-    if (tickers.length === 0) {
+        let allTickers = Object.keys(tickersData);
+        if (allTickers.length === 0) {
             const tickersResult = await fetchTickers();
             if (tickersResult && tickersResult.tickers) {
-                tickers.push(...tickersResult.tickers);
+                allTickers.push(...tickersResult.tickers);
             }
         }
         
@@ -1254,17 +1254,43 @@ async function refreshAllOptions(optionType) {
             tableId = 'call-options-table'; // Default to call table for display purposes
             buttonId = 'refresh-all-options';
         }
+
+        // Filter tickers based on the table type
+        let tickersToRefresh = [];
         
-        console.log(`Refreshing ${optionType || 'all'} options for ${tickers.length} tickers`);
+        // Load excluded position tickers for PUT options
+        const excludedTickers = loadExcludedTickers();
+        
+        if (optionType === 'CALL') {
+            // For call options, only include tickers with sufficient shares
+            tickersToRefresh = allTickers.filter(ticker => {
+                const sharesOwned = tickersData[ticker]?.data?.data?.[ticker]?.position || 0;
+                return sharesOwned >= 100;
+            });
+            console.log(`Filtered tickers for CALL options: ${tickersToRefresh.length} out of ${allTickers.length}`);
+        } else if (optionType === 'PUT') {
+            // For put options, include custom tickers and tickers with shares that aren't excluded
+            tickersToRefresh = allTickers.filter(ticker => {
+                const sharesOwned = tickersData[ticker]?.data?.data?.[ticker]?.position || 0;
+                return customTickers.has(ticker) || 
+                       (sharesOwned >= 100 && !excludedTickers.includes(ticker));
+            });
+            console.log(`Filtered tickers for PUT options: ${tickersToRefresh.length} out of ${allTickers.length}`);
+        } else {
+            // If no specific option type, refresh all tickers
+            tickersToRefresh = allTickers;
+        }
+        
+        console.log(`Refreshing ${optionType || 'all'} options for ${tickersToRefresh.length} tickers`);
         
         // Process each ticker sequentially to provide visual feedback
-        for (let i = 0; i < tickers.length; i++) {
-            const ticker = tickers[i];
+        for (let i = 0; i < tickersToRefresh.length; i++) {
+            const ticker = tickersToRefresh[i];
             
             // Update the button text to show progress
             const button = document.getElementById(buttonId);
             if (button) {
-                const progressText = `Refreshing ${ticker} (${i+1}/${tickers.length})`;
+                const progressText = `Refreshing ${ticker} (${i+1}/${tickersToRefresh.length})`;
                 button.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> ${progressText}`;
             }
             
@@ -1319,7 +1345,7 @@ async function refreshAllOptions(optionType) {
         // Make sure event listeners are added
         addOptionsTableEventListeners();
         
-            } catch (error) {
+    } catch (error) {
         console.error(`Error refreshing ${optionType || 'all'} options:`, error);
         showAlert(`Error refreshing options: ${error.message}`, 'danger');
         
