@@ -9,7 +9,6 @@ from .utils import (
     rotate_reports, 
     get_closest_friday, 
     get_next_monthly_expiration,
-    print_stock_summary,
     format_currency,
     format_percentage,
     get_strikes_around_price
@@ -29,7 +28,6 @@ __all__ = [
     'setup_logging',
     'get_closest_friday',
     'get_next_monthly_expiration',
-    'print_stock_summary',
     'format_currency',
     'format_percentage',
     'get_strikes_around_price'

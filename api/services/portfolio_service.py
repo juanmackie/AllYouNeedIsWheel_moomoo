@@ -7,7 +7,6 @@ import logging
 import random
 import time
 from core.connection import IBConnection
-from core.utils import is_market_hours, print_stock_summary
 from config import Config
 import traceback
 

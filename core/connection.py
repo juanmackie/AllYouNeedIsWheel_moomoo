@@ -177,6 +177,18 @@ class IBConnection:
             # Ensure event loop exists for this thread
             self._ensure_event_loop()
             
+            # Determine if market is open and set data type accordingly
+            is_market_open = is_market_hours()
+            
+            if not is_market_open:
+                # Use frozen data when market is closed
+                logger.info(f"Market is closed. Setting market data type to FROZEN for stock {symbol}")
+                self.set_market_data_type(2)  # 2 = Frozen
+            else:
+                # Use live data when market is open
+                logger.info(f"Market is open. Setting market data type to LIVE for stock {symbol}")
+                self.set_market_data_type(1)  # 1 = Live
+            
             # Create a stock contract
             contract = Contract(symbol=symbol, secType='STK', exchange='SMART', currency='USD')
             
@@ -191,8 +203,10 @@ class IBConnection:
             # Request market data
             ticker = self.ib.reqMktData(qualified_contract)
             
-            # Wait for market data to be received
-            self.ib.sleep(0.2)
+            # Wait for market data to be received - wait a bit longer for frozen data
+            wait_time = 1.0 if not is_market_open else 0.2
+            self.ib.sleep(wait_time)
+            
             # Get the last price
             last_price = ticker.last if ticker.last else (ticker.close if ticker.close else None)
             bid_price = ticker.bid if ticker.bid else None
@@ -236,57 +250,129 @@ class IBConnection:
                 logger.error(f"Error getting {symbol} price: {error_msg}")
             return None
   
+    def set_market_data_type(self, data_type=1):
+        """
+        Set market data type for IB client
+        
+        Args:
+            data_type (int): Market data type
+                1 = Live
+                2 = Frozen
+                3 = Delayed
+                4 = Delayed frozen
+        
+        Returns:
+            bool: Success or failure
+        """
+        try:
+            if not self.is_connected():
+                logger.warning("Cannot set market data type - not connected")
+                return False
+                
+            logger.info(f"Setting market data type to {data_type}")
+            self.ib.reqMarketDataType(data_type)
+            return True
+        except Exception as e:
+            logger.error(f"Error setting market data type: {e}")
+            return False
+            
     def get_option_chain(self, symbol, expiration=None, right='C', target_strike=None, exchange='SMART'):
         """
-        Get option chain data for a stock, filtered to a specific expiration date and closest strike price
+        Get option chain for a given symbol, expiration, and right
         
         Args:
             symbol (str): Stock symbol
-            expiration (str): Target expiration date in YYYYMMDD format
-            right (str): Option right ('C' for call, 'P' for put)
-            target_strike (float, optional): Target strike price. If provided, returns only the option with the closest strike.
-            exchange (str): Exchange
+            expiration (str, optional): Option expiration date in YYYYMMDD format
+            right (str, optional): Option right - 'C' for calls, 'P' for puts
+            target_strike (float, optional): Specific strike price to look for
+            exchange (str, optional): Exchange to use
             
         Returns:
-            dict: Dictionary with option chain data including market data
+            dict: Option chain data or None if error
         """
-        if not self.is_connected():
-            logger.warning("Not connected to IB. Attempting to connect...")
-            if not self.connect():
-                return None
-            
-        # Get stock contract and price
-        stock = Stock(symbol, exchange, 'USD')
-        
         try:
-            # Qualify the stock contract
-            qualified_stocks = self.ib.qualifyContracts(stock)
-            if not qualified_stocks:
-                logger.error(f"Could not qualify stock contract for {symbol}")
+            if not self.is_connected():
+                logger.error(f"Cannot get option chain for {symbol} - not connected")
                 return None
             
-            stock_contract = qualified_stocks[0]
+            # Determine if market is open and set data type accordingly
+            is_market_open = is_market_hours()
             
-            # Get current stock price for reference
-            ticker = self.ib.reqMktData(stock_contract)
-            self.ib.sleep(0.2)
-            stock_price = ticker.last if hasattr(ticker, 'last') and ticker.last > 0 else ticker.close
-            self.ib.cancelMktData(stock_contract)
+            if not is_market_open:
+                # Use frozen data when market is closed
+                logger.info(f"Market is closed. Setting market data type to FROZEN for {symbol}")
+                self.set_market_data_type(2)  # 2 = Frozen
+            else:
+                # Use live data when market is open
+                logger.info(f"Market is open. Setting market data type to LIVE for {symbol}")
+                self.set_market_data_type(1)  # 1 = Live
             
-            logger.info(f"Current price for {symbol}: ${stock_price}")
-            # Request option chain
-            chains = self.ib.reqSecDefOptParams(stock_contract.symbol, '', stock_contract.secType, stock_contract.conId)
+            # Rest of the method remains the same...
+            stock = Stock(symbol, exchange, 'USD')
+            self.ib.qualifyContracts(stock)
+            
+            # Get stock price for reference
+            ticker = self.ib.reqMktData(stock)
+            self.ib.sleep(1)  # Wait for data
+            
+            stock_price = ticker.marketPrice()
+            if not stock_price or stock_price <= 0:
+                stock_price = ticker.last if hasattr(ticker, 'last') and ticker.last > 0 else None
+            if not stock_price or stock_price <= 0:
+                stock_price = ticker.close if hasattr(ticker, 'close') and ticker.close > 0 else None
+            
+            logger.info(f"Current price for {symbol}: {stock_price}")
+            
+            if not stock_price or stock_price <= 0:
+                logger.warning(f"Could not get valid price for {symbol}")
+                return None
+            
+            # Cancel the market data request
+            self.ib.cancelMktData(stock)
+            
+            # Get option chains to find expirations and strikes
+            chains = self.ib.reqSecDefOptParams(stock.symbol, '', stock.secType, stock.conId)
+            
             if not chains:
-                logger.error(f"No option chain found for {symbol}")
+                logger.error(f"No option chains found for {symbol}")
                 return None
+                
+            # Get the first exchange's data
+            chain = next((c for c in chains if c.exchange == exchange), chains[0])
             
-            chain = next((c for c in chains if c.exchange == exchange and expiration in c.expirations), None)
+            # If expiration not provided, get the next standard expiration
+            if not expiration:
+                # Find closest expiration to current date
+                if chain.expirations:
+                    today = datetime.now().strftime('%Y%m%d')
+                    valid_expirations = [exp for exp in chain.expirations if exp >= today]
+                    
+                    if valid_expirations:
+                        expiration = sorted(valid_expirations)[0]
+                        logger.info(f"Using expiration {expiration} for {symbol}")
+                    else:
+                        logger.error(f"No valid expirations found for {symbol}")
+                        return None
+                else:
+                    logger.error(f"No expirations found for {symbol}")
+                    return None
             
             if not chain:
                 logger.error(f"No option chain found for {symbol} on exchange {exchange}")
                 return None
             
-            strikes = chain.strikes
+            # Get strikes from the chain
+            strikes = chain.strikes if hasattr(chain, 'strikes') and chain.strikes else []
+            
+            # If no strikes available but target_strike provided, use that
+            if not strikes and target_strike is not None:
+                logger.warning(f"No strikes available for {symbol}, using provided target strike: {target_strike}")
+                strikes = [target_strike]
+            # If no strikes available and no target_strike, return error
+            elif not strikes:
+                logger.error(f"No strikes available for {symbol} and no target strike provided")
+                return None
+                
             # If target_strike is provided, find the closest strike
             if target_strike is not None and strikes:
                 logger.info(f"Finding strike closest to {target_strike} for {symbol}")
@@ -294,19 +380,22 @@ class IBConnection:
                 logger.info(f"Selected strike {closest_strike} (from {len(strikes)} available strikes)")
                 strikes = [closest_strike]
             
-            # Build option contracts
-            option_contracts = []
-            for strike in strikes:
-                option = Option(symbol, expiration, strike, right, exchange)
-                option.currency = 'USD'
-                option.multiplier = '100'  # Standard for equity options
-                option_contracts.append(option)
+            # Final check to ensure expiration is set
+            if not expiration:
+                logger.error(f"No expiration date available for {symbol}")
+                return None
                 
+            # Create option contract for each strike
+            option_contracts = []
             
-            # Get market data for the options
-            logger.info(f"Requesting market data for {len(option_contracts)} option contracts")
+            for strike in strikes:
+                contract = Option(symbol=symbol, lastTradeDateOrContractMonth=expiration, strike=strike, right=right, exchange=exchange, currency='USD')
+                option_contracts.append(contract)
             
-            # Initialize result structure
+            if not option_contracts:
+                logger.error(f"No option contracts created for {symbol}")
+                return None
+            # Get additional data for these contracts
             result = {
                 'symbol': symbol,
                 'expiration': expiration,  # Just use the first one since we're filtering
@@ -315,8 +404,7 @@ class IBConnection:
                 'options': []
             }
             
-            self.ib.reqMarketDataType(1)
-            
+            # Rest of the method remains the same...
             # Qualify and request market data for each option
             for contract in option_contracts:
                 try:
@@ -416,20 +504,32 @@ class IBConnection:
                 logger.error("Not connected to IB during market hours")
                 raise ConnectionError("Not connected to IB during market hours")
             else:
-                logger.info("Market is closed. Using mock portfolio data.")
-                return self._generate_mock_portfolio()
+                # Try to connect even when market is closed
+                logger.info("Market is closed, but trying to connect for frozen data")
+                if not self.connect():
+                    logger.info("Could not connect to IB during closed market. Using mock portfolio data.")
+                    return self._generate_mock_portfolio()
         
         try:
+            # Set market data type based on market hours
+            if not is_market_open:
+                # Use frozen data when market is closed
+                logger.info("Market is closed. Setting market data type to FROZEN for portfolio")
+                self.set_market_data_type(2)  # 2 = Frozen
+            else:
+                # Use live data when market is open
+                logger.info("Market is open. Setting market data type to LIVE for portfolio")
+                self.set_market_data_type(1)  # 1 = Live
+                
             # Get account summary
             account_id = self.ib.managedAccounts()[0]
             account_values = self.ib.accountSummary(account_id)
             
             if not account_values:
-                if is_market_open:
-                    raise ValueError("No account data available during market hours")
-                else:
-                    logger.info("No account data during closed market. Using mock portfolio data.")
-                    return self._generate_mock_portfolio()
+                logger.warning("No account data available")
+                # If we don't get account data, use mock portfolio data
+                logger.info("Using mock portfolio data as fallback")
+                return self._generate_mock_portfolio()
             
             # Extract relevant account information
             account_info = {
@@ -493,88 +593,36 @@ class IBConnection:
                 except Exception as e:
                     logger.error(f"Error processing position: {str(e)}")
             
-            logger.info(f"Processed {stock_count} stock positions, {option_count} option positions, and {other_count} other positions")
+            if is_market_open:
+                logger.info(f"Processed {stock_count} stock positions, {option_count} option positions, and {other_count} other positions")
+            else:
+                logger.info(f"Processed {stock_count} stock positions, {option_count} option positions, and {other_count} other positions using FROZEN data")
             
             if not positions:
-                if is_market_open:
-                    raise ValueError("No positions available during market hours")
-                else:
-                    logger.info("No positions found during closed market. Using mock portfolio data.")
-                    return self._generate_mock_portfolio()
+                # If we don't get any positions, use mock portfolio data
+                logger.info("No positions found. Using mock portfolio data as fallback.")
+                return self._generate_mock_portfolio()
             
             return {
                 'account_id': account_id,
                 'available_cash': account_info.get('available_cash', 0),
                 'account_value': account_info.get('account_value', 0),
                 'positions': positions,
-                'is_mock': False
+                'is_frozen': not is_market_open  # Indicate if data is frozen
             }
-        
+                
         except Exception as e:
-            if is_market_open:
-                logger.error(f"Error getting portfolio during market hours: {str(e)}")
-                raise
-            else:
-                logger.info(f"Error getting portfolio during closed market. Using mock portfolio data.")
+            error_msg = str(e)
+            logger.error(f"Error getting portfolio: {error_msg}")
+            logger.error(traceback.format_exc())
+            
+            # Only use mock data if not during market hours
+            if not is_market_open:
+                logger.info("Market is closed. Using mock portfolio data due to error.")
                 return self._generate_mock_portfolio()
-          
-        """
-        Generate mock stock data when real and historical data are unavailable
-        
-        Args:
-            symbol (str): Stock symbol
-            
-        Returns:
-            dict: Mock stock data
-        """
-        import random
-        from datetime import datetime
-        
-        # Special case for NVDA
-        if symbol.upper() == 'NVDA':
-            # Use a realistic price for NVDA (around $900 - will be a fixed reference point)
-            price = 905.75
-            volume = 32457890  # Realistic volume
-            
-            logger.warning(f"Using MOCK DATA for NVIDIA stock - real and historical data unavailable")
-            
-            return {
-                'symbol': 'NVDA',
-                'last': price,
-                'bid': price * 0.998,  # $904.00
-                'ask': price * 1.002,  # $907.50
-                'high': price * 1.02,   # $923.87
-                'low': price * 0.985,   # $892.16
-                'close': price,
-                'open': price * 0.99,   # $896.69
-                'volume': volume,
-                'halted': False,
-                'timestamp': datetime.now().isoformat(),
-                'is_mock': True
-            }
-        else:
-            # Generate random stock price between $10-$500 for other stocks
-            price = random.uniform(10, 500)
-            
-            # Generate random volume
-            volume = random.randint(10000, 1000000)
-            
-            logger.warning(f"Using MOCK DATA for stock {symbol} - real and historical data unavailable")
-            
-            return {
-                'symbol': symbol,
-                'last': price,
-                'bid': price * 0.995,  # 0.5% less than last
-                'ask': price * 1.005,  # 0.5% more than last
-                'high': price * 1.03,  # 3% above last
-                'low': price * 0.97,   # 3% below last
-                'close': price,
-                'open': price * 0.99,  # Slightly below close
-                'volume': volume,
-                'halted': False,
-                'timestamp': datetime.now().isoformat(),
-                'is_mock': True
-            }
+            else:
+                # During market hours, propagate the error
+                raise
     
     def _generate_mock_portfolio(self):
         """

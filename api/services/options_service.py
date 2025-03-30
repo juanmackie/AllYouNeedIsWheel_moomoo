@@ -585,6 +585,8 @@ class OptionsService:
             logger.error("Failed to establish connection to IB")
         
         is_market_open = is_market_hours()
+        logger.info(f"Market is {'open' if is_market_open else 'closed'}, will attempt to get {'real-time' if is_market_open else 'frozen'} data")
+        
         # If no tickers provided, get them from portfolio
         tickers = [ticker]
         if not tickers:
@@ -628,21 +630,29 @@ class OptionsService:
         logger.info(f"Processing {ticker} for {otm_percentage}% OTM options, option_type={option_type}")
         result = {}
         
-        # Get stock price - either real or mock
+        # Get stock price from IB - will use frozen data if market is closed
         stock_price = None
-        if conn and conn.is_connected() and is_market_open:
+        if conn and conn.is_connected():
             try:
-                logger.info(f"Attempting to get real-time stock price for {ticker}")
+                if is_market_open:
+                    logger.info(f"Market is open. Attempting to get real-time stock price for {ticker}")
+                else:
+                    logger.info(f"Market is closed. Attempting to get frozen stock price for {ticker}")
+                    
                 stock_price = conn.get_stock_price(ticker)
-                logger.info(f"Retrieved real-time stock price for {ticker}: ${stock_price}")
+                
+                if is_market_open:
+                    logger.info(f"Retrieved real-time stock price for {ticker}: ${stock_price}")
+                else:
+                    logger.info(f"Retrieved frozen stock price for {ticker}: ${stock_price}")
             except Exception as e:
-                logger.error(f"Error getting real-time stock price for {ticker}: {e}")
+                logger.error(f"Error getting stock price for {ticker}: {e}")
                 logger.error(traceback.format_exc())
         
-        # If we don't have a stock price, use mock data
+        # If we don't have a stock price, use mock data as a last resort
         if stock_price is None or not isinstance(stock_price, (int, float)) or stock_price <= 0:
             try:
-                logger.info(f"Getting mock stock price for {ticker}")
+                logger.info(f"No valid stock price received. Using mock stock price for {ticker}")
                 stock_data = self._get_mock_stock_data(ticker)
                 stock_price = stock_data.get('last', 0)
                 logger.info(f"Using mock stock price for {ticker}: ${stock_price}")
@@ -650,6 +660,7 @@ class OptionsService:
                 logger.error(f"Error getting mock stock price for {ticker}: {e}")
                 logger.error(traceback.format_exc())
                 stock_price = 100.0  # Default fallback price
+                
         # Store stock price in result
         result['stock_price'] = stock_price
         
@@ -680,11 +691,15 @@ class OptionsService:
         # Store position size in result
         result['position'] = position_size
         
-        # Get options chain - either real or mock
+        # Get options chain - use IB data (frozen when market is closed)
         options_data = {}
-        if conn and conn.is_connected() and is_market_open:
+        if conn and conn.is_connected():
             try:
-                logger.info(f"Attempting to get real-time options chain for {ticker}")
+                if is_market_open:
+                    logger.info(f"Attempting to get real-time options chain for {ticker}")
+                else:
+                    logger.info(f"Attempting to get frozen options chain for {ticker}")
+                    
                 # Calculate target strikes
                 call_strike = round(stock_price * (1 + otm_percentage / 100), 2)
                 put_strike = round(stock_price * (1 - otm_percentage / 100), 2)
@@ -708,19 +723,30 @@ class OptionsService:
                         options.append(put_option)
                 
                 if options:
-                    logger.info(f"Successfully retrieved real-time options for {ticker}")
+                    if is_market_open:
+                        logger.info(f"Successfully retrieved real-time options for {ticker}")
+                    else:
+                        logger.info(f"Successfully retrieved frozen options for {ticker}")
+                        
                     options_data = self._process_options_chain(options, ticker, stock_price, otm_percentage, option_type)
-                    logger.info(f"Processed real-time options data for {ticker}")
+                    
+                    if is_market_open:
+                        logger.info(f"Processed real-time options data for {ticker}")
+                    else:
+                        logger.info(f"Processed frozen options data for {ticker}")
                 else:
-                    logger.warning(f"Could not get real-time options chain for {ticker}")
+                    if is_market_open:
+                        logger.warning(f"Could not get real-time options chain for {ticker}")
+                    else:
+                        logger.warning(f"Could not get frozen options chain for {ticker}")
             except Exception as e:
-                logger.error(f"Error getting real-time options chain for {ticker}: {e}")
+                logger.error(f"Error getting options chain for {ticker}: {e}")
                 logger.error(traceback.format_exc())
         
-        # If we need to use mock data
-        else:
+        # Only use mock data if we couldn't get any options data from IB
+        if not options_data:
             try:
-                logger.info(f"Generating mock options data for {ticker} with {otm_percentage}% OTM")
+                logger.info(f"No options data received from IB. Generating mock options data for {ticker} as last resort")
                 # Generate mock data with option type filtering
                 options_data = self._generate_mock_option_data(ticker, stock_price, otm_percentage, expiration, option_type)
                 logger.info(f"Successfully generated mock options data for {ticker}")
