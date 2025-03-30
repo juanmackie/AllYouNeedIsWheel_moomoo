@@ -336,10 +336,8 @@ class IBConnection:
             if not chains:
                 logger.error(f"No option chains found for {symbol}")
                 return None
-                
             # Get the first exchange's data
-            chain = next((c for c in chains if c.exchange == exchange), chains[0])
-            
+            chain = next((c for c in chains if c.exchange == exchange and len(c.strikes) > 1), chains[0])
             # If expiration not provided, get the next standard expiration
             if not expiration:
                 # Find closest expiration to current date
@@ -389,7 +387,7 @@ class IBConnection:
             option_contracts = []
             
             for strike in strikes:
-                contract = Option(symbol=symbol, lastTradeDateOrContractMonth=expiration, strike=strike, right=right, exchange=exchange, currency='USD')
+                contract = Option(symbol=symbol, lastTradeDateOrContractMonth=expiration, strike=strike, right=right, exchange=exchange, currency='USD',multiplier=100)
                 option_contracts.append(contract)
             
             if not option_contracts:
