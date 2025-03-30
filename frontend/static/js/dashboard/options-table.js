@@ -1508,36 +1508,32 @@ async function sellAllOptions(optionType) {
             quantity: optionType === 'CALL' ? 
                 Math.floor(sharesOwned / 100) : 
                     (tickerData.putQuantity || 1),
-                // Include all price fields with proper fallbacks
-                bid: parseFloat(button.dataset.bid || 0),
-                ask: parseFloat(button.dataset.ask || 0),
-                last: parseFloat(button.dataset.last || 0),
-                // Calculate premium as mid price of bid and ask with fallbacks
-                premium: calculatePremium(button.dataset.bid, button.dataset.ask, button.dataset.last),
-                delta: parseFloat(button.dataset.delta || 0),
-                gamma: parseFloat(button.dataset.gamma || 0),
-                theta: parseFloat(button.dataset.theta || 0),
-                vega: parseFloat(button.dataset.vega || 0),
-                implied_volatility: parseFloat(button.dataset.implied_volatility || 0),
-                // Add timestamp
-                timestamp: new Date().toISOString(),
-                // Add market data reference
-                stock_price: tickersData[ticker]?.data?.data?.[ticker]?.stock_price || 0
+            // Get price data from the option object instead of button.dataset
+            bid: parseFloat(option.bid || 0),
+            ask: parseFloat(option.ask || 0),
+            last: parseFloat(option.last || 0),
+            // Calculate premium using the option's price data
+            premium: calculatePremium(option.bid, option.ask, option.last),
+            delta: parseFloat(option.delta || 0),
+            gamma: parseFloat(option.gamma || 0),
+            theta: parseFloat(option.theta || 0),
+            vega: parseFloat(option.vega || 0),
+            implied_volatility: parseFloat(option.implied_volatility || 0),
+            // Add timestamp
+            timestamp: new Date().toISOString(),
+            // Add market data reference
+            stock_price: tickersData[ticker]?.data?.data?.[ticker]?.stock_price || 0
         };
         
-        // Safety check for critical price fields
+        // Safety check for critical price fields - this shouldn't be needed now but keeping as fallback
         if (orderData.bid <= 0 && button.closest('tr')) {
-            // Try to get data from the table row
-            const row = button.closest('tr');
-            const bidCell = row.querySelector('td[data-field="bid"]');
-            const askCell = row.querySelector('td[data-field="ask"]');
-            const lastCell = row.querySelector('td[data-field="last"]');
+            // Try to get data directly from option object again
+            orderData.bid = parseFloat(option.bid || 0);
+            orderData.ask = parseFloat(option.ask || 0);
+            orderData.last = parseFloat(option.last || 0);
+            orderData.premium = calculatePremium(option.bid, option.ask, option.last);
             
-            if (bidCell) orderData.bid = parseFloat(bidCell.textContent) || orderData.bid;
-            if (askCell) orderData.ask = parseFloat(askCell.textContent) || orderData.ask;
-            if (lastCell) orderData.last = parseFloat(lastCell.textContent) || orderData.last;
-            
-            console.log(`Updated order price fields from table row - bid: ${orderData.bid}, ask: ${orderData.ask}, last: ${orderData.last}`);
+            console.log(`Updated order price fields from option object - bid: ${orderData.bid}, ask: ${orderData.ask}, last: ${orderData.last}, premium: ${orderData.premium}`);
         }
         
         // Final sanity check - ensure we have some price reference
