@@ -65,25 +65,19 @@ The key configuration parameters are:
 
 ### Starting the Development Server
 
-Run the Flask development server:
+```bash
+# For paper trading (default)
+python run_api.py
+```
+### Starting the Production API Server
 
 ```bash
-python app.py
+# For real money trading
+python run_api.py --realmoney
 ```
 
 This will start the application on http://localhost:5000
 
-### Starting the Production API Server
-
-For production use with Gunicorn (recommended for deployment):
-
-```bash
-# For paper trading (default)
-python run_api.py
-
-# For real money trading
-python run_api.py --realmoney
-```
 
 By default, the server will run on port 5000 with 4 workers. You can change these settings with environment variables:
 
