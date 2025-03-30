@@ -507,8 +507,8 @@ class IBConnection:
                 # Try to connect even when market is closed
                 logger.info("Market is closed, but trying to connect for frozen data")
                 if not self.connect():
-                    logger.info("Could not connect to IB during closed market. Using mock portfolio data.")
-                    return self._generate_mock_portfolio()
+                    logger.error("Could not connect to IB during closed market.")
+                    return None
         
         try:
             # Set market data type based on market hours
@@ -527,9 +527,7 @@ class IBConnection:
             
             if not account_values:
                 logger.warning("No account data available")
-                # If we don't get account data, use mock portfolio data
-                logger.info("Using mock portfolio data as fallback")
-                return self._generate_mock_portfolio()
+                return None
             
             # Extract relevant account information
             account_info = {
@@ -610,9 +608,9 @@ class IBConnection:
                 logger.info(f"Processed {stock_count} stock positions, {option_count} option positions, and {other_count} other positions using FROZEN data")
             
             if not positions:
-                # If we don't get any positions, use mock portfolio data
-                logger.info("No positions found. Using mock portfolio data as fallback.")
-                return self._generate_mock_portfolio()
+                # If we don't get any positions, return None or empty result
+                logger.info("No positions found.")
+                return None
             
             return {
                 'account_id': account_id,
@@ -630,128 +628,8 @@ class IBConnection:
             logger.error(f"Error getting portfolio: {error_msg}")
             logger.error(traceback.format_exc())
             
-            # Only use mock data if not during market hours
-            if not is_market_open:
-                logger.info("Market is closed. Using mock portfolio data due to error.")
-                return self._generate_mock_portfolio()
-            else:
-                # During market hours, propagate the error
-                raise
-    
-    def _generate_mock_portfolio(self):
-        """
-        Generate a mock portfolio with stock and option positions and $1M cash
-        
-        Returns:
-            dict: Mock portfolio data
-        """
-        # Use our NVDA mock price
-        nvda_price = 905.75
-        nvda_position = 5000
-        nvda_value = nvda_price * nvda_position
-        
-        # Create mock account data
-        account_id = "U1234567"  # Mock account number
-        total_cash = 1000000.00  # $1M cash as requested
-        
-        # Create a contract for NVDA stock position
-        from ib_insync import Contract, Option
-        nvda_contract = Contract(
-            symbol="NVDA",
-            secType="STK",
-            exchange="SMART",
-            currency="USD"
-        )
-        
-        # Create an option contract for a short NVDA put
-        from datetime import datetime, timedelta
-        # Calculate this week's Friday
-        today = datetime.now()
-        days_until_friday = (4 - today.weekday()) % 7
-        # If today is Friday, use today. Otherwise calculate the upcoming Friday
-        this_friday = today if days_until_friday == 0 else today + timedelta(days=days_until_friday)
-        this_friday_str = this_friday.strftime('%Y%m%d')
-        
-        # Premium value is per contract
-        nvda_put_price = 15.50
-        nvda_put_strike = 850.0
-        nvda_put_quantity = -10  # Short 10 contracts
-        nvda_put_value = nvda_put_price * 100 * abs(nvda_put_quantity)  # Market value calculation
-        
-        nvda_put_contract = Option(
-            symbol="NVDA",
-            lastTradeDateOrContractMonth=this_friday_str,
-            strike=nvda_put_strike,
-            right='P',
-            exchange='SMART',
-            currency='USD'
-        )
-        
-        # Create an option contract for a short NVDA call
-        # Premium value is per contract
-        nvda_call_price = 12.75
-        nvda_call_strike = 950.0
-        nvda_call_quantity = -5  # Short 5 contracts
-        nvda_call_value = nvda_call_price * 100 * abs(nvda_call_quantity)  # Market value calculation
-        
-        nvda_call_contract = Option(
-            symbol="NVDA",
-            lastTradeDateOrContractMonth=this_friday_str,
-            strike=nvda_call_strike,
-            right='C',
-            exchange='SMART',
-            currency='USD'
-        )
-        
-        # Calculate total value including options premium
-        total_value = total_cash + nvda_value + nvda_put_value + nvda_call_value
-        
-        # Create the portfolio object with both stock and option positions
-        positions = {
-            "NVDA": {
-                'shares': nvda_position,
-                'avg_cost': nvda_price * 0.8,  # Assume we bought it 20% cheaper
-                'market_price': nvda_price,
-                'market_value': nvda_value,
-                'unrealized_pnl': nvda_value - (nvda_price * 0.8 * nvda_position),
-                'realized_pnl': 0,
-                'contract': nvda_contract,
-                'security_type': 'STK'
-            },
-            f"NVDA_{this_friday_str}_{nvda_put_strike}_P": {
-                'shares': nvda_put_quantity,
-                'avg_cost': nvda_put_price,
-                'market_price': nvda_put_price,
-                'market_value': -nvda_put_value,  # Negative for short positions
-                'unrealized_pnl': 0,
-                'realized_pnl': 0,
-                'contract': nvda_put_contract,
-                'security_type': 'OPT'
-            },
-            f"NVDA_{this_friday_str}_{nvda_call_strike}_C": {
-                'shares': nvda_call_quantity,
-                'avg_cost': nvda_call_price,
-                'market_price': nvda_call_price,
-                'market_value': -nvda_call_value,  # Negative for short positions
-                'unrealized_pnl': 0,
-                'realized_pnl': 0,
-                'contract': nvda_call_contract,
-                'security_type': 'OPT'
-            }
-        }
-        
-        logger.warning("Using MOCK PORTFOLIO DATA - showing NVDA shares and option positions with $1M cash")
-        
-        return {
-            'account_id': account_id,
-            'available_cash': total_cash,
-            'account_value': total_value,
-            'positions': positions,
-            'excess_liquidity': total_cash * 0.7,  # Mock 70% of cash as excess liquidity
-            'initial_margin': total_value * 0.25,  # Mock 25% initial margin requirement
-            'leverage_percentage': 25.0,  # Mock 25% leverage percentage
-            'is_mock': True
-        }
+            # During market hours, propagate the error
+            raise
 
     def create_option_contract(self, symbol, expiry, strike, option_type, exchange='SMART', currency='USD'):
         """
@@ -871,8 +749,7 @@ class IBConnection:
                     'status': 'Submitted',
                     'filled': 0,
                     'remaining': getattr(order, 'totalQuantity', 0),
-                    'avg_fill_price': 0,
-                    'is_mock': False
+                    'avg_fill_price': 0
                 }
                 
             # Wait for order ID to be assigned
@@ -890,8 +767,7 @@ class IBConnection:
                 'last_fill_price': getattr(trade.orderStatus, 'lastFillPrice', 0),
                 'client_id': getattr(trade.orderStatus, 'clientId', 0),
                 'why_held': getattr(trade.orderStatus, 'whyHeld', ''),
-                'market_cap': getattr(trade.orderStatus, 'mktCapPrice', 0),
-                'is_mock': False
+                'market_cap': getattr(trade.orderStatus, 'mktCapPrice', 0)
             }
             
             logger.info(f"Order placed: {order_status}")
@@ -908,8 +784,7 @@ class IBConnection:
                         'status': 'Error',
                         'filled': 0,
                         'remaining': getattr(order, 'totalQuantity', 0),
-                        'error': str(e),
-                        'is_mock': False
+                        'error': str(e)
                     }
             except:
                 pass

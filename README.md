@@ -120,21 +120,17 @@ The web interface consists of four main pages:
 3. **Options** (http://localhost:5000/options?ticker=SYMBOL): Option chain analysis
 4. **Recommendations** (http://localhost:5000/recommendations): Trade recommendations
 
-### Mock Data
+### Frozen Data
 
-The application automatically uses mock data in the following scenarios:
+The application automatically uses frozen data from Interactive Brokers in the following scenarios:
 - When the market is closed (outside of 9:30 AM - 4:00 PM ET, Monday-Friday)
 - On weekends and market holidays
-- When no connection to Interactive Brokers TWS/IB Gateway is available
-- When API requests fail for any reason
 
-This ensures that the application remains functional for development, testing, and demonstration purposes even when real-time market data is unavailable. Mock data includes:
-- Portfolio summary with realistic account values
-- Stock positions (primarily NVDA)
-- Option positions with appropriate strikes and expiration dates
-- Weekly option income calculations
+Frozen data is actual historical data provided by Interactive Brokers rather than generated mock data. This ensures that all data provided by the application represents real market conditions even when markets are closed.
 
-Mock data is clearly labeled in the UI with an indicator showing "Mock Data" to avoid confusion with real trading data.
+When no connection to Interactive Brokers TWS/IB Gateway is available or when API requests fail for any reason, the application will return appropriate error messages rather than falling back to mock data.
+
+The application clearly indicates when it's using frozen data in the UI to avoid confusion with real-time market data.
 
 ## Project Structure
 
