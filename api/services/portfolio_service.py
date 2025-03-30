@@ -116,7 +116,6 @@ class PortfolioService:
                 pos_type = pos.get('security_type', '')
                 if security_type and pos_type != security_type:
                     continue
-                
                 # Build position dictionary
                 position_data = {
                     'symbol': contract.symbol if hasattr(contract, 'symbol') else '',
@@ -171,6 +170,7 @@ class PortfolioService:
             # Filter positions expiring this week that are short options
             weekly_positions = []
             total_income = 0
+            total_commission = 0
             
             for pos in positions:
                 # Skip if not a short position (negative position means short)
@@ -182,11 +182,21 @@ class PortfolioService:
                     # Calculate the income for this position
                     # For short options, we receive premium, so we use absolute value
                     contracts = abs(pos.get('position', 0))
-                    premium_per_contract = pos.get('avg_cost', 0) * 100  # Each contract is 100 shares
+                    premium_per_contract = pos.get('avg_cost', 0)  # Already in dollar terms per contract
                     income = premium_per_contract * contracts
                     
-                    # Add income to total
+                    # Try to get commission if available, estimate if not
+                    commission = pos.get('commission', 0)
+                    
+                    # Add income and commission to totals
                     total_income += income
+                    total_commission += commission
+                    
+                    # Calculate notional value for PUT options (strike price × 100 × number of contracts)
+                    notional_value = None
+                    if pos.get('option_type') == 'PUT':
+                        strike = pos.get('strike', 0)
+                        notional_value = strike * 100 * contracts
                     
                     # Add position details to the result
                     weekly_positions.append({
@@ -196,14 +206,20 @@ class PortfolioService:
                         'expiration': pos.get('expiration', ''),
                         'position': pos.get('position', 0),
                         'premium_per_contract': pos.get('avg_cost', 0),
-                        'income': income
+                        'avg_cost': pos.get('avg_cost', 0),  # Include both field names for compatibility
+                        'income': income,
+                        'commission': commission,
+                        'notional_value': notional_value
                     })
             
             # Build result dictionary
             result = {
                 'positions': weekly_positions,
                 'total_income': total_income,
-                'positions_count': len(weekly_positions)
+                'total_commission': total_commission,
+                'positions_count': len(weekly_positions),
+                'this_friday': this_friday.strftime('%Y-%m-%d'),
+                'total_put_notional': sum(pos.get('notional_value', 0) for pos in weekly_positions if pos.get('option_type') == 'PUT')
             }
             
             return result

@@ -230,58 +230,55 @@ function updateFilledOrdersTable() {
     // Check if we have positions data
     if (!weeklyOptionIncomeData.positions || weeklyOptionIncomeData.positions.length === 0) {
         console.log('No weekly option income data to display');
-        filledOrdersTable.innerHTML = '<tr><td colspan="10" class="text-center">No positions expiring this coming Friday found</td></tr>';
+        filledOrdersTable.innerHTML = '<tr><td colspan="9" class="text-center">No positions expiring this coming Friday found</td></tr>';
         
         // Update summary with zeros
         updateWeeklyEarningsSummary([], 0, 0);
         return;
     }
     
-    // Get the positions array and sort by symbol
+    // Get the positions array
     const positions = weeklyOptionIncomeData.positions;
-    positions.sort((a, b) => a.symbol.localeCompare(b.symbol));
     
-    // Add each position to the table
-    positions.forEach(position => {
-        const row = document.createElement('tr');
-        row.className = 'table-success'; // Highlight all rows
+    // Add debug logging to see what we received
+    console.log('Weekly options data received:', weeklyOptionIncomeData);
+    
+    // Group positions by option type - supporting both formats (C/P and CALL/PUT)
+    const callPositions = positions.filter(p => 
+        p.option_type === 'C' || p.option_type === 'CALL' || p.option_type === 'Call');
+    const putPositions = positions.filter(p => 
+        p.option_type === 'P' || p.option_type === 'PUT' || p.option_type === 'Put');
+    
+    // Log what we filtered
+    console.log(`Filtered ${callPositions.length} call options and ${putPositions.length} put options`);
+    if (callPositions.length + putPositions.length === 0) {
+        console.warn('No positions matched our filtering criteria. Original option types:', 
+            positions.map(p => p.option_type));
+        filledOrdersTable.innerHTML = '<tr><td colspan="9" class="text-center">Data format issue: No positions matched CALL/PUT filters</td></tr>';
+        return;
+    }
+    
+    // Add header for CALL options if there are any
+    if (callPositions.length > 0) {
+        const callHeader = document.createElement('tr');
+        callHeader.className = 'table-primary';
+        callHeader.innerHTML = `<td colspan="9" class="fw-bold">CALL OPTIONS (${callPositions.length})</td>`;
+        filledOrdersTable.appendChild(callHeader);
         
-        // Format the strike price
-        const strike = position.strike ? `$${position.strike}` : 'N/A';
+        // Add each CALL position
+        addPositionsToTable(callPositions, filledOrdersTable);
+    }
+    
+    // Add header for PUT options if there are any
+    if (putPositions.length > 0) {
+        const putHeader = document.createElement('tr');
+        putHeader.className = 'table-warning';
+        putHeader.innerHTML = `<td colspan="9" class="fw-bold">PUT OPTIONS (${putPositions.length})</td>`;
+        filledOrdersTable.appendChild(putHeader);
         
-        // Calculate premiums
-        const fillPrice = position.avg_cost || 0;
-        const income = position.income || 0;
-        
-        // Format values for display
-        const fillPriceFormatted = formatCurrency(fillPrice);
-        const incomeFormatted = formatCurrency(income);
-        
-        // Get option type full name
-        const optionType = position.option_type === 'C' ? 'CALL' : (position.option_type === 'P' ? 'PUT' : position.option_type);
-        
-        // Calculate and format notional value for PUT options
-        let notionalValue = '-';
-        if (optionType === 'PUT' && position.notional_value) {
-            notionalValue = formatCurrency(position.notional_value);
-        }
-        
-        // Create the row HTML
-        row.innerHTML = `
-            <td>${position.symbol}</td>
-            <td>${optionType}</td>
-            <td>${strike}</td>
-            <td>${position.expiration || 'N/A'}</td>
-            <td>${fillPriceFormatted}</td>
-            <td>${position.position}</td>
-            <td>-</td>
-            <td>${incomeFormatted}</td>
-            <td>${notionalValue}</td>
-            <td>Expires Next Friday</td>
-        `;
-        
-        filledOrdersTable.appendChild(row);
-    });
+        // Add each PUT position
+        addPositionsToTable(putPositions, filledOrdersTable);
+    }
     
     // Update the weekly earnings summary
     updateWeeklyEarningsSummary(positions, weeklyOptionIncomeData.total_income || 0, weeklyOptionIncomeData.total_put_notional || 0);
@@ -663,4 +660,52 @@ export {
     loadFilledOrders,
     executeOrderById,
     cancelOrderById
-}; 
+};
+
+function addPositionsToTable(positions, table) {
+    positions.forEach(position => {
+        const row = document.createElement('tr');
+        row.className = 'table-success'; // Highlight all rows
+        
+        // Format the strike price
+        const strike = position.strike ? `$${position.strike}` : 'N/A';
+        
+        // Calculate premiums - use premium_per_contract if available, fall back to avg_cost
+        const fillPrice = position.premium_per_contract || position.avg_cost || 0;
+        const income = position.income || 0;
+        
+        // Format values for display
+        const fillPriceFormatted = formatCurrency(fillPrice);
+        const incomeFormatted = formatCurrency(income);
+        
+        // Get option type full name
+        let optionType = position.option_type;
+        // Normalize option type to standard display format
+        if (optionType === 'C' || optionType === 'CALL' || optionType === 'Call') {
+            optionType = 'CALL';
+        } else if (optionType === 'P' || optionType === 'PUT' || optionType === 'Put') {
+            optionType = 'PUT';
+        }
+        
+        // Calculate and format notional value for PUT options
+        let notionalValue = '-';
+        if ((optionType === 'PUT' || optionType === 'P') && position.notional_value) {
+            notionalValue = formatCurrency(position.notional_value);
+        }
+        
+        // Create the row HTML
+        row.innerHTML = `
+            <td>${position.symbol}</td>
+            <td>${optionType}</td>
+            <td>${strike}</td>
+            <td>${position.expiration || 'N/A'}</td>
+            <td>${fillPriceFormatted}</td>
+            <td>${position.position}</td>
+            <td>${incomeFormatted}</td>
+            <td>${notionalValue}</td>
+            <td>Expires Next Friday</td>
+        `;
+        
+        table.appendChild(row);
+    });
+} 
