@@ -30,6 +30,7 @@ AllYouNeedIsWheel is a financial options trading assistant specifically designed
    ```bash
    pip install -r requirements.txt
    ```
+   *Note: The `run_api.py` script will automatically check and install all required dependencies from requirements.txt when run, including platform-specific dependencies like waitress (Windows) or gunicorn (Unix/Linux/Mac).*
 
 3. Create your connection configuration file:
    ```bash
@@ -149,7 +150,7 @@ AllYouNeedIsWheel/
 │   └── templates/            # Jinja2 HTML templates
 ├── logs/                     # Log files directory
 ├── app.py                    # Main Flask application entry point
-├── run_api.py                # Production API server runner with Gunicorn
+├── run_api.py                # Production API server runner (cross-platform)
 ├── config.py                 # Configuration handling
 ├── connection.json           # IB connection configuration (paper trading)
 ├── connection_real.json      # IB connection configuration (real money)
@@ -187,6 +188,7 @@ The application uses SQLite for storage. Two database files are maintained:
 - "Socket Connection Broken": TWS/IB Gateway is not running
 - "Client ID already in use": Another application is using the same client ID
 - "No market data permissions": You need to subscribe to market data for the securities you're requesting
+- "ModuleNotFoundError: No module named 'fcntl'": This is a Windows-specific issue. The script will automatically install waitress as an alternative to gunicorn when run on Windows, or you can install it manually with `pip install waitress`
 
 ## Security Notes
 
@@ -203,3 +205,4 @@ The application uses SQLite for storage. Two database files are maintained:
 - [IB Insync](https://github.com/erdewit/ib_insync) for Interactive Brokers API integration
 - [Flask](https://flask.palletsprojects.com/) for the web framework
 - [Gunicorn](https://gunicorn.org/) for WSGI HTTP server
+- [Waitress](https://docs.pylonsproject.org/projects/waitress/) for Windows-compatible WSGI HTTP server
