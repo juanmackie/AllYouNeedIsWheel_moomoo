@@ -203,9 +203,10 @@ class IBConnection:
             # Request market data
             ticker = self.ib.reqMktData(qualified_contract)
             
-            # Wait for market data to be received - wait a bit longer for frozen data
-            wait_time = 1.0 if not is_market_open else 0.2
-            self.ib.sleep(wait_time)
+            for _ in range(10):
+                self.ib.sleep(0.1)
+                if ticker.marketPrice() is not None and ticker.marketPrice() > 0:
+                    break
             
             # Get the last price
             last_price = ticker.last if ticker.last else (ticker.close if ticker.close else None)
@@ -313,7 +314,10 @@ class IBConnection:
             
             # Get stock price for reference
             ticker = self.ib.reqMktData(stock)
-            self.ib.sleep(1)  # Wait for data
+            for _ in range(10):
+                self.ib.sleep(0.1)
+                if ticker.marketPrice() is not None and ticker.marketPrice() > 0:
+                    break
             
             stock_price = ticker.marketPrice()
             if not stock_price or stock_price <= 0:
