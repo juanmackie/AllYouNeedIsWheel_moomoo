@@ -1,15 +1,16 @@
 # AllYouNeedIsWheel
 
-AllYouNeedIsWheel is a financial options trading assistant that connects to Interactive Brokers (IB) to help analyze, visualize, and recommend option trading strategies. It retrieves portfolio data, analyzes options chains, and presents recommendations through a user-friendly web interface.
+AllYouNeedIsWheel is a financial options trading assistant specifically designed for the "Wheel Strategy" that connects to Interactive Brokers (IB). It helps traders analyze, visualize, and execute the wheel strategy effectively by retrieving portfolio data, analyzing options chains for cash-secured puts and covered calls, and presenting recommendations through a user-friendly web interface.
 
 ## Features
 
 - **Portfolio Dashboard**: View your current portfolio positions, value, and performance metrics
-- **Options Analysis**: Analyze option chains for any stock ticker
-- **Trading Recommendations**: Get option trade recommendations
+- **Wheel Strategy Focus**: Specialized tools for implementing the wheel strategy (selling cash-secured puts and covered calls)
+- **Options Analysis**: Analyze option chains to find the best cash-secured puts and covered calls for any stock ticker
+- **Trading Recommendations**: Get wheel strategy trade recommendations with projected premium income
 - **Interactive Web Interface**: Modern, responsive web application with data visualizations
 - **API Integration**: Backend API to interact with Interactive Brokers
-- **Order Management**: Create, cancel, and execute option orders through the dashboard
+- **Order Management**: Create, cancel, and execute wheel strategy option orders through the dashboard
 
 ## Prerequisites
 
