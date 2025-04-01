@@ -15,8 +15,8 @@ from datetime import datetime
 import pytz
 from core.utils import is_market_hours
 
-# Import ib_insync
-from ib_insync import IB, Stock, Option, Contract, util
+# Import ib_async instead of ib_insync
+from ib_async import IB, Stock, Option, Contract, util
 
 # Import our logging configuration
 from core.logging_config import get_logger
@@ -24,26 +24,26 @@ from core.logging_config import get_logger
 # Configure logging
 logger = get_logger('autotrader.connection', 'tws')
 
-# Set ib_insync logger to WARNING level to reduce noise
+# Set ib_async logger to WARNING level to reduce noise
 def suppress_ib_logs():
     """
-    Suppress verbose logs from the ib_insync library by setting higher log levels
+    Suppress verbose logs from the ib_async library by setting higher log levels
     """
-    # Base ib_insync loggers
-    logging.getLogger('ib_insync').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.wrapper').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.client').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.ticker').setLevel(logging.WARNING)
+    # Base ib_async loggers
+    logging.getLogger('ib_async').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.wrapper').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.client').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.ticker').setLevel(logging.WARNING)
     
-    # Additional ib_insync logger components
-    logging.getLogger('ib_insync.event').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.util').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.objects').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.contract').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.order').setLevel(logging.WARNING)
-    logging.getLogger('ib_insync.ib').setLevel(logging.WARNING)
+    # Additional ib_async logger components
+    logging.getLogger('ib_async.event').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.util').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.objects').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.contract').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.order').setLevel(logging.WARNING)
+    logging.getLogger('ib_async.ib').setLevel(logging.WARNING)
     
-    # Suppress related lower-level modules used by ib_insync
+    # Suppress related lower-level modules used by ib_async
     logging.getLogger('asyncio').setLevel(logging.WARNING)
     logging.getLogger('eventkit').setLevel(logging.WARNING)
     
@@ -74,7 +74,7 @@ class IBConnection:
         self.ib = IB()
         self._connected = False
         
-        # Suppress ib_insync logs when initializing
+        # Suppress ib_async logs when initializing
         suppress_ib_logs()
     
     def _ensure_event_loop(self):
@@ -565,7 +565,7 @@ class IBConnection:
             other_count = 0
             
             # Import Option class for isinstance check
-            from ib_insync import Option
+            from ib_async import Option
             
             for position in portfolio:
                 try:
@@ -688,7 +688,7 @@ class IBConnection:
         Returns:
             Order: Order object ready for use with TWS
         """
-        from ib_insync import LimitOrder, MarketOrder
+        from ib_async import LimitOrder, MarketOrder
         
         try:
             if order_type.upper() == 'LMT':
