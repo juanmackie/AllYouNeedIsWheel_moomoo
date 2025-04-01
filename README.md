@@ -28,7 +28,7 @@ AllYouNeedIsWheel is a financial options trading assistant specifically designed
 
 2. Install required dependencies:
    ```bash
-   pip install -r requirements.txt
+   python3 -m pip install -r requirements.txt
    ```
    *Note: The `run_api.py` script will automatically check and install all required dependencies from requirements.txt when run, including platform-specific dependencies like waitress (Windows) or gunicorn (Unix/Linux/Mac).*
 
@@ -69,13 +69,13 @@ The key configuration parameters are:
 
 ```bash
 # For paper trading (default)
-python run_api.py
+python3 run_api.py
 ```
 ### Starting the Production API Server
 
 ```bash
 # For real money trading
-python run_api.py --realmoney
+python3 run_api.py --realmoney
 ```
 
 This will start the application on http://localhost:5000
@@ -85,7 +85,7 @@ By default, the server will run on port 5000 with 4 workers. You can change thes
 
 ```bash
 # Change port and worker count
-PORT=8080 WORKERS=2 python run_api.py
+PORT=8080 WORKERS=2 python3 run_api.py
 ```
 
 ### API Endpoints
