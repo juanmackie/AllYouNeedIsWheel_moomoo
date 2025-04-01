@@ -2,6 +2,10 @@
 
 AllYouNeedIsWheel is a financial options trading assistant specifically designed for the "Wheel Strategy" that connects to Interactive Brokers (IB). It helps traders analyze, visualize, and execute the wheel strategy effectively by retrieving portfolio data, analyzing options chains for cash-secured puts and covered calls, and presenting recommendations through a user-friendly web interface.
 
+## Important Note on IB API
+
+This project now uses the `ib_async` library (the successor to `ib_insync`). The `ib_async` library requires Python 3.10 or higher. This change was made because `ib_insync` is no longer being maintained after the original creator's passing, and `ib_async` is the community-maintained continuation of that project.
+
 ## Features
 
 - **Portfolio Dashboard**: View your current portfolio positions, value, and performance metrics
@@ -14,7 +18,7 @@ AllYouNeedIsWheel is a financial options trading assistant specifically designed
 
 ## Prerequisites
 
-- Python 3.7+
+- Python 3.10+
 - Interactive Brokers TWS (Trader Workstation) or IB Gateway
 - IB account with market data subscriptions for options
 
@@ -202,7 +206,7 @@ The application uses SQLite for storage. Two database files are maintained:
 
 ## Acknowledgments
 
-- [IB Insync](https://github.com/erdewit/ib_insync) for Interactive Brokers API integration
+- [IB Async](https://github.com/ib-api-reloaded/ib_async) for Interactive Brokers API integration
 - [Flask](https://flask.palletsprojects.com/) for the web framework
 - [Gunicorn](https://gunicorn.org/) for WSGI HTTP server
 - [Waitress](https://docs.pylonsproject.org/projects/waitress/) for Windows-compatible WSGI HTTP server
