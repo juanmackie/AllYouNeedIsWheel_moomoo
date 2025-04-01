@@ -38,6 +38,9 @@ function formatPercentage(value) {
 function updateAccountSummary() {
     if (!accountData) return;
     
+    // Update the data status indicator
+    updateDataStatusIndicator(accountData.is_frozen);
+    
     // Update account value
     const accountValueElement = document.getElementById('account-value');
     if (accountValueElement) {
@@ -310,10 +313,16 @@ function addOptionsToTable(options, tableBody) {
  * Load portfolio data from API
  */
 async function loadPortfolioData() {
-    const data = await fetchAccountData();
-    if (data) {
-        accountData = data;
-        updateAccountSummary();
+    try {
+        // Fetch account data
+        accountData = await fetchAccountData();
+        if (accountData) {
+            updateAccountSummary();
+            await loadPositionsTable();
+        }
+    } catch (error) {
+        console.error('Error loading portfolio data:', error);
+        showAlert('Error loading portfolio data. Please check your connection to Interactive Brokers.', 'danger');
     }
 }
 
@@ -331,10 +340,48 @@ async function loadPositionsTable() {
     }
 }
 
+/**
+ * Update the data status indicator
+ * @param {boolean} isFrozen - Whether the data is frozen (true) or real-time (false)
+ */
+function updateDataStatusIndicator(isFrozen) {
+    const dataStatusIndicator = document.getElementById('data-status-indicator');
+    const dataStatusIcon = document.getElementById('data-status-icon').querySelector('i');
+    const dataUpdateTime = document.getElementById('data-update-time');
+    
+    if (!dataStatusIndicator || !dataStatusIcon || !dataUpdateTime) return;
+    
+    // Get current time for the update timestamp
+    const now = new Date();
+    const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    dataUpdateTime.textContent = `Updated ${timeString}`;
+    
+    if (isFrozen) {
+        // Frozen data state
+        dataStatusIndicator.className = 'badge bg-warning text-dark';
+        dataStatusIndicator.textContent = 'FROZEN DATA';
+        dataStatusIndicator.setAttribute('title', 'Using frozen data because market is closed');
+        
+        // Change icon to snowflake
+        dataStatusIcon.className = 'bi bi-snow';
+    } else {
+        // Real-time data state
+        dataStatusIndicator.className = 'badge bg-success';
+        dataStatusIndicator.textContent = 'REAL-TIME';
+        dataStatusIndicator.setAttribute('title', 'Using real-time market data');
+        
+        // Change icon to lightning
+        dataStatusIcon.className = 'bi bi-lightning-fill';
+    }
+}
+
 // Export functions
 export {
+    formatCurrency,
+    formatPercentage,
+    updateAccountSummary,
+    populatePositionsTable,
     loadPortfolioData,
     loadPositionsTable,
-    formatCurrency,
-    formatPercentage
+    updateDataStatusIndicator
 }; 
