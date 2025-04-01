@@ -4,7 +4,18 @@
     <div class="col-md-4 mb-3 mb-md-0">
         <div class="card shadow-sm h-100">
             <div class="card-body d-flex flex-column">
-                <h5 class="card-title text-secondary mb-3">Portfolio Summary</h5>
+                <div class="d-flex align-items-center gap-2 mb-3">
+                    <h5 class="card-title text-secondary mb-0">Portfolio Summary</h5>
+                    <div id="data-status-container" class="d-flex align-items-center ms-auto">
+                        <span id="data-status-icon" class="me-1">
+                            <i class="bi bi-lightning-fill"></i>
+                        </span>
+                        <span id="data-status-indicator" class="badge bg-secondary">
+                            LOADING
+                        </span>
+                        <small id="data-update-time" class="text-muted ms-2"></small>
+                    </div>
+                </div>
                 <div class="d-flex justify-content-between mt-2">
                     <div class="text-center flex-grow-1 border-end pe-2">
                         <p class="text-muted mb-1 small">Total Value</p>

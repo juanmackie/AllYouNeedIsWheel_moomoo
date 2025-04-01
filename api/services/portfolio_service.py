@@ -78,7 +78,8 @@ class PortfolioService:
                 'account_value': portfolio.get('account_value', 0),
                 'excess_liquidity': portfolio.get('excess_liquidity', 0),
                 'initial_margin': portfolio.get('initial_margin', 0),
-                'leverage_percentage': portfolio.get('leverage_percentage', 0)
+                'leverage_percentage': portfolio.get('leverage_percentage', 0),
+                'is_frozen': portfolio.get('is_frozen', False)
             }
         except Exception as e:
             logger.error(f"Error getting portfolio summary: {e}")
