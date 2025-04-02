@@ -201,7 +201,7 @@ class IBConnection:
             qualified_contract = qualified_contracts[0]
             
             # Request market data
-            ticker = self.ib.reqMktData(qualified_contract)
+            ticker = self.ib.reqMktData(contract=qualified_contract,snapshot=True)
             
             for _ in range(10):
                 self.ib.sleep(0.1)
@@ -434,7 +434,6 @@ class IBConnection:
                     volume = ticker.volume if hasattr(ticker, 'volume') and ticker.volume is not None else 0
                     open_interest = ticker.openInterest if hasattr(ticker, 'openInterest') and ticker.openInterest is not None else 0
                     implied_vol = ticker.impliedVolatility if hasattr(ticker, 'impliedVolatility') and ticker.impliedVolatility is not None else 0
-                    print(f"Implied volatility: {implied_vol}")
                     # Get real delta from model greeks if available
                     delta = None
                     gamma = None
