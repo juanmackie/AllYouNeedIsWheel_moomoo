@@ -430,6 +430,7 @@ function updateOptionsTable() {
                                 <th>Expiration</th>
                                 <th>Mid Price</th>
                                 <th>Delta</th>
+                                <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
                                 <th>% Return</th>
@@ -472,6 +473,7 @@ function updateOptionsTable() {
                                 <th>Expiration</th>
                                 <th>Mid Price</th>
                                 <th>Delta</th>
+                                <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
                                 <th>% Return</th>
@@ -2027,6 +2029,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
+                <td class="align-middle">-</td>
                 <td class="align-middle">${maxContracts}</td>
                 <td class="align-middle">$ 0.00</td>
                 <td class="align-middle">0.00%</td>
@@ -2062,6 +2065,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                         </button>
                     </div>
                 </td>
+                <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
@@ -2108,6 +2112,9 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     row.dataset.premium = option.ask ? option.ask * 100 : 0;
     row.dataset.strike = option.strike || 0;
     
+    // Format IV% value
+    const ivPercent = option.implied_volatility ? option.implied_volatility.toFixed(2) : 'N/A';
+    
     // For CALL options
     if (optionType === 'CALL') {
         const maxContracts = Math.floor(sharesOwned / 100);
@@ -2142,6 +2149,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle">${option.expiration || 'N/A'}</td>
             <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle">${ivPercent}%</td>
             <td class="align-middle">${maxContracts}</td>
             <td class="align-middle">$ ${totalPremium.toFixed(2)}</td>
             <td class="align-middle">${returnOnCapital.toFixed(2)}%</td>
@@ -2202,6 +2210,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle">${option.expiration || 'N/A'}</td>
             <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle">${ivPercent}%</td>
             <td class="align-middle">
                 <input type="number" class="form-control form-control-sm put-qty-input" 
                     data-ticker="${ticker}" 
@@ -2268,6 +2277,20 @@ function buildOptionsTable(tableId, optionType) {
         return;
     }
     
+    // Update the table headers to include IV%
+    const thead = table.querySelector('thead');
+    if (thead && thead.querySelector('tr')) {
+        const headerRow = thead.querySelector('tr');
+        // Find where we want to insert the IV% column (after Delta)
+        const deltaHeader = Array.from(headerRow.querySelectorAll('th')).find(th => th.textContent === 'Delta');
+        if (deltaHeader) {
+            // Create and insert the IV% header after Delta
+            const ivHeader = document.createElement('th');
+            ivHeader.textContent = 'IV%';
+            deltaHeader.after(ivHeader);
+        }
+    }
+    
     tbody.innerHTML = '';
     
     let atLeastOneRowAdded = false;
@@ -2287,7 +2310,7 @@ function buildOptionsTable(tableId, optionType) {
         console.log(`No ${optionType} rows added to the table`);
         const row = document.createElement('tr');
         row.innerHTML = `
-            <td colspan="12" class="text-center p-3">
+            <td colspan="13" class="text-center p-3">
                 <div class="alert alert-info m-0">
                     No ${optionType === 'CALL' ? 'covered call' : 'cash secured put'} opportunities found.
                     ${optionType === 'PUT' ? 'Add a ticker to see put option opportunities.' : ''}
@@ -2365,6 +2388,7 @@ async function loadTickers() {
                                 <th>Expiration</th>
                                 <th>Mid Price</th>
                                 <th>Delta</th>
+                                <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
                                 <th>% Return</th>
@@ -2414,6 +2438,7 @@ async function loadTickers() {
                                 <th>Expiration</th>
                                 <th>Mid Price</th>
                                 <th>Delta</th>
+                                <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
                                 <th>% Return</th>
@@ -2500,7 +2525,7 @@ async function loadTickers() {
         const callStatusRow = document.createElement('tr');
         callStatusRow.id = `call-status-${ticker}`;
         callStatusRow.innerHTML = `
-            <td colspan="12" class="text-center">
+            <td colspan="13" class="text-center">
                 <div class="d-flex align-items-center justify-content-center">
                     <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
                     <span>${progressMessage}</span>
@@ -2512,7 +2537,7 @@ async function loadTickers() {
         const putStatusRow = document.createElement('tr');
         putStatusRow.id = `put-status-${ticker}`;
         putStatusRow.innerHTML = `
-            <td colspan="12" class="text-center">
+            <td colspan="13" class="text-center">
                 <div class="d-flex align-items-center justify-content-center">
                     <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
                     <span>${progressMessage}</span>
@@ -2544,14 +2569,14 @@ async function loadTickers() {
             const errorMessage = `Error loading data for ${ticker}: ${error.message}`;
             if (document.getElementById(`call-status-${ticker}`)) {
                 document.getElementById(`call-status-${ticker}`).innerHTML = `
-                    <td colspan="12" class="text-center text-danger">
+                    <td colspan="13" class="text-center text-danger">
                         <i class="bi bi-exclamation-triangle"></i> ${errorMessage}
                     </td>
                 `;
             }
             if (document.getElementById(`put-status-${ticker}`)) {
                 document.getElementById(`put-status-${ticker}`).innerHTML = `
-                    <td colspan="12" class="text-center text-danger">
+                    <td colspan="13" class="text-center text-danger">
                         <i class="bi bi-exclamation-triangle"></i> ${errorMessage}
                     </td>
                 `;
@@ -2576,7 +2601,7 @@ async function loadTickers() {
     if (document.querySelector('#call-options-table tbody').children.length === 0) {
         const row = document.createElement('tr');
         row.innerHTML = `
-            <td colspan="12" class="text-center p-3">
+            <td colspan="13" class="text-center p-3">
                 <div class="alert alert-info m-0">
                     No covered call opportunities found.
                 </div>
@@ -2588,7 +2613,7 @@ async function loadTickers() {
     if (document.querySelector('#put-options-table tbody').children.length === 0) {
         const row = document.createElement('tr');
         row.innerHTML = `
-            <td colspan="12" class="text-center p-3">
+            <td colspan="13" class="text-center p-3">
                 <div class="alert alert-info m-0">
                     No cash secured put opportunities found.
                     Add a ticker to see put option opportunities.
