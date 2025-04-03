@@ -201,7 +201,7 @@ class IBConnection:
             qualified_contract = qualified_contracts[0]
             
             # Request market data
-            ticker = self.ib.reqMktData(contract=qualified_contract,snapshot=True)
+            ticker = self.ib.reqMktData(contract=qualified_contract)
             
             for _ in range(10):
                 self.ib.sleep(0.1)
@@ -422,7 +422,7 @@ class IBConnection:
                     ticker = self.ib.reqMktData(qualified_contract, '106', False,False)  # Added genericTickList='13' to get implied volatility
                    
                     # Wait for data to arrive - give more time for Greeks and implied volatility
-                    for _ in range(100):  # Increased from 50 to give more time
+                    for _ in range(50):  # Increased from 50 to give more time
                         self.ib.sleep(0.1)
                         if ticker.modelGreeks is not None and ticker.impliedVolatility is not None and ticker.impliedVolatility > 0:
                             break
