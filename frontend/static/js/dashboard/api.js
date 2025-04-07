@@ -282,6 +282,54 @@ async function executeOrder(orderId) {
     }
 }
 
+/**
+ * Fetch stock prices for one or more tickers
+ * @param {Array|string} tickers - Array of ticker symbols or comma-separated string
+ * @returns {Promise} Promise with stock prices data
+ */
+async function fetchStockPrices(tickers) {
+    try {
+        // Format tickers parameter
+        let tickersParam = '';
+        if (Array.isArray(tickers)) {
+            tickersParam = tickers.join(',');
+        } else {
+            tickersParam = tickers;
+        }
+        
+        if (!tickersParam) {
+            throw new Error('No tickers provided');
+        }
+        
+        // Add timestamp to avoid caching
+        const timestamp = new Date().getTime();
+        const url = `/api/options/stock-price?tickers=${encodeURIComponent(tickersParam)}&t=${timestamp}`;
+        
+        const response = await fetch(url, {
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (result.status === 'success' && result.data) {
+            return result.data;
+        } else {
+            throw new Error(result.error || 'Failed to fetch stock prices');
+        }
+    } catch (error) {
+        console.error('Error fetching stock prices:', error);
+        return {};
+    }
+}
+
 // Export all API functions
 export {
     fetchAccountData,
@@ -293,5 +341,6 @@ export {
     saveOptionOrder,
     cancelOrder,
     executeOrder,
-    checkOrderStatus
+    checkOrderStatus,
+    fetchStockPrices
 }; 

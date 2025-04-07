@@ -42,6 +42,38 @@ def otm_options():
     
     return jsonify(result)
 
+@bp.route('/stock-price', methods=['GET'])
+def get_stock_price():
+    """
+    Get the current stock price for one or more tickers.
+    This is a lightweight endpoint that only returns stock prices.
+    """
+    # Get ticker(s) from request
+    tickers_param = request.args.get('tickers', '')
+    if not tickers_param:
+        return jsonify({"error": "No tickers provided"}), 400
+    
+    # Split tickers on commas if multiple are provided
+    tickers = [t.strip() for t in tickers_param.split(',')]
+    
+    # Get stock prices for the tickers
+    prices = {}
+    try:
+        for ticker in tickers:
+            if ticker:
+                # Use the options service to get the stock price without option data
+                price = options_service.get_stock_price(ticker)
+                prices[ticker] = price
+        
+        return jsonify({
+            "status": "success",
+            "data": prices
+        })
+    except Exception as e:
+        logger.error(f"Error getting stock price for {tickers_param}: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e), "status": "error"}), 500
+
 @bp.route('/order', methods=['POST'])
 def save_order():
     """
@@ -180,6 +212,78 @@ def check_orders():
             
     except Exception as e:
         logger.error(f"Error checking orders: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/rollover', methods=['POST'])
+def rollover_option():
+    """
+    Create orders to roll over an option position.
+    
+    This creates two orders:
+    1. Buy order to close the current option position
+    2. Sell order to open a new option position
+    
+    Returns:
+        JSON response with created orders
+    """
+    logger.info("POST /rollover request received")
+    
+    try:
+        # Get order data from request
+        rollover_data = request.json
+        if not rollover_data:
+            return jsonify({"error": "No rollover data provided"}), 400
+            
+        # Validate required fields for current option
+        required_fields = ['ticker', 'current_option_type', 'current_strike', 'current_expiration', 
+                           'new_strike', 'new_expiration', 'quantity']
+        for field in required_fields:
+            if field not in rollover_data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Create buy order to close current position
+        buy_order = {
+            'ticker': rollover_data['ticker'],
+            'option_type': rollover_data['current_option_type'],
+            'strike': rollover_data['current_strike'],
+            'expiration': rollover_data['current_expiration'],
+            'action': 'BUY',  # Buy to close
+            'quantity': rollover_data['quantity'],
+            'order_type': rollover_data.get('current_order_type', 'MARKET'),
+            'limit_price': rollover_data.get('current_limit_price'),
+            'notes': f"Rollover: Close existing {rollover_data['current_option_type']} position"
+        }
+        
+        # Create sell order for new position
+        sell_order = {
+            'ticker': rollover_data['ticker'],
+            'option_type': rollover_data['current_option_type'],  # Same option type
+            'strike': rollover_data['new_strike'],
+            'expiration': rollover_data['new_expiration'],
+            'action': 'SELL',  # Sell to open
+            'quantity': rollover_data['quantity'],
+            'order_type': rollover_data.get('new_order_type', 'LIMIT'),
+            'limit_price': rollover_data.get('new_limit_price'),
+            'notes': f"Rollover: Open new {rollover_data['current_option_type']} position"
+        }
+        
+        # Save orders to database
+        buy_order_id = options_service.db.save_order(buy_order)
+        sell_order_id = options_service.db.save_order(sell_order)
+        
+        if buy_order_id and sell_order_id:
+            return jsonify({
+                "success": True, 
+                "buy_order_id": buy_order_id,
+                "sell_order_id": sell_order_id,
+                "message": "Rollover orders created successfully"
+            }), 201
+        else:
+            return jsonify({"error": "Failed to create one or more rollover orders"}), 500
+            
+    except Exception as e:
+        logger.error(f"Error creating rollover orders: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 

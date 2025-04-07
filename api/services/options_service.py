@@ -1069,4 +1069,40 @@ class OptionsService:
                     "success": False,
                     "error": str(e),
                     "secondary_error": str(inner_e)
-                }, 500 
+                }, 500
+
+    def get_stock_price(self, ticker):
+        """
+        Get just the current stock price for a ticker without fetching options.
+        This is a lightweight method for the stock-price endpoint.
+        
+        Args:
+            ticker (str): Ticker symbol
+            
+        Returns:
+            float: Current stock price
+        """
+        try:
+            logger.info(f"Fetching stock price for {ticker}")
+            
+            # Use _ensure_connection to get or create a connection
+            conn = self._ensure_connection()
+            if not conn:
+                logger.error("Failed to establish connection to IB")
+                return 0
+            
+            # Use the existing get_stock_price method from the connection
+            stock_price = conn.get_stock_price(ticker)
+            
+            # Check if we got a valid price
+            if stock_price is None or stock_price <= 0:
+                logger.warning(f"Got invalid stock price for {ticker}: {stock_price}")
+                return 0
+            
+            logger.info(f"Successfully fetched stock price for {ticker}: {stock_price}")
+            return stock_price
+        
+        except Exception as e:
+            logger.error(f"Error getting stock price for {ticker}: {str(e)}")
+            logger.error(traceback.format_exc())
+            return 0 

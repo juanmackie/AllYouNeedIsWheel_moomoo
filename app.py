@@ -87,6 +87,14 @@ def options():
     logger.info("Options page accessed but currently unavailable - redirecting to home")
     return redirect(url_for('index'))
 
+@app.route('/rollover')
+def rollover():
+    """
+    Render the rollover page for options approaching strike price
+    """
+    logger.info("Rendering rollover page")
+    return render_template('rollover.html')
+
 @app.route('/recommendations')
 def recommendations():
     """
