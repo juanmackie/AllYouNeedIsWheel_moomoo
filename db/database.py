@@ -28,6 +28,7 @@ class OptionsDatabase:
             
         self.db_path = db_path
         self._create_tables_if_not_exist()
+        self._migrate_database()
     
     def _create_tables_if_not_exist(self):
         """Create necessary tables with flattened structure"""
@@ -93,12 +94,81 @@ class OptionsDatabase:
                 ib_status TEXT,
                 filled INTEGER DEFAULT 0,
                 remaining INTEGER DEFAULT 0,
-                avg_fill_price REAL DEFAULT 0
+                avg_fill_price REAL DEFAULT 0,
+                
+                -- Rollover data
+                isRollover BOOLEAN DEFAULT 0
             )
         ''')
         
         conn.commit()
         conn.close()
+    
+    def _migrate_database(self):
+        """
+        Run database migrations for backward compatibility
+        
+        This function checks for missing columns in existing tables
+        and adds them if necessary.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get the current columns in the orders table
+            cursor.execute("PRAGMA table_info(orders)")
+            columns = cursor.fetchall()
+            column_names = [column[1] for column in columns]
+            
+            # Check if we need to add the isRollover column
+            if 'isRollover' not in column_names:
+                print("Running migration: Adding isRollover column to orders table")
+                cursor.execute("ALTER TABLE orders ADD COLUMN isRollover BOOLEAN DEFAULT 0")
+                print("Migration completed: isRollover column added")
+                
+                # Look for paired orders that might be rollover orders
+                # For simplicity, we'll identify orders created close in time with opposite actions
+                cursor.execute("""
+                    WITH order_pairs AS (
+                        SELECT o1.id as buy_id, o2.id as sell_id
+                        FROM orders o1
+                        JOIN orders o2 ON o1.ticker = o2.ticker 
+                                      AND o1.option_type = o2.option_type
+                                      AND datetime(o1.timestamp) BETWEEN datetime(o2.timestamp, '-2 minutes') AND datetime(o2.timestamp, '+2 minutes')
+                                      AND o1.action = 'BUY' AND o2.action = 'SELL'
+                                      AND o1.isRollover = 0 AND o2.isRollover = 0
+                    )
+                    SELECT buy_id, sell_id FROM order_pairs
+                """)
+                
+                potential_rollover_pairs = cursor.fetchall()
+                
+                if potential_rollover_pairs:
+                    print(f"Found {len(potential_rollover_pairs)} potential rollover order pairs")
+                    
+                    for buy_id, sell_id in potential_rollover_pairs:
+                        # Update the buy order
+                        cursor.execute("""
+                            UPDATE orders
+                            SET isRollover = 1
+                            WHERE id = ?
+                        """, (buy_id,))
+                        
+                        # Update the sell order
+                        cursor.execute("""
+                            UPDATE orders
+                            SET isRollover = 1
+                            WHERE id = ?
+                        """, (sell_id,))
+                    
+                    print(f"Migration: Marked {len(potential_rollover_pairs) * 2} orders as potential rollovers")
+            
+            conn.commit()
+            conn.close()
+            print("Database migration completed successfully")
+        except Exception as e:
+            print(f"Error during database migration: {str(e)}")
+            print(traceback.format_exc())
     
     def save_order(self, order_data):
         """
@@ -147,6 +217,9 @@ class OptionsDatabase:
             earnings_return_on_cash = order_data.get('earnings_return_on_cash', 0)
             earnings_return_on_capital = order_data.get('earnings_return_on_capital', 0)
             
+            # Extract rollover specific data
+            is_rollover = order_data.get('isRollover', False)
+            
             # Insert order with all fields using the flattened structure
             cursor.execute('''
                 INSERT INTO orders 
@@ -155,15 +228,15 @@ class OptionsDatabase:
                  open_interest, volume, is_mock,
                  earnings_max_contracts, earnings_premium_per_contract, 
                  earnings_total_premium, earnings_return_on_cash, 
-                 earnings_return_on_capital, status, executed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 earnings_return_on_capital, status, executed, isRollover)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 timestamp, ticker, option_type, action, strike, expiration, premium, quantity, 
                 bid, ask, last, delta, gamma, theta, vega, implied_volatility, 
                 open_interest, volume, is_mock,
                 earnings_max_contracts, earnings_premium_per_contract, 
                 earnings_total_premium, earnings_return_on_cash, 
-                earnings_return_on_capital, 'pending', False
+                earnings_return_on_capital, 'pending', False, is_rollover
             ))
             
             record_id = cursor.lastrowid
@@ -176,23 +249,24 @@ class OptionsDatabase:
             return None
             
     
-    def get_pending_orders(self, executed=False, limit=50):
+    def get_pending_orders(self, executed=False, limit=50, isRollover=None):
         """
         Get pending orders from the database
         
         Args:
             executed (bool): Whether to return executed orders (True) or pending orders (False)
             limit (int): Maximum number of orders to return
+            isRollover (bool): Whether to filter for rollover orders
             
         Returns:
             list: List of order dictionaries
         """
         if executed:
             # Return executed orders (completed, cancelled, etc.)
-            return self.get_orders(executed=executed, limit=limit)
+            return self.get_orders(executed=executed, limit=limit, isRollover=isRollover)
         else:
             # Return pending/processing orders specifically
-            return self.get_orders(status_filter=['pending', 'processing'], limit=limit)
+            return self.get_orders(status_filter=['pending', 'processing'], limit=limit, isRollover=isRollover)
     
     def update_order_status(self, order_id, status, executed=False, execution_details=None):
         """
@@ -408,7 +482,7 @@ class OptionsDatabase:
             print(f"Error getting order: {str(e)}")
             return None
             
-    def get_orders(self, status=None, executed=None, ticker=None, limit=50, status_filter=None):
+    def get_orders(self, status=None, executed=None, ticker=None, limit=50, status_filter=None, isRollover=None):
         """
         Get orders from the database with flexible filtering
         
@@ -418,6 +492,7 @@ class OptionsDatabase:
             ticker (str): Filter by ticker symbol
             limit (int): Maximum number of orders to return
             status_filter (list): Filter by multiple status values
+            isRollover (bool): Filter by rollover flag (None = no filter)
             
         Returns:
             list: List of order dictionaries
@@ -447,6 +522,11 @@ class OptionsDatabase:
             if ticker is not None:
                 query += " AND ticker = ?"
                 params.append(ticker)
+                
+            # Add rollover filter if specified
+            if isRollover is not None:
+                query += " AND isRollover = ?"
+                params.append(isRollover)
                 
             query += " ORDER BY timestamp DESC LIMIT ?"
             params.append(limit)

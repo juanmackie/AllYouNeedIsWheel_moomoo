@@ -12,6 +12,7 @@ This project now uses the `ib_async` library (the successor to `ib_insync`). The
 - **Wheel Strategy Focus**: Specialized tools for implementing the wheel strategy (selling cash-secured puts and covered calls)
 - **Options Analysis**: Analyze option chains to find the best cash-secured puts and covered calls for any stock ticker
 - **Trading Recommendations**: Get wheel strategy trade recommendations with projected premium income
+- **Option Rollover Management**: Tool for rolling option positions approaching strike price to later expirations
 - **Interactive Web Interface**: Modern, responsive web application with data visualizations
 - **API Integration**: Backend API to interact with Interactive Brokers
 - **Order Management**: Create, cancel, and execute wheel strategy option orders through the dashboard
@@ -107,18 +108,20 @@ PORT=8080 WORKERS=2 python3 run_api.py
   - DELETE `/api/options/order/<order_id>` - Cancel an order
   - PUT `/api/options/order/<order_id>` - Update an order status
   - POST `/api/options/execute/<order_id>` - Execute an order through TWS
+  - POST `/api/options/rollover` - Create rollover orders (close current position and open new one)
 
 - **Stock Data**:
   - GET `/api/stock/<ticker>` - Get stock price and basic data
 
 ### Web Interface
 
-The web interface consists of four main pages:
+The web interface consists of five main pages:
 
 1. **Dashboard** (http://localhost:5000/): Overview of your portfolio and key metrics
 2. **Portfolio** (http://localhost:5000/portfolio): Detailed view of all positions
 3. **Options** (http://localhost:5000/options?ticker=SYMBOL): Option chain analysis
 4. **Recommendations** (http://localhost:5000/recommendations): Trade recommendations
+5. **Rollover** (http://localhost:5000/rollover): Interface for managing option positions approaching strike price
 
 ### Frozen Data
 
