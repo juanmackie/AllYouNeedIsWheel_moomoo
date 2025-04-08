@@ -356,17 +356,18 @@ class OptionsService:
                 "error": str(e)
             }, 500
       
-    def get_otm_options(self, ticker=None, otm_percentage=10, option_type=None):
+    def get_otm_options(self, ticker, otm_percentage=10, option_type=None, expiration=None):
         """
-        Get option data based on OTM percentage from current price.
+        Get option contracts that are OTM by the specified percentage
         
         Args:
-            ticker (str, optional): Stock ticker symbol
-            otm_percentage (int, optional): Percentage out of the money
-            option_type (str, optional): Type of options to return ('CALL' or 'PUT'), if None returns both
+            ticker (str): Ticker symbol or comma-separated list of tickers
+            otm_percentage (float): Percentage OTM to filter by
+            option_type (str, optional): Filter by option type ('CALL' or 'PUT')
+            expiration (str, optional): Filter by specific expiration date
             
         Returns:
-            dict: Options data for the requested ticker
+            dict: Dictionary of option data
         """
         start_time = time.time()
         
@@ -389,7 +390,6 @@ class OptionsService:
             logger.info("No tickers found, unable to proceed")
             return {'error': 'No tickers found for processing'}
                 
-        expiration = get_closest_friday().strftime('%Y%m%d')
         # Process each ticker
         result = {}
         
@@ -413,15 +413,15 @@ class OptionsService:
         Process a single ticker for OTM options
         
         Args:
-            conn: IB connection
-            ticker (str): Stock ticker symbol
-            otm_percentage (float): Percentage out of the money
+            conn (IBConnection): Connection to Interactive Brokers
+            ticker (str): Ticker symbol
+            otm_percentage (float): Percentage OTM to filter by
             expiration (str, optional): Expiration date in YYYYMMDD format
-            is_market_open (bool, optional): Whether the market is currently open
-            option_type (str, optional): Type of options to return ('CALL' or 'PUT'), if None returns both
+            is_market_open (bool, optional): Whether the market is open
+            option_type (str, optional): Filter by option type ('CALL' or 'PUT')
             
         Returns:
-            dict: Processed options data for the ticker
+            dict: Option data for the ticker
         """
         logger.info(f"Processing {ticker} for {otm_percentage}% OTM options, option_type={option_type}")
         result = {}
@@ -499,15 +499,22 @@ class OptionsService:
                 
                 options = []
                 
+                # Get default expiration date (closest Friday) if not specified
+                default_expiration = get_closest_friday().strftime('%Y%m%d')
+                
+                # Use provided expiration if available, otherwise use default
+                target_expiration = expiration if expiration else default_expiration
+                logger.info(f"Using expiration date: {target_expiration} (Provided: {expiration is not None})")
+                
                 # Get call options if requested
                 if not option_type or option_type == 'CALL':
-                    call_option = conn.get_option_chain(ticker, expiration, 'C', call_strike)
+                    call_option = conn.get_option_chain(ticker, target_expiration, 'C', call_strike)
                     if call_option:
                         options.append(call_option)
                 
                 # Get put options if requested
                 if not option_type or option_type == 'PUT':
-                    put_option = conn.get_option_chain(ticker, expiration, 'P', put_strike)
+                    put_option = conn.get_option_chain(ticker, target_expiration, 'P', put_strike)
                     if put_option:
                         options.append(put_option)
                 

@@ -53,9 +53,9 @@
                                 <th>Strike</th>
                                 <th>Expiration</th>
                                 <th>Contracts</th>
-                                <th>Price</th>
+                                <th>Limit Price</th>
                                 <th>Order Type</th>
-                                <th>Notes</th>
+                                <th>Action</th>
                             </tr>
                         </thead>
                         <tbody id="rollover-suggestions-table-body">
@@ -76,14 +76,14 @@
     <div class="col-md-12">
         <div class="card shadow-sm">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Pending Option Orders</h5>
+                <h5 class="mb-0">Rollover Pending Orders</h5>
                 <button id="refresh-pending-orders" class="btn btn-sm btn-outline-primary">
                     <i class="bi bi-arrow-repeat"></i> Refresh
                 </button>
             </div>
             <div class="card-body">
                 <div class="table-responsive">
-                    <table class="table table-striped">
+                    <table class="table table-striped" id="pending-orders-table">
                         <thead>
                             <tr>
                                 <th>ID</th>
@@ -93,21 +93,21 @@
                                 <th>Strike</th>
                                 <th>Expiration</th>
                                 <th>Contracts</th>
-                                <th>Price</th>
+                                <th>Limit Price</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="pending-orders-table-body">
                             <tr>
-                                <td colspan="10" class="text-center">Loading pending orders...</td>
+                                <td colspan="10" class="text-center">Loading rollover pending orders...</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
             </div>
             <div class="card-footer">
-                <small class="text-muted">This table shows your pending option orders including rollover orders.</small>
+                <small class="text-muted">This table only shows rollover-related option orders. For all pending orders, please visit the dashboard.</small>
             </div>
         </div>
     </div>

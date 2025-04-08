@@ -68,17 +68,25 @@ async function fetchWeeklyOptionIncome() {
  * @param {string} ticker - The stock symbol
  * @param {number} otmPercentage - The OTM percentage value (default: 10)
  * @param {string} optionType - The option type to filter by ('CALL' or 'PUT')
+ * @param {string} expiration - The specific expiration date to filter by
  * @returns {Promise} Promise with option data
  */
-async function fetchOptionData(ticker, otmPercentage = 10, optionType = null) {
+async function fetchOptionData(ticker, otmPercentage = 10, optionType = null, expiration = null) {
     try {
         const timestamp = new Date().getTime();
-        const url = `/api/options/otm?tickers=${encodeURIComponent(ticker)}&otm=${otmPercentage}&real_time=true&options_only=true&t=${timestamp}`;
+        let url = `/api/options/otm?tickers=${encodeURIComponent(ticker)}&otm=${otmPercentage}&real_time=true&options_only=true&t=${timestamp}`;
         
         // Add option type to URL if provided
-        const finalUrl = optionType ? `${url}&optionType=${optionType}` : url;
+        if (optionType) {
+            url += `&optionType=${optionType}`;
+        }
         
-        const response = await fetch(finalUrl, {
+        // Add expiration date to URL if provided
+        if (expiration) {
+            url += `&expiration=${encodeURIComponent(expiration)}`;
+        }
+        
+        const response = await fetch(url, {
             headers: {
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
                 'Pragma': 'no-cache',
@@ -155,21 +163,31 @@ async function fetchTickers() {
 }
 
 /**
- * Fetch pending orders
- * @param {boolean} executed - Whether to fetch executed orders (default: false)
- * @returns {Promise} Promise with pending or executed orders data
+ * Fetch pending orders from the API
+ * @param {boolean} executed - Whether to fetch executed orders (true) or pending orders (false)
+ * @param {boolean} isRollover - Whether to fetch only rollover orders
+ * @returns {Promise<Object>} Pending orders data
  */
-async function fetchPendingOrders(executed = false) {
+async function fetchPendingOrders(executed = false, isRollover = false) {
     try {
-        const url = `/api/options/pending-orders${executed ? '?executed=true' : ''}`;
+        // Construct the URL with query parameters
+        let url = `/api/options/pending-orders?executed=${executed}`;
+        
+        // Add isRollover parameter if specified
+        if (isRollover) {
+            url += `&isRollover=true`;
+        }
+        
         const response = await fetch(url);
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
         }
-        return await response.json();
+        
+        const data = await response.json();
+        console.log('Pending orders API response:', data);
+        return data;
     } catch (error) {
-        console.error('Error fetching orders:', error);
-        showAlert(`Error fetching orders: ${error.message}`, 'danger');
+        console.error('Error fetching pending orders:', error);
         return null;
     }
 }
@@ -256,29 +274,27 @@ async function checkOrderStatus() {
 }
 
 /**
- * Execute an order through TWS
- * @param {string} orderId - The order ID to execute
- * @returns {Promise} Promise with the executed order
+ * Execute an order
+ * @param {number} orderId - The order ID to execute
+ * @returns {Promise<Object>} Result object with success/error info
  */
 async function executeOrder(orderId) {
     try {
         const response = await fetch(`/api/options/execute/${orderId}`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
             }
         });
         
         if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.error || 'Failed to execute order');
+            throw new Error(`HTTP error ${response.status}`);
         }
         
         return await response.json();
     } catch (error) {
         console.error('Error executing order:', error);
-        showAlert(`Error executing order: ${error.message}`, 'danger');
-        throw error;
+        return { success: false, error: error.message };
     }
 }
 
@@ -330,6 +346,27 @@ async function fetchStockPrices(tickers) {
     }
 }
 
+/**
+ * Fetch available option expiration dates for a ticker
+ * @param {string} ticker - The ticker symbol
+ * @returns {Promise<Object>} - Promise resolving to an object with expiration dates
+ */
+async function fetchOptionExpirations(ticker) {
+    try {
+        const response = await fetch(`/api/options/expirations?ticker=${encodeURIComponent(ticker)}`);
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to fetch option expirations: ${errorText}`);
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching option expirations:', error);
+        throw error;
+    }
+}
+
 // Export all API functions
 export {
     fetchAccountData,
@@ -342,5 +379,6 @@ export {
     cancelOrder,
     executeOrder,
     checkOrderStatus,
-    fetchStockPrices
+    fetchStockPrices,
+    fetchOptionExpirations
 }; 

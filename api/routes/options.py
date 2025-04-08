@@ -8,6 +8,7 @@ import traceback
 import logging
 import time
 import json
+import datetime
 
 # Set up logger
 logger = logging.getLogger('api.routes.options')
@@ -26,18 +27,20 @@ def otm_options():
     # Get parameters from request
     ticker = request.args.get('tickers')
     otm_percentage = float(request.args.get('otm', 10))
-    option_type = request.args.get('optionType')  # New parameter for filtering by option type
+    option_type = request.args.get('optionType')  # Parameter for filtering by option type
+    expiration = request.args.get('expiration')   # New parameter for filtering by expiration date
     
     # Validate option_type if provided
     if option_type and option_type not in ['CALL', 'PUT']:
         return jsonify({"error": f"Invalid option_type: {option_type}. Must be 'CALL' or 'PUT'"}), 400
     
     # Use the existing module-level instance instead of creating a new one
-    # Call the service with appropriate parameters including the new option_type
+    # Call the service with appropriate parameters including the new option_type and expiration
     result = options_service.get_otm_options(
         ticker=ticker,
         otm_percentage=otm_percentage,
-        option_type=option_type
+        option_type=option_type,
+        expiration=expiration
     )
     
     return jsonify(result)
@@ -107,13 +110,23 @@ def save_order():
 def get_pending_orders():
     """
     Get pending option orders from the database
+    
+    Query parameters:
+        executed (bool): Whether to fetch executed orders (default: false)
+        isRollover (bool): Whether to fetch only rollover orders (default: None = all orders)
     """
     try:
         # Get executed parameter (optional)
         executed = request.args.get('executed', 'false').lower() == 'true'
         
+        # Get isRollover parameter (optional)
+        is_rollover_param = request.args.get('isRollover')
+        is_rollover = None
+        if is_rollover_param is not None:
+            is_rollover = is_rollover_param.lower() == 'true'
+        
         # Get pending orders from database
-        orders = options_service.db.get_pending_orders(executed=executed)
+        orders = options_service.db.get_pending_orders(executed=executed, isRollover=is_rollover)
         
         return jsonify({"orders": orders})
     except Exception as e:
@@ -251,8 +264,10 @@ def rollover_option():
             'action': 'BUY',  # Buy to close
             'quantity': rollover_data['quantity'],
             'order_type': rollover_data.get('current_order_type', 'MARKET'),
-            'limit_price': rollover_data.get('current_limit_price'),
-            'notes': f"Rollover: Close existing {rollover_data['current_option_type']} position"
+            'limit_price': rollover_data.get('current_limit_price'),  # Already per-contract from frontend
+            'bid': rollover_data.get('current_bid', 0),
+            'ask': rollover_data.get('current_ask', 0),
+            'isRollover': True
         }
         
         # Create sell order for new position
@@ -264,8 +279,10 @@ def rollover_option():
             'action': 'SELL',  # Sell to open
             'quantity': rollover_data['quantity'],
             'order_type': rollover_data.get('new_order_type', 'LIMIT'),
-            'limit_price': rollover_data.get('new_limit_price'),
-            'notes': f"Rollover: Open new {rollover_data['current_option_type']} position"
+            'limit_price': rollover_data.get('new_limit_price', 0) * 100,  # Convert from per-share to per-contract
+            'bid': rollover_data.get('new_bid', 0),
+            'ask': rollover_data.get('new_ask', 0),
+            'isRollover': True
         }
         
         # Save orders to database
@@ -374,6 +391,89 @@ def update_order_quantity(order_id):
         return jsonify({"error": "Invalid quantity value"}), 400
     except Exception as e:
         logger.error(f"Error updating order quantity: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/expirations', methods=['GET'])
+def get_option_expirations():
+    """
+    Get available expiration dates for options of a given ticker.
+    
+    Query parameters:
+        ticker (str): The ticker symbol (e.g., 'NVDA')
+        
+    Returns:
+        JSON response with a list of available expiration dates
+    """
+    logger.info("GET /expirations request received")
+    
+    try:
+        # Get ticker from request
+        ticker = request.args.get('ticker')
+        if not ticker:
+            return jsonify({"error": "No ticker provided"}), 400
+            
+        # Ensure connection to IB
+        conn = options_service._ensure_connection()
+        if not conn:
+            return jsonify({"error": "Failed to establish connection to IB"}), 500
+            
+        # Import is_market_hours directly from core module
+        from core.utils import is_market_hours
+        
+        # Get market status
+        is_market_open = is_market_hours()
+        logger.info(f"Market is {'open' if is_market_open else 'closed'}")
+        
+        # Set appropriate market data type based on market status
+        if not is_market_open:
+            conn.set_market_data_type(2)  # Frozen data when market is closed
+        else:
+            conn.set_market_data_type(1)  # Live data when market is open
+            
+        # Create a Stock object for the ticker
+        from ib_async import Stock
+        stock = Stock(ticker, 'SMART', 'USD')
+        conn.ib.qualifyContracts(stock)
+        
+        # Get option chains to find available expirations
+        chains = conn.ib.reqSecDefOptParams(stock.symbol, '', stock.secType, stock.conId)
+        
+        if not chains:
+            logger.error(f"No option chains found for {ticker}")
+            return jsonify({"error": f"No option chains found for {ticker}"}), 404
+            
+        # Get the first exchange's data (typically SMART)
+        chain = next((c for c in chains if c.exchange == 'SMART' and c.expirations), chains[0])
+        
+        # Extract and filter valid expirations (only future dates)
+        today = datetime.datetime.now().strftime('%Y%m%d')
+        valid_expirations = []
+        
+        if chain and chain.expirations:
+            # Sort expirations chronologically
+            valid_expirations = sorted([exp for exp in chain.expirations if exp >= today])
+            
+            # Format the dates for better readability (YYYYMMDD -> YYYY-MM-DD)
+            formatted_expirations = []
+            for exp in valid_expirations:
+                if len(exp) == 8:  # YYYYMMDD format
+                    formatted_exp = f"{exp[0:4]}-{exp[4:6]}-{exp[6:8]}"
+                    formatted_expirations.append({
+                        "value": exp,  # Original format for API use
+                        "label": formatted_exp  # Formatted for display
+                    })
+            
+            return jsonify({
+                "ticker": ticker,
+                "expirations": formatted_expirations
+            })
+        else:
+            logger.error(f"No valid expirations found for {ticker}")
+            return jsonify({"error": f"No valid expirations found for {ticker}"}), 404
+            
+    except Exception as e:
+        logger.error(f"Error getting option expirations for {request.args.get('ticker', 'unknown')}: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
        
