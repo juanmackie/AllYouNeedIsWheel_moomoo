@@ -1,7 +1,7 @@
 /**
  * Options Table module for handling options display and interaction
  */
-import { fetchOptionData, fetchTickers, saveOptionOrder, fetchAccountData } from './api.js';
+import { fetchOptionData, fetchTickers, saveOptionOrder, fetchAccountData, fetchOptionExpirations } from './api.js';
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency, formatPercentage } from './account.js';
 
@@ -1123,15 +1123,33 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
         const putOtmPercentage = tickersData[ticker]?.putOtmPercentage || 10;
         
         console.log(`Refreshing options for ${ticker} with call OTM ${callOtmPercentage}% and put OTM ${putOtmPercentage}%`);
+
+        // Fetch option expiration dates for this ticker
+        let closestExpiration = null;
+        try {
+            console.log(`Fetching expiration dates for ${ticker}`);
+            const expirationData = await fetchOptionExpirations(ticker);
+            
+            if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
+                // Get the closest expiration date (first one in the sorted list)
+                closestExpiration = expirationData.expirations[0].value;
+                console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
+            } else {
+                console.log(`No expiration dates found for ${ticker}, will use default`);
+            }
+        } catch (error) {
+            console.error(`Error fetching expiration dates for ${ticker}:`, error);
+            // Continue with default (no expiration specified)
+        }
         
-        // Make API call for call options
-        console.log(`Fetching CALL options for ${ticker} with OTM ${callOtmPercentage}%`);
-        const callOptionData = await fetchOptionData(ticker, callOtmPercentage, 'CALL');
+        // Make API call for call options with the closest expiration date
+        console.log(`Fetching CALL options for ${ticker} with OTM ${callOtmPercentage}% and expiration ${closestExpiration || 'default'}`);
+        const callOptionData = await fetchOptionData(ticker, callOtmPercentage, 'CALL', closestExpiration);
         console.log(`Received CALL data for ${ticker}:`, callOptionData);
         
-        // Make API call for put options
-        console.log(`Fetching PUT options for ${ticker} with OTM ${putOtmPercentage}%`);
-        const putOptionData = await fetchOptionData(ticker, putOtmPercentage, 'PUT');
+        // Make API call for put options with the closest expiration date
+        console.log(`Fetching PUT options for ${ticker} with OTM ${putOtmPercentage}% and expiration ${closestExpiration || 'default'}`);
+        const putOptionData = await fetchOptionData(ticker, putOtmPercentage, 'PUT', closestExpiration);
         console.log(`Received PUT data for ${ticker}:`, putOptionData);
         
         // Make sure tickersData is initialized for this ticker
@@ -1374,8 +1392,27 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
         
         console.log(`Refreshing ${optionType} options for ${ticker} with OTM ${otmPercentage}%`);
         
-        // Make API call for specific option type
-        const optionData = await fetchOptionData(ticker, otmPercentage, optionType);
+        // Fetch option expiration dates for this ticker
+        let closestExpiration = null;
+        try {
+            console.log(`Fetching expiration dates for ${ticker}`);
+            const expirationData = await fetchOptionExpirations(ticker);
+            
+            if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
+                // Get the closest expiration date (first one in the sorted list)
+                closestExpiration = expirationData.expirations[0].value;
+                console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
+            } else {
+                console.log(`No expiration dates found for ${ticker}, will use default`);
+            }
+        } catch (error) {
+            console.error(`Error fetching expiration dates for ${ticker}:`, error);
+            // Continue with default (no expiration specified)
+        }
+        
+        // Make API call for specific option type with the closest expiration
+        console.log(`Fetching ${optionType} options for ${ticker} with OTM ${otmPercentage}% and expiration ${closestExpiration || 'default'}`);
+        const optionData = await fetchOptionData(ticker, otmPercentage, optionType, closestExpiration);
         
         console.log(`${optionType} data for ${ticker}:`, optionData);
         
@@ -1412,7 +1449,7 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
             // Update the specific option type data
             if (optionType === 'CALL') {
                 tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
-    } else {
+            } else {
                 tickersData[ticker].data.data[ticker].puts = optionData.data[ticker].puts || [];
             }
         }
