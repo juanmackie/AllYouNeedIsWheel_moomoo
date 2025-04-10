@@ -1048,3 +1048,76 @@ class OptionsService:
             logger.error(f"Error getting stock price for {ticker}: {str(e)}")
             logger.error(traceback.format_exc())
             return 0 
+
+    def get_option_expirations(self, ticker):
+        """
+        Get available expiration dates for options of a given ticker.
+        Only process chains that have more than 1 expiration date.
+        
+        Args:
+            ticker (str): The ticker symbol (e.g., 'NVDA')
+            
+        Returns:
+            dict: Dictionary containing ticker and list of expiration dates
+                  Each expiration has 'value' (YYYYMMDD) and 'label' (YYYY-MM-DD)
+        """
+        try:
+            # Ensure connection to IB
+            conn = self._ensure_connection()
+            if not conn:
+                logger.error(f"Failed to establish connection to IB for {ticker} expirations")
+                return {"error": "Failed to establish connection to IB"}
+                
+            # Get market status
+            is_market_open = is_market_hours()
+            
+            # Set appropriate market data type based on market status
+            if not is_market_open:
+                conn.set_market_data_type(2)  # Frozen data when market is closed
+            else:
+                conn.set_market_data_type(1)  # Live data when market is open
+                
+            # Create a Stock object for the ticker
+            stock = Stock(ticker, 'SMART', 'USD')
+            conn.ib.qualifyContracts(stock)
+            
+            # Get option chains to find available expirations
+            chains = conn.ib.reqSecDefOptParams(stock.symbol, '', stock.secType, stock.conId)
+            
+            if not chains:
+                logger.error(f"No option chains found for {ticker}")
+                return {"error": f"No option chains found for {ticker}"}
+                
+                
+            # Get the first valid exchange's data (typically SMART)
+            chain = next((c for c in chains if c.exchange == 'SMART' and len(c.expirations) > 1), chains[0])
+            
+            # Extract and filter valid expirations (only future dates)
+            today = datetime.now().strftime('%Y%m%d')
+            
+            # Sort expirations chronologically
+            valid_expirations = sorted([exp for exp in chain.expirations if exp >= today])
+            
+            if not valid_expirations:
+                logger.error(f"No valid future expirations found for {ticker}")
+                return {"error": f"No valid future expirations found for {ticker}"}
+                
+            # Format the dates for better readability (YYYYMMDD -> YYYY-MM-DD)
+            formatted_expirations = []
+            for exp in valid_expirations:
+                if len(exp) == 8:  # YYYYMMDD format
+                    formatted_exp = f"{exp[0:4]}-{exp[4:6]}-{exp[6:8]}"
+                    formatted_expirations.append({
+                        "value": exp,  # Original format for API use
+                        "label": formatted_exp  # Formatted for display
+                    })
+            
+            return {
+                "ticker": ticker,
+                "expirations": formatted_expirations
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting option expirations for {ticker}: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {"error": str(e)} 
