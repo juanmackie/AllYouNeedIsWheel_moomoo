@@ -413,64 +413,17 @@ def get_option_expirations():
         if not ticker:
             return jsonify({"error": "No ticker provided"}), 400
             
-        # Ensure connection to IB
-        conn = options_service._ensure_connection()
-        if not conn:
-            return jsonify({"error": "Failed to establish connection to IB"}), 500
+        # Call the service method to get option expirations
+        result = options_service.get_option_expirations(ticker)
+        
+        # Check if there was an error
+        if "error" in result:
+            error_message = result["error"]
+            logger.error(f"Error getting expirations for {ticker}: {error_message}")
+            return jsonify({"error": error_message}), 404
             
-        # Import is_market_hours directly from core module
-        from core.utils import is_market_hours
-        
-        # Get market status
-        is_market_open = is_market_hours()
-        logger.info(f"Market is {'open' if is_market_open else 'closed'}")
-        
-        # Set appropriate market data type based on market status
-        if not is_market_open:
-            conn.set_market_data_type(2)  # Frozen data when market is closed
-        else:
-            conn.set_market_data_type(1)  # Live data when market is open
-            
-        # Create a Stock object for the ticker
-        from ib_async import Stock
-        stock = Stock(ticker, 'SMART', 'USD')
-        conn.ib.qualifyContracts(stock)
-        
-        # Get option chains to find available expirations
-        chains = conn.ib.reqSecDefOptParams(stock.symbol, '', stock.secType, stock.conId)
-        
-        if not chains:
-            logger.error(f"No option chains found for {ticker}")
-            return jsonify({"error": f"No option chains found for {ticker}"}), 404
-            
-        # Get the first exchange's data (typically SMART)
-        chain = next((c for c in chains if c.exchange == 'SMART' and c.expirations), chains[0])
-        
-        # Extract and filter valid expirations (only future dates)
-        today = datetime.datetime.now().strftime('%Y%m%d')
-        valid_expirations = []
-        
-        if chain and chain.expirations:
-            # Sort expirations chronologically
-            valid_expirations = sorted([exp for exp in chain.expirations if exp >= today])
-            
-            # Format the dates for better readability (YYYYMMDD -> YYYY-MM-DD)
-            formatted_expirations = []
-            for exp in valid_expirations:
-                if len(exp) == 8:  # YYYYMMDD format
-                    formatted_exp = f"{exp[0:4]}-{exp[4:6]}-{exp[6:8]}"
-                    formatted_expirations.append({
-                        "value": exp,  # Original format for API use
-                        "label": formatted_exp  # Formatted for display
-                    })
-            
-            return jsonify({
-                "ticker": ticker,
-                "expirations": formatted_expirations
-            })
-        else:
-            logger.error(f"No valid expirations found for {ticker}")
-            return jsonify({"error": f"No valid expirations found for {ticker}"}), 404
+        # Return successful response
+        return jsonify(result)
             
     except Exception as e:
         logger.error(f"Error getting option expirations for {request.args.get('ticker', 'unknown')}: {str(e)}")

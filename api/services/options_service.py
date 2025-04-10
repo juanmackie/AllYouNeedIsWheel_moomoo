@@ -26,7 +26,6 @@ class OptionsService:
     """
     def __init__(self):
         self.config = Config()
-        logger.info(f"Options service using port: {self.config.get('port')}")
         self.connection = None
         db_path = self.config.get('db_path')
         self.db = OptionsDatabase(db_path)
@@ -58,7 +57,6 @@ class OptionsService:
             logger.info(f"Creating new TWS connection with client ID: {unique_client_id}")
             
             port = self.config.get('port', 7497)
-            logger.info(f"Connecting to TWS on port: {port}")
             
             self.connection = IBConnection(
                 host=self.config.get('host', '127.0.0.1'),
@@ -178,7 +176,6 @@ class OptionsService:
                     'premium': order.get('premium'),
                     'strike': strike
                 }
-                logger.info(f"Price fields in order: {price_fields}")
                 
                 # Get price values, with more thorough validation
                 bid = float(order.get('bid', 0) or 0)
@@ -202,43 +199,33 @@ class OptionsService:
                         if contract:
                             option_data = conn.get_option_market_data(contract)
                             if option_data:
-                                logger.info(f"Retrieved real-time option data: {option_data}")
                                 # Update bid and ask if available
                                 if 'bid' in option_data and option_data['bid'] > 0:
                                     bid = float(option_data['bid'])
-                                    logger.info(f"Updated bid from real-time data: {bid}")
                                 if 'ask' in option_data and option_data['ask'] > 0:
                                     ask = float(option_data['ask'])
-                                    logger.info(f"Updated ask from real-time data: {ask}")
                                 if 'last' in option_data and option_data['last'] > 0:
                                     last = float(option_data['last'])
-                                    logger.info(f"Updated last from real-time data: {last}")
                     except Exception as e:
                         logger.warning(f"Error getting real-time option data: {e}")
                 
                 # Calculate appropriate limit price using all available price information
-                logger.info(f"Calculating limit price from: bid={bid}, ask={ask}, last={last}, premium={premium}")
                 
                 if bid > 0 and ask > 0:
                     # Use mid-price if both bid and ask are valid
                     limit_price = (bid + ask) / 2
-                    logger.info(f"Using mid-price between bid and ask: {limit_price}")
                 elif bid > 0:
                     # Use bid if only bid is valid
                     limit_price = bid
-                    logger.info(f"Using bid price: {limit_price}")
                 elif ask > 0:
                     # Use 90% of ask if only ask is valid (more conservative)
                     limit_price = ask * 0.9
-                    logger.info(f"Using 90% of ask price: {limit_price}")
                 elif last > 0:
                     # Use last price if available
                     limit_price = last
-                    logger.info(f"Using last price: {limit_price}")
                 elif premium > 0:
                     # Use premium as fallback
                     limit_price = premium
-                    logger.info(f"Using premium price: {limit_price}")
                 else:
                     # Last resort - calculate a minimum price based on strike
                     # For safety, use at least 1% of strike price or $0.05, whichever is higher
@@ -248,7 +235,6 @@ class OptionsService:
                     
                 # Ensure minimum price and round properly
                 if limit_price < 0.05:
-                    logger.info(f"Limit price {limit_price} below minimum, using $0.05")
                     limit_price = 0.05
                 
                 # Round to nearest cent
@@ -261,7 +247,6 @@ class OptionsService:
                     # Use 1% of strike price or $0.05, whichever is higher
                     default_price = max(float(strike) * 0.01, 0.05)
                     limit_price = round(default_price, 2)
-                    logger.info(f"Using calculated default price: {limit_price}")
                 except:
                     limit_price = 0.05
                     logger.warning(f"Failed to calculate default price, using absolute minimum: {limit_price}")
@@ -382,7 +367,6 @@ class OptionsService:
             logger.error("Failed to establish connection to IB")
         
         is_market_open = is_market_hours()
-        logger.info(f"Market is {'open' if is_market_open else 'closed'}, will attempt to get {'real-time' if is_market_open else 'frozen'} data")
         
         # If no tickers provided, get them from portfolio
         tickers = [ticker]
@@ -403,7 +387,6 @@ class OptionsService:
                 result[ticker] = {"error": str(e)}
         
         elapsed = time.time() - start_time
-        logger.info(f"Completed OTM-based options request in {elapsed:.2f}s, is_market_open={is_market_open}, option_type={option_type}")
         
         # Return the results
         return {'data': result}
@@ -423,24 +406,13 @@ class OptionsService:
         Returns:
             dict: Option data for the ticker
         """
-        logger.info(f"Processing {ticker} for {otm_percentage}% OTM options, option_type={option_type}")
         result = {}
         
         # Get stock price from IB - will use frozen data if market is closed
         stock_price = None
         if conn and conn.is_connected():
             try:
-                if is_market_open:
-                    logger.info(f"Market is open. Attempting to get real-time stock price for {ticker}")
-                else:
-                    logger.info(f"Market is closed. Attempting to get frozen stock price for {ticker}")
-                    
                 stock_price = conn.get_stock_price(ticker)
-                
-                if is_market_open:
-                    logger.info(f"Retrieved real-time stock price for {ticker}: ${stock_price}")
-                else:
-                    logger.info(f"Retrieved frozen stock price for {ticker}: ${stock_price}")
             except Exception as e:
                 logger.error(f"Error getting stock price for {ticker}: {e}")
                 logger.error(traceback.format_exc())
@@ -468,11 +440,10 @@ class OptionsService:
             for pos in positions:
                 if pos.get('symbol') == ticker:
                     position_size = pos.get('position', 0)
-                    logger.info(f"Found position for {ticker}: {position_size} shares")
                     break
             
             if position_size == 0:
-                logger.info(f"No position found for {ticker}, using 0 shares")
+                pass
         except Exception as e:
             logger.error(f"Error getting position for {ticker}: {e}")
             logger.error(traceback.format_exc())
@@ -484,11 +455,6 @@ class OptionsService:
         options_data = {}
         if conn and conn.is_connected():
             try:
-                if is_market_open:
-                    logger.info(f"Attempting to get real-time options chain for {ticker}")
-                else:
-                    logger.info(f"Attempting to get frozen options chain for {ticker}")
-                    
                 # Calculate target strikes
                 call_strike = round(stock_price * (1 + otm_percentage / 100), 2)
                 put_strike = round(stock_price * (1 - otm_percentage / 100), 2)
@@ -504,7 +470,6 @@ class OptionsService:
                 
                 # Use provided expiration if available, otherwise use default
                 target_expiration = expiration if expiration else default_expiration
-                logger.info(f"Using expiration date: {target_expiration} (Provided: {expiration is not None})")
                 
                 # Get call options if requested
                 if not option_type or option_type == 'CALL':
@@ -519,17 +484,7 @@ class OptionsService:
                         options.append(put_option)
                 
                 if options:
-                    if is_market_open:
-                        logger.info(f"Successfully retrieved real-time options for {ticker}")
-                    else:
-                        logger.info(f"Successfully retrieved frozen options for {ticker}")
-                        
                     options_data = self._process_options_chain(options, ticker, stock_price, otm_percentage, option_type)
-                    
-                    if is_market_open:
-                        logger.info(f"Processed real-time options data for {ticker}")
-                    else:
-                        logger.info(f"Processed frozen options data for {ticker}")
                 else:
                     if is_market_open:
                         logger.warning(f"Could not get real-time options chain for {ticker}")
@@ -546,10 +501,6 @@ class OptionsService:
         
         # Add options data to result
         result.update(options_data)
-        
-        # Log summary of the results
-        log_msg = f"Completed processing {ticker}"
-        logger.info(log_msg)
         
         return result
 
@@ -752,8 +703,6 @@ class OptionsService:
         Returns:
             dict: Result with updated orders
         """
-        logger.info("Checking pending orders with TWS")
-        
         try:
             # Get all pending and processing orders from database
             db = self.db
@@ -762,7 +711,6 @@ class OptionsService:
                     status_filter=['pending', 'processing'],
                     limit=50  # Limit to most recent orders
                 )
-                logger.info(f"Found {len(orders)} pending/processing orders to check")
                 
                 # Log details of each order at debug level
                 for i, order in enumerate(orders):
@@ -778,7 +726,6 @@ class OptionsService:
                 }
             
             if not orders or len(orders) == 0:
-                logger.info("No pending or processing orders found")
                 return {
                     "success": True,
                     "message": "No pending or processing orders to check",
@@ -825,7 +772,6 @@ class OptionsService:
                             }
                             
                             # Update database with new status
-                            logger.info(f"Updating order {order_id} with new status: {new_status}, executed: {executed}")
                             update_result = db.update_order_status(
                                 order_id=order_id,
                                 status=new_status,
@@ -834,7 +780,6 @@ class OptionsService:
                             )
                             
                             if update_result:
-                                logger.info(f"Successfully updated order {order_id} in database")
                                 
                                 # Add to list of updated orders
                                 updated_order = order.copy()
@@ -842,14 +787,12 @@ class OptionsService:
                                 updated_order.update(execution_details)
                                 updated_orders.append(updated_order)
                                 
-                                logger.info(f"Updated order {order_id} status to {new_status}, IB status: {ib_status.get('status')}")
                             else:
                                 logger.error(f"Failed to update order {order_id} in database")
                                 # Verify current order status
                                 current_order = db.get_order(order_id)
                                 if current_order:
-                                    logger.info(f"Current order status: {current_order.get('status')}, " +
-                                               f"executed: {current_order.get('executed')}")
+                                    pass
                                 else:
                                     logger.error(f"Could not find order {order_id} in database after update attempt")
                     except Exception as e:
@@ -886,8 +829,6 @@ class OptionsService:
         Returns:
             dict: Result with status and details
         """
-        logger.info(f"Canceling order with ID {order_id}")
-        
         try:
             # Get the order to check its current status
             db = self.db
@@ -931,7 +872,6 @@ class OptionsService:
                             logger.error(f"Failed to cancel order in TWS: {cancel_result.get('error')}")
                             tws_error_message = f"Failed to cancel order in TWS: {cancel_result.get('error')}"
                         else:
-                            logger.info(f"Successfully requested cancellation in TWS for order ID {ib_order_id}")
                             
                             # Even if TWS accepts the cancellation request, the order might not be canceled immediately
                             # Check the actual status
@@ -1060,8 +1000,6 @@ class OptionsService:
                     execution_details=execution_details
                 )
                 
-                logger.info(f"Order {order_id} forcibly marked as canceled despite errors")
-                
                 return {
                     "success": True,
                     "message": "Order forcibly marked as canceled despite errors",
@@ -1090,8 +1028,6 @@ class OptionsService:
             float: Current stock price
         """
         try:
-            logger.info(f"Fetching stock price for {ticker}")
-            
             # Use _ensure_connection to get or create a connection
             conn = self._ensure_connection()
             if not conn:
@@ -1106,10 +1042,82 @@ class OptionsService:
                 logger.warning(f"Got invalid stock price for {ticker}: {stock_price}")
                 return 0
             
-            logger.info(f"Successfully fetched stock price for {ticker}: {stock_price}")
             return stock_price
         
         except Exception as e:
             logger.error(f"Error getting stock price for {ticker}: {str(e)}")
             logger.error(traceback.format_exc())
             return 0 
+
+    def get_option_expirations(self, ticker):
+        """
+        Get available expiration dates for options of a given ticker.
+        Only process chains that have more than 1 expiration date.
+        
+        Args:
+            ticker (str): The ticker symbol (e.g., 'NVDA')
+            
+        Returns:
+            dict: Dictionary containing ticker and list of expiration dates
+                  Each expiration has 'value' (YYYYMMDD) and 'label' (YYYY-MM-DD)
+        """
+        try:
+            # Ensure connection to IB
+            conn = self._ensure_connection()
+            if not conn:
+                logger.error(f"Failed to establish connection to IB for {ticker} expirations")
+                return {"error": "Failed to establish connection to IB"}
+                
+            # Get market status
+            is_market_open = is_market_hours()
+            
+            # Set appropriate market data type based on market status
+            if not is_market_open:
+                conn.set_market_data_type(2)  # Frozen data when market is closed
+            else:
+                conn.set_market_data_type(1)  # Live data when market is open
+                
+            # Create a Stock object for the ticker
+            stock = Stock(ticker, 'SMART', 'USD')
+            conn.ib.qualifyContracts(stock)
+            
+            # Get option chains to find available expirations
+            chains = conn.ib.reqSecDefOptParams(stock.symbol, '', stock.secType, stock.conId)
+            
+            if not chains:
+                logger.error(f"No option chains found for {ticker}")
+                return {"error": f"No option chains found for {ticker}"}
+                
+                
+            # Get the first valid exchange's data (typically SMART)
+            chain = next((c for c in chains if c.exchange == 'SMART' and len(c.expirations) > 1), chains[0])
+            
+            # Extract and filter valid expirations (only future dates)
+            today = datetime.now().strftime('%Y%m%d')
+            
+            # Sort expirations chronologically
+            valid_expirations = sorted([exp for exp in chain.expirations if exp >= today])
+            
+            if not valid_expirations:
+                logger.error(f"No valid future expirations found for {ticker}")
+                return {"error": f"No valid future expirations found for {ticker}"}
+                
+            # Format the dates for better readability (YYYYMMDD -> YYYY-MM-DD)
+            formatted_expirations = []
+            for exp in valid_expirations:
+                if len(exp) == 8:  # YYYYMMDD format
+                    formatted_exp = f"{exp[0:4]}-{exp[4:6]}-{exp[6:8]}"
+                    formatted_expirations.append({
+                        "value": exp,  # Original format for API use
+                        "label": formatted_exp  # Formatted for display
+                    })
+            
+            return {
+                "ticker": ticker,
+                "expirations": formatted_expirations
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting option expirations for {ticker}: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {"error": str(e)} 
