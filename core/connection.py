@@ -105,10 +105,7 @@ class IBConnection:
         
         try:
             if self._connected and self.ib.isConnected():
-                logger.info(f"Already connected to IB")
                 return True
-            
-            logger.info(f"Connecting to IB at {self.host}:{self.port} with client ID {self.client_id}")
             
             # Ensure event loop exists
             self._ensure_event_loop()
@@ -182,11 +179,9 @@ class IBConnection:
             
             if not is_market_open:
                 # Use frozen data when market is closed
-                logger.info(f"Market is closed. Setting market data type to FROZEN for stock {symbol}")
                 self.set_market_data_type(2)  # 2 = Frozen
             else:
                 # Use live data when market is open
-                logger.info(f"Market is open. Setting market data type to LIVE for stock {symbol}")
                 self.set_market_data_type(1)  # 1 = Live
             
             # Create a stock contract
@@ -270,7 +265,6 @@ class IBConnection:
                 logger.warning("Cannot set market data type - not connected")
                 return False
                 
-            logger.info(f"Setting market data type to {data_type}")
             self.ib.reqMarketDataType(data_type)
             return True
         except Exception as e:
@@ -301,11 +295,9 @@ class IBConnection:
             
             if not is_market_open:
                 # Use frozen data when market is closed
-                logger.info(f"Market is closed. Setting market data type to FROZEN for {symbol}")
                 self.set_market_data_type(2)  # 2 = Frozen
             else:
                 # Use live data when market is open
-                logger.info(f"Market is open. Setting market data type to LIVE for {symbol}")
                 self.set_market_data_type(1)  # 1 = Live
             
             # Rest of the method remains the same...
@@ -324,8 +316,6 @@ class IBConnection:
                 stock_price = ticker.last if hasattr(ticker, 'last') and ticker.last > 0 else None
             if not stock_price or stock_price <= 0:
                 stock_price = ticker.close if hasattr(ticker, 'close') and ticker.close > 0 else None
-            
-            logger.info(f"Current price for {symbol}: {stock_price}")
             
             if not stock_price or stock_price <= 0:
                 logger.warning(f"Could not get valid price for {symbol}")
@@ -351,7 +341,6 @@ class IBConnection:
                     
                     if valid_expirations:
                         expiration = sorted(valid_expirations)[0]
-                        logger.info(f"Using expiration {expiration} for {symbol}")
                     else:
                         logger.error(f"No valid expirations found for {symbol}")
                         return None
@@ -377,9 +366,7 @@ class IBConnection:
                 
             # If target_strike is provided, find the closest strike
             if target_strike is not None and strikes:
-                logger.info(f"Finding strike closest to {target_strike} for {symbol}")
                 closest_strike = min(strikes, key=lambda s: abs(s - target_strike))
-                logger.info(f"Selected strike {closest_strike} (from {len(strikes)} available strikes)")
                 strikes = [closest_strike]
             
             # Final check to ensure expiration is set
@@ -506,7 +493,6 @@ class IBConnection:
                 raise ConnectionError("Not connected to IB during market hours")
             else:
                 # Try to connect even when market is closed
-                logger.info("Market is closed, but trying to connect for frozen data")
                 if not self.connect():
                     logger.error("Could not connect to IB during closed market.")
                     return None
@@ -515,11 +501,9 @@ class IBConnection:
             # Set market data type based on market hours
             if not is_market_open:
                 # Use frozen data when market is closed
-                logger.info("Market is closed. Setting market data type to FROZEN for portfolio")
                 self.set_market_data_type(2)  # 2 = Frozen
             else:
                 # Use live data when market is open
-                logger.info("Market is open. Setting market data type to LIVE for portfolio")
                 self.set_market_data_type(1)  # 1 = Live
                 
             # Get account summary
@@ -603,14 +587,8 @@ class IBConnection:
                 except Exception as e:
                     logger.error(f"Error processing position: {str(e)}")
             
-            if is_market_open:
-                logger.info(f"Processed {stock_count} stock positions, {option_count} option positions, and {other_count} other positions")
-            else:
-                logger.info(f"Processed {stock_count} stock positions, {option_count} option positions, and {other_count} other positions using FROZEN data")
-            
             if not positions:
                 # If we don't get any positions, return None or empty result
-                logger.info("No positions found.")
                 return None
             
             return {
@@ -666,7 +644,6 @@ class IBConnection:
                 currency=currency
             )
             
-            logger.info(f"Created option contract: {symbol} {expiry} {strike} {right}")
             return contract
         except Exception as e:
             logger.error(f"Error creating option contract: {str(e)}")
@@ -710,8 +687,6 @@ class IBConnection:
             else:
                 logger.error(f"Unsupported order type: {order_type}")
                 return None
-                
-            logger.info(f"Created {order_type} order: {action} {quantity} contracts")
             return order
         except Exception as e:
             logger.error(f"Error creating order: {str(e)}")
@@ -771,7 +746,6 @@ class IBConnection:
                 'market_cap': getattr(trade.orderStatus, 'mktCapPrice', 0)
             }
             
-            logger.info(f"Order placed: {order_status}")
             return order_status
         except Exception as e:
             logger.error(f"Error placing order: {str(e)}")
@@ -802,7 +776,6 @@ class IBConnection:
         Returns:
             dict: Order status information or None if error
         """
-        logger.info(f"Checking status for order with IB ID: {order_id}")
         
         try:
             # Ensure connection
@@ -822,7 +795,6 @@ class IBConnection:
                 if hasattr(o, 'orderId') and o.orderId == order_id:
                     # Check if it's a contract+order tuple or an order with status
                     if hasattr(o, 'orderStatus'):
-                        logger.info(f"Found open order with ID {order_id}, status: {o.orderStatus.status}")
                         return {
                             'status': o.orderStatus.status,
                             'filled': o.orderStatus.filled,
@@ -834,7 +806,6 @@ class IBConnection:
                         }
                     else:
                         # This might be just the order object without status
-                        logger.info(f"Found open order with ID {order_id}, but no status information")
                         return {
                             'status': 'Submitted',  # Default status for found orders
                             'filled': 0,
@@ -849,7 +820,6 @@ class IBConnection:
             trades = self.ib.trades()
             for trade in trades:
                 if hasattr(trade.order, 'orderId') and trade.order.orderId == order_id:
-                    logger.info(f"Found trade with order ID {order_id}, status: {trade.orderStatus.status}")
                     return {
                         'status': trade.orderStatus.status,
                         'filled': trade.orderStatus.filled,
@@ -864,7 +834,6 @@ class IBConnection:
             executions = self.ib.executions()
             for execution in executions:
                 if execution.orderId == order_id:
-                    logger.info(f"Found completed order with ID {order_id}")
                     # Get commission info from commissions report
                     commission = 0
                     for fill in self.ib.fills():
@@ -904,7 +873,6 @@ class IBConnection:
         Returns:
             dict: Result with success/failure info
         """
-        logger.info(f"Cancelling order with IB ID: {order_id}")
         
         try:
             # Ensure connection
@@ -938,10 +906,8 @@ class IBConnection:
                 return {'success': False, 'error': f"Order with ID {order_id} not found in open orders"}
             
             # Cancel the order
-            logger.info(f"Cancelling order: {order_to_cancel}")
             try:
                 self.ib.cancelOrder(order_to_cancel)
-                logger.info(f"Cancellation request sent for order {order_id}")
                 return {'success': True, 'message': f"Cancellation request sent for order {order_id}"}
             except Exception as e:
                 logger.error(f"Error cancelling order: {str(e)}")
