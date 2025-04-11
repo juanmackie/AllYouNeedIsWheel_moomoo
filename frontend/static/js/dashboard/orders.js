@@ -693,7 +693,7 @@ function addPositionsToTable(positions, table) {
             notionalValue = formatCurrency(position.notional_value);
         }
         
-        // Create the row HTML
+        // Create the row HTML without the status column
         row.innerHTML = `
             <td>${position.symbol}</td>
             <td>${optionType}</td>
@@ -703,7 +703,6 @@ function addPositionsToTable(positions, table) {
             <td>${position.position}</td>
             <td>${incomeFormatted}</td>
             <td>${notionalValue}</td>
-            <td>Expires Next Friday</td>
         `;
         
         table.appendChild(row);
