@@ -1088,9 +1088,8 @@ class OptionsService:
                 logger.error(f"No option chains found for {ticker}")
                 return {"error": f"No option chains found for {ticker}"}
                 
-                
             # Get the first valid exchange's data (typically SMART)
-            chain = next((c for c in chains if c.exchange == 'SMART' and len(c.expirations) > 1), chains[0])
+            chain = next((c for c in chains if c.exchange == 'SMART' and len(c.expirations) > 2), chains[0])
             
             # Extract and filter valid expirations (only future dates)
             today = datetime.now().strftime('%Y%m%d')
