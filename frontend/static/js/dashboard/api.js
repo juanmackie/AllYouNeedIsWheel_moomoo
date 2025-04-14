@@ -349,11 +349,13 @@ async function fetchStockPrices(tickers) {
 /**
  * Fetch available option expiration dates for a ticker
  * @param {string} ticker - The ticker symbol
+ * @param {boolean} [lastTradingDay=false] - If true, get only the last trading day of the week
  * @returns {Promise<Object>} - Promise resolving to an object with expiration dates
  */
-async function fetchOptionExpirations(ticker) {
+async function fetchOptionExpirations(ticker, lastTradingDay = false) {
     try {
-        const response = await fetch(`/api/options/expirations?ticker=${encodeURIComponent(ticker)}`);
+        const url = `/api/options/expirations?ticker=${encodeURIComponent(ticker)}${lastTradingDay ? '&last_trading_day=true' : ''}`;
+        const response = await fetch(url);
         
         if (!response.ok) {
             const errorText = await response.text();

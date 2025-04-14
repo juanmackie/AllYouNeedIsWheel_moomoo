@@ -401,6 +401,7 @@ def get_option_expirations():
     
     Query parameters:
         ticker (str): The ticker symbol (e.g., 'NVDA')
+        last_trading_day (bool): If true, get only the last trading day of the week (default: false)
         
     Returns:
         JSON response with a list of available expiration dates
@@ -413,8 +414,14 @@ def get_option_expirations():
         if not ticker:
             return jsonify({"error": "No ticker provided"}), 400
             
-        # Call the service method to get option expirations
-        result = options_service.get_option_expirations(ticker)
+        # Check if we only want the last trading day of the week
+        last_trading_day = request.args.get('last_trading_day', 'false').lower() == 'true'
+            
+        # Call the appropriate service method
+        if last_trading_day:
+            result = options_service.get_last_trading_day_expiration(ticker)
+        else:
+            result = options_service.get_option_expirations(ticker)
         
         # Check if there was an error
         if "error" in result:
