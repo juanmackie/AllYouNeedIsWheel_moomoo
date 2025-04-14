@@ -387,7 +387,7 @@ async function selectOptionToRoll(optionId) {
         // Clear the table
         tableBody.innerHTML = '';
         
-        // Add OTM selector at the top (this will always be present)
+        // Create OTM selector at the top (this will always be present)
         const otmSelectorRow = document.createElement('tr');
         otmSelectorRow.className = 'bg-light';
         otmSelectorRow.id = 'otm-selector-row'; // Add ID for easier reference
@@ -400,7 +400,7 @@ async function selectOptionToRoll(optionId) {
         }
         
         otmSelectorRow.innerHTML = `
-            <td colspan="9">
+            <td colspan="11">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div class="d-flex align-items-center">
                         <label for="otm-percentage" class="me-2 mb-0">OTM Percentage:</label>
@@ -419,7 +419,7 @@ async function selectOptionToRoll(optionId) {
         // Show loading indicator
         const loadingRow = document.createElement('tr');
         loadingRow.innerHTML = `
-            <td colspan="9" class="text-center">
+            <td colspan="11" class="text-center">
                 <div class="spinner-border text-primary" role="status">
                     <span class="visually-hidden">Loading expiration dates...</span>
                 </div>
@@ -464,6 +464,12 @@ async function selectOptionToRoll(optionId) {
         const buyLimitPricePerContract = buyAsk * 100; // Convert to per-contract price
         const quantity = Math.abs(selectedOption.position);
         
+        // Get delta and IV for current option
+        const delta = selectedOption.delta || 'N/A';
+        const iv = selectedOption.implied_volatility || 'N/A';
+        const formattedDelta = typeof delta === 'number' ? delta.toFixed(2) : delta;
+        const formattedIV = typeof iv === 'number' ? `${iv.toFixed(1)}%` : iv;
+        
         buyRow.innerHTML = `
             <td>BUY</td>
             <td>${selectedOption.symbol}</td>
@@ -473,6 +479,8 @@ async function selectOptionToRoll(optionId) {
             <td>${quantity}</td>
             <td>${formatCurrency(buyAsk)} <small class="text-muted" title="Ask price per share">(ask)</small></td>
             <td>LIMIT</td>
+            <td>${formattedDelta}</td>
+            <td>${formattedIV}</td>
             <td><span class="badge bg-info">Current Position</span></td>
         `;
         tableBody.appendChild(buyRow);
@@ -635,7 +643,7 @@ function populateRolloverSuggestionsTable(suggestions) {
     
     if (!selectedOption || suggestions.length === 0) {
         const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = '<td colspan="9" class="text-center">No rollover suggestions available</td>';
+        noDataRow.innerHTML = '<td colspan="11" class="text-center">No rollover suggestions available</td>';
         tableBody.appendChild(noDataRow);
         return;
     }
@@ -643,7 +651,7 @@ function populateRolloverSuggestionsTable(suggestions) {
     // Create a header row for the buy action
     const buyHeaderRow = document.createElement('tr');
     buyHeaderRow.className = 'table-primary';
-    buyHeaderRow.innerHTML = '<td colspan="9" class="fw-bold">BUY TO CLOSE</td>';
+    buyHeaderRow.innerHTML = '<td colspan="11" class="fw-bold">BUY TO CLOSE</td>';
     tableBody.appendChild(buyHeaderRow);
     
     // Create row for the buy action (current option)
@@ -655,6 +663,12 @@ function populateRolloverSuggestionsTable(suggestions) {
     const buyLimitPricePerContract = buyAsk * 100; // Convert to per-contract price
     const quantity = Math.abs(selectedOption.position);
     
+    // Get delta and IV for current option
+    const delta = selectedOption.delta || 'N/A';
+    const iv = selectedOption.implied_volatility || 'N/A';
+    const formattedDelta = typeof delta === 'number' ? delta.toFixed(2) : delta;
+    const formattedIV = typeof iv === 'number' ? `${iv.toFixed(1)}%` : iv;
+    
     buyRow.innerHTML = `
         <td>BUY</td>
         <td>${selectedOption.symbol}</td>
@@ -664,6 +678,8 @@ function populateRolloverSuggestionsTable(suggestions) {
         <td>${quantity}</td>
         <td>${formatCurrency(buyAsk)} <small class="text-muted" title="Ask price per share">(ask)</small></td>
         <td>LIMIT</td>
+        <td>${formattedDelta}</td>
+        <td>${formattedIV}</td>
         <td><span class="badge bg-info">Current Position</span></td>
     `;
     tableBody.appendChild(buyRow);
@@ -671,7 +687,7 @@ function populateRolloverSuggestionsTable(suggestions) {
     // Create a header row for the sell action
     const sellHeaderRow = document.createElement('tr');
     sellHeaderRow.className = 'table-success';
-    sellHeaderRow.innerHTML = '<td colspan="9" class="fw-bold">SELL TO OPEN (NEW POSITION)</td>';
+    sellHeaderRow.innerHTML = '<td colspan="11" class="fw-bold">SELL TO OPEN (NEW POSITION)</td>';
     tableBody.appendChild(sellHeaderRow);
     
     // For each suggestion, create a sell row
@@ -696,6 +712,12 @@ function populateRolloverSuggestionsTable(suggestions) {
         // Include bid/ask in tooltip for transparency
         const bidAskTooltip = `bid: ${formatCurrency(bid)}, ask: ${formatCurrency(ask)}`;
         
+        // Get delta and IV for suggestion
+        const delta = suggestion.delta || 'N/A';
+        const iv = suggestion.implied_volatility || 'N/A';
+        const formattedDelta = typeof delta === 'number' ? delta.toFixed(2) : delta;
+        const formattedIV = typeof iv === 'number' ? `${iv.toFixed(1)}%` : iv;
+        
         sellRow.innerHTML = `
             <td>SELL</td>
             <td>${selectedOption.symbol.split(' ')[0]}</td>
@@ -705,6 +727,8 @@ function populateRolloverSuggestionsTable(suggestions) {
             <td>${quantity}</td>
             <td>${formatCurrency(midPrice)} <small class="text-muted" title="${bidAskTooltip}">(mid)</small></td>
             <td>LIMIT</td>
+            <td>${formattedDelta}</td>
+            <td>${formattedIV}</td>
             <td>
                 <button class="btn btn-sm btn-success rollover-btn" data-suggestion-id="${index}">
                     Execute Rollover
@@ -721,7 +745,7 @@ function populateRolloverSuggestionsTable(suggestions) {
         const executeAllRow = document.createElement('tr');
         executeAllRow.className = 'bg-light';
         executeAllRow.innerHTML = `
-            <td colspan="9" class="text-center">
+            <td colspan="11" class="text-center">
                 <button id="execute-rollover-btn" class="btn btn-primary mt-2">
                     <i class="bi bi-check2-all"></i> Execute Rollover with First Option
                 </button>
@@ -1265,7 +1289,7 @@ async function fetchRolloverSuggestions() {
             
             const loadingRow = document.createElement('tr');
             loadingRow.innerHTML = `
-                <td colspan="9" class="text-center">
+                <td colspan="11" class="text-center">
                     <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">Loading expiration dates...</span>
                     </div>
@@ -1591,7 +1615,7 @@ async function fetchRolloverSuggestions() {
             tableBody.appendChild(otmSelectorRow);
             
             const errorRow = document.createElement('tr');
-            errorRow.innerHTML = `<td colspan="9" class="text-center text-danger">Error: ${error.message}</td>`;
+            errorRow.innerHTML = `<td colspan="11" class="text-center text-danger">Error: ${error.message}</td>`;
             tableBody.appendChild(errorRow);
         }
     }
