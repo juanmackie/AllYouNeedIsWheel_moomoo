@@ -1128,12 +1128,16 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
         let closestExpiration = null;
         try {
             console.log(`Fetching expiration dates for ${ticker}`);
-            const expirationData = await fetchOptionExpirations(ticker);
+            const expirationData = await fetchOptionExpirations(ticker, true); // Use lastTradingDay=true
             
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
                 // Get the closest expiration date (first one in the sorted list)
                 closestExpiration = expirationData.expirations[0].value;
                 console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
+            } else if (expirationData && expirationData.expiration) {
+                // If using last trading day, we'll get a single expiration object
+                closestExpiration = expirationData.expiration.value;
+                console.log(`Using last trading day expiration for ${ticker}: ${closestExpiration}`);
             } else {
                 console.log(`No expiration dates found for ${ticker}, will use default`);
             }
@@ -1396,12 +1400,16 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
         let closestExpiration = null;
         try {
             console.log(`Fetching expiration dates for ${ticker}`);
-            const expirationData = await fetchOptionExpirations(ticker);
+            const expirationData = await fetchOptionExpirations(ticker, true); // Use lastTradingDay=true
             
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
                 // Get the closest expiration date (first one in the sorted list)
                 closestExpiration = expirationData.expirations[0].value;
                 console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
+            } else if (expirationData && expirationData.expiration) {
+                // If using last trading day, we'll get a single expiration object
+                closestExpiration = expirationData.expiration.value;
+                console.log(`Using last trading day expiration for ${ticker}: ${closestExpiration}`);
             } else {
                 console.log(`No expiration dates found for ${ticker}, will use default`);
             }

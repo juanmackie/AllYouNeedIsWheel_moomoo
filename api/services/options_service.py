@@ -1120,3 +1120,79 @@ class OptionsService:
             logger.error(f"Error getting option expirations for {ticker}: {str(e)}")
             logger.error(traceback.format_exc())
             return {"error": str(e)} 
+
+    def get_last_trading_day_of_week(self):
+        """
+        Get the last trading day of the current week (typically Friday).
+        
+        Returns:
+            str: The date in YYYYMMDD format
+        """
+        # Get today's date
+        today = datetime.now()
+        
+        # Find Friday of this week
+        days_until_friday = 4 - today.weekday()  # 4 is Friday (0-based index)
+        if days_until_friday < 0:
+            days_until_friday += 7  # If today is after Friday, get next Friday
+            
+        # Get the Friday date
+        friday = today + timedelta(days=days_until_friday)
+        
+        # Format as YYYYMMDD
+        return friday.strftime('%Y%m%d')
+        
+    def get_last_trading_day_expiration(self, ticker):
+        """
+        Get the expiration date that is closest to the last trading day of the week.
+        This is useful for securities with daily expirations like QQQ.
+        
+        Args:
+            ticker (str): The ticker symbol
+            
+        Returns:
+            dict: Dictionary containing ticker and the last trading day expiration
+        """
+        try:
+            # Get all available expirations
+            expirations_data = self.get_option_expirations(ticker)
+            if "error" in expirations_data:
+                return expirations_data
+                
+            # Get the list of expirations
+            expirations = expirations_data.get("expirations", [])
+            if not expirations:
+                return {"error": f"No expirations found for {ticker}"}
+                
+            # Get the target day (last trading day of the week)
+            target_day = self.get_last_trading_day_of_week()
+            
+            # Get the current day
+            today = datetime.now().strftime('%Y%m%d')
+            
+            # Filter for expirations between today and the target day (inclusive)
+            valid_expirations = [
+                exp for exp in expirations 
+                if today <= exp["value"] <= target_day
+            ]
+            
+            if not valid_expirations:
+                # If no expirations in the current week, get the next available one
+                return {
+                    "ticker": ticker,
+                    "expiration": expirations[0] if expirations else None
+                }
+                
+            # Sort by date (descending) and get the last one before or on the target day
+            valid_expirations.sort(key=lambda x: x["value"], reverse=True)
+            last_expiration = valid_expirations[0]
+            
+            return {
+                "ticker": ticker,
+                "expiration": last_expiration
+            }
+                
+        except Exception as e:
+            logger.error(f"Error getting last trading day expiration for {ticker}: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {"error": str(e)} 
