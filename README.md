@@ -68,6 +68,27 @@ The key configuration parameters are:
 - `readonly`: Set to `true` to prevent actual order execution (safer for testing)
 - `db_path`: Path to the SQLite database file
 
+## Interactive Brokers TWS/Gateway Configuration
+
+Configure TWS/Gateway for API connections with these essential settings:
+
+1. **Enable API**: 
+   - TWS: File → Global Configuration → API → Settings
+   - Gateway: Configure → Settings → API → Settings
+   - Check "Enable ActiveX and Socket Clients"
+   - Uncheck "Read-Only API" if you want to execute trades (required for orders)
+
+2. **Socket Port**: 
+   - Set to match your config file (7496 for TWS, 7497 for Gateway)
+
+3. **Trusted IPs**:
+   - Add "127.0.0.1" to trusted IPs if running locally
+
+4. **Data Subscriptions**:
+   - Ensure you have market data subscriptions for options
+
+Note: TWS/Gateway must be running and logged in for the API to function.
+
 ## Usage
 
 ### Starting the Development Server
