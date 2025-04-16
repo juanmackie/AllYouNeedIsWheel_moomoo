@@ -2,11 +2,15 @@
 
 AllYouNeedIsWheel is a financial options trading assistant specifically designed for the "Wheel Strategy" that connects to Interactive Brokers (IB). It helps traders analyze, visualize, and execute the wheel strategy effectively by retrieving portfolio data, analyzing options chains for cash-secured puts and covered calls, and presenting recommendations through a user-friendly web interface.
 
-## Important Note on IB API
-
-This project now uses the `ib_async` library (the successor to `ib_insync`). The `ib_async` library requires Python 3.10 or higher. This change was made because `ib_insync` is no longer being maintained after the original creator's passing, and `ib_async` is the community-maintained continuation of that project.
+<img width="1578" alt="Screen Shot 2025-04-16 at 22 42 04" src="https://github.com/user-attachments/assets/14eff1c7-037c-4684-b774-2dd762f46708" />
+<img width="1313" alt="Screen Shot 2025-04-16 at 22 42 47" src="https://github.com/user-attachments/assets/765dac39-c2ba-43db-ac56-f8aa95258430" />
+<img width="1336" alt="Screen Shot 2025-04-16 at 22 45 38" src="https://github.com/user-attachments/assets/b4239c2a-8a1b-49f3-8210-61a7b5a36276" />
+<img width="1310" alt="Screen Shot 2025-04-16 at 22 47 50" src="https://github.com/user-attachments/assets/27544a73-f2bd-4f20-9835-4d3d166dad36" />
+<img width="1363" alt="Screen Shot 2025-04-16 at 22 48 05" src="https://github.com/user-attachments/assets/96461c63-112c-4610-a6d7-f335af2ef712" />
+<img width="1316" alt="Screen Shot 2025-04-16 at 22 48 28" src="https://github.com/user-attachments/assets/76b1beb5-cbb9-4bc1-9b57-17bdd8c42ccf" />
 
 ## Features
+
 
 - **Portfolio Dashboard**: View your current portfolio positions, value, and performance metrics
 - **Wheel Strategy Focus**: Specialized tools for implementing the wheel strategy (selling cash-secured puts and covered calls)
@@ -140,9 +144,7 @@ The web interface consists of five main pages:
 
 1. **Dashboard** (http://localhost:5000/): Overview of your portfolio and key metrics
 2. **Portfolio** (http://localhost:5000/portfolio): Detailed view of all positions
-3. **Options** (http://localhost:5000/options?ticker=SYMBOL): Option chain analysis
-4. **Recommendations** (http://localhost:5000/recommendations): Trade recommendations
-5. **Rollover** (http://localhost:5000/rollover): Interface for managing option positions approaching strike price
+3. **Rollover** (http://localhost:5000/rollover): Interface for managing option positions approaching strike price
 
 ### Frozen Data
 
