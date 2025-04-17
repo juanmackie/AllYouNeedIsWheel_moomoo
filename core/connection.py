@@ -111,7 +111,7 @@ class IBConnection:
             self._ensure_event_loop()
             
             self.ib.clientId = self.client_id
-            self.ib.connect(self.host, self.port, clientId=self.client_id, readonly=False, timeout=self.timeout)
+            self.ib.connect(self.host, self.port, clientId=self.client_id, readonly=self.readonly, timeout=self.timeout)
             
             self._connected = self.ib.isConnected()
             if self._connected:

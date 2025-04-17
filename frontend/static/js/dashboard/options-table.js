@@ -614,24 +614,59 @@ function addOptionsTableEventListeners() {
                     const inputGroup = button.closest('.input-group');
                     const otmInput = inputGroup.querySelector('.otm-input');
                     const otmPercentage = parseInt(otmInput.value, 10);
-                        const optionType = otmInput.dataset.optionType || 'CALL'; // Get option type from data attribute
+                    const optionType = otmInput.dataset.optionType || 'CALL'; // Get option type from data attribute
                     
-                        // Update ticker's OTM percentage based on option type
-                    if (tickersData[ticker]) {
-                            if (optionType === 'CALL') {
-                                tickersData[ticker].callOtmPercentage = otmPercentage;
-                                console.log(`Updated ${ticker} call OTM% to ${otmPercentage}`);
-                            } else {
-                                tickersData[ticker].putOtmPercentage = otmPercentage;
-                                console.log(`Updated ${ticker} put OTM% to ${otmPercentage}`);
-                            }
-                            
-                            // Save OTM settings to localStorage
-                            saveOtmSettings();
+                    // Find the selected expiration from the dropdown in the same row
+                    const row = button.closest('tr');
+                    let selectedExpiration = null;
+                    if (row) {
+                        const expirationSelect = row.querySelector('.expiration-select');
+                        if (expirationSelect) {
+                            selectedExpiration = expirationSelect.value;
+                            console.log(`Using selected expiration: ${selectedExpiration} for ${ticker}`);
+                        }
                     }
                     
-                    // Refresh options with the new OTM percentage
+                    // Update ticker's OTM percentage based on option type
+                    if (tickersData[ticker]) {
+                        if (optionType === 'CALL') {
+                            tickersData[ticker].callOtmPercentage = otmPercentage;
+                            console.log(`Updated ${ticker} call OTM% to ${otmPercentage}`);
+                        } else {
+                            tickersData[ticker].putOtmPercentage = otmPercentage;
+                            console.log(`Updated ${ticker} put OTM% to ${otmPercentage}`);
+                        }
+                        
+                        // Save OTM settings to localStorage
+                        saveOtmSettings();
+                        
+                        // Save the selected expiration to use for the API call
+                        if (selectedExpiration) {
+                            tickersData[ticker].selectedExpiration = selectedExpiration;
+                        }
+                    }
+                    
+                    // Refresh options with the new OTM percentage and selected expiration
+                    if (selectedExpiration) {
+                        // Fetch fresh data with the selected expiration
+                        const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
+                        
+                        if (optionData && optionData.data && optionData.data[ticker]) {
+                            // Update the specific option type data
+                            if (optionType === 'CALL') {
+                                tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
+                            } else {
+                                tickersData[ticker].data.data[ticker].puts = optionData.data[ticker].puts || [];
+                            }
+                            
+                            // Update the UI
+                            updateOptionsTable();
+                            addOptionsTableEventListeners();
+                        }
+                    } else {
+                        // If no expiration is selected, use the normal refresh function
                         await refreshOptionsForTickerByType(ticker, optionType, true);
+                    }
                 } catch (error) {
                     console.error(`Error refreshing ${ticker} with new OTM%:`, error);
                 } finally {
@@ -961,6 +996,59 @@ function addOptionsTableEventListeners() {
     
     // Add input event listeners for OTM% inputs - these need to be added each time
     addOtmInputEventListeners();
+    
+    // Add event listeners for expiration dropdowns
+    const expirationSelects = document.querySelectorAll('.expiration-select');
+    expirationSelects.forEach(select => {
+        select.addEventListener('change', async function() {
+            const ticker = this.getAttribute('data-ticker');
+            const optionType = this.getAttribute('data-option-type');
+            const selectedExpiration = this.value;
+            
+            console.log(`Expiration changed for ${ticker} ${optionType} to ${selectedExpiration}`);
+            
+            try {
+                // Show loading indicator on the row
+                const row = this.closest('tr');
+                const cells = row.querySelectorAll('td');
+                cells.forEach(cell => {
+                    if (!cell.querySelector('select') && !cell.querySelector('input')) {
+                        cell.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary" role="status"></div>';
+                    }
+                });
+                
+                // Get OTM percentage
+                const otmPercentage = optionType === 'CALL' 
+                    ? tickersData[ticker]?.callOtmPercentage || 10 
+                    : tickersData[ticker]?.putOtmPercentage || 10;
+                
+                // Fetch new option data with the selected expiration
+                const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
+                
+                if (optionData && optionData.data && optionData.data[ticker]) {
+                    // Update the specific option type data
+                    if (optionType === 'CALL') {
+                        tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
+                    } else {
+                        tickersData[ticker].data.data[ticker].puts = optionData.data[ticker].puts || [];
+                    }
+                    
+                    // Update the UI
+                    updateOptionsTable();
+                    
+                    // Add event listeners again
+                    addOptionsTableEventListeners();
+                }
+            } catch (error) {
+                console.error(`Error updating options for new expiration: ${error.message}`);
+                showAlert(`Error updating options: ${error.message}`, 'danger');
+                
+                // Refresh the table to restore original state
+                updateOptionsTable();
+                addOptionsTableEventListeners();
+            }
+        });
+    });
 }
 
 /**
@@ -1126,18 +1214,24 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
 
         // Fetch option expiration dates for this ticker
         let closestExpiration = null;
+        let allExpirations = [];
         try {
             console.log(`Fetching expiration dates for ${ticker}`);
-            const expirationData = await fetchOptionExpirations(ticker, true); // Use lastTradingDay=true
+            const expirationData = await fetchOptionExpirations(ticker);
             
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
+                // Store all expirations for this ticker
+                allExpirations = expirationData.expirations;
+                
                 // Get the closest expiration date (first one in the sorted list)
-                closestExpiration = expirationData.expirations[0].value;
+                closestExpiration = allExpirations[0].value;
                 console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
-            } else if (expirationData && expirationData.expiration) {
-                // If using last trading day, we'll get a single expiration object
-                closestExpiration = expirationData.expiration.value;
-                console.log(`Using last trading day expiration for ${ticker}: ${closestExpiration}`);
+                console.log(`Retrieved ${allExpirations.length} expiration dates for ${ticker}`);
+                
+                // Store the expirations in the ticker data for later use
+                if (!tickersData[ticker].expirations) {
+                    tickersData[ticker].expirations = allExpirations;
+                }
             } else {
                 console.log(`No expiration dates found for ${ticker}, will use default`);
             }
@@ -1398,18 +1492,24 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
         
         // Fetch option expiration dates for this ticker
         let closestExpiration = null;
+        let allExpirations = [];
         try {
             console.log(`Fetching expiration dates for ${ticker}`);
-            const expirationData = await fetchOptionExpirations(ticker, true); // Use lastTradingDay=true
+            const expirationData = await fetchOptionExpirations(ticker);
             
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
+                // Store all expirations for this ticker
+                allExpirations = expirationData.expirations;
+                
                 // Get the closest expiration date (first one in the sorted list)
-                closestExpiration = expirationData.expirations[0].value;
+                closestExpiration = allExpirations[0].value;
                 console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
-            } else if (expirationData && expirationData.expiration) {
-                // If using last trading day, we'll get a single expiration object
-                closestExpiration = expirationData.expiration.value;
-                console.log(`Using last trading day expiration for ${ticker}: ${closestExpiration}`);
+                console.log(`Retrieved ${allExpirations.length} expiration dates for ${ticker}`);
+                
+                // Store the expirations in the ticker data for later use
+                if (!tickersData[ticker].expirations) {
+                    tickersData[ticker].expirations = allExpirations;
+                }
             } else {
                 console.log(`No expiration dates found for ${ticker}, will use default`);
             }
@@ -2054,6 +2154,18 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         if (optionType === 'CALL') {
             const maxContracts = Math.floor(sharesOwned / 100);
             
+            // Create expiration dropdown options even for empty row
+            let expirationOptionsHtml = '';
+            const expirations = tickersData[ticker].expirations || [];
+            if (expirations.length > 0) {
+                expirations.forEach((exp, index) => {
+                    const selected = index === 0 ? 'selected' : '';
+                    expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+                });
+            } else {
+                expirationOptionsHtml = `<option value="">No expirations available</option>`;
+            }
+            
             row.innerHTML = `
                 <td class="align-middle">${ticker}</td>
                 <td class="align-middle">${sharesOwned}</td>
@@ -2071,8 +2183,11 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     </div>
                 </td>
                 <td class="align-middle">-</td>
-                <td class="align-middle">-</td>
-                <td class="align-middle">-</td>
+                <td class="align-middle">
+                    <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="CALL">
+                        ${expirationOptionsHtml}
+                    </select>
+                </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">${maxContracts}</td>
@@ -2089,6 +2204,18 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         } else {
             // PUT option empty row
             const putQuantity = tickerData.putQuantity || 1;
+            
+            // Create expiration dropdown options even for empty row
+            let expirationOptionsHtml = '';
+            const expirations = tickersData[ticker].expirations || [];
+            if (expirations.length > 0) {
+                expirations.forEach((exp, index) => {
+                    const selected = index === 0 ? 'selected' : '';
+                    expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+                });
+            } else {
+                expirationOptionsHtml = `<option value="">No expirations available</option>`;
+            }
             
             row.innerHTML = `
                 <td class="align-middle">
@@ -2111,7 +2238,11 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     </div>
                 </td>
                 <td class="align-middle">-</td>
-                <td class="align-middle">-</td>
+                <td class="align-middle">
+                    <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="PUT">
+                        ${expirationOptionsHtml}
+                    </select>
+                </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
@@ -2172,6 +2303,19 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         // Calculate return on capital
         const returnOnCapital = option.strike > 0 ? ((totalPremium / (stockPrice * 100 * maxContracts)) * 100) : 0;
         
+        // Create expiration dropdown options
+        let expirationOptionsHtml = '';
+        const expirations = tickersData[ticker].expirations || [];
+        if (expirations.length > 0) {
+            expirations.forEach(exp => {
+                const selected = exp.value === option.expiration ? 'selected' : '';
+                expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+            });
+        } else {
+            // If no expiration data is available, just show the current one
+            expirationOptionsHtml = `<option value="${option.expiration}" selected>${option.expiration}</option>`;
+        }
+        
         row.innerHTML = `
             <td class="align-middle">
                 ${ticker}
@@ -2191,7 +2335,11 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 </div>
             </td>
             <td class="align-middle">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
-            <td class="align-middle">${option.expiration || 'N/A'}</td>
+            <td class="align-middle">
+                <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="CALL">
+                    ${expirationOptionsHtml}
+                </select>
+            </td>
             <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${ivPercent}%</td>
@@ -2234,6 +2382,19 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         // Calculate mid price between bid and ask
         const midPrice = calculatePremium(option.bid, option.ask, option.last);
         
+        // Create expiration dropdown options
+        let expirationOptionsHtml = '';
+        const expirations = tickersData[ticker].expirations || [];
+        if (expirations.length > 0) {
+            expirations.forEach(exp => {
+                const selected = exp.value === option.expiration ? 'selected' : '';
+                expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+            });
+        } else {
+            // If no expiration data is available, just show the current one
+            expirationOptionsHtml = `<option value="${option.expiration}" selected>${option.expiration}</option>`;
+        }
+        
         row.innerHTML = `
             <td class="align-middle">
                 ${ticker}
@@ -2252,7 +2413,11 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 </div>
             </td>
             <td class="align-middle">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
-            <td class="align-middle">${option.expiration || 'N/A'}</td>
+            <td class="align-middle">
+                <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="PUT">
+                    ${expirationOptionsHtml}
+                </select>
+            </td>
             <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${ivPercent}%</td>
