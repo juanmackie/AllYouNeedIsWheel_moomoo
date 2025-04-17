@@ -1,7 +1,7 @@
 /**
  * Options Table module for handling options display and interaction
  */
-import { fetchOptionData, fetchTickers, saveOptionOrder, fetchAccountData, fetchOptionExpirations } from './api.js';
+import { fetchOptionData, fetchTickers, saveOptionOrder, fetchAccountData, fetchOptionExpirations, fetchStockPrices } from './api.js';
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency, formatPercentage } from './account.js';
 
@@ -1842,8 +1842,9 @@ function setupCustomTickerEventListeners() {
             addCustomTickerBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Adding...';
             
             try {
-                console.log('Fetching options data for ticker:', ticker);
-                // Get OTM percent from UI or use default
+                console.log('Fetching expiration dates for ticker:', ticker);
+                
+                // Get OTM percent from UI or use default - only setting this up in data structure, not fetching options yet
                 let otmPercent = 5; // Default
 
                 // First try to get from the dedicated OTM% selector in the options table header
@@ -1853,22 +1854,21 @@ function setupCustomTickerEventListeners() {
                     console.log('Found OTM percent selector with value:', otmPercent);
                 }
                 
-                console.log('Using OTM percent:', otmPercent);
+                // 1. Fetch expiration dates first
+                const expirationData = await fetchOptionExpirations(ticker);
+                console.log('Received expiration data:', expirationData);
                 
-                const optionData = await fetchOptionData(ticker, otmPercent, 'PUT');
-                console.log('Received option data:', optionData);
-                
-                if (!optionData || !optionData.data || !optionData.data[ticker] || !optionData.data[ticker].puts || optionData.data[ticker].puts.length === 0) {
-                    console.error('Invalid or empty option data returned:', optionData);
-                    showToast('error', 'Data Error', `Could not find put options data for ${ticker}.`);
+                if (!expirationData || !expirationData.expirations || expirationData.expirations.length === 0) {
+                    console.error('No expiration dates found for ticker:', ticker);
+                    showToast('error', 'Data Error', `Could not find expiration dates for ${ticker}.`);
                     return;
                 }
                 
-                // Add to custom tickers set
+                // 2. Add to custom tickers set without fetching options data yet
                 customTickers.add(ticker);
                 console.log('Added to custom tickers, new set:', [...customTickers]);
                 
-                // Initialize ticker data with the proper structure to match existing code
+                // 3. Initialize ticker data structure with expirations and basic info, but no options data yet
                 if (!tickersData[ticker]) {
                     console.log('Creating new ticker data structure for', ticker);
                     tickersData[ticker] = {
@@ -1877,37 +1877,44 @@ function setupCustomTickerEventListeners() {
                         },
                         callOtmPercentage: parseInt(otmPercent, 10),
                         putOtmPercentage: parseInt(otmPercent, 10),
-                        putQuantity: 1
+                        putQuantity: 1,
+                        expirations: expirationData.expirations // Store the expirations
                     };
                     
-                    // Add the option data properly structured
+                    // Add minimal structure needed for rendering
                     tickersData[ticker].data.data[ticker] = {
-                        stock_price: optionData.data[ticker].stock_price || 0,
-                        position: 0, // No shares for custom tickers
+                        stock_price: 0, // Will be filled when actually fetching options
+                        position: 0,    // No shares for custom tickers
                         calls: [],
-                        puts: optionData.data[ticker].puts || []
+                        puts: []        // Empty puts array until user selects expiration and refreshes
                     };
-                } else {
-                    console.log('Updating existing ticker data for', ticker);
-                    // Update the option data if ticker exists
-                    tickersData[ticker].data.data[ticker].puts = optionData.data[ticker].puts || [];
-                    tickersData[ticker].data.data[ticker].stock_price = optionData.data[ticker].stock_price || 0;
-                    tickersData[ticker].putOtmPercentage = parseInt(otmPercent, 10);
+                    
+                    // Try to get stock price separately without options data
+                    try {
+                        const stockPriceData = await fetchStockPrices([ticker]);
+                        if (stockPriceData && stockPriceData.data && stockPriceData.data[ticker]) {
+                            tickersData[ticker].data.data[ticker].stock_price = stockPriceData.data[ticker];
+                        }
+                    } catch (priceError) {
+                        console.error('Error fetching stock price:', priceError);
+                        // Continue anyway - price will be updated when user refreshes
+                    }
                 }
                 
-                console.log('Updated ticker data structure:', JSON.stringify(tickersData[ticker]));
-                
-                // Save custom tickers to localStorage
+                // 4. Save custom tickers to localStorage
                 localStorage.setItem('customTickers', JSON.stringify([...customTickers]));
                 
-                // Update the table to show the new ticker
-                console.log('Updating options table with new ticker data');
+                // 5. Update the table to show the new ticker with expiration dropdown but no options data yet
+                console.log('Updating options table with new ticker and expiration dropdown');
                 updateOptionsTable();
                 
-                // Clear the input
+                // 6. Make sure event listeners are attached
+                addOptionsTableEventListeners();
+                
+                // 7. Clear the input field
                 customTickerInput.value = '';
                 
-                showToast('success', 'Ticker Added', `${ticker} has been added to your cash-secured puts list.`);
+                showToast('success', 'Ticker Added', `${ticker} has been added. Select an expiration and click refresh to load options.`);
             } catch (error) {
                 console.error('Error adding custom ticker:', error);
                 showToast('error', 'Error', `Failed to add ${ticker}: ${error.message}`);
