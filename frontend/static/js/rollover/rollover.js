@@ -431,14 +431,10 @@ async function selectOptionToRoll(optionId) {
         // Fetch available expiration dates for the ticker
         let expirationDates = [];
         try {
-            const expirationData = await fetchOptionExpirations(ticker, false); // Use lastTradingDay=false to keep all dates
+            const expirationData = await fetchOptionExpirations(ticker);
             if (expirationData && expirationData.expirations) {
                 expirationDates = expirationData.expirations;
                 console.log(`Fetched ${expirationDates.length} expiration dates for ${ticker}`);
-            } else if (expirationData && expirationData.expiration) {
-                // If using last trading day, we'll get a single expiration object
-                expirationDates = [expirationData.expiration];
-                console.log(`Using last trading day expiration for ${ticker}: ${expirationData.expiration.value}`);
             }
         } catch (error) {
             console.error(`Error fetching expiration dates for ${ticker}:`, error);
