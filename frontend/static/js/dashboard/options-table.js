@@ -2491,13 +2491,17 @@ function buildOptionsTable(tableId, optionType) {
     const thead = table.querySelector('thead');
     if (thead && thead.querySelector('tr')) {
         const headerRow = thead.querySelector('tr');
-        // Find where we want to insert the IV% column (after Delta)
-        const deltaHeader = Array.from(headerRow.querySelectorAll('th')).find(th => th.textContent === 'Delta');
-        if (deltaHeader) {
-            // Create and insert the IV% header after Delta
-            const ivHeader = document.createElement('th');
-            ivHeader.textContent = 'IV%';
-            deltaHeader.after(ivHeader);
+        // Check if the IV% column already exists to avoid duplicates
+        const existingIvHeader = Array.from(headerRow.querySelectorAll('th')).find(th => th.textContent === 'IV%');
+        if (!existingIvHeader) {
+            // Find where we want to insert the IV% column (after Delta)
+            const deltaHeader = Array.from(headerRow.querySelectorAll('th')).find(th => th.textContent === 'Delta');
+            if (deltaHeader) {
+                // Create and insert the IV% header after Delta
+                const ivHeader = document.createElement('th');
+                ivHeader.textContent = 'IV%';
+                deltaHeader.after(ivHeader);
+            }
         }
     }
     
