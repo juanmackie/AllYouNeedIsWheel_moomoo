@@ -369,6 +369,12 @@ function addOrdersTableEventListeners() {
         refreshPendingOrdersButton.addEventListener('click', loadPendingOrders);
     }
     
+    // Add listener to cancel all pending orders button
+    const cancelAllPendingOrdersButton = document.getElementById('cancel-all-pending-orders');
+    if (cancelAllPendingOrdersButton) {
+        cancelAllPendingOrdersButton.addEventListener('click', cancelAllPendingOrders);
+    }
+    
     // Add listener to refresh filled orders button
     const refreshFilledOrdersButton = document.getElementById('refresh-filled-orders');
     if (refreshFilledOrdersButton) {
@@ -707,4 +713,42 @@ function addPositionsToTable(positions, table) {
         
         table.appendChild(row);
     });
+}
+
+/**
+ * Handle canceling all pending orders
+ */
+async function cancelAllPendingOrders() {
+    try {
+        // Filter only pending orders
+        const pendingOrders = pendingOrdersData.filter(order => order.status === 'pending');
+        
+        if (pendingOrders.length === 0) {
+            showAlert('No pending orders to cancel', 'info');
+            return;
+        }
+        
+        // Confirm with the user
+        if (!confirm(`Are you sure you want to cancel all ${pendingOrders.length} pending orders?`)) {
+            return;
+        }
+        
+        // Show a loading alert
+        showAlert(`Canceling ${pendingOrders.length} orders...`, 'info');
+        
+        // Create an array of promises for all the cancel operations
+        const cancelPromises = pendingOrders.map(order => cancelOrder(order.id));
+        
+        // Wait for all cancellations to complete
+        await Promise.all(cancelPromises);
+        
+        // Refresh the orders table
+        await loadPendingOrders();
+        
+        // Show success message
+        showAlert(`Successfully canceled ${pendingOrders.length} orders`, 'success');
+    } catch (error) {
+        console.error('Error canceling all orders:', error);
+        showAlert('Error canceling all orders: ' + error.message, 'danger');
+    }
 } 
