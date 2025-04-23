@@ -60,7 +60,7 @@ async function initializeRollover() {
         }
         
         // Set up refresh button with event listener to preserve state
-        const refreshBtn = document.getElementById('refresh-data-btn');
+        const refreshBtn = document.getElementById('refresh-rollover');
         if (refreshBtn) {
             refreshBtn.addEventListener('click', async () => {
                 try {
