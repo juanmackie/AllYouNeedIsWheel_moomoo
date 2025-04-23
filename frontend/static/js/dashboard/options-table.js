@@ -433,7 +433,6 @@ function updateOptionsTable() {
                                 <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
-                                <th>% Return</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -476,7 +475,6 @@ function updateOptionsTable() {
                                 <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
-                                <th>% Return</th>
                                 <th>Cash Required</th>
                                 <th>Action</th>
                             </tr>
@@ -1128,15 +1126,12 @@ function addPutQtyInputEventListeners() {
                 // Recalculate values
                 const totalPremium = premiumPerContract * newQty;
                 const cashRequired = strike * 100 * newQty;
-                const returnOnCash = cashRequired > 0 ? (totalPremium / cashRequired) * 100 : 0;
                 
                 // Update cells
                 const totalPremiumCell = row.querySelector('.total-premium');
-                const returnOnCashCell = row.querySelector('.return-on-cash');
                 const cashRequiredCell = row.querySelector('.cash-required');
                 
                 if (totalPremiumCell) totalPremiumCell.textContent = formatCurrency(totalPremium);
-                if (returnOnCashCell) returnOnCashCell.textContent = formatPercentage(returnOnCash);
                 if (cashRequiredCell) cashRequiredCell.textContent = formatCurrency(cashRequired);
                 
                 // Also update the earnings summary since total premiums changed
@@ -2197,9 +2192,9 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
+                <td class="align-middle">-</td>
                 <td class="align-middle">${maxContracts}</td>
                 <td class="align-middle">$ 0.00</td>
-                <td class="align-middle">0.00%</td>
                 <td class="align-middle">
                     <button class="btn btn-sm btn-outline-secondary refresh-option" 
                         data-ticker="${ticker}" 
@@ -2260,7 +2255,6 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                         min="1" max="100" step="1" style="width: 70px;">
                 </td>
                 <td class="align-middle total-premium">$ 0.00</td>
-                <td class="align-middle return-on-cash">0.00%</td>
                 <td class="align-middle cash-required">$ 0.00</td>
                 <td class="align-middle d-flex">
                     <button class="btn btn-sm btn-outline-secondary refresh-option me-2" 
@@ -2352,7 +2346,6 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle">${ivPercent}%</td>
             <td class="align-middle">${maxContracts}</td>
             <td class="align-middle">$ ${totalPremium.toFixed(2)}</td>
-            <td class="align-middle">${returnOnCapital.toFixed(2)}%</td>
             <td class="align-middle d-flex">
                 <button class="btn btn-sm btn-outline-success sell-option me-2" 
                     data-ticker="${ticker}" 
@@ -2436,9 +2429,6 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle total-premium">
                 $ ${(midPrice * 100 * putQuantity).toFixed(2)}
-            </td>
-            <td class="align-middle return-on-cash">
-                ${((midPrice * 100) / (option.strike || 1) * 100).toFixed(2)}%
             </td>
             <td class="align-middle cash-required">
                 $ ${((option.strike || 0) * 100 * putQuantity).toFixed(2)}
@@ -2612,7 +2602,6 @@ async function loadTickers() {
                                 <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
-                                <th>% Return</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -2662,7 +2651,6 @@ async function loadTickers() {
                                 <th>IV%</th>
                                 <th>Qty</th>
                                 <th>Total Premium</th>
-                                <th>% Return</th>
                                 <th>Cash Required</th>
                                 <th>Action</th>
                             </tr>
