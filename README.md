@@ -1,13 +1,12 @@
 # AllYouNeedIsWheel
 
 AllYouNeedIsWheel is a financial options trading assistant specifically designed for the "Wheel Strategy" that connects to Interactive Brokers (IB). It helps traders analyze, visualize, and execute the wheel strategy effectively by retrieving portfolio data, analyzing options chains for cash-secured puts and covered calls, and presenting recommendations through a user-friendly web interface.
-
-<img width="1578" alt="Screen Shot 2025-04-16 at 22 42 04" src="https://github.com/user-attachments/assets/14eff1c7-037c-4684-b774-2dd762f46708" />
-<img width="1313" alt="Screen Shot 2025-04-16 at 22 42 47" src="https://github.com/user-attachments/assets/765dac39-c2ba-43db-ac56-f8aa95258430" />
-<img width="1336" alt="Screen Shot 2025-04-16 at 22 45 38" src="https://github.com/user-attachments/assets/b4239c2a-8a1b-49f3-8210-61a7b5a36276" />
-<img width="1310" alt="Screen Shot 2025-04-16 at 22 47 50" src="https://github.com/user-attachments/assets/27544a73-f2bd-4f20-9835-4d3d166dad36" />
-<img width="1363" alt="Screen Shot 2025-04-16 at 22 48 05" src="https://github.com/user-attachments/assets/96461c63-112c-4610-a6d7-f335af2ef712" />
-<img width="1316" alt="Screen Shot 2025-04-16 at 22 48 28" src="https://github.com/user-attachments/assets/76b1beb5-cbb9-4bc1-9b57-17bdd8c42ccf" />
+<img width="1680" alt="Screen Shot 2025-04-26 at 00 32 08" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
+<img width="1321" alt="Screen Shot 2025-04-26 at 00 33 00" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
+<img width="1311" alt="Screen Shot 2025-04-26 at 00 33 21" src="https://github.com/user-attachments/assets/0688ca0a-7fca-41fc-83b4-91881a2e9848" />
+<img width="1309" alt="Screen Shot 2025-04-26 at 00 33 41" src="https://github.com/user-attachments/assets/3e029e78-406c-44d4-b557-39b55c691f8a" />
+<img width="1500" alt="Screen Shot 2025-04-26 at 00 34 06" src="https://github.com/user-attachments/assets/12a6539c-f74a-4d18-b868-ac7bef766dc8" />
+<img width="1357" alt="Screen Shot 2025-04-26 at 00 34 38" src="https://github.com/user-attachments/assets/d9b2f57f-606d-4f4f-9d83-08b933ba71da" />
 
 ## Features
 
