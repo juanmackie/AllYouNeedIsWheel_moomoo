@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 import pytz
 from core.utils import is_market_hours
+from .currency import CurrencyHelper
 
 # Import ib_async instead of ib_insync
 from ib_async import IB, Stock, Option, Contract, util
@@ -473,6 +474,21 @@ class IBConnection:
             logger.error(traceback.format_exc())
             return None
     
+    def _convert_to_usd(self, value, currency):
+        """
+        Convert a value to USD if needed
+        
+        Args:
+            value (float): The value to convert
+            currency (str): The currency of the value
+            
+        Returns:
+            float: The value in USD
+        """
+        if not currency or currency == 'USD':
+            return value
+        return CurrencyHelper.convert_amount(value, currency, 'USD')
+
     def get_portfolio(self):
         """
         Get current portfolio positions and account information from IB
@@ -524,15 +540,28 @@ class IBConnection:
                 'leverage_percentage': 0
             }
             
+            # Map account tags to their corresponding fields
+            account_fields = {
+                'TotalCashValue': 'available_cash',
+                'NetLiquidation': 'account_value',
+                'ExcessLiquidity': 'excess_liquidity',
+                'FullInitMarginReq': 'initial_margin'
+            }
+            
             for av in account_values:
-                if av.tag == 'TotalCashValue':
-                    account_info['available_cash'] = float(av.value)
-                elif av.tag == 'NetLiquidation':
-                    account_info['account_value'] = float(av.value)
-                elif av.tag == 'ExcessLiquidity':
-                    account_info['excess_liquidity'] = float(av.value)
-                elif av.tag == 'FullInitMarginReq':
-                    account_info['initial_margin'] = float(av.value)
+                try:
+                    # Skip if not a numeric field we care about
+                    if av.tag not in account_fields:
+                        continue
+                        
+                    # Get the currency for this value, default to USD if empty or missing
+                    currency = av.currency if hasattr(av, 'currency') and av.currency else 'USD'
+                    value = float(av.value)
+                    
+                    # Store the converted value
+                    account_info[account_fields[av.tag]] = self._convert_to_usd(value, currency)
+                except Exception as e:
+                    logger.error(f"Error processing account value {av.tag}: {str(e)}")
             
             # Calculate leverage percentage
             if account_info['account_value'] > 0 and account_info['initial_margin'] > 0:
@@ -555,6 +584,8 @@ class IBConnection:
                     symbol = position.contract.symbol
                     position_key = symbol
                     position_type = 'UNKNOWN'
+                    # Default to USD if currency is empty or missing
+                    position_currency = position.contract.currency if position.contract.currency else 'USD'
                     
                     # Determine position type and create an appropriate key
                     if isinstance(position.contract, Stock):
@@ -572,24 +603,20 @@ class IBConnection:
                         position_type = position.contract.secType
                         other_count += 1
                     
-                    # Store position data
+                    # Convert position values to USD if needed
                     positions[position_key] = {
                         'shares': position.position,
-                        'avg_cost': position.averageCost,
-                        'market_price': position.marketPrice,
-                        'market_value': position.marketValue,
-                        'unrealized_pnl': position.unrealizedPNL,
-                        'realized_pnl': position.realizedPNL,
+                        'avg_cost': self._convert_to_usd(position.averageCost, position_currency),
+                        'market_price': self._convert_to_usd(position.marketPrice, position_currency),
+                        'market_value': self._convert_to_usd(position.marketValue, position_currency),
+                        'unrealized_pnl': self._convert_to_usd(position.unrealizedPNL, position_currency),
+                        'realized_pnl': self._convert_to_usd(position.realizedPNL, position_currency),
                         'contract': position.contract,
                         'security_type': position_type
                     }
                     
                 except Exception as e:
                     logger.error(f"Error processing position: {str(e)}")
-            
-            if not positions:
-                # If we don't get any positions, return None or empty result
-                return None
             
             return {
                 'account_id': account_id,
