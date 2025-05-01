@@ -8,6 +8,7 @@ python-dotenv>=1.1.0
 loguru>=0.7.2
 backtrader>=1.9.76
 pytz>=2024.1
+currencyconverter>=0.5.0
 
 # Web application dependencies
 flask>=3.0.2
