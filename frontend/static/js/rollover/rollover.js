@@ -213,7 +213,10 @@ async function processOptionPositions(optionPositions) {
     
     // Return all processed options, sorted by percentage difference in ascending order
     return processedOptions.sort((a, b) => {
-        // Sort by percentage difference (closest to strike by percentage first)
+        // Sort by crossing the strike first (negative percentDifference), then by absolute value
+        if (a.percentDifference < 0 && b.percentDifference >= 0) return -1;
+        if (a.percentDifference >= 0 && b.percentDifference < 0) return 1;
+        // Both on same side, sort by absolute value (closer to zero is higher)
         return Math.abs(a.percentDifference) - Math.abs(b.percentDifference);
     });
 }
