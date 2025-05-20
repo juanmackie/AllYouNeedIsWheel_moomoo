@@ -34,9 +34,11 @@ AllYouNeedIsWheel is a financial options trading assistant specifically designed
    cd AllYouNeedIsWheel
    ```
 
-2. Install required dependencies:
+2. Set up a virtual environment and install required dependencies:
    ```bash
-   python3 -m pip install -r requirements.txt
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
    ```
    *Note: The `run_api.py` script will automatically check and install all required dependencies from requirements.txt when run, including platform-specific dependencies like waitress (Windows) or gunicorn (Unix/Linux/Mac).*
 
