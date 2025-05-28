@@ -116,9 +116,20 @@ def main():
             os.environ['CONNECTION_CONFIG'] = 'connection.json'
             logger.info("Using paper trading configuration")
         
-        # Get port from environment variable or use default
-        port = os.environ.get('PORT', '5000')
+        # Get port from environment variable or use default (changed from 5000 to 8000)
+        port = os.environ.get('PORT', '8000')
         workers = os.environ.get('WORKERS', '4')
+        
+        # Check if port is available
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex(('127.0.0.1', int(port)))
+        sock.close()
+        
+        if result == 0:
+            logger.error(f"Port {port} is already in use. Please stop the existing process or use a different port.")
+            logger.info(f"Try: PORT={int(port)+1} python3 run_api.py")
+            sys.exit(1)
         
         # Detect operating system
         is_windows = platform.system() == 'Windows'
