@@ -109,10 +109,10 @@ python3 run_api.py
 python3 run_api.py --realmoney
 ```
 
-This will start the application on http://localhost:5000
+This will start the application on http://localhost:8000
 
 
-By default, the server will run on port 5000 with 4 workers. You can change these settings with environment variables:
+By default, the server will run on port 8000 with 4 workers. You can change these settings with environment variables:
 
 ```bash
 # Change port and worker count
@@ -143,9 +143,9 @@ PORT=8080 WORKERS=2 python3 run_api.py
 
 The web interface consists of five main pages:
 
-1. **Dashboard** (http://localhost:5000/): Overview of your portfolio and key metrics
-2. **Portfolio** (http://localhost:5000/portfolio): Detailed view of all positions
-3. **Rollover** (http://localhost:5000/rollover): Interface for managing option positions approaching strike price
+1. **Dashboard** (http://localhost:8000/): Overview of your portfolio and key metrics
+2. **Portfolio** (http://localhost:8000/portfolio): Detailed view of all positions
+3. **Rollover** (http://localhost:8000/rollover): Interface for managing option positions approaching strike price
 
 ### Frozen Data
 
