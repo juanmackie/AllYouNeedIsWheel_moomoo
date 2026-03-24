@@ -15,12 +15,11 @@ from .utils import (
 )
 
 # Import connection classes
-from .connection import IBConnection, Option
+from .connection import MoomooConnection
 
 __all__ = [
     # Connection
-    'IBConnection',
-    'Option',
+    'MoomooConnection',
     
     # Utils
     'rotate_logs',
@@ -31,4 +30,4 @@ __all__ = [
     'format_currency',
     'format_percentage',
     'get_strikes_around_price'
-] 
+]
