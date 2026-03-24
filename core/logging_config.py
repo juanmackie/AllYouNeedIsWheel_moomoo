@@ -14,7 +14,7 @@ from datetime import datetime
 LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
 
 # Ensure log directories exist
-for subdir in ['api', 'tws', 'server', 'general']:
+for subdir in ['api', 'moomoo', 'server', 'general']:
     os.makedirs(os.path.join(LOGS_DIR, subdir), exist_ok=True)
 
 # Log file name format with timestamp
@@ -29,7 +29,7 @@ def cleanup_old_logs(log_type, max_logs=5):
     Cleanup old log files, keeping only the latest N logs
     
     Args:
-        log_type (str): Type of log ('api', 'tws', 'server', 'general')
+        log_type (str): Type of log ('api', 'moomoo', 'server', 'general')
         max_logs (int): Number of log files to keep (default: 5)
     """
     log_dir = os.path.join(LOGS_DIR, log_type)
@@ -57,7 +57,7 @@ def configure_logging(module_name, log_type=None, console_level=logging.INFO, fi
     
     Args:
         module_name (str): Name of the module (used as logger name)
-        log_type (str, optional): Type of log ('api', 'tws', 'server', or None for 'general')
+        log_type (str, optional): Type of log ('api', 'moomoo', 'server', or None for 'general')
         console_level (int, optional): Logging level for console output. Defaults to logging.INFO.
         file_level (int, optional): Logging level for file output. Defaults to logging.DEBUG.
         
@@ -112,7 +112,7 @@ def get_logger(module_name, log_type=None):
     
     Args:
         module_name (str): Name of the module
-        log_type (str, optional): Type of log ('api', 'tws', 'server', or None for 'general')
+        log_type (str, optional): Type of log ('api', 'moomoo', 'server', or None for 'general')
         
     Returns:
         logging.Logger: Configured logger
