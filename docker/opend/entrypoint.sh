@@ -43,18 +43,18 @@ cp /opt/opend/OpenD.xml /app/data/OpenD.xml
 echo "Starting OpenD..."
 
 # Find and run the OpenD binary
-if [ -f /opt/opend/FutuOpenD ]; then
-    exec /opt/opend/FutuOpenD -cfg_file=/opt/opend/OpenD.xml
-elif [ -f /opt/opend/OpenD ]; then
-    exec /opt/opend/OpenD -cfg_file=/opt/opend/OpenD.xml
+OPEND_BIN=$(find /opt/opend -maxdepth 3 -type f \( -name "FutuOpenD" -o -name "OpenD" -o -name "opend" \) | head -1)
+if [ -z "$OPEND_BIN" ]; then
+    OPEND_BIN=$(find /opt/opend -maxdepth 3 -type f -executable | head -1)
+fi
+
+if [ -n "$OPEND_BIN" ]; then
+    echo "Found OpenD binary: $OPEND_BIN"
+    chmod +x "$OPEND_BIN"
+    exec "$OPEND_BIN" -cfg_file=/opt/opend/OpenD.xml
 else
-    # Try to find any executable
-    OPEND_BIN=$(find /opt/opend -maxdepth 1 -type f -executable -name "*OpenD*" | head -1)
-    if [ -n "$OPEND_BIN" ]; then
-        exec "$OPEND_BIN" -cfg_file=/opt/opend/OpenD.xml
-    else
-        echo "ERROR: Could not find OpenD binary!"
-        ls -la /opt/opend/
-        exit 1
-    fi
+    echo "ERROR: Could not find OpenD binary!"
+    echo "Contents of /opt/opend/:"
+    find /opt/opend -type f | head -20
+    exit 1
 fi

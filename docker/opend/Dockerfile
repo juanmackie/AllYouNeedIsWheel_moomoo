@@ -6,7 +6,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     tar \
-    libssl-dev \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -16,9 +15,12 @@ ARG OPEND_URL=https://softwaredownload.futunn.com/Futu_OpenD_${OPEND_VERSION}_Ub
 
 RUN mkdir -p /opt/opend && \
     wget -qO /tmp/opend.tar.gz "${OPEND_URL}" && \
-    tar -xzf /tmp/opend.tar.gz -C /opt/opend --strip-components=1 && \
+    tar -xzf /tmp/opend.tar.gz -C /opt/opend && \
     rm /tmp/opend.tar.gz && \
-    chmod +x /opt/opend/FutuOpenD*
+    find /opt/opend -type f -name "*OpenD*" -exec chmod +x {} \; && \
+    find /opt/opend -type f -name "*opend*" -exec chmod +x {} \; && \
+    ls -la /opt/opend/ && \
+    find /opt/opend -type f -executable
 
 # Create data directory
 RUN mkdir -p /app/data
