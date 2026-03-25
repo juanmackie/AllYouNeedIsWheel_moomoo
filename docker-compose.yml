@@ -35,8 +35,7 @@ services:
     volumes:
       - wheel_data:/app/data
     depends_on:
-      opend:
-        condition: service_healthy
+      - opend
     restart: unless-stopped
 
 volumes:

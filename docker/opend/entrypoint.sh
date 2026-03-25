@@ -1,6 +1,21 @@
 #!/bin/bash
 set -e
 
+# Validate required credentials
+if [ -z "$MOOMOO_LOGIN" ] || [ -z "$MOOMOO_PASSWORD" ]; then
+    echo "============================================"
+    echo "  ERROR: Missing Moomoo credentials!"
+    echo "  Set MOOMOO_LOGIN and MOOMOO_PASSWORD"
+    echo "  in Coolify environment variables."
+    echo "============================================"
+    echo ""
+    echo "Container will wait for credentials..."
+    echo "Update env vars and redeploy."
+    # Keep container alive so web can still start
+    tail -f /dev/null
+    exit 1
+fi
+
 # Generate OpenD.xml from environment variables
 cat > /opt/opend/OpenD.xml << XMLEOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -26,12 +41,6 @@ echo "  Port:  11111"
 echo "  Lang:  ${MOOMOO_LANG:-en}"
 echo "============================================"
 
-# Check if Appdata.dat exists, if not copy from install
-if [ ! -f /app/data/Appdata.dat ] && [ -f /opt/opend/Appdata.dat ]; then
-    echo "Copying initial Appdata.dat to persistent volume..."
-    cp /opt/opend/Appdata.dat /app/data/Appdata.dat
-fi
-
 # Symlink Appdata.dat if it exists in data volume
 if [ -f /app/data/Appdata.dat ]; then
     ln -sf /app/data/Appdata.dat /opt/opend/Appdata.dat
@@ -42,9 +51,12 @@ cp /opt/opend/OpenD.xml /app/data/OpenD.xml
 
 echo "Starting OpenD..."
 
-# Find and run the OpenD binary
-OPEND_BIN=$(find /opt/opend -maxdepth 3 -type f \( -name "FutuOpenD" -o -name "OpenD" -o -name "opend" \) | head -1)
-if [ -z "$OPEND_BIN" ]; then
+# Find the OpenD binary
+OPEND_BIN="/opt/opend/FutuOpenD"
+if [ ! -f "$OPEND_BIN" ]; then
+    OPEND_BIN=$(find /opt/opend -maxdepth 3 -type f -name "FutuOpenD" | head -1)
+fi
+if [ ! -f "$OPEND_BIN" ]; then
     OPEND_BIN=$(find /opt/opend -maxdepth 3 -type f -executable | head -1)
 fi
 
