@@ -29,4 +29,12 @@ options.db
 trades.db
 
 # Connection config (may contain secrets)
-connection*.json
+connection.json
+connection_real.json
+
+# But allow Docker config (no secrets)
+!connection_docker.json
+
+# Environment variables
+.env
+.env.local

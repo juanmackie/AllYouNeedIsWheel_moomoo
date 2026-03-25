@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  opend:
+    build:
+      context: ./docker/opend
+    container_name: moomoo-opend
+    ports:
+      - "${OPEND_PORT:-11111}:11111"
+    environment:
+      - MOOMOO_LOGIN=${MOOMOO_LOGIN}
+      - MOOMOO_PASSWORD=${MOOMOO_PASSWORD}
+      - MOOMOO_LANG=${MOOMOO_LANG:-en}
+      - MOOMOO_LOG_LEVEL=${MOOMOO_LOG_LEVEL:-info}
+    volumes:
+      - opend_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/11111"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: all-you-need-is-wheel
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      - CONNECTION_CONFIG=connection_docker.json
+      - MOOMOO_TRADING_PASSWORD=${MOOMOO_TRADING_PASSWORD:-}
+    volumes:
+      - wheel_data:/app/data
+    depends_on:
+      opend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  opend_data:
+  wheel_data:
