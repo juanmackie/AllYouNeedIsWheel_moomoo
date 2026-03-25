@@ -248,7 +248,7 @@ async function cancelOrder(orderId) {
 }
 
 /**
- * Check status of pending/processing orders with TWS
+ * Check status of pending/processing orders with moomoo
  * @returns {Promise} Promise with updated orders
  */
 async function checkOrderStatus() {

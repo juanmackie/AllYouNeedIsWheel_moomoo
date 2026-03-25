@@ -90,8 +90,8 @@ class OptionsDatabase:
                 earnings_return_on_capital REAL DEFAULT 0,
                 
                 -- Execution data
-                ib_order_id TEXT,
-                ib_status TEXT,
+                moomoo_order_id TEXT,
+                moomoo_status TEXT,
                 filled INTEGER DEFAULT 0,
                 remaining INTEGER DEFAULT 0,
                 avg_fill_price REAL DEFAULT 0,
@@ -119,6 +119,25 @@ class OptionsDatabase:
             cursor.execute("PRAGMA table_info(orders)")
             columns = cursor.fetchall()
             column_names = [column[1] for column in columns]
+            
+            # Migrate ib_order_id -> moomoo_order_id and ib_status -> moomoo_status
+            if 'ib_order_id' in column_names and 'moomoo_order_id' not in column_names:
+                print("Running migration: Renaming ib_order_id to moomoo_order_id")
+                cursor.execute("ALTER TABLE orders RENAME COLUMN ib_order_id TO moomoo_order_id")
+                print("Migration completed: ib_order_id renamed to moomoo_order_id")
+                # Refresh column names after rename
+                cursor.execute("PRAGMA table_info(orders)")
+                columns = cursor.fetchall()
+                column_names = [column[1] for column in columns]
+            
+            if 'ib_status' in column_names and 'moomoo_status' not in column_names:
+                print("Running migration: Renaming ib_status to moomoo_status")
+                cursor.execute("ALTER TABLE orders RENAME COLUMN ib_status TO moomoo_status")
+                print("Migration completed: ib_status renamed to moomoo_status")
+                # Refresh column names after rename
+                cursor.execute("PRAGMA table_info(orders)")
+                columns = cursor.fetchall()
+                column_names = [column[1] for column in columns]
             
             # Check if we need to add the isRollover column
             if 'isRollover' not in column_names:
@@ -299,8 +318,8 @@ class OptionsDatabase:
                 
                 # Map execution details to database fields
                 field_mappings = {
-                    'ib_order_id': 'ib_order_id',
-                    'ib_status': 'ib_status',
+                    'moomoo_order_id': 'moomoo_order_id',
+                    'moomoo_status': 'moomoo_status',
                     'filled': 'filled',
                     'remaining': 'remaining',
                     'avg_fill_price': 'avg_fill_price',

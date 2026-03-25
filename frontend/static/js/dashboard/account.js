@@ -322,7 +322,7 @@ async function loadPortfolioData() {
         }
     } catch (error) {
         console.error('Error loading portfolio data:', error);
-        showAlert('Error loading portfolio data. Please check your connection to Interactive Brokers.', 'danger');
+        showAlert('Error loading portfolio data. Please check your connection to moomoo OpenD.', 'danger');
     }
 }
 

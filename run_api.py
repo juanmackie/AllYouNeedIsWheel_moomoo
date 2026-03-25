@@ -112,9 +112,11 @@ def main():
         if args.realmoney:
             os.environ['CONNECTION_CONFIG'] = 'connection_real.json'
             logger.warning("Using REAL MONEY trading configuration! Be careful with your orders!")
+            if not os.environ.get('MOOMOO_TRADING_PASSWORD'):
+                logger.warning("MOOMOO_TRADING_PASSWORD not set - live trading may fail to unlock trades")
         else:
             os.environ['CONNECTION_CONFIG'] = 'connection.json'
-            logger.info("Using paper trading configuration")
+            logger.info("Using paper trading configuration (moomoo SIMULATE)")
         
         # Get port from environment variable or use default (changed from 5000 to 8000)
         port = os.environ.get('PORT', '8000')

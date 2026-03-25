@@ -15,7 +15,7 @@ ENV/
 
 # IDE files
 .idea/
-.vscode/
+vscode/
 *.swp
 *.swo
 
@@ -23,12 +23,10 @@ ENV/
 logs/
 reports/
 
-# IB API cache
-.api-cache/
-
 # SQLite databases
 *.db
 options.db
-trades.db 
+trades.db
 
+# Connection config (may contain secrets)
 connection*.json

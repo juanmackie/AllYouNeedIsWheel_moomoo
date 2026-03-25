@@ -9,7 +9,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify
 from api import create_app
 from core.logging_config import get_logger
 from db.database import OptionsDatabase
-from core.connection import IBConnection, suppress_ib_logs
+from core.connection import MoomooConnection
 
 # Configure logging
 logger = get_logger('autotrader.app', 'api')
@@ -40,7 +40,7 @@ def create_application():
             # Use default values
             connection_config = {
                 "host": "127.0.0.1",
-                "port": 7497,  # Use 7496 for TWS, 7497 for IB Gateway
+                "port": 11111,  # Default port for moomoo OpenD
                 "client_id": 1,
                 "readonly": True  # Default to readonly for safety
             }
@@ -49,7 +49,7 @@ def create_application():
         # Use default values
         connection_config = {
             "host": "127.0.0.1",
-            "port": 7497,
+            "port": 11111,  # Default port for moomoo OpenD
             "client_id": 1,
             "readonly": True
         }
@@ -94,14 +94,6 @@ def rollover():
     """
     logger.info("Rendering rollover page")
     return render_template('rollover.html')
-
-@app.route('/recommendations')
-def recommendations():
-    """
-    Temporarily redirect recommendations page to home
-    """
-    logger.info("Recommendations page accessed but currently unavailable - redirecting to home")
-    return redirect(url_for('index'))
 
 @app.errorhandler(404)
 def page_not_found(e):

@@ -119,9 +119,9 @@ function updatePendingOrdersTable() {
         // Get the badge color for status
         const badgeColor = getBadgeColor(order.status);
         
-        // IB order information
-        const ibOrderId = order.ib_order_id || 'Not sent';
-        const ibStatus = order.ib_status || '-';
+        // Order information from moomoo
+        const moomooOrderId = order.moomoo_order_id || 'Not sent';
+        const moomooStatus = order.moomoo_status || '-';
         
         // Format execution price if available
         const avgFillPrice = order.avg_fill_price ? formatCurrency(order.avg_fill_price) : '-';
@@ -143,16 +143,16 @@ function updatePendingOrdersTable() {
             `;
         }
         
-        // Add IB info if order has been executed
+        // Add moomoo info if order has been executed
         if (order.status !== 'pending') {
             statusHtml += `
                 <br>
                 <small class="text-muted mt-1">
-                    <strong>IB ID:</strong> ${ibOrderId}
+                    <strong>Order ID:</strong> ${moomooOrderId}
                 </small>
                 <br>
                 <small class="text-muted">
-                    <strong>Status:</strong> ${ibStatus}
+                    <strong>Moomoo Status:</strong> ${moomooStatus}
                 </small>
             `;
             
@@ -398,17 +398,17 @@ async function executeOrderById(orderId) {
             pendingOrdersData[orderIndex].status = "processing";
             pendingOrdersData[orderIndex].executed = true;
             
-            // Add IB details from the response
+            // Add moomoo details from the response
             if (result.execution_details) {
-                pendingOrdersData[orderIndex].ib_order_id = result.execution_details.ib_order_id;
-                pendingOrdersData[orderIndex].ib_status = result.execution_details.ib_status;
+                pendingOrdersData[orderIndex].moomoo_order_id = result.execution_details.moomoo_order_id;
+                pendingOrdersData[orderIndex].moomoo_status = result.execution_details.moomoo_status;
                 pendingOrdersData[orderIndex].filled = result.execution_details.filled;
                 pendingOrdersData[orderIndex].remaining = result.execution_details.remaining;
                 pendingOrdersData[orderIndex].avg_fill_price = result.execution_details.avg_fill_price;
             } else {
                 // Fallback if execution_details is not present
-                pendingOrdersData[orderIndex].ib_order_id = result.ib_order_id || 'Unknown';
-                pendingOrdersData[orderIndex].ib_status = 'Submitted';
+                pendingOrdersData[orderIndex].moomoo_order_id = result.moomoo_order_id || 'Unknown';
+                pendingOrdersData[orderIndex].moomoo_status = 'Submitted';
             }
             
             // Update the table immediately
@@ -416,7 +416,7 @@ async function executeOrderById(orderId) {
         }
         
         // Show success message
-        showAlert(`Order sent to TWS (IB Order ID: ${result.ib_order_id})`, 'success');
+        showAlert(`Order sent to moomoo (Order ID: ${result.moomoo_order_id})`, 'success');
         
         // Start auto-refresh if not already running to track this order's status
         startAutoRefresh();
@@ -439,11 +439,11 @@ async function cancelOrderById(orderId) {
         const orderIndex = pendingOrdersData.findIndex(order => order.id == orderId);
         if (orderIndex !== -1) {
             // Update the order status
-            pendingOrdersData[orderIndex].status = result.ib_status === 'PendingCancel' ? 'canceling' : 'canceled';
+            pendingOrdersData[orderIndex].status = result.moomoo_status === 'PendingCancel' ? 'canceling' : 'canceled';
             
-            // Add IB details if available
-            if (result.ib_status) {
-                pendingOrdersData[orderIndex].ib_status = result.ib_status;
+            // Add moomoo details if available
+            if (result.moomoo_status) {
+                pendingOrdersData[orderIndex].moomoo_status = result.moomoo_status;
             }
             
             // Update the table immediately
@@ -506,7 +506,7 @@ async function loadFilledOrders() {
 }
 
 /**
- * Check for order status updates with TWS
+ * Check for order status updates with moomoo
  */
 async function checkOrdersStatus() {
     try {

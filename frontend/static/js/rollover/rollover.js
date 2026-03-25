@@ -879,11 +879,11 @@ function populatePendingOrdersTable(orders) {
             statusHtml += `<br><small class="text-muted">${createdAt}</small>`;
         }
         
-        // Show IB information if available
-        if (order.ib_order_id) {
+        // Show moomoo information if available
+        if (order.moomoo_order_id) {
             statusHtml += `
-                <br><small class="text-muted"><strong>IB ID:</strong> ${order.ib_order_id}</small>
-                <br><small class="text-muted"><strong>Status:</strong> ${order.ib_status || 'Unknown'}</small>
+                <br><small class="text-muted"><strong>Order ID:</strong> ${order.moomoo_order_id}</small>
+                <br><small class="text-muted"><strong>Moomoo Status:</strong> ${order.moomoo_status || 'Unknown'}</small>
             `;
             
             // Show fill price if executed

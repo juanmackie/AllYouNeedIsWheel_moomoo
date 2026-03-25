@@ -162,8 +162,8 @@ class OptionsService:
 
             # Update order status in database
             execution_details = {
-                "ib_order_id": result.get('order_id'), # Keeping key name for compatibility
-                "ib_status": result.get('status'),
+                "moomoo_order_id": result.get('order_id'),
+                "moomoo_status": result.get('status'),
                 "filled": result.get('filled'),
                 "remaining": result.get('remaining'),
                 "avg_fill_price": result.get('avg_fill_price'),
@@ -181,7 +181,7 @@ class OptionsService:
                 "success": True,
                 "message": "Order sent to moomoo",
                 "order_id": order_id,
-                "ib_order_id": result.get('order_id'),
+                "moomoo_order_id": result.get('order_id'),
                 "status": "processing",
                 "execution_details": execution_details
             }, 200
@@ -378,9 +378,9 @@ class OptionsService:
             conn = self._ensure_connection()
             updated_orders = []
             for order in orders:
-                ib_order_id = order.get('ib_order_id')
-                if order.get('status') == 'processing' and ib_order_id:
-                    status_info = conn.check_order_status(ib_order_id)
+                moomoo_order_id = order.get('moomoo_order_id')
+                if order.get('status') == 'processing' and moomoo_order_id:
+                    status_info = conn.check_order_status(moomoo_order_id)
                     if status_info:
                         new_status = "processing"
                         executed = False
@@ -389,8 +389,8 @@ class OptionsService:
                             executed = True
                             
                         execution_details = {
-                            "ib_order_id": ib_order_id,
-                            "ib_status": status_info.get('status'),
+                            "moomoo_order_id": moomoo_order_id,
+                            "moomoo_status": status_info.get('status'),
                             "filled": status_info.get('filled', 0),
                             "remaining": status_info.get('remaining', 0),
                             "avg_fill_price": status_info.get('avg_fill_price', 0),
@@ -413,9 +413,9 @@ class OptionsService:
             order = self.db.get_order(order_id)
             if not order: return {"success": False, "error": "Order not found"}, 404
             
-            if order['status'] == 'processing' and order.get('ib_order_id'):
+            if order['status'] == 'processing' and order.get('moomoo_order_id'):
                 conn = self._ensure_connection()
-                res = conn.cancel_order(order.get('ib_order_id'))
+                res = conn.cancel_order(order.get('moomoo_order_id'))
                 if res.get('success'):
                     self.db.update_order_status(order_id=order_id, status="canceled", executed=True)
                     return {"success": True, "message": "Order canceled"}, 200

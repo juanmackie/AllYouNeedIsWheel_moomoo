@@ -178,7 +178,7 @@ def delete_order(order_id):
 @bp.route('/execute/<int:order_id>', methods=['POST'])
 def execute_order(order_id):
     """
-    Execute an order by sending it to TWS.
+    Execute an order by sending it to moomoo OpenD.
     
     Args:
         order_id (int): ID of the order to execute
@@ -209,7 +209,7 @@ def execute_order(order_id):
 @bp.route('/check-orders', methods=['POST'])
 def check_orders():
     """
-    Check status of pending/processing orders with TWS API and update them in the database.
+    Check status of pending/processing orders with moomoo API and update them in the database.
     
     Returns:
         JSON response with updated orders
