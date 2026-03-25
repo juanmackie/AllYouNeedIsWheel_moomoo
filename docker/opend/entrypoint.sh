@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 # Validate required credentials
 if [ -z "$MOOMOO_LOGIN" ] || [ -z "$MOOMOO_PASSWORD" ]; then
@@ -63,10 +62,17 @@ fi
 if [ -n "$OPEND_BIN" ]; then
     echo "Found OpenD binary: $OPEND_BIN"
     chmod +x "$OPEND_BIN"
+    
+    # Check for missing shared libraries
+    echo "Checking binary dependencies..."
+    ldd "$OPEND_BIN" 2>&1 || echo "ldd check failed (static binary or cross-compiled)"
+    
+    echo "Starting OpenD..."
     exec "$OPEND_BIN" -cfg_file=/opt/opend/OpenD.xml
 else
     echo "ERROR: Could not find OpenD binary!"
     echo "Contents of /opt/opend/:"
     find /opt/opend -type f | head -20
-    exit 1
+    echo "Keeping container alive for debugging..."
+    tail -f /dev/null
 fi
