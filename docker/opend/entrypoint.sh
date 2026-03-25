@@ -46,19 +46,30 @@ chmod +x "$OPEND_BIN"
 OPEND_DIR=$(dirname "$OPEND_BIN")
 echo "OpenD directory: $OPEND_DIR"
 
-# Generate OpenD.xml NEXT TO THE BINARY (not in /opt/opend)
+# Create log directory
+mkdir -p "$OPEND_DIR/log"
+
+# Generate OpenD.xml with CORRECT Futu format
 cat > "$OPEND_DIR/OpenD.xml" << XMLEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <FutuOpenD>
     <Global>
-        <lang>${MOOMOO_LANG:-en}</lang>
         <log_level>${MOOMOO_LOG_LEVEL:-info}</log_level>
+        <log_path>./log</log_path>
+        <cmd_push_protobuf_ver>0</cmd_push_protobuf_ver>
+        <lang>chs</lang>
+    </Global>
+    <Login>
+        <login_account>
+            <account>${MOOMOO_LOGIN}</account>
+            <pwd>${MOOMOO_PASSWORD}</pwd>
+            <login_env>0</login_env>
+            <login_region>2</login_region>
+        </login_account>
+    </Login>
+    <Global>
         <ip>0.0.0.0</ip>
-        <api_port>11111</api_port>
-        <login_account>${MOOMOO_LOGIN}</login_account>
-        <login_pwd>${MOOMOO_PASSWORD}</login_pwd>
-        <push_proto_type>0</push_proto_type>
-        <auto_hold_quote_right>1</auto_hold_quote_right>
+        <port>11111</port>
     </Global>
 </FutuOpenD>
 XMLEOF
@@ -73,10 +84,6 @@ fi
 
 # Copy config to data volume for persistence
 cp "$OPEND_DIR/OpenD.xml" /app/data/OpenD.xml
-
-# Check for missing shared libraries
-echo "Checking binary dependencies..."
-ldd "$OPEND_BIN" 2>&1 || echo "ldd not available"
 
 echo "Starting OpenD from $OPEND_DIR ..."
 
