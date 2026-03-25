@@ -15,17 +15,16 @@ ARG OPEND_VERSION=10.1.6108
 ARG OPEND_URL=https://softwaredownload.futunn.com/Futu_OpenD_${OPEND_VERSION}_Ubuntu18.04.tar.gz
 
 # Extract and flatten the double-nested directory structure
-RUN mkdir -p /tmp/opend-extract && \
+RUN mkdir -p /opt/opend && \
     wget -qO /tmp/opend.tar.gz "${OPEND_URL}" && \
-    tar -xzf /tmp/opend.tar.gz -C /tmp/opend-extract && \
+    tar -xzf /tmp/opend.tar.gz -C /tmp && \
     rm /tmp/opend.tar.gz && \
-    # Move binary files to /opt/opend (flatten double nesting)
-    cp -r /tmp/opend-extract/Futu_OpenD_*/Futu_OpenD_*/. /opt/opend/ 2>/dev/null || \
-    cp -r /tmp/opend-extract/Futu_OpenD_*/. /opt/opend/ 2>/dev/null || \
-    cp -r /tmp/opend-extract/. /opt/opend/ && \
-    rm -rf /tmp/opend-extract && \
-    chmod +x /opt/opend/FutuOpenD /opt/opend/FTWebSocket /opt/opend/FTUpdate 2>/dev/null || true && \
-    ls -la /opt/opend/
+    # Flatten: copy from double-nested Futu_OpenD_* dir to /opt/opend
+    INNER=$(find /tmp/Futu_OpenD_10.1.6108_Ubuntu18.04 -maxdepth 1 -type d -name "Futu_OpenD_*" | head -1) && \
+    cp -r "$INNER"/* /opt/opend/ && \
+    rm -rf /tmp/Futu_OpenD_* && \
+    chmod +x /opt/opend/FutuOpenD /opt/opend/FTWebSocket /opt/opend/FTUpdate 2>/dev/null; true && \
+    echo "=== OpenD contents ===" && ls -la /opt/opend/
 
 # Create data directory
 RUN mkdir -p /app/data
