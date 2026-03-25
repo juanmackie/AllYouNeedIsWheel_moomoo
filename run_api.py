@@ -109,14 +109,18 @@ def main():
         args = parser.parse_args()
         
         # Set environment variable for connection config based on the flag
+        # Only override if not already set (e.g., from Docker environment)
         if args.realmoney:
-            os.environ['CONNECTION_CONFIG'] = 'connection_real.json'
+            if 'CONNECTION_CONFIG' not in os.environ:
+                os.environ['CONNECTION_CONFIG'] = 'connection_real.json'
             logger.warning("Using REAL MONEY trading configuration! Be careful with your orders!")
             if not os.environ.get('MOOMOO_TRADING_PASSWORD'):
                 logger.warning("MOOMOO_TRADING_PASSWORD not set - live trading may fail to unlock trades")
-        else:
+        elif 'CONNECTION_CONFIG' not in os.environ:
             os.environ['CONNECTION_CONFIG'] = 'connection.json'
             logger.info("Using paper trading configuration (moomoo SIMULATE)")
+        else:
+            logger.info(f"Using connection config from environment: {os.environ.get('CONNECTION_CONFIG')}")
         
         # Get port from environment variable or use default (changed from 5000 to 8000)
         port = os.environ.get('PORT', '8000')

@@ -2,6 +2,6 @@
     "host": "opend",
     "port": 11111,
     "readonly": false,
-    "db_path": "options.db",
-    "comment": "Docker Compose config - 'opend' is the service name in docker-compose.yml"
+    "db_path": "data/options.db",
+    "comment": "Docker Compose config - 'opend' is the service name in docker-compose.yml. DB stored in mounted volume for persistence."
 }

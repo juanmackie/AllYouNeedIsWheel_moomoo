@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     ca-certificates \
     libssl-dev \
+    netcat-openbsd \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Download OpenD for Ubuntu
