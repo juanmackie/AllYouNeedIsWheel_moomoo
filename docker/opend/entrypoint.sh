@@ -60,9 +60,11 @@ if [ ! -f "$APPDATA_TARGET" ]; then
     tail -f /dev/null
 fi
 
-cat > "$OPEND_DIR/OpenD.xml" <<EOF
+CONFIG_PATH="$OPEND_DIR/FutuOpenD.xml"
+
+cat > "$CONFIG_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
-<FutuOpenD>
+<futu_opend>
     <ip>0.0.0.0</ip>
     <api_port>11111</api_port>
     <login_account>${MOOMOO_LOGIN}</login_account>
@@ -70,15 +72,19 @@ cat > "$OPEND_DIR/OpenD.xml" <<EOF
     <lang>${MOOMOO_LANG:-en}</lang>
     <log_level>${MOOMOO_LOG_LEVEL:-info}</log_level>
     <push_proto_type>0</push_proto_type>
+    <price_reminder_push>1</price_reminder_push>
     <auto_hold_quote_right>1</auto_hold_quote_right>
-</FutuOpenD>
+    <future_trade_api_time_zone>UTC+8</future_trade_api_time_zone>
+</futu_opend>
 EOF
 
-cp "$OPEND_DIR/OpenD.xml" /app/data/OpenD.xml
+cp "$CONFIG_PATH" /app/data/FutuOpenD.xml
+ln -sf "$CONFIG_PATH" "$OPEND_DIR/OpenD.xml"
+ln -sf "$CONFIG_PATH" /app/data/OpenD.xml
 
 echo "Using binary: $OPEND_BIN"
-echo "Using config: $OPEND_DIR/OpenD.xml"
+echo "Using config: $CONFIG_PATH"
 echo "Using appdata: $APPDATA_TARGET"
 
 cd "$OPEND_DIR"
-exec "$OPEND_BIN" -cfg_file="$OPEND_DIR/OpenD.xml"
+exec "$OPEND_BIN" -cfg_file="$CONFIG_PATH"
