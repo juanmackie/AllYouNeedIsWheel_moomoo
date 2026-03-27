@@ -27,17 +27,35 @@ chmod +x "$OPEND_BIN"
 OPEND_DIR=$(dirname "$OPEND_BIN")
 mkdir -p "$OPEND_DIR/log"
 
-if [ -f /app/data/Appdata.dat ]; then
-    ln -sf /app/data/Appdata.dat "$OPEND_DIR/Appdata.dat"
-elif [ ! -f "$OPEND_DIR/Appdata.dat" ]; then
-    PACKAGE_APPDATA=$(find /opt/opend -maxdepth 4 -type f -name "Appdata.dat" | head -1)
-    if [ -n "$PACKAGE_APPDATA" ]; then
-        ln -sf "$PACKAGE_APPDATA" "$OPEND_DIR/Appdata.dat"
+APPDATA_TARGET="$OPEND_DIR/AppData.dat"
+APPDATA_LEGACY_TARGET="$OPEND_DIR/Appdata.dat"
+APPDATA_SOURCE=""
+
+for candidate in /app/data/AppData.dat /app/data/Appdata.dat; do
+    if [ -f "$candidate" ]; then
+        APPDATA_SOURCE="$candidate"
+        break
     fi
+done
+
+if [ -z "$APPDATA_SOURCE" ] && [ -f "$APPDATA_TARGET" ]; then
+    APPDATA_SOURCE="$APPDATA_TARGET"
 fi
 
-if [ ! -f "$OPEND_DIR/Appdata.dat" ]; then
-    echo "ERROR: Appdata.dat not found next to FutuOpenD."
+if [ -z "$APPDATA_SOURCE" ]; then
+    APPDATA_SOURCE=$(find /opt/opend -maxdepth 4 -type f \( -name "AppData.dat" -o -name "Appdata.dat" \) | head -1)
+fi
+
+if [ -n "$APPDATA_SOURCE" ] && [ "$APPDATA_SOURCE" != "$APPDATA_TARGET" ]; then
+    ln -sf "$APPDATA_SOURCE" "$APPDATA_TARGET"
+fi
+
+if [ -f "$APPDATA_TARGET" ] && [ ! -e "$APPDATA_LEGACY_TARGET" ]; then
+    ln -sf "$APPDATA_TARGET" "$APPDATA_LEGACY_TARGET"
+fi
+
+if [ ! -f "$APPDATA_TARGET" ]; then
+    echo "ERROR: AppData.dat not found next to FutuOpenD."
     find /opt/opend -maxdepth 4 -type f | head -30
     tail -f /dev/null
 fi
@@ -60,7 +78,7 @@ cp "$OPEND_DIR/OpenD.xml" /app/data/OpenD.xml
 
 echo "Using binary: $OPEND_BIN"
 echo "Using config: $OPEND_DIR/OpenD.xml"
-echo "Using appdata: $OPEND_DIR/Appdata.dat"
+echo "Using appdata: $APPDATA_TARGET"
 
 cd "$OPEND_DIR"
 exec "$OPEND_BIN" -cfg_file="$OPEND_DIR/OpenD.xml"

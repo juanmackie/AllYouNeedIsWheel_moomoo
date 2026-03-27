@@ -21,11 +21,16 @@ RUN mkdir -p /opt/opend && \
     wget -qO /tmp/opend.tar.gz "${OPEND_URL}" && \
     tar -xzf /tmp/opend.tar.gz -C /tmp && \
     rm /tmp/opend.tar.gz && \
-    # Flatten: copy from double-nested Futu_OpenD_* dir to /opt/opend
-    INNER=$(find /tmp/Futu_OpenD_10.1.6108_Ubuntu18.04 -maxdepth 1 -type d -name "Futu_OpenD_*" | head -1) && \
-    cp -r "$INNER"/* /opt/opend/ && \
+    INNER="/tmp/Futu_OpenD_${OPEND_VERSION}_Ubuntu18.04/Futu_OpenD_${OPEND_VERSION}_Ubuntu18.04" && \
+    if [ ! -d "$INNER" ]; then \
+        INNER=$(find "/tmp/Futu_OpenD_${OPEND_VERSION}_Ubuntu18.04" -mindepth 1 -maxdepth 1 -type d -name "Futu_OpenD_${OPEND_VERSION}_Ubuntu18.04" | head -1); \
+    fi && \
+    if [ -z "$INNER" ] || [ ! -d "$INNER" ]; then \
+        echo "ERROR: Could not locate extracted OpenD directory." && exit 1; \
+    fi && \
+    cp -r "$INNER"/. /opt/opend/ && \
     rm -rf /tmp/Futu_OpenD_* && \
-    chmod +x /opt/opend/FutuOpenD /opt/opend/FTWebSocket /opt/opend/FTUpdate 2>/dev/null; true && \
+    chmod +x /opt/opend/FutuOpenD /opt/opend/FTWebSocket /opt/opend/FTUpdate 2>/dev/null || true && \
     echo "=== OpenD contents ===" && ls -la /opt/opend/
 
 # Create data directory
