@@ -87,4 +87,32 @@ echo "Using config: $CONFIG_PATH"
 echo "Using appdata: $APPDATA_TARGET"
 
 cd "$OPEND_DIR"
-exec "$OPEND_BIN" -cfg_file="$CONFIG_PATH"
+
+LOG_FILE="/app/data/opend-runtime.log"
+rm -f "$LOG_FILE"
+touch "$LOG_FILE"
+
+"$OPEND_BIN" -cfg_file="$CONFIG_PATH" >> "$LOG_FILE" 2>&1 &
+OPEND_PID=$!
+
+for _ in $(seq 1 60); do
+    if nc -z 127.0.0.1 11111; then
+        echo "OpenD port is ready on 11111."
+        wait "$OPEND_PID"
+        exit $?
+    fi
+
+    if ! kill -0 "$OPEND_PID" 2>/dev/null; then
+        wait "$OPEND_PID"
+        EXIT_CODE=$?
+        echo "OpenD exited with code $EXIT_CODE before port 11111 became ready."
+        cat "$LOG_FILE"
+        tail -f /dev/null
+    fi
+
+    sleep 2
+done
+
+echo "OpenD did not open port 11111 within the expected time."
+cat "$LOG_FILE"
+tail -f /dev/null
