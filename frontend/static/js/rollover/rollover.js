@@ -392,7 +392,7 @@ async function selectOptionToRoll(optionId) {
         
         // Create OTM selector at the top (this will always be present)
         const otmSelectorRow = document.createElement('tr');
-        otmSelectorRow.className = 'bg-light';
+        otmSelectorRow.className = 'bg-body-tertiary';
         otmSelectorRow.id = 'otm-selector-row'; // Add ID for easier reference
         
         // Create options string with 1% granularity
@@ -742,7 +742,7 @@ function populateRolloverSuggestionsTable(suggestions) {
     if (suggestions.length > 1) {
         // Single execute button at the bottom
         const executeAllRow = document.createElement('tr');
-        executeAllRow.className = 'bg-light';
+        executeAllRow.className = 'bg-body-tertiary';
         executeAllRow.innerHTML = `
             <td colspan="11" class="text-center">
                 <button id="execute-rollover-btn" class="btn btn-primary mt-2">

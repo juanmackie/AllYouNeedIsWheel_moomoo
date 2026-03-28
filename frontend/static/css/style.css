@@ -1,7 +1,8 @@
 /* Auto-Trader Custom Styles */
 
 body {
-    background-color: #f8f9fa;
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
     font-family: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
 }
 
@@ -13,8 +14,8 @@ body {
 }
 
 .card-header {
-    background-color: #fff;
-    border-bottom: 1px solid rgba(0,0,0,.125);
+    background-color: var(--bs-tertiary-bg);
+    border-bottom: 1px solid var(--bs-border-color);
     padding: 1rem 1.25rem;
 }
 
@@ -28,8 +29,8 @@ body {
 }
 
 .card-footer {
-    background-color: #fff;
-    border-top: 1px solid rgba(0,0,0,.125);
+    background-color: var(--bs-tertiary-bg);
+    border-top: 1px solid var(--bs-border-color);
     padding: 0.75rem 1.25rem;
 }
 
@@ -52,7 +53,24 @@ body {
 }
 
 .table-striped tbody tr:nth-of-type(odd) {
-    background-color: rgba(0, 0, 0, 0.02);
+    background-color: var(--bs-tertiary-bg);
+}
+
+.navbar-brand {
+    font-weight: 600;
+}
+
+#theme-toggle {
+    min-width: 2.5rem;
+}
+
+.theme-toggle-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
 }
 
 /* Badge styles */

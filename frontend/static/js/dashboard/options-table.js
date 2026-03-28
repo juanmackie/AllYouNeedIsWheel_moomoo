@@ -2938,7 +2938,7 @@ function displayEarningsSummary(summary) {
     // Create a new, more compact earnings summary table
     const earningsSummaryHTML = `
         <div class="card shadow-sm mt-4">
-            <div class="card-header d-flex justify-content-between align-items-center bg-light py-2">
+            <div class="card-header d-flex justify-content-between align-items-center bg-body-tertiary py-2">
                 <h6 class="mb-0">Estimated Earnings Summary</h6>
             </div>
             <div class="card-body py-2">
