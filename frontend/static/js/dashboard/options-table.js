@@ -28,6 +28,37 @@ function getUnavailableTickerMessage() {
     return 'No stock positions available. Please add stock positions first.';
 }
 
+
+function getSelectedExpirationPreference(ticker, optionType) {
+    return tickersData[ticker]?.selectedExpirations?.[optionType] || null;
+}
+
+
+function setSelectedExpirationPreference(ticker, optionType, expiration) {
+    if (!tickersData[ticker]) {
+        tickersData[ticker] = {};
+    }
+
+    if (!tickersData[ticker].selectedExpirations) {
+        tickersData[ticker].selectedExpirations = {};
+    }
+
+    if (expiration) {
+        tickersData[ticker].selectedExpirations[optionType] = expiration;
+    } else {
+        delete tickersData[ticker].selectedExpirations[optionType];
+    }
+}
+
+
+function formatExpirationLabel(expiration) {
+    if (!expiration || expiration.length !== 8) {
+        return expiration || '-';
+    }
+
+    return `${expiration.slice(0, 4)}-${expiration.slice(4, 6)}-${expiration.slice(6, 8)}`;
+}
+
 // Reference to loadPendingOrders function from orders.js
 let loadPendingOrdersFunc = null;
 
@@ -244,8 +275,8 @@ function calculateEarningsSummary() {
             // Process call options (only for positions with enough shares)
             if (sharesOwned >= 100 && optionData.calls && optionData.calls.length > 0) {
                 const callOption = optionData.calls[0];
-            if (callOption && callOption.ask) {
-                const callPremiumPerContract = callOption.ask * 100; // Premium per contract (100 shares)
+            if (callOption) {
+                const callPremiumPerContract = calculatePremium(callOption.bid, callOption.ask, callOption.last) * 100;
                 const totalCallPremium = callPremiumPerContract * maxCallContracts;
                 summary.totalWeeklyCallPremium += totalCallPremium;
             }
@@ -254,8 +285,8 @@ function calculateEarningsSummary() {
             // Process put options for both regular positions and custom tickers
             if ((sharesOwned >= 100 || isCustomTicker) && optionData.puts && optionData.puts.length > 0) {
                 const putOption = optionData.puts[0];
-            if (putOption && putOption.ask) {
-                const putPremiumPerContract = putOption.ask * 100;
+            if (putOption) {
+                const putPremiumPerContract = calculatePremium(putOption.bid, putOption.ask, putOption.last) * 100;
                     
                     // Use custom put quantity if available, otherwise calculate based on shares
                     const customPutQuantity = tickerData.putQuantity || 
@@ -648,10 +679,7 @@ function addOptionsTableEventListeners() {
                         // Save OTM settings to localStorage
                         saveOtmSettings();
                         
-                        // Save the selected expiration to use for the API call
-                        if (selectedExpiration) {
-                            tickersData[ticker].selectedExpiration = selectedExpiration;
-                        }
+                        setSelectedExpirationPreference(ticker, optionType, selectedExpiration);
                     }
                     
                     // Refresh options with the new OTM percentage and selected expiration
@@ -1014,6 +1042,7 @@ function addOptionsTableEventListeners() {
             const selectedExpiration = this.value;
             
             console.log(`Expiration changed for ${ticker} ${optionType} to ${selectedExpiration}`);
+            setSelectedExpirationPreference(ticker, optionType, selectedExpiration);
             
             try {
                 // Show loading indicator on the row
@@ -1207,7 +1236,8 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
             tickersData[ticker] = {
                 callOtmPercentage: 10,
                 putOtmPercentage: 10,
-                putQuantity: 1
+                putQuantity: 1,
+                errors: {}
             };
         }
         
@@ -1218,7 +1248,6 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
         console.log(`Refreshing options for ${ticker} with call OTM ${callOtmPercentage}% and put OTM ${putOtmPercentage}%`);
 
         // Fetch option expiration dates for this ticker
-        let closestExpiration = null;
         let allExpirations = [];
         try {
             console.log(`Fetching expiration dates for ${ticker}`);
@@ -1227,16 +1256,10 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
                 // Store all expirations for this ticker
                 allExpirations = expirationData.expirations;
-                
-                // Get the closest expiration date (first one in the sorted list)
-                closestExpiration = allExpirations[0].value;
-                console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
                 console.log(`Retrieved ${allExpirations.length} expiration dates for ${ticker}`);
                 
                 // Store the expirations in the ticker data for later use
-                if (!tickersData[ticker].expirations) {
-                    tickersData[ticker].expirations = allExpirations;
-                }
+                tickersData[ticker].expirations = allExpirations;
             } else {
                 console.log(`No expiration dates found for ${ticker}, will use default`);
             }
@@ -1244,15 +1267,17 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
             console.error(`Error fetching expiration dates for ${ticker}:`, error);
             // Continue with default (no expiration specified)
         }
+
+        const selectedCallExpiration = getSelectedExpirationPreference(ticker, 'CALL');
+        const selectedPutExpiration = getSelectedExpirationPreference(ticker, 'PUT');
         
-        // Make API call for call options with the closest expiration date
-        console.log(`Fetching CALL options for ${ticker} with OTM ${callOtmPercentage}% and expiration ${closestExpiration || 'default'}`);
-        const callOptionData = await fetchOptionData(ticker, callOtmPercentage, 'CALL', closestExpiration);
+        // Let the backend rank across expirations unless the user picked one explicitly.
+        console.log(`Fetching CALL options for ${ticker} with OTM ${callOtmPercentage}% and expiration ${selectedCallExpiration || 'optimal-ranked'}`);
+        const callOptionData = await fetchOptionData(ticker, callOtmPercentage, 'CALL', selectedCallExpiration);
         console.log(`Received CALL data for ${ticker}:`, callOptionData);
         
-        // Make API call for put options with the closest expiration date
-        console.log(`Fetching PUT options for ${ticker} with OTM ${putOtmPercentage}% and expiration ${closestExpiration || 'default'}`);
-        const putOptionData = await fetchOptionData(ticker, putOtmPercentage, 'PUT', closestExpiration);
+        console.log(`Fetching PUT options for ${ticker} with OTM ${putOtmPercentage}% and expiration ${selectedPutExpiration || 'optimal-ranked'}`);
+        const putOptionData = await fetchOptionData(ticker, putOtmPercentage, 'PUT', selectedPutExpiration);
         console.log(`Received PUT data for ${ticker}:`, putOptionData);
         
         // Make sure tickersData is initialized for this ticker
@@ -1264,7 +1289,8 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
                 },
                 callOtmPercentage: callOtmPercentage,
                 putOtmPercentage: putOtmPercentage,
-                putQuantity: 1
+                putQuantity: 1,
+                errors: {}
         };
         
             // Initialize the ticker data structure
@@ -1289,19 +1315,27 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
             
             // Update call options
             tickersData[ticker].data.data[ticker].calls = callOptionData.data[ticker].calls || [];
+            tickersData[ticker].errors.CALL = callOptionData.data[ticker].error || '';
             
             console.log(`Updated CALL data for ${ticker}`);
         } else {
             console.log(`No valid CALL data received for ${ticker}`);
+            if (tickersData[ticker]?.errors) {
+                tickersData[ticker].errors.CALL = callOptionData?.message || 'No valid covered call data returned';
+            }
         }
         
         // Add put options data
         if (putOptionData && putOptionData.data && putOptionData.data[ticker]) {
             // Update put options
             tickersData[ticker].data.data[ticker].puts = putOptionData.data[ticker].puts || [];
+            tickersData[ticker].errors.PUT = putOptionData.data[ticker].error || '';
             console.log(`Updated PUT data for ${ticker}`);
         } else {
             console.log(`No valid PUT data received for ${ticker}`);
+            if (tickersData[ticker]?.errors) {
+                tickersData[ticker].errors.PUT = putOptionData?.message || 'No valid cash-secured put data returned';
+            }
         }
         
         console.log(`Completed data update for ${ticker}:`, JSON.stringify(tickersData[ticker]));
@@ -1496,7 +1530,6 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
         console.log(`Refreshing ${optionType} options for ${ticker} with OTM ${otmPercentage}%`);
         
         // Fetch option expiration dates for this ticker
-        let closestExpiration = null;
         let allExpirations = [];
         try {
             console.log(`Fetching expiration dates for ${ticker}`);
@@ -1505,16 +1538,10 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
                 // Store all expirations for this ticker
                 allExpirations = expirationData.expirations;
-                
-                // Get the closest expiration date (first one in the sorted list)
-                closestExpiration = allExpirations[0].value;
-                console.log(`Using closest expiration date for ${ticker}: ${closestExpiration}`);
                 console.log(`Retrieved ${allExpirations.length} expiration dates for ${ticker}`);
                 
                 // Store the expirations in the ticker data for later use
-                if (!tickersData[ticker].expirations) {
-                    tickersData[ticker].expirations = allExpirations;
-                }
+                tickersData[ticker].expirations = allExpirations;
             } else {
                 console.log(`No expiration dates found for ${ticker}, will use default`);
             }
@@ -1522,10 +1549,11 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
             console.error(`Error fetching expiration dates for ${ticker}:`, error);
             // Continue with default (no expiration specified)
         }
+
+        const selectedExpiration = getSelectedExpirationPreference(ticker, optionType);
         
-        // Make API call for specific option type with the closest expiration
-        console.log(`Fetching ${optionType} options for ${ticker} with OTM ${otmPercentage}% and expiration ${closestExpiration || 'default'}`);
-        const optionData = await fetchOptionData(ticker, otmPercentage, optionType, closestExpiration);
+        console.log(`Fetching ${optionType} options for ${ticker} with OTM ${otmPercentage}% and expiration ${selectedExpiration || 'optimal-ranked'}`);
+        const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
         
         console.log(`${optionType} data for ${ticker}:`, optionData);
         
@@ -1537,7 +1565,8 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
                 },
                 callOtmPercentage: optionType === 'CALL' ? otmPercentage : 10,
                 putOtmPercentage: optionType === 'PUT' ? otmPercentage : 10,
-                putQuantity: optionType === 'PUT' ? 1 : 0
+                putQuantity: optionType === 'PUT' ? 1 : 0,
+                errors: {}
             };
             
             // Initialize the ticker data structure
@@ -1562,8 +1591,10 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
             // Update the specific option type data
             if (optionType === 'CALL') {
                 tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
+                tickersData[ticker].errors.CALL = optionData.data[ticker].error || '';
             } else {
                 tickersData[ticker].data.data[ticker].puts = optionData.data[ticker].puts || [];
+                tickersData[ticker].errors.PUT = optionData.data[ticker].error || '';
             }
         }
         
@@ -2160,8 +2191,23 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     // Get stock price and shares owned safely
     const stockPrice = optionData?.stock_price || 0;
     const sharesOwned = optionData?.position || 0;
+    const optionError = tickerData.errors?.[optionType] || '';
     
     if (!options || options.length === 0) {
+        if (optionError) {
+            const colspan = optionType === 'CALL' ? 12 : 12;
+            row.innerHTML = `
+                <td colspan="${colspan}" class="text-center p-3">
+                    <div class="alert alert-warning m-0">
+                        <div class="fw-semibold">${ticker} ${optionType === 'CALL' ? 'covered call' : 'cash-secured put'} data unavailable</div>
+                        <div class="small mt-1">${optionError}</div>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(row);
+            return true;
+        }
+
         // Instead of a warning message row with colSpan, create a row with empty data cells
         if (optionType === 'CALL') {
             const maxContracts = Math.floor(sharesOwned / 100);
@@ -2294,9 +2340,18 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     }
     
     console.log(`Creating row for ${ticker} with option: ${JSON.stringify(option)}`);
+
+    const score = option.score || 0;
+    const annualizedReturn = option.annualized_return || 0;
+    const rationaleText = (option.rationale || []).join(' | ').replace(/"/g, '&quot;');
+    const warningText = (option.warnings || []).join(' | ').replace(/"/g, '&quot;');
+    const scoreClass = score >= 80 ? 'text-success' : (score >= 65 ? 'text-primary' : 'text-warning');
+    const warningHtml = warningText ? `<div class="small text-warning">${warningText}</div>` : '';
     
+    const midPrice = calculatePremium(option.bid, option.ask, option.last);
+
     // Update row data attributes
-    row.dataset.premium = option.ask ? option.ask * 100 : 0;
+    row.dataset.premium = midPrice * 100;
     row.dataset.strike = option.strike || 0;
     
     // Format IV% value
@@ -2307,7 +2362,6 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         const maxContracts = Math.floor(sharesOwned / 100);
         
         // Calculate premium and return values
-        const midPrice = calculatePremium(option.bid, option.ask, option.last);
         const premiumPerContract = midPrice * 100; // Use midPrice instead of option.ask
         const totalPremium = premiumPerContract * maxContracts;
         
@@ -2324,12 +2378,14 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             });
         } else {
             // If no expiration data is available, just show the current one
-            expirationOptionsHtml = `<option value="${option.expiration}" selected>${option.expiration}</option>`;
+            expirationOptionsHtml = `<option value="${option.expiration}" selected>${formatExpirationLabel(option.expiration)}</option>`;
         }
         
         row.innerHTML = `
             <td class="align-middle">
-                ${ticker}
+                <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
+                <div class="small ${scoreClass}">Score ${score.toFixed(1)} • ${annualizedReturn.toFixed(1)}% ann.</div>
+                ${warningHtml}
             </td>
             <td class="align-middle">${sharesOwned}</td>
             <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
@@ -2350,12 +2406,16 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="CALL">
                     ${expirationOptionsHtml}
                 </select>
+                <div class="small text-muted mt-1">${option.dte || '-'} DTE</div>
             </td>
             <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${ivPercent}%</td>
             <td class="align-middle">${maxContracts}</td>
-            <td class="align-middle">$ ${totalPremium.toFixed(2)}</td>
+            <td class="align-middle">
+                <div>$ ${totalPremium.toFixed(2)}</div>
+                <div class="small text-muted">Max if-called: ${formatPercentage(option.if_called_return || 0)}</div>
+            </td>
             <td class="align-middle d-flex">
                 <button class="btn btn-sm btn-outline-success sell-option me-2" 
                     data-ticker="${ticker}" 
@@ -2389,9 +2449,6 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     else {
         const putQuantity = tickerData.putQuantity || 1;
         
-        // Calculate mid price between bid and ask
-        const midPrice = calculatePremium(option.bid, option.ask, option.last);
-        
         // Create expiration dropdown options
         let expirationOptionsHtml = '';
         const expirations = tickersData[ticker].expirations || [];
@@ -2402,12 +2459,14 @@ function addTickerRowToTable(tableId, optionType, ticker) {
             });
         } else {
             // If no expiration data is available, just show the current one
-            expirationOptionsHtml = `<option value="${option.expiration}" selected>${option.expiration}</option>`;
+            expirationOptionsHtml = `<option value="${option.expiration}" selected>${formatExpirationLabel(option.expiration)}</option>`;
         }
         
         row.innerHTML = `
             <td class="align-middle">
-                ${ticker}
+                <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
+                <div class="small ${scoreClass}">Score ${score.toFixed(1)} • ${annualizedReturn.toFixed(1)}% ann.</div>
+                ${warningHtml}
             </td>
             <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
@@ -2427,6 +2486,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="PUT">
                     ${expirationOptionsHtml}
                 </select>
+                <div class="small text-muted mt-1">${option.dte || '-'} DTE</div>
             </td>
             <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
@@ -2438,10 +2498,12 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     min="1" max="100" step="1" style="width: 70px;">
             </td>
             <td class="align-middle total-premium">
-                $ ${(midPrice * 100 * putQuantity).toFixed(2)}
+                <div>$ ${(midPrice * 100 * putQuantity).toFixed(2)}</div>
+                <div class="small text-muted">BE: ${formatCurrency(option.breakeven || 0)}</div>
             </td>
             <td class="align-middle cash-required">
-                $ ${((option.strike || 0) * 100 * putQuantity).toFixed(2)}
+                <div>$ ${((option.strike || 0) * 100 * putQuantity).toFixed(2)}</div>
+                <div class="small text-muted">Buffer: ${formatPercentage(option.breakeven_buffer_pct || 0)}</div>
             </td>
             <td class="align-middle d-flex">
                 <button class="btn btn-sm btn-outline-success sell-option me-2" 
@@ -2727,7 +2789,8 @@ async function loadTickers() {
                 },
                 callOtmPercentage: 10, // Default OTM percentage for calls
                 putOtmPercentage: 10, // Default OTM percentage for puts
-                putQuantity: 1 // Default put quantity
+                putQuantity: 1, // Default put quantity
+                errors: {}
             };
             
             // Initialize nested structure for this ticker

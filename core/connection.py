@@ -505,12 +505,10 @@ class MoomooConnection:
                 logger.error(f"Failed to get option chain for {symbol}: {data}")
                 return None
             
-            stock_price = self.get_stock_price(symbol)
-            
             result = {
                 'symbol': symbol.split('.')[-1],
                 'expiration': expiration.replace('-', '') if expiration else '',
-                'stock_price': stock_price,
+                'stock_price': None,
                 'right': right,
                 'options': []
             }
@@ -530,10 +528,10 @@ class MoomooConnection:
             ret, snap_data = self.quote_ctx.get_market_snapshot(option_codes)
             if ret == RET_OK:
                 for _, row in snap_data.iterrows():
-                    opt_expiry = row.get('option_expiry_date', '')
+                    opt_expiry = row.get('option_expiry_date', '') or row.get('strike_time', '')
                     if opt_expiry:
                         opt_expiry = opt_expiry.replace('-', '')
-                        
+                         
                     option_data = {
                         'strike': float(row.get('option_strike_price', 0)),
                         'expiration': opt_expiry,
@@ -542,7 +540,7 @@ class MoomooConnection:
                         'ask': float(row.get('ask_price', 0)),
                         'last': float(row.get('last_price', 0)),
                         'volume': int(row.get('volume', 0)),
-                        'open_interest': int(row.get('open_interest', 0)),
+                        'open_interest': int(row.get('option_open_interest', row.get('open_interest', 0)) or 0),
                         'implied_volatility': float(row.get('option_implied_volatility', 0)),
                         'delta': float(row.get('option_delta', 0)),
                         'gamma': float(row.get('option_gamma', 0)),

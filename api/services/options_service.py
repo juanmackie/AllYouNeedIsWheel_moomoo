@@ -196,94 +196,432 @@ class OptionsService:
                 "error": str(e)
             }, 500
       
-    def get_otm_options(self, ticker, otm_percentage=10, option_type=None, expiration=None):
-        """
-        Get option contracts that are OTM by the specified percentage
-        """
-        start_time = time.time()
-        
-        if option_type and option_type not in ['CALL', 'PUT']:
-            return {'error': f"Invalid option_type: {option_type}. Must be 'CALL' or 'PUT'"}
-            
-        conn = self._ensure_connection()
-        if not conn:
-            return {'error': 'Failed to establish connection to moomoo'}
-        
-        tickers = [ticker]
-        result = {}
-        
-        for ticker in tickers:
-            try:
-                ticker_data = self._process_ticker_for_otm(conn, ticker, otm_percentage, expiration, option_type)
-                result[ticker] = ticker_data
-            except Exception as e:
-                logger.error(f"Error processing {ticker} for OTM options: {e}")
-                result[ticker] = {"error": str(e)}
-        
-        elapsed = time.time() - start_time
-        return {'data': result}
-        
-    def _process_ticker_for_otm(self, conn, ticker, otm_percentage, expiration=None, option_type=None):
-        """
-        Process a single ticker for OTM options
-        """
-        result = {}
-        stock_price = conn.get_stock_price(ticker)
-        
-        if stock_price is None or stock_price <= 0:
-            return {'error': 'Unable to obtain valid stock price from moomoo'}
-                
-        result['stock_price'] = stock_price
-        
-        # Get position information
-        position_size = 0
+    def _get_portfolio_context(self):
+        context = {
+            'cash_balance': 0.0,
+            'account_value': 0.0,
+            'positions': {}
+        }
+
         try:
             if self.portfolio_service is None:
                 from api.services.portfolio_service import PortfolioService
                 self.portfolio_service = PortfolioService()
-            
-            positions = self.portfolio_service.get_positions()
-            for pos in positions:
-                if pos.get('symbol') == ticker or pos.get('symbol') == f"US.{ticker}":
-                    position_size = pos.get('position', 0)
-                    break
-        except Exception as e:
-            logger.error(f"Error getting position for {ticker}: {e}")
-        
-        result['position'] = position_size
-        
-        # Calculate target strikes
-        call_strike = self._adjust_to_standard_strike(stock_price * (1 + otm_percentage / 100))
-        put_strike = self._adjust_to_standard_strike(stock_price * (1 - otm_percentage / 100))
-        
-        # Use provided expiration if available, otherwise get default
-        target_expiration = expiration
-        if not target_expiration:
-            target_expiration = get_closest_friday().strftime('%Y%m%d')
-        
-        options_chains = []
-        if not option_type or option_type == 'CALL':
-            call_chain = conn.get_option_chain(ticker, target_expiration, 'C', call_strike)
-            if call_chain:
-                options_chains.append(call_chain)
 
-        if not option_type or option_type == 'PUT':
-            put_chain = conn.get_option_chain(ticker, target_expiration, 'P', put_strike)
-            if put_chain:
-                options_chains.append(put_chain)
+            summary = self.portfolio_service.get_portfolio_summary() or {}
+            positions = self.portfolio_service.get_positions('STK') or []
+
+            context['cash_balance'] = float(summary.get('cash_balance', 0) or 0)
+            context['account_value'] = float(summary.get('account_value', 0) or 0)
+
+            for position in positions:
+                symbol = str(position.get('symbol', '') or '').replace('US.', '')
+                if not symbol:
+                    continue
+                context['positions'][symbol] = position
+        except Exception as exc:
+            logger.error(f"Error building portfolio context for options scoring: {exc}")
+
+        return context
+
+    def _get_position_snapshot(self, portfolio_context, ticker):
+        return portfolio_context.get('positions', {}).get(ticker, {})
+
+    def _get_fallback_stock_price(self, portfolio_context, ticker):
+        position = self._get_position_snapshot(portfolio_context, ticker)
+        for field in ('market_price', 'avg_cost'):
+            value = position.get(field)
+            try:
+                numeric_value = float(value or 0)
+            except (TypeError, ValueError):
+                numeric_value = 0
+            if numeric_value > 0:
+                return numeric_value
+        return 0.0
+
+    def _get_screening_profile(self, option_type):
+        base_profile = {
+            'max_expirations': 4,
+            'min_mid_price': 0.05,
+            'min_open_interest': 10,
+            'ideal_open_interest': 500,
+            'min_volume': 1,
+            'ideal_volume': 100,
+            'max_spread_pct': 60,
+            'ideal_spread_pct': 12,
+        }
+
+        if option_type == 'CALL':
+            base_profile.update({
+                'min_dte': 5,
+                'max_dte': 35,
+                'preferred_dte': 14,
+                'target_delta': 0.24,
+                'delta_tolerance': 0.18,
+                'min_premium_per_contract': 12,
+            })
+        else:
+            base_profile.update({
+                'min_dte': 7,
+                'max_dte': 45,
+                'preferred_dte': 21,
+                'target_delta': 0.22,
+                'delta_tolerance': 0.16,
+                'min_premium_per_contract': 15,
+            })
+
+        return base_profile
+
+    def _calculate_mid_price(self, bid, ask, last):
+        bid = float(bid or 0)
+        ask = float(ask or 0)
+        last = float(last or 0)
+
+        if bid > 0 and ask > 0:
+            return (bid + ask) / 2
+        if bid > 0:
+            return bid
+        if ask > 0:
+            return ask
+        if last > 0:
+            return last
+        return 0.0
+
+    def _clamp(self, value, minimum=0.0, maximum=1.0):
+        return max(minimum, min(maximum, value))
+
+    def _score_proximity(self, value, target, tolerance):
+        if tolerance <= 0:
+            return 0.0
+        return self._clamp(1 - (abs(value - target) / tolerance))
+
+    def _score_positive_metric(self, value, ideal_value):
+        if ideal_value <= 0:
+            return 0.0
+        return self._clamp(value / ideal_value)
+
+    def _get_candidate_expirations(self, conn, ticker, profile, expiration=None):
+        if expiration:
+            return [expiration]
+
+        symbol = conn._format_symbol(ticker)
+        try:
+            ret, data = conn.quote_ctx.get_option_expiration_date(code=symbol)
+            if ret != 0 or data is None or data.empty:
+                fallback = get_closest_friday().strftime('%Y%m%d')
+                return [fallback]
+
+            today = datetime.now().date()
+            filtered = []
+            fallback = []
+
+            expiration_column = 'expiration_date'
+            if expiration_column not in data.columns:
+                if 'strike_time' in data.columns:
+                    expiration_column = 'strike_time'
+                elif 'option_expiry_date' in data.columns:
+                    expiration_column = 'option_expiry_date'
+                else:
+                    raise KeyError('No expiration column returned by moomoo')
+
+            for raw_date in data[expiration_column].tolist():
+                normalized = raw_date.replace('-', '')
+                expiry_date = datetime.strptime(normalized, '%Y%m%d').date()
+                dte = (expiry_date - today).days
+                if dte <= 0:
+                    continue
+                fallback.append((normalized, dte))
+                if profile['min_dte'] <= dte <= profile['max_dte']:
+                    filtered.append((normalized, dte))
+
+            expirations = filtered or fallback
+            return [value for value, _ in expirations[:profile['max_expirations']]] or [get_closest_friday().strftime('%Y%m%d')]
+        except Exception as exc:
+            logger.error(f"Error loading option expirations for {ticker}: {exc}")
+            return [get_closest_friday().strftime('%Y%m%d')]
+
+    def _build_candidate(self, ticker, option, stock_price, desired_otm, profile, portfolio_context):
+        strike = float(option.get('strike', 0) or 0)
+        expiration = str(option.get('expiration', '') or '')
+        if strike <= 0 or not expiration:
+            return None
+
+        try:
+            expiry_date = datetime.strptime(expiration, '%Y%m%d').date()
+        except ValueError:
+            return None
+
+        dte = (expiry_date - datetime.now().date()).days
+        if dte <= 0:
+            return None
+
+        bid = float(option.get('bid', 0) or 0)
+        ask = float(option.get('ask', 0) or 0)
+        last = float(option.get('last', 0) or 0)
+        mid_price = self._calculate_mid_price(bid, ask, last)
+        if mid_price < profile['min_mid_price']:
+            return None
+
+        spread_pct = 100.0
+        if bid > 0 and ask > 0 and mid_price > 0:
+            spread_pct = ((ask - bid) / mid_price) * 100
+        elif bid == 0 and ask == 0:
+            spread_pct = 100.0
+
+        if spread_pct > profile['max_spread_pct']:
+            return None
+
+        option_type = str(option.get('option_type', '') or '').upper()
+        delta = float(option.get('delta', 0) or 0)
+        abs_delta = abs(delta)
+        implied_volatility = float(option.get('implied_volatility', 0) or 0)
+        open_interest = int(option.get('open_interest', 0) or 0)
+        volume = int(option.get('volume', 0) or 0)
+        premium_per_contract = mid_price * 100
+
+        if premium_per_contract < profile['min_premium_per_contract']:
+            return None
+        if open_interest < profile['min_open_interest'] and volume < profile['min_volume']:
+            return None
+
+        position = portfolio_context.get('positions', {}).get(ticker, {})
+        shares_owned = float(position.get('position', 0) or 0)
+        avg_cost = float(position.get('avg_cost', 0) or 0)
+        cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
+
+        candidate = {
+            'symbol': f"{ticker}{expiration}{'C' if option_type == 'CALL' else 'P'}{int(strike)}",
+            'strike': strike,
+            'expiration': expiration,
+            'option_type': option_type,
+            'bid': bid,
+            'ask': ask,
+            'last': last if last > 0 else round(mid_price, 4),
+            'mid_price': round(mid_price, 4),
+            'open_interest': open_interest,
+            'volume': volume,
+            'implied_volatility': round(implied_volatility, 2),
+            'delta': round(delta, 5),
+            'gamma': round(float(option.get('gamma', 0) or 0), 5),
+            'theta': round(float(option.get('theta', 0) or 0), 5),
+            'vega': round(float(option.get('vega', 0) or 0), 5),
+            'dte': dte,
+            'premium_per_contract': round(premium_per_contract, 2),
+            'spread_pct': round(spread_pct, 2),
+            'score': 0.0,
+            'score_details': {},
+            'rationale': [],
+            'warnings': []
+        }
+
+        delta_score = self._score_proximity(abs_delta, profile['target_delta'], profile['delta_tolerance'])
+        dte_score = self._score_proximity(dte, profile['preferred_dte'], max(profile['preferred_dte'], 10))
+        oi_score = self._score_positive_metric(open_interest, profile['ideal_open_interest'])
+        volume_score = self._score_positive_metric(volume, profile['ideal_volume'])
+        spread_score = self._clamp(1 - (spread_pct / max(profile['ideal_spread_pct'], 1)))
+        liquidity_score = (oi_score * 0.45) + (volume_score * 0.2) + (spread_score * 0.35)
+
+        if option_type == 'CALL':
+            if stock_price <= 0 or strike <= stock_price:
+                return None
+            max_contracts = max(int(shares_owned // 100), 0)
+            if max_contracts < 1:
+                return None
+
+            otm_pct = ((strike - stock_price) / stock_price) * 100
+            annualized_return = (premium_per_contract / (stock_price * 100)) * (365 / dte) * 100 if stock_price > 0 else 0
+            if_called_return = (((strike - stock_price) + mid_price) / stock_price) * 100 if stock_price > 0 else 0
+            cost_basis_score = 1.0 if avg_cost <= 0 or strike >= avg_cost else self._clamp(1 - ((avg_cost - strike) / avg_cost) * 4)
+            otm_score = self._score_proximity(otm_pct, desired_otm, max(desired_otm * 0.75, 6))
+            annualized_score = self._score_positive_metric(annualized_return, 24)
+            upside_score = self._score_positive_metric(if_called_return, 12)
+
+            score = (
+                annualized_score * 0.28 +
+                upside_score * 0.22 +
+                liquidity_score * 0.2 +
+                delta_score * 0.12 +
+                otm_score * 0.1 +
+                dte_score * 0.08
+            ) * 100
+            score *= (0.65 + (0.35 * cost_basis_score))
+
+            candidate.update({
+                'otm_pct': round(otm_pct, 2),
+                'annualized_return': round(annualized_return, 2),
+                'if_called_return': round(if_called_return, 2),
+                'earnings_max_contracts': max_contracts,
+                'earnings_premium_per_contract': round(premium_per_contract, 2),
+                'earnings_total_premium': round(premium_per_contract * max_contracts, 2),
+                'earnings_return_on_capital': round(annualized_return, 2),
+                'score': round(score, 2),
+                'score_details': {
+                    'annualized': round(annualized_score * 100, 1),
+                    'upside': round(upside_score * 100, 1),
+                    'liquidity': round(liquidity_score * 100, 1),
+                    'delta_fit': round(delta_score * 100, 1),
+                    'otm_fit': round(otm_score * 100, 1),
+                    'cost_basis_fit': round(cost_basis_score * 100, 1)
+                },
+                'rationale': [
+                    f"{annualized_return:.1f}% annualized call yield",
+                    f"{otm_pct:.1f}% OTM with {abs_delta:.2f} delta",
+                    f"{open_interest} OI / {volume} volume / {spread_pct:.1f}% spread"
+                ]
+            })
+
+            if spread_pct > profile['ideal_spread_pct']:
+                candidate['warnings'].append('Wide bid/ask spread')
+            if open_interest < profile['ideal_open_interest']:
+                candidate['warnings'].append('Below ideal open interest')
+            if avg_cost > 0 and strike < avg_cost:
+                candidate['warnings'].append('Strike below stock cost basis')
+        else:
+            if stock_price <= 0 or strike >= stock_price:
+                return None
+
+            otm_pct = ((stock_price - strike) / stock_price) * 100
+            cash_required = strike * 100
+            annualized_return = (premium_per_contract / cash_required) * (365 / dte) * 100 if cash_required > 0 else 0
+            breakeven = strike - mid_price
+            breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
+            otm_score = self._score_proximity(otm_pct, desired_otm, max(desired_otm * 0.75, 6))
+            annualized_score = self._score_positive_metric(annualized_return, 18)
+            buffer_score = self._score_positive_metric(breakeven_buffer_pct, max(desired_otm, 8))
+            capital_fit = 1.0 if cash_balance <= 0 else self._clamp(cash_balance / cash_required)
+
+            score = (
+                annualized_score * 0.3 +
+                buffer_score * 0.22 +
+                liquidity_score * 0.2 +
+                delta_score * 0.12 +
+                otm_score * 0.08 +
+                dte_score * 0.08
+            ) * 100
+            score *= (0.75 + (0.25 * capital_fit))
+
+            candidate.update({
+                'otm_pct': round(otm_pct, 2),
+                'annualized_return': round(annualized_return, 2),
+                'breakeven': round(breakeven, 2),
+                'breakeven_buffer_pct': round(breakeven_buffer_pct, 2),
+                'cash_required': round(cash_required, 2),
+                'earnings_max_contracts': 1,
+                'earnings_premium_per_contract': round(premium_per_contract, 2),
+                'earnings_total_premium': round(premium_per_contract, 2),
+                'earnings_return_on_cash': round(annualized_return, 2),
+                'score': round(score, 2),
+                'score_details': {
+                    'annualized': round(annualized_score * 100, 1),
+                    'buffer': round(buffer_score * 100, 1),
+                    'liquidity': round(liquidity_score * 100, 1),
+                    'delta_fit': round(delta_score * 100, 1),
+                    'otm_fit': round(otm_score * 100, 1),
+                    'capital_fit': round(capital_fit * 100, 1)
+                },
+                'rationale': [
+                    f"{annualized_return:.1f}% annualized cash yield",
+                    f"{otm_pct:.1f}% OTM with {breakeven_buffer_pct:.1f}% breakeven buffer",
+                    f"{open_interest} OI / {volume} volume / {spread_pct:.1f}% spread"
+                ]
+            })
+
+            if spread_pct > profile['ideal_spread_pct']:
+                candidate['warnings'].append('Wide bid/ask spread')
+            if open_interest < profile['ideal_open_interest']:
+                candidate['warnings'].append('Below ideal open interest')
+            if cash_balance > 0 and cash_required > cash_balance:
+                candidate['warnings'].append('Cash required exceeds current cash balance')
+
+        return candidate
+
+    def get_otm_options(self, ticker, otm_percentage=10, option_type=None, expiration=None):
+        """
+        Return ranked wheel candidates near the requested OTM preference.
+        """
+        start_time = time.time()
+
+        if option_type and option_type not in ['CALL', 'PUT']:
+            return {'error': f"Invalid option_type: {option_type}. Must be 'CALL' or 'PUT'"}
+
+        conn = self._ensure_connection()
+        if not conn:
+            return {'error': 'Failed to establish connection to moomoo'}
+
+        portfolio_context = self._get_portfolio_context()
+        result = {}
+
+        try:
+            result[ticker] = self._process_ticker_for_otm(
+                conn,
+                ticker,
+                otm_percentage,
+                portfolio_context,
+                expiration,
+                option_type
+            )
+        except Exception as exc:
+            logger.error(f"Error processing {ticker} for optimal options: {exc}")
+            logger.error(traceback.format_exc())
+            result[ticker] = {'error': str(exc)}
+
+        elapsed = time.time() - start_time
+        logger.info(f"Ranked option opportunities for {ticker} in {elapsed:.2f}s")
+        return {'data': result}
+
+    def _process_ticker_for_otm(self, conn, ticker, otm_percentage, portfolio_context, expiration=None, option_type=None):
+        result = {
+            'symbol': ticker,
+            'stock_price': 0,
+            'otm_percentage': otm_percentage,
+            'position': 0,
+            'calls': [],
+            'puts': []
+        }
+
+        stock_price = conn.get_stock_price(ticker)
+        if stock_price is None or stock_price <= 0:
+            stock_price = self._get_fallback_stock_price(portfolio_context, ticker)
+        if stock_price is None or stock_price <= 0:
+            return {'error': 'Unable to obtain valid stock price from moomoo'}
+
+        position = self._get_position_snapshot(portfolio_context, ticker)
+        result['stock_price'] = stock_price
+        result['position'] = float(position.get('position', 0) or 0)
+        result['avg_cost'] = float(position.get('avg_cost', 0) or 0)
+
+        sides = [option_type] if option_type else ['CALL', 'PUT']
+        options_chains = []
+
+        for side in sides:
+            profile = self._get_screening_profile(side)
+            expirations = self._get_candidate_expirations(conn, ticker, profile, expiration)
+            target_strike = stock_price * (1 + (otm_percentage / 100)) if side == 'CALL' else stock_price * (1 - (otm_percentage / 100))
+            for expiry in expirations:
+                chain = conn.get_option_chain(
+                    ticker,
+                    expiry,
+                    'C' if side == 'CALL' else 'P',
+                    target_strike=target_strike
+                )
+                if chain and chain.get('options'):
+                    options_chains.append(chain)
 
         if not options_chains:
             return {'error': 'No options data available from moomoo'}
 
-        formatted_data = self._process_options_chain(options_chains, ticker, stock_price, otm_percentage, option_type)
+        formatted_data = self._process_options_chain(
+            options_chains,
+            ticker,
+            stock_price,
+            otm_percentage,
+            portfolio_context,
+            option_type
+        )
         result.update(formatted_data)
-        
         return result
 
-    def _process_options_chain(self, options_chains, ticker, stock_price, otm_percentage, option_type=None):
-        """
-        Process options chain data and format it
-        """
+    def _process_options_chain(self, options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type=None):
         try:
             result = {
                 'symbol': ticker,
@@ -292,67 +630,57 @@ class OptionsService:
                 'calls': [],
                 'puts': []
             }
-            
+
+            grouped_options = {'CALL': [], 'PUT': []}
             for chain in options_chains:
-                options_list = chain.get('options', [])
-                for option in options_list:
-                    strike = option.get('strike', 0)
-                    bid = option.get('bid', 0)
-                    ask = option.get('ask', 0)
-                    last = option.get('last', 0)
+                chain_type = str(chain.get('right', '') or '').upper()
+                option_side = 'CALL' if chain_type == 'C' else 'PUT'
+                grouped_options[option_side].extend(chain.get('options', []))
 
-                    if last == 0:
-                        last = (bid + ask) / 2 if bid > 0 or ask > 0 else 0.01
+            for side in ['CALL', 'PUT']:
+                if option_type and option_type != side:
+                    continue
 
-                    option_data = {
-                        'symbol': f"{ticker}{option.get('expiration')}{'C' if option.get('option_type') == 'CALL' else 'P'}{int(strike)}",
-                        'strike': strike,
-                        'expiration': option.get('expiration'),
-                        'option_type': option.get('option_type'),
-                        'bid': bid,
-                        'ask': ask,
-                        'last': last,
-                        'open_interest': int(option.get('open_interest', 0)),
-                        'implied_volatility': round(option.get('implied_volatility', 0), 2),
-                        'delta': round(option.get('delta', 0), 5),
-                        'gamma': round(option.get('gamma', 0), 5),
-                        'theta': round(option.get('theta', 0), 5),
-                        'vega': round(option.get('vega', 0), 5)
-                    }
+                profile = self._get_screening_profile(side)
+                candidates = []
+                seen_contracts = set()
 
-                    # Add earnings data
-                    if option.get('option_type') == 'CALL':
-                        max_contracts = 1
-                        premium_per_contract = last * 100
-                        total_premium = premium_per_contract * max_contracts
-                        return_on_capital = (total_premium / (strike * 100)) * 100 if strike > 0 else 0
-                        
-                        option_data.update({
-                            'earnings_max_contracts': max_contracts,
-                            'earnings_premium_per_contract': round(premium_per_contract, 2),
-                            'earnings_total_premium': round(total_premium, 2),
-                            'earnings_return_on_capital': round(return_on_capital, 2)
-                        })
-                        result['calls'].append(option_data)
-                    else:
-                        max_contracts = 1
-                        premium_per_contract = last * 100
-                        total_premium = premium_per_contract * max_contracts
-                        return_on_cash = (total_premium / (strike * 100)) * 100 if strike > 0 else 0
-                        
-                        option_data.update({
-                            'earnings_max_contracts': max_contracts,
-                            'earnings_premium_per_contract': round(premium_per_contract, 2),
-                            'earnings_total_premium': round(total_premium, 2),
-                            'earnings_return_on_cash': round(return_on_cash, 2)
-                        })
-                        result['puts'].append(option_data)
-            
-            result['calls'] = sorted(result['calls'], key=lambda x: x['strike'])
-            result['puts'] = sorted(result['puts'], key=lambda x: x['strike'])
+                for option in grouped_options[side]:
+                    contract_key = (
+                        option.get('expiration'),
+                        option.get('strike'),
+                        option.get('option_type')
+                    )
+                    if contract_key in seen_contracts:
+                        continue
+                    seen_contracts.add(contract_key)
+
+                    candidate = self._build_candidate(
+                        ticker,
+                        option,
+                        stock_price,
+                        otm_percentage,
+                        profile,
+                        portfolio_context
+                    )
+                    if candidate:
+                        candidates.append(candidate)
+
+                candidates.sort(
+                    key=lambda item: (
+                        item.get('score', 0),
+                        item.get('annualized_return', 0),
+                        item.get('premium_per_contract', 0)
+                    ),
+                    reverse=True
+                )
+
+                result['calls' if side == 'CALL' else 'puts'] = candidates[:5]
+
             return result
-        except Exception as e:
-            logger.error(f"Error processing options chain: {e}")
+        except Exception as exc:
+            logger.error(f"Error processing options chain: {exc}")
+            logger.error(traceback.format_exc())
             return {}
 
     def _sanitize_result(self, result):
@@ -429,7 +757,16 @@ class OptionsService:
 
     def get_stock_price(self, ticker):
         conn = self._ensure_connection()
-        return conn.get_stock_price(ticker) if conn else 0
+        if not conn:
+            return 0
+
+        live_price = conn.get_stock_price(ticker)
+        if live_price is not None and live_price > 0:
+            return live_price
+
+        portfolio_context = self._get_portfolio_context()
+        fallback_price = self._get_fallback_stock_price(portfolio_context, ticker)
+        return fallback_price if fallback_price > 0 else 0
 
     def get_option_expirations(self, ticker):
         """
@@ -443,8 +780,17 @@ class OptionsService:
             ret, data = conn.quote_ctx.get_option_expiration_date(code=ticker)
             if ret != 0: return {"error": f"Failed to get expirations: {data}"}
             
+            expiration_column = 'expiration_date'
+            if expiration_column not in data.columns:
+                if 'strike_time' in data.columns:
+                    expiration_column = 'strike_time'
+                elif 'option_expiry_date' in data.columns:
+                    expiration_column = 'option_expiry_date'
+                else:
+                    return {"error": "No expiration column returned by moomoo"}
+
             expirations = []
-            for date in data['expiration_date'].tolist():
+            for date in data[expiration_column].tolist():
                 expirations.append({
                     "value": date.replace('-', ''),
                     "label": date
