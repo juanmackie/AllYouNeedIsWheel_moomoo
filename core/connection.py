@@ -109,6 +109,29 @@ def _infer_security_type_from_code(code):
     return ''
 
 
+def _parse_option_code_metadata(code):
+    if not code:
+        return None
+
+    normalized = str(code).strip()
+    suffix = normalized.split('.', 1)[1] if '.' in normalized else normalized
+    match = re.match(r'^(?P<underlying>[A-Z]+)(?P<expiry>\d{6})(?P<right>[CP])(?P<strike>\d+)$', suffix)
+    if not match:
+        return None
+
+    expiry = match.group('expiry')
+    year = 2000 + int(expiry[0:2])
+    month = expiry[2:4]
+    day = expiry[4:6]
+
+    return {
+        'underlying': match.group('underlying'),
+        'expiration': f"{year:04d}{month}{day}",
+        'strike': int(match.group('strike')) / 1000,
+        'option_type': 'CALL' if match.group('right') == 'C' else 'PUT'
+    }
+
+
 def _safe_float(value, default=0.0):
     if value in (None, '', 'N/A', 'nan', 'NaN'):
         return default
@@ -619,6 +642,7 @@ class MoomooConnection:
                 for _, pos in pos_data.iterrows():
                     symbol = pos.get('code', '')
                     sec_type = _infer_security_type_from_code(symbol)
+                    option_metadata = _parse_option_code_metadata(symbol) if sec_type == 'OPT' else None
                     
                     pos_key = symbol
                     pos_details = {
@@ -633,9 +657,15 @@ class MoomooConnection:
                     if sec_type == 'OPT' and symbol in opt_snaps_dict:
                         snap = opt_snaps_dict[symbol]
                         pos_details.update({
-                            'expiration': snap.get('option_expiry_date', '').replace('-', ''),
-                            'strike': _safe_float(snap.get('option_strike_price', 0)),
+                            'expiration': snap.get('option_expiry_date', '').replace('-', '') or (option_metadata or {}).get('expiration', ''),
+                            'strike': _safe_float(snap.get('option_strike_price', (option_metadata or {}).get('strike', 0))),
                             'option_type': 'CALL' if snap.get('option_type') == 'CALL' else 'PUT'
+                        })
+                    elif sec_type == 'OPT' and option_metadata:
+                        pos_details.update({
+                            'expiration': option_metadata.get('expiration', ''),
+                            'strike': _safe_float(option_metadata.get('strike', 0)),
+                            'option_type': option_metadata.get('option_type', '')
                         })
 
                     account_info['positions'][pos_key] = pos_details

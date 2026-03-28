@@ -305,14 +305,12 @@ function addOptionsToTable(options, tableBody) {
         const row = document.createElement('tr');
         
         const avgCost = position.avg_cost || position.average_cost || 0;
-        const rawMarketValue = position.market_value || 0;
-        // For short options (negative position), show market value as positive
-        const marketValue = position.position < 0 ? Math.abs(rawMarketValue) : rawMarketValue;
+        const marketValue = position.market_value || 0;
         const unrealizedPnL = position.unrealized_pnl || 0;
         
         // Calculate the P&L percentage based on the position's cost basis
         let unrealizedPnLPercent = 0;
-        const totalCostBasis = Math.abs(position.position) * avgCost;
+        const totalCostBasis = Math.abs(position.position) * avgCost * 100;
         if (totalCostBasis > 0) {
             unrealizedPnLPercent = (unrealizedPnL / totalCostBasis) * 100;
         }
@@ -333,11 +331,7 @@ function addOptionsToTable(options, tableBody) {
             strike = position.strike ? formatCurrency(position.strike) : '-';
             expiry = position.expiration || '-';
         }
-        
-        // Convert price to per-contract (multiply by 100)
-        const perSharePrice = position.market_price || 0;
-        const perContractPrice = perSharePrice * 100;
-        
+
         const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
         
         row.innerHTML = `
@@ -347,7 +341,7 @@ function addOptionsToTable(options, tableBody) {
             <td>${strike}</td>
             <td>${expiry}</td>
             <td>${formatCurrency(avgCost)}</td>
-            <td>${formatCurrency(perContractPrice)}</td>
+            <td>${formatCurrency(position.market_price || 0)}</td>
             <td>${formatCurrency(marketValue)}</td>
             <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
         `;
