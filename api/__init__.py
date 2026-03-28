@@ -3,9 +3,10 @@ Auto-Trader API
 Flask application initialization and configuration.
 """
 
-from flask import Flask
+from flask import Flask, current_app
 from flask_cors import CORS
 from core.logging_config import get_logger
+from core.connection import probe_opend_status
 
 # Configure logging
 logger = get_logger('autotrader.api', 'api')
@@ -50,6 +51,13 @@ def create_app(config=None):
     def health_check():
         logger.debug("Health check endpoint called")
         return {'status': 'healthy'}
+
+    @app.route('/api/system/opend-status')
+    def opend_status():
+        connection_config = current_app.config.get('connection_config', {})
+        host = connection_config.get('host', '127.0.0.1')
+        port = connection_config.get('port', 11111)
+        return probe_opend_status(host=host, port=port)
         
     logger.info("API application created successfully")
     return app 

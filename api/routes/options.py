@@ -4,6 +4,7 @@ Options API routes
 
 from flask import Blueprint, request, jsonify, current_app
 from api.services.options_service import OptionsService
+from core.connection import probe_opend_status
 import traceback
 import logging
 import time
@@ -16,6 +17,23 @@ logger = logging.getLogger('api.routes.options')
 bp = Blueprint('options', __name__, url_prefix='/api/options')
 options_service = OptionsService()
 
+
+def _ensure_opend_available():
+    connection_config = current_app.config.get('connection_config', {})
+    status = probe_opend_status(
+        host=connection_config.get('host', '127.0.0.1'),
+        port=connection_config.get('port', 11111)
+    )
+    if status.get('status') == 'connected':
+        return None
+
+    error_code = 'opend_login_required' if status.get('status') == 'login_required' else 'opend_unavailable'
+    return jsonify({
+        'error': status.get('message', 'OpenD is unavailable.'),
+        'error_code': error_code,
+        'opend_status': status
+    }), 503
+
 # Market status is now checked directly in the route functions
 
 # Helper function to check market status with better error handling
@@ -24,6 +42,10 @@ def otm_options():
     """
     Get option data based on OTM percentage from current price.
     """
+    unavailable_response = _ensure_opend_available()
+    if unavailable_response:
+        return unavailable_response
+
     # Get parameters from request
     ticker = request.args.get('tickers')
     otm_percentage = float(request.args.get('otm', 10))
@@ -51,6 +73,10 @@ def get_stock_price():
     Get the current stock price for one or more tickers.
     This is a lightweight endpoint that only returns stock prices.
     """
+    unavailable_response = _ensure_opend_available()
+    if unavailable_response:
+        return unavailable_response
+
     # Get ticker(s) from request
     tickers_param = request.args.get('tickers', '')
     if not tickers_param:
@@ -408,6 +434,10 @@ def get_option_expirations():
     logger.info("GET /expirations request received")
     
     try:
+        unavailable_response = _ensure_opend_available()
+        if unavailable_response:
+            return unavailable_response
+
         # Get ticker from request
         ticker = request.args.get('ticker')
         if not ticker:

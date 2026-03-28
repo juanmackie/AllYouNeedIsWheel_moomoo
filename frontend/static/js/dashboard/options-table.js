@@ -18,6 +18,16 @@ let customTickers = new Set();
 // Flag to track if custom ticker event listeners have been initialized
 let customTickerListenersInitialized = false;
 
+
+function getUnavailableTickerMessage() {
+    const status = window.appConnectionStatus || null;
+    if (status && status.status === 'real_account_unavailable') {
+        return 'No portfolio tickers available because OpenD is not exposing your REAL trading account yet.';
+    }
+
+    return 'No stock positions available. Please add stock positions first.';
+}
+
 // Reference to loadPendingOrders function from orders.js
 let loadPendingOrdersFunc = null;
 
@@ -354,7 +364,7 @@ function updateOptionsTable() {
     
     if (tickers.length === 0) {
         console.log("No tickers found");
-        optionsTableContainer.innerHTML = '<div class="alert alert-info">No stock positions available. Please add stock positions first.</div>';
+        optionsTableContainer.innerHTML = `<div class="alert alert-info">${getUnavailableTickerMessage()}</div>`;
         return;
     }
     

@@ -13,6 +13,27 @@ let weeklyOptionIncomeData = {}; // Changed from filledOrdersData
 let autoRefreshTimer = null;
 const AUTO_REFRESH_INTERVAL = 10000; // 10 seconds
 
+
+function canExecuteOrders() {
+    return window.appConnectionStatus && window.appConnectionStatus.status === 'connected';
+}
+
+
+function applyOpenDAvailabilityToOrderButtons() {
+    const executeButtons = document.querySelectorAll('.execute-order');
+    const connected = canExecuteOrders();
+
+    executeButtons.forEach(button => {
+        if (button.dataset.pendingDisabled === 'true') {
+            button.disabled = true;
+            return;
+        }
+
+        button.disabled = !connected;
+        button.title = connected ? '' : 'OpenD must be running and logged in before you can execute orders.';
+    });
+}
+
 /**
  * Format date for display
  * @param {string|number} dateString - The date string or timestamp to format
@@ -192,7 +213,7 @@ function updatePendingOrdersTable() {
             <td>${statusHtml}</td>
             <td>
                 <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary execute-order" data-order-id="${order.id}" ${order.status !== 'pending' ? 'disabled' : ''}>
+                    <button class="btn btn-outline-primary execute-order" data-order-id="${order.id}" data-pending-disabled="${order.status !== 'pending'}" ${order.status !== 'pending' ? 'disabled' : ''}>
                         <i class="bi bi-play-fill"></i> Execute
                     </button>
                     <button class="btn btn-outline-danger cancel-order" data-order-id="${order.id}" ${['executed', 'canceled', 'rejected'].includes(order.status) ? 'disabled' : ''}>
@@ -207,6 +228,7 @@ function updatePendingOrdersTable() {
     
     // Add event listeners
     addOrdersTableEventListeners();
+    applyOpenDAvailabilityToOrderButtons();
     
     // Also update the filled orders if any order was executed
     updateFilledOrdersTable();
@@ -390,6 +412,10 @@ async function executeOrderById(orderId) {
     try {
         // Execute the order
         const result = await executeOrder(orderId);
+
+        if (!result || result.success === false) {
+            throw new Error(result?.error || 'Failed to execute order');
+        }
         
         // Update the order in pendingOrdersData with the IB information
         const orderIndex = pendingOrdersData.findIndex(order => order.id == orderId);
@@ -643,6 +669,7 @@ async function updateOrderQuantity(orderId, quantity) {
 
 // Set up event listener for the custom ordersUpdated event
 document.addEventListener('ordersUpdated', loadPendingOrders);
+document.addEventListener('opend-status-changed', applyOpenDAvailabilityToOrderButtons);
 
 // Initial load of pending orders
 document.addEventListener('DOMContentLoaded', () => {

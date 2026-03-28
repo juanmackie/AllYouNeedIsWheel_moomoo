@@ -19,26 +19,35 @@ class PortfolioService:
     def __init__(self):
         self.config = Config()
         self.connection = None
+        self.last_error = None
+
+    def _set_error(self, message):
+        self.last_error = message
+        logger.error(message)
         
     def _ensure_connection(self):
         """
         Ensure that the moomoo connection exists and is connected
         """
         try:
+            self.last_error = None
             if self.connection is None or not self.connection.is_connected():
                 logger.info("Creating new moomoo connection for portfolio")
                 
                 self.connection = MoomooConnection(
-                    host=self.config.get('host', '127.0.0.1'),
-                    port=self.config.get('port', 11111),
-                    readonly=self.config.get('readonly', True)
+                    host=str(self.config.get('host', '127.0.0.1')),
+                    port=int(self.config.get('port', 11111)),
+                    readonly=bool(self.config.get('readonly', True)),
+                    account_id=self.config.get('account_id'),
+                    portfolio_env=self.config.get('portfolio_env'),
+                    security_firm=self.config.get('security_firm')
                 )
                 
                 if not self.connection.connect():
-                    logger.error("Failed to connect to moomoo OpenD")
+                    self._set_error(self.connection.last_error or "Failed to connect to moomoo OpenD")
             return self.connection
         except Exception as e:
-            logger.error(f"Error ensuring connection: {str(e)}")
+            self._set_error(f"Error ensuring connection: {str(e)}")
             return None
         
     def get_portfolio_summary(self):
@@ -47,13 +56,18 @@ class PortfolioService:
         """
         try:
             conn = self._ensure_connection()
-            if not conn: return None
+            if not conn:
+                return None
             
             portfolio = conn.get_portfolio()
-            if not portfolio: return None
+            if not portfolio:
+                self._set_error(conn.last_error or 'Failed to load portfolio summary from moomoo')
+                return None
             
             return {
                 'account_id': portfolio.get('account_id', ''),
+                'trading_env': portfolio.get('trading_env', ''),
+                'currency': portfolio.get('currency', 'USD'),
                 'cash_balance': portfolio.get('available_cash', 0),
                 'account_value': portfolio.get('account_value', 0),
                 'excess_liquidity': portfolio.get('excess_liquidity', 0),
@@ -62,7 +76,7 @@ class PortfolioService:
                 'is_frozen': portfolio.get('is_frozen', False)
             }
         except Exception as e:
-            logger.error(f"Error getting portfolio summary: {e}")
+            self._set_error(f"Error getting portfolio summary: {e}")
             return None
     
     def get_positions(self, security_type=None):
@@ -71,10 +85,13 @@ class PortfolioService:
         """
         try:
             conn = self._ensure_connection()
-            if not conn: return []
+            if not conn:
+                return None
             
             portfolio = conn.get_portfolio()
-            if not portfolio: return []
+            if not portfolio:
+                self._set_error(conn.last_error or 'Failed to load positions from moomoo')
+                return None
             
             positions = portfolio.get('positions', {})
             positions_list = []
@@ -107,8 +124,8 @@ class PortfolioService:
             
             return positions_list
         except Exception as e:
-            logger.error(f"Error getting positions: {e}")
-            return []
+            self._set_error(f"Error getting positions: {e}")
+            return None
     
     def get_weekly_option_income(self):
         """
@@ -116,6 +133,13 @@ class PortfolioService:
         """
         try:
             positions = self.get_positions('OPT')
+            if positions is None:
+                return {
+                    'error': self.last_error or 'Failed to load option positions from moomoo',
+                    'positions': [],
+                    'total_income': 0,
+                    'positions_count': 0
+                }
             
             today = datetime.now()
             days_until_friday = (4 - today.weekday()) % 7
@@ -152,5 +176,5 @@ class PortfolioService:
                 'this_friday': this_friday.strftime('%Y-%m-%d')
             }
         except Exception as e:
-            logger.error(f"Error getting weekly option income: {e}")
-            return {'positions': [], 'total_income': 0, 'positions_count': 0}
+            self._set_error(f"Error getting weekly option income: {e}")
+            return {'positions': [], 'total_income': 0, 'positions_count': 0, 'error': str(e)}

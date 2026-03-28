@@ -2,7 +2,11 @@
     "host": "127.0.0.1",
     "port": 11111,
     "readonly": true,
+    "portfolio_env": "SIMULATE",
+    "security_firm": "FUTUSECURITIES",
     "account_id": "YOUR_MOOMOO_ACCOUNT_ID",
+    "auto_launch_opend": false,
+    "opend_path": "",
     "db_path": "options.db",
-    "comment": "Default port for moomoo OpenD is 11111. Set readonly to true for safety during testing. Ensure MOOMOO_TRADING_PASSWORD environment variable is set for live trading."
+    "comment": "Default port for moomoo OpenD is 11111. readonly controls live order placement safety. portfolio_env controls whether the dashboard reads SIMULATE or REAL portfolio data. security_firm should match your moomoo broker region, such as FUTUAU, FUTUINC, or FUTUSG. account_id must be a trade acc_id, not your moomoo login/user ID. Set auto_launch_opend to true and fill opend_path if you want the local launcher to open OpenD for you. Ensure MOOMOO_TRADING_PASSWORD environment variable is set for live trading."
 }

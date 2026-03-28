@@ -30,6 +30,15 @@
     </div>
 
     <main class="container py-4">
+        <div id="opend-status-banner" class="alert alert-warning d-none" role="alert">
+            <div class="d-flex flex-column flex-md-row gap-2 align-items-md-center justify-content-between">
+                <div>
+                    <strong id="opend-status-title">OpenD status</strong>
+                    <div id="opend-status-message" class="small mb-0">Checking local OpenD connection...</div>
+                </div>
+                <div class="small text-muted" id="opend-status-meta"></div>
+            </div>
+        </div>
         {% block content %}{% endblock %}
     </main>
 

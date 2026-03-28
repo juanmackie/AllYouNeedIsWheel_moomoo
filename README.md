@@ -1,45 +1,56 @@
 # AllYouNeedIsWheel (Moomoo Edition)
 
-AllYouNeedIsWheel is a financial options trading assistant specifically designed for the "Wheel Strategy" that connects to the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). It helps traders analyze, visualize, and execute the wheel strategy effectively by retrieving portfolio data, analyzing options chains for cash-secured puts and covered calls, and presenting recommendations through a user-friendly web interface.
+A financial options trading assistant for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and manage orders through a local web dashboard.
 
-<img width="1680" alt="Screen Shot 2025-04-26 at 00 32 08" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
-<img width="1321" alt="Screen Shot 2025-04-26 at 00 33 00" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
-<img width="1311" alt="Screen Shot 2025-04-26 at 00 33 21" src="https://github.com/user-attachments/assets/0688ca0a-7fca-41fc-83b4-91881a2e9848" />
-<img width="1309" alt="Screen Shot 2025-04-26 at 00 33 41" src="https://github.com/user-attachments/assets/3e029e78-406c-44d4-b557-39b55c691f8a" />
-<img width="1500" alt="Screen Shot 2025-04-26 at 00 34 06" src="https://github.com/user-attachments/assets/12a6539c-f74a-4d18-b868-ac7bef766dc8" />
-<img width="1357" alt="Screen Shot 2025-04-26 at 00 34 38" src="https://github.com/user-attachments/assets/d9b2f57f-606d-4f4f-9d83-08b933ba71da" />
+<img width="1680" alt="Dashboard screenshot" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
+<img width="1321" alt="Portfolio screenshot" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
+<img width="1311" alt="Options screenshot" src="https://github.com/user-attachments/assets/0688ca0a-7fca-41fc-83b4-91881a2e9848" />
+<img width="1309" alt="Rollover screenshot" src="https://github.com/user-attachments/assets/3e029e78-406c-44d4-b557-39b55c691f8a" />
+<img width="1500" alt="Dashboard screenshot 2" src="https://github.com/user-attachments/assets/12a6539c-f74a-4d18-b868-ac7bef766dc8" />
+<img width="1357" alt="Dashboard screenshot 3" src="https://github.com/user-attachments/assets/d9b2f57f-606d-4f4f-9d83-08b933ba71da" />
 
 ## Features
 
-- **Portfolio Dashboard**: View your current portfolio positions, value, and performance metrics
-- **Wheel Strategy Focus**: Specialized tools for implementing the wheel strategy (selling cash-secured puts and covered calls)
-- **Options Analysis**: Analyze option chains to find the best cash-secured puts and covered calls for any stock ticker
-- **Option Rollover Management**: Tool for rolling option positions approaching strike price to later expirations
-- **Interactive Web Interface**: Modern, responsive web application with data visualizations
-- **Moomoo OpenAPI Integration**: Backend API connected to moomoo via OpenD gateway
-- **Order Management**: Create, cancel, and execute wheel strategy option orders through the dashboard
+- **Portfolio Dashboard** — positions, cash balance, margin metrics, and weekly option income
+- **Wheel Strategy Focus** — cash-secured puts and covered calls with OTM analysis
+- **Options Rollover** — roll positions approaching strike price to later expirations
+- **Order Management** — create, execute, and cancel option orders from the browser
+- **OpenD Connection Status** — the web UI shows real-time OpenD connection and login state
+- **Auto Launch** — optional one-click start that can open OpenD for you on Windows
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
-- Moomoo account with market data subscriptions for US options
-- OPRA Options Real-time Quote card (free if total assets > $3,000)
+| Requirement | Notes |
+|---|---|
+| Windows 10/11 | Required for the one-click launcher (`start_local.cmd`) |
+| Python 3.10+ | The launcher creates a venv automatically |
+| [Moomoo OpenD](https://www.moomoo.com/download/OpenAPI) | Runs locally alongside the app |
+| Moomoo account | With US options market data subscriptions |
+| OPRA Options Real-time Quote card | Free if total assets > $3,000 |
 
-## Quick Start (Docker Compose)
+## Quick Start (Windows)
 
-The easiest way to run everything — Moomoo OpenD + the web app — in one command.
+This is the recommended daily-use flow.
 
-### 1. Clone and configure
+### 1. Clone
 
 ```bash
 git clone https://github.com/juanmackie/AllYouNeedIsWheel_moomoo.git
 cd AllYouNeedIsWheel_moomoo
 ```
 
-### 2. Create your `.env` file
+### 2. Create connection.json
 
 ```bash
-cp .env.example .env
+copy connection.json.example connection.json
+```
+
+The launcher will also create this file for you if it is missing.
+
+### 3. Create .env
+
+```bash
+copy .env.example .env
 ```
 
 Edit `.env` with your Moomoo credentials:
@@ -51,208 +62,219 @@ MOOMOO_TRADING_PASSWORD=your-trading-password
 MOOMOO_LANG=en
 ```
 
-### 3. Start everything
+### 4. Start the app
 
-```bash
-docker-compose up -d
-```
+Double-click `start_local.cmd`.
 
-This starts two containers:
-- **moomoo-opend** — Moomoo OpenD gateway on port `11111`
-- **all-you-need-is-wheel** — The web app on port `8000`
+The launcher will:
 
-### 4. Open the app
+1. Create a Python virtual environment (`.venv`) if it does not exist
+2. Install Python dependencies when requirements change
+3. Create `connection.json` from the example if it is missing
+4. Optionally open OpenD (see below)
+5. Start the Flask app on `http://127.0.0.1:8000/`
+6. Open your browser automatically
 
-Visit http://localhost:8000
+### 5. Log in to OpenD
 
-### 5. First-time setup
+If OpenD is not already signed in, sign in there manually and complete any verification or captcha step. The web app stays running and shows a banner explaining the current OpenD state.
 
-Before trading, log into your Moomoo account via the [moomoo app](https://www.moomoo.com/) or web to complete the API questionnaire and agreements. OpenD cannot do this step.
+### 6. Open the app
 
-### Coolify Deployment
+If the launcher did not open a browser, visit `http://127.0.0.1:8000/`.
 
-1. Go to Coolify → New Resource → **Docker Compose** (not Public Repository)
-2. Point to this GitHub repo
-3. Set environment variables in Coolify:
-   - `MOOMOO_LOGIN` = your email/phone
-   - `MOOMOO_PASSWORD` = your password
-   - `MOOMOO_TRADING_PASSWORD` = your trading password
-4. Deploy
+## OpenD Auto Launch
 
-The docker-compose.yml handles everything automatically.
-
-## Manual Installation (without Docker)
-
-If you prefer to run OpenD separately:
-
-### 1. Prerequisites
-
-- Python 3.10+
-- [Moomoo OpenD](https://www.moomoo.com/download/OpenAPI) running locally or on a server
-
-### 2. Install
-
-```bash
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Configure
-
-```bash
-cp connection.json.example connection.json
-```
-
-Edit `connection.json`:
+To have the launcher open OpenD for you, edit `connection.json`:
 
 ```json
 {
-    "host": "127.0.0.1",
-    "port": 11111,
-    "readonly": true,
-    "db_path": "options.db"
+  "host": "127.0.0.1",
+  "port": 11111,
+  "readonly": true,
+  "auto_launch_opend": true,
+  "opend_path": "C:\\Path\\To\\OpenD.exe",
+  "db_path": "options.db"
 }
 ```
 
-### 4. Run
+- `auto_launch_opend` — set to `true` to start OpenD when you run the launcher
+- `opend_path` — path to `OpenD.exe` or `FutuOpenD.exe` on your machine
+- If `opend_path` is empty the launcher searches common install locations automatically
 
-```bash
-python3 run_api.py
-```
+## OpenD Login
 
-Visit http://localhost:8000
-
-## Moomoo OpenD Setup
-
-If running without Docker, you must have Moomoo OpenD running:
-
-1. **Download OpenD** from [moomoo.com/download/OpenAPI](https://www.moomoo.com/download/OpenAPI)
-2. **Start OpenD** and log in with your Moomoo ID and password
-3. **Configure OpenD**:
-   - IP: `0.0.0.0` (for remote access) or `127.0.0.1` (local only)
-   - Port: `11111` (default)
-4. **First-time setup**: Complete the API questionnaire and agreements in the moomoo app
-5. **Market data**: Ensure you have US options market data access (free if assets > $3,000)
+OpenD requires manual login and may show a graphic verification step (captcha). The app cannot automate this. When OpenD is running but not logged in, the dashboard shows a "LOGIN REQUIRED" banner and disables execute buttons until you complete the step in the OpenD window.
 
 ## Configuration
 
-### Connection files
+### connection.json fields
 
-- `connection.json` — Local development (connects to `127.0.0.1:11111`)
-- `connection_docker.json` — Docker Compose (connects to `opend:11111` via Docker network)
-- `connection_real.json` — Live trading config (not committed to git)
+| Field | Default | Description |
+|---|---|---|
+| `host` | `127.0.0.1` | OpenD hostname |
+| `port` | `11111` | OpenD port |
+| `readonly` | `true` | Use `true` for paper trading (SIMULATE), `false` for live |
+| `db_path` | `options.db` | Path to SQLite database |
+| `auto_launch_opend` | `false` | Open OpenD when the launcher starts |
+| `opend_path` | `""` | Path to the OpenD executable |
 
-### Environment Variables
+### connection_docker.json
+
+Used only by `docker-compose.yml`. Points to `opend:11111` via the Docker network.
+
+### connection_real.json (gitignored)
+
+Live trading config. Not committed to version control.
+
+### Environment variables
 
 | Variable | Required | Description |
-|----------|----------|-------------|
-| `MOOMOO_LOGIN` | Yes (Docker) | Your Moomoo email or phone number |
-| `MOOMOO_PASSWORD` | Yes (Docker) | Your Moomoo login password |
-| `MOOMOO_TRADING_PASSWORD` | Yes (live) | Your trading password for live orders |
+|---|---|---|
+| `MOOMOO_LOGIN` | Yes | Your Moomoo email or phone number |
+| `MOOMOO_PASSWORD` | Yes | Your Moomoo login password |
+| `MOOMOO_TRADING_PASSWORD` | For live | Your trading password |
 | `MOOMOO_LANG` | No | Language: `en` (default) or `ch` |
-| `CONNECTION_CONFIG` | No | Connection config file (default: `connection.json`) |
+| `CONNECTION_CONFIG` | No | Override config file (default: `connection.json`) |
 | `PORT` | No | App port (default: `8000`) |
 
 ## API Endpoints
 
-- **Portfolio**:
-  - `GET /api/portfolio/` — Get current portfolio positions and account data
-  - `GET /api/portfolio/positions` — Get positions (filter with `?type=STK` or `?type=OPT`)
-  - `GET /api/portfolio/weekly-income` — Get weekly option income from short options expiring this Friday
+### System
 
-- **Options**:
-  - `GET /api/options/otm?tickers=<ticker>&otm=<pct>` — Get OTM options by percentage
-  - `GET /api/options/stock-price?tickers=<ticker>` — Get stock price(s)
-  - `GET /api/options/expirations?ticker=<ticker>` — Get available expiration dates
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | App health check |
+| `GET` | `/api/system/opend-status` | Live OpenD connection probe |
 
-- **Orders**:
-  - `GET /api/options/pending-orders` — Get pending/processing orders
-  - `POST /api/options/order` — Create a new order
-  - `DELETE /api/options/order/<order_id>` — Delete an order
-  - `PUT /api/options/order/<order_id>/quantity` — Update order quantity
-  - `POST /api/options/execute/<order_id>` — Execute an order through moomoo
-  - `POST /api/options/cancel/<order_id>` — Cancel a processing order
-  - `POST /api/options/check-orders` — Check status of pending orders
-  - `POST /api/options/rollover` — Create rollover orders
+### Portfolio
 
-## Web Interface
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/portfolio/` | Portfolio summary |
+| `GET` | `/api/portfolio/positions` | Positions (filter: `?type=STK` or `?type=OPT`) |
+| `GET` | `/api/portfolio/weekly-income` | Weekly option income from short options expiring this Friday |
 
-1. **Dashboard** (http://localhost:8000/): Overview of your portfolio and key metrics
-2. **Portfolio** (http://localhost:8000/portfolio): Detailed view of all positions
-3. **Rollover** (http://localhost:8000/rollover): Interface for managing option positions approaching strike price
+### Options
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/options/otm?tickers=<t>&otm=<pct>` | OTM options analysis |
+| `GET` | `/api/options/stock-price?tickers=<t>` | Current stock prices |
+| `GET` | `/api/options/expirations?ticker=<t>` | Available option expirations |
+
+### Orders
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/options/pending-orders` | Pending/processing orders |
+| `POST` | `/api/options/order` | Create an order |
+| `DELETE` | `/api/options/order/<id>` | Delete an order |
+| `PUT` | `/api/options/order/<id>/quantity` | Update order quantity |
+| `POST` | `/api/options/execute/<id>` | Execute an order via moomoo |
+| `POST` | `/api/options/cancel/<id>` | Cancel a processing order |
+| `POST` | `/api/options/check-orders` | Sync order statuses |
+| `POST` | `/api/options/rollover` | Create rollover orders |
+
+## Web Pages
+
+| URL | Description |
+|---|---|
+| `http://127.0.0.1:8000/` | Dashboard |
+| `http://127.0.0.1:8000/portfolio` | Detailed portfolio view |
+| `http://127.0.0.1:8000/rollover` | Option rollover manager |
 
 ## Project Structure
 
 ```
 AllYouNeedIsWheel_moomoo/
-├── api/                      # Flask API backend
-│   ├── routes/               # API route modules
-│   └── services/             # Business logic for API
-├── core/                     # Core trading functionality
-│   ├── connection.py         # Moomoo OpenD connection handling
-│   ├── currency.py           # Currency conversion utilities
-│   ├── logging_config.py     # Logging configuration
-│   └── utils.py              # Utility functions
-├── db/                       # Database operations
-│   └── database.py           # SQLite database wrapper
-├── docker/                   # Docker support
-│   └── opend/                # Moomoo OpenD container
-│       ├── Dockerfile
-│       └── entrypoint.sh
-├── frontend/                 # Frontend web application
-│   ├── static/               # Static assets (CSS, JS)
-│   └── templates/            # Jinja2 HTML templates
-├── app.py                    # Main Flask application entry point
-├── run_api.py                # Production API server runner
-├── config.py                 # Configuration handling
-├── docker-compose.yml        # Docker Compose orchestration
-├── Dockerfile                # Web app container
-├── connection_docker.json    # Docker networking config
-├── connection.json.example   # Example local config
-├── requirements.txt          # Python dependencies
-└── README.md                 # This file
+├── api/                         # Flask API
+│   ├── routes/                  #   route modules
+│   └── services/                #   business logic
+├── core/                        # Moomoo connection + helpers
+│   ├── connection.py            #   OpenD probe and connection
+│   ├── currency.py              #   currency conversion
+│   ├── logging_config.py        #   logging setup
+│   └── utils.py                 #   utility functions
+├── db/                          # SQLite database
+│   └── database.py
+├── docker/opend/                # OpenD container (optional)
+│   ├── Dockerfile
+│   └── entrypoint.sh
+├── frontend/                    # Web UI
+│   ├── static/                  #   CSS + JS
+│   └── templates/               #   Jinja2 templates
+├── app.py                       # Flask app factory
+├── run_api.py                   # WSGI server launcher
+├── config.py                    # Config loader
+├── start_local.cmd              # Windows one-click launcher
+├── start_local.ps1              # PowerShell launcher logic
+├── connection.json.example      # Example local config
+├── connection_docker.json       # Docker Compose config
+├── docker-compose.yml           # Optional containerized setup
+├── Dockerfile                   # Web app container image
+├── requirements.txt             # Python dependencies
+└── .env.example                 # Example env file
 ```
+
+## Docker (Optional)
+
+The Docker Compose setup runs everything in containers. It is optional and best suited for experimentation rather than daily use because OpenD requires interactive login that is difficult in containers.
+
+```bash
+docker-compose up -d
+```
+
+This starts:
+- `moomoo-opend` — OpenD gateway on port 11111
+- `all-you-need-is-wheel` — web app on port 8000
 
 ## Troubleshooting
 
-### Connection Issues
+### OpenD not running
 
-- Ensure Moomoo OpenD is running and logged in (`docker-compose logs opend`)
-- Verify the correct port (default: 11111)
-- Confirm you have the right market data subscriptions for US options
+The dashboard shows an "OPEN OPEND" or "OpenD is not running" banner. Open the OpenD application and log in.
 
-### Common Errors
+### OpenD login required
 
-- "Failed to connect to moomoo OpenD": OpenD is not running or not logged in
-- "No market data permissions": You need OPRA options data subscription (free if assets > $3,000)
-- "Failed to unlock trade": Set `MOOMOO_TRADING_PASSWORD` environment variable for live trading
+The dashboard shows "LOGIN REQUIRED". Complete the login or captcha step inside the OpenD window.
 
-### Docker Commands
+### Port 8000 already in use
+
+Stop the existing process or start the app on a different port:
 
 ```bash
-# View logs
+PORT=8001 python run_api.py
+```
+
+### No market data permissions
+
+You need the OPRA Options Real-time Quote card (free if total assets > $3,000).
+
+### Failed to unlock trade
+
+Set `MOOMOO_TRADING_PASSWORD` in your `.env` file for live trading.
+
+### App starts but pages show no data
+
+Check the OpenD connection banner at the top of every page. Data only loads when OpenD is connected and logged in.
+
+## Docker Commands (Reference)
+
+```bash
 docker-compose logs -f
-
-# Restart everything
 docker-compose restart
-
-# Stop everything
 docker-compose down
-
-# Rebuild after code changes
 docker-compose up -d --build
-
-# View OpenD logs specifically
 docker-compose logs opend
 ```
 
 ## Security Notes
 
-- Never commit `connection_real.json` to version control (it's in `.gitignore`)
-- Moomoo credentials in `.env` are visible to anyone with server access
-- Store `MOOMOO_TRADING_PASSWORD` as an environment variable, never in config files
-- Use caution when trading with real money
+- Never commit `connection_real.json` to version control (it is in `.gitignore`)
+- `.env` credentials are visible to anyone with access to the machine
+- Store `MOOMOO_TRADING_PASSWORD` in your environment, not in config files
+- Use `readonly: true` in `connection.json` unless you intentionally want live trading
 
 ## License
 
@@ -260,6 +282,5 @@ docker-compose logs opend
 
 ## Acknowledgments
 
-- [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html) for market data and trading API
-- [Flask](https://flask.palletsprojects.com/) for the web framework
-- [Docker](https://www.docker.com/) for containerization
+- [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html) — market data and trading API
+- [Flask](https://flask.palletsprojects.com/) — web framework

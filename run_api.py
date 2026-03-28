@@ -11,6 +11,7 @@ import platform
 import argparse
 import subprocess
 import importlib.util
+import shutil
 from dotenv import load_dotenv
 from core.logging_config import get_logger
 
@@ -19,6 +20,31 @@ load_dotenv()
 
 # Configure logging
 logger = get_logger('autotrader.server', 'server')
+
+
+def ensure_local_connection_config():
+    """
+    Create a local connection.json from the example file when needed.
+    """
+    config_name = os.environ.get('CONNECTION_CONFIG', 'connection.json')
+    config_path = os.path.abspath(config_name)
+
+    if os.path.exists(config_path):
+        return
+
+    if os.path.basename(config_path) != 'connection.json':
+        return
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    example_path = os.path.join(script_dir, 'connection.json.example')
+    if not os.path.exists(example_path):
+        return
+
+    try:
+        shutil.copyfile(example_path, config_path)
+        logger.info(f"Created local connection config at {config_path}")
+    except Exception as exc:
+        logger.warning(f"Could not create {config_path} from example: {exc}")
 
 def check_and_install_dependencies():
     """
@@ -121,6 +147,8 @@ def main():
             logger.info("Using paper trading configuration (moomoo SIMULATE)")
         else:
             logger.info(f"Using connection config from environment: {os.environ.get('CONNECTION_CONFIG')}")
+
+        ensure_local_connection_config()
         
         # Get port from environment variable or use default (changed from 5000 to 8000)
         port = os.environ.get('PORT', '8000')

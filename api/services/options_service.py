@@ -55,9 +55,11 @@ class OptionsService:
             logger.info("Creating new moomoo connection")
             
             self.connection = MoomooConnection(
-                host=self.config.get('host', '127.0.0.1'),
-                port=self.config.get('port', 11111),
-                readonly=self.config.get('readonly', True)
+                host=str(self.config.get('host', '127.0.0.1')),
+                port=int(self.config.get('port', 11111)),
+                readonly=bool(self.config.get('readonly', True)),
+                account_id=self.config.get('account_id'),
+                security_firm=self.config.get('security_firm')
             )
             
             # Try to connect with proper error handling

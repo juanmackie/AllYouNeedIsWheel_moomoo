@@ -9,6 +9,53 @@ import { showAlert } from '../utils/alerts.js';
 let accountData = null;
 let positionsData = null;
 
+
+function getOpenDStatus() {
+    return window.appConnectionStatus || null;
+}
+
+
+function updateUnavailableAccountState() {
+    accountData = null;
+    positionsData = [];
+
+    updateDataStatusIndicator(true);
+
+    const zeroValueIds = [
+        'account-value',
+        'cash-balance',
+        'excess-liquidity',
+        'initial-margin'
+    ];
+
+    zeroValueIds.forEach((id) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = formatCurrency(0);
+        }
+    });
+
+    const leveragePercentageElement = document.getElementById('leverage-percentage');
+    if (leveragePercentageElement) {
+        leveragePercentageElement.textContent = formatPercentage(0);
+    }
+
+    const leverageBar = document.getElementById('leverage-bar');
+    if (leverageBar) {
+        leverageBar.style.width = '0%';
+        leverageBar.setAttribute('aria-valuenow', '0');
+        leverageBar.className = 'progress-bar bg-secondary';
+    }
+
+    const positionsCountElement = document.getElementById('positions-count');
+    if (positionsCountElement) {
+        positionsCountElement.textContent = '0';
+    }
+
+    populateStockPositionsTable([]);
+    populateOptionPositionsTable([]);
+}
+
 /**
  * Format currency value for display
  * @param {number} value - The currency value to format
@@ -319,10 +366,13 @@ async function loadPortfolioData() {
         if (accountData) {
             updateAccountSummary();
             await loadPositionsTable();
+        } else {
+            updateUnavailableAccountState();
         }
     } catch (error) {
         console.error('Error loading portfolio data:', error);
         showAlert('Error loading portfolio data. Please check your connection to moomoo OpenD.', 'danger');
+        updateUnavailableAccountState();
     }
 }
 
@@ -355,6 +405,26 @@ function updateDataStatusIndicator(isFrozen) {
     const now = new Date();
     const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     dataUpdateTime.textContent = `Updated ${timeString}`;
+
+    const opendStatus = getOpenDStatus();
+    if (opendStatus && opendStatus.status && opendStatus.status !== 'connected') {
+        dataStatusIndicator.setAttribute('title', opendStatus.message || 'OpenD is unavailable');
+
+        if (opendStatus.status === 'login_required') {
+            dataStatusIndicator.className = 'badge bg-warning text-dark';
+            dataStatusIndicator.textContent = 'LOGIN REQUIRED';
+            dataStatusIcon.className = 'bi bi-person-lock';
+        } else if (opendStatus.status === 'unavailable') {
+            dataStatusIndicator.className = 'badge bg-danger';
+            dataStatusIndicator.textContent = 'OPEN OPEND';
+            dataStatusIcon.className = 'bi bi-plug';
+        } else {
+            dataStatusIndicator.className = 'badge bg-secondary';
+            dataStatusIndicator.textContent = 'CONNECTING';
+            dataStatusIcon.className = 'bi bi-arrow-repeat';
+        }
+        return;
+    }
     
     if (isFrozen) {
         // Frozen data state
@@ -374,6 +444,13 @@ function updateDataStatusIndicator(isFrozen) {
         dataStatusIcon.className = 'bi bi-lightning-fill';
     }
 }
+
+
+document.addEventListener('opend-status-changed', () => {
+    if (!accountData) {
+        updateDataStatusIndicator(true);
+    }
+});
 
 // Export functions
 export {

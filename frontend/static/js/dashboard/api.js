@@ -4,6 +4,65 @@
  */
 import { showAlert } from '../utils/alerts.js';
 
+
+async function readJsonSafely(response) {
+    try {
+        return await response.json();
+    } catch (error) {
+        return null;
+    }
+}
+
+
+function isOpenDUnavailable(payload) {
+    return payload && ['opend_unavailable', 'opend_login_required', 'real_account_unavailable'].includes(payload.error_code);
+}
+
+
+function setConnectionStatusFromPayload(payload) {
+    if (!payload) {
+        return;
+    }
+
+    const status = payload.opend_status || {
+        status: payload.error_code || 'error',
+        message: payload.error || 'Connection unavailable'
+    };
+
+    if (typeof window.updateOpenDStatusBanner === 'function') {
+        window.updateOpenDStatusBanner(status);
+        return;
+    }
+
+    window.appConnectionStatus = status;
+    document.dispatchEvent(new CustomEvent('opend-status-changed', { detail: status }));
+}
+
+
+function clearUnavailableStatus() {
+    if (!window.appConnectionStatus || window.appConnectionStatus.status !== 'real_account_unavailable') {
+        return;
+    }
+
+    if (typeof window.updateOpenDStatusBanner === 'function') {
+        window.updateOpenDStatusBanner({
+            status: 'connected',
+            message: 'OpenD is running and ready.'
+        });
+    }
+}
+
+
+function isRealAccountUnavailableError(error) {
+    const status = window.appConnectionStatus || null;
+    if (status && status.status === 'real_account_unavailable') {
+        return true;
+    }
+
+    const message = error?.message || '';
+    return message.includes('requested REAL account') || message.includes('real_account_unavailable');
+}
+
 /**
  * Fetch account and portfolio data
  * @returns {Promise} Promise with account data
@@ -11,13 +70,21 @@ import { showAlert } from '../utils/alerts.js';
 async function fetchAccountData() {
     try {
         const response = await fetch('/api/portfolio');
+        const payload = await readJsonSafely(response);
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return null;
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
         }
-        return await response.json();
+        clearUnavailableStatus();
+        return payload;
     } catch (error) {
         console.error('Error fetching account data:', error);
-        showAlert(`Error fetching account data: ${error.message}`, 'danger');
+        if (!isRealAccountUnavailableError(error)) {
+            showAlert(`Error fetching account data: ${error.message}`, 'danger');
+        }
         return null;
     }
 }
@@ -29,13 +96,21 @@ async function fetchAccountData() {
 async function fetchPositions() {
     try {
         const response = await fetch('/api/portfolio/positions');
+        const payload = await readJsonSafely(response);
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return null;
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
         }
-        return await response.json();
+        clearUnavailableStatus();
+        return payload;
     } catch (error) {
         console.error('Error fetching positions:', error);
-        showAlert(`Error fetching positions: ${error.message}`, 'danger');
+        if (!isRealAccountUnavailableError(error)) {
+            showAlert(`Error fetching positions: ${error.message}`, 'danger');
+        }
         return null;
     }
 }
@@ -47,13 +122,26 @@ async function fetchPositions() {
 async function fetchWeeklyOptionIncome() {
     try {
         const response = await fetch('/api/portfolio/weekly-income');
+        const payload = await readJsonSafely(response);
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return {
+                    positions: [],
+                    total_income: 0,
+                    positions_count: 0,
+                    error: payload?.error || 'OpenD unavailable'
+                };
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
         }
-        return await response.json();
+        clearUnavailableStatus();
+        return payload;
     } catch (error) {
         console.error('Error fetching weekly option income:', error);
-        showAlert(`Error fetching weekly income data: ${error.message}`, 'danger');
+        if (!isRealAccountUnavailableError(error)) {
+            showAlert(`Error fetching weekly income data: ${error.message}`, 'danger');
+        }
         return {
             positions: [],
             total_income: 0,
@@ -95,8 +183,25 @@ async function fetchOptionData(ticker, otmPercentage = 10, optionType = null, ex
         });
         
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            const payload = await readJsonSafely(response);
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return {
+                    status: 'error',
+                    message: payload.error,
+                    data: {
+                        [ticker]: {
+                            stock_price: 0,
+                            position: 0,
+                            calls: [],
+                            puts: []
+                        }
+                    }
+                };
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
         }
+        clearUnavailableStatus();
         
         // Get response as text first to fix any NaN values
         const responseText = await response.text();
@@ -119,7 +224,9 @@ async function fetchOptionData(ticker, otmPercentage = 10, optionType = null, ex
         }
     } catch (error) {
         console.error(`Error fetching options for ${ticker}:`, error);
-        showAlert(`Error fetching options for ${ticker}: ${error.message}`, 'danger');
+        if (!isRealAccountUnavailableError(error)) {
+            showAlert(`Error fetching options for ${ticker}: ${error.message}`, 'danger');
+        }
         
         // Return a fallback empty structure to prevent further errors
         return {
@@ -145,11 +252,17 @@ async function fetchTickers() {
     try {
         // Only fetch stock positions by using the type=STK filter
         const response = await fetch('/api/portfolio/positions?type=STK');
+        const payload = await readJsonSafely(response);
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return { tickers: [] };
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
         }
+        clearUnavailableStatus();
         
-        const positionsData = await response.json();
+        const positionsData = payload;
         
         // Extract unique ticker symbols from stock positions
         const tickers = positionsData.map(position => position.symbol);
@@ -157,7 +270,9 @@ async function fetchTickers() {
         return { tickers: tickers };
     } catch (error) {
         console.error('Error fetching tickers:', error);
-        showAlert(`Error fetching tickers: ${error.message}`, 'danger');
+        if (!isRealAccountUnavailableError(error)) {
+            showAlert(`Error fetching tickers: ${error.message}`, 'danger');
+        }
         return { tickers: [] };
     }
 }
@@ -330,7 +445,11 @@ async function fetchStockPrices(tickers) {
         });
         
         if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+            const payload = await readJsonSafely(response);
+            if (isOpenDUnavailable(payload)) {
+                return {};
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
         }
         
         const result = await response.json();
@@ -355,13 +474,18 @@ async function fetchOptionExpirations(ticker) {
     try {
         const url = `/api/options/expirations?ticker=${encodeURIComponent(ticker)}`;
         const response = await fetch(url);
+        const payload = await readJsonSafely(response);
         
         if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to fetch option expirations: ${errorText}`);
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return { expirations: [], error: payload.error };
+            }
+            throw new Error(payload?.error || 'Failed to fetch option expirations');
         }
+        clearUnavailableStatus();
         
-        return await response.json();
+        return payload;
     } catch (error) {
         console.error('Error fetching option expirations:', error);
         throw error;

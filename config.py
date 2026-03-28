@@ -4,6 +4,48 @@ import logging
 
 logger = logging.getLogger('autotrader.config')
 
+DEFAULT_CONNECTION_CONFIG = {
+    'host': '127.0.0.1',
+    'port': 11111,
+    'readonly': True,
+    'portfolio_env': 'SIMULATE',
+    'security_firm': 'FUTUSECURITIES',
+    'account_id': '',
+    'db_path': 'options.db',
+    'auto_launch_opend': False,
+    'opend_path': ''
+}
+
+
+def apply_env_overrides(config):
+    env_mapping = {
+        'host': 'MOOMOO_OPEND_HOST',
+        'port': 'MOOMOO_OPEND_PORT',
+        'portfolio_env': 'MOOMOO_PORTFOLIO_ENV',
+        'security_firm': 'MOOMOO_SECURITY_FIRM',
+        'account_id': 'MOOMOO_ACCOUNT_ID'
+    }
+
+    for key, env_var in env_mapping.items():
+        env_value = os.environ.get(env_var)
+        if env_value is None or env_value == '':
+            continue
+
+        if key == 'port':
+            try:
+                config[key] = int(env_value)
+            except ValueError:
+                logger.warning(f"Ignoring invalid integer for {env_var}: {env_value}")
+            continue
+
+        config[key] = env_value
+
+    readonly_override = os.environ.get('MOOMOO_READONLY')
+    if readonly_override is not None and readonly_override != '':
+        config['readonly'] = readonly_override.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+    return config
+
 class Config:
     """
     Configuration class for the AutoTrader application
@@ -18,7 +60,10 @@ class Config:
             config_file (str, optional): Path to a JSON configuration file. Defaults to None.
         """
         # Initialize with default values
-        self.config = default_config.copy() if default_config else {}
+        self.config = DEFAULT_CONNECTION_CONFIG.copy()
+        if default_config:
+            self.config.update(default_config)
+        apply_env_overrides(self.config)
         
         # If config_file is not provided, check environment variable
         if config_file is None:
@@ -49,6 +94,7 @@ class Config:
                 
             # Update our configuration with values from the file
             self.config.update(file_config)
+            apply_env_overrides(self.config)
             return True
         except Exception as e:
             logger.error(f"Error loading configuration from {config_file}: {str(e)}")

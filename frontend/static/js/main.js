@@ -124,6 +124,79 @@ function showError(targetId, message = 'An error occurred. Please try again.') {
     }
 }
 
+function updateOpenDStatusBanner(status) {
+    const banner = document.getElementById('opend-status-banner');
+    const title = document.getElementById('opend-status-title');
+    const message = document.getElementById('opend-status-message');
+    const meta = document.getElementById('opend-status-meta');
+
+    if (!banner || !title || !message || !meta) {
+        return;
+    }
+
+    window.appConnectionStatus = status || null;
+    document.dispatchEvent(new CustomEvent('opend-status-changed', { detail: status || {} }));
+
+    if (!status || status.status === 'connected') {
+        banner.className = 'alert alert-warning d-none';
+        title.textContent = 'OpenD status';
+        message.textContent = 'OpenD is connected.';
+        meta.textContent = '';
+        return;
+    }
+
+    let bannerClass = 'alert alert-warning';
+    let heading = 'OpenD needs attention';
+
+    if (status.status === 'unavailable') {
+        bannerClass = 'alert alert-danger';
+        heading = 'OpenD is not running';
+    } else if (status.status === 'login_required') {
+        bannerClass = 'alert alert-warning';
+        heading = 'OpenD login required';
+    } else if (status.status === 'real_account_unavailable') {
+        bannerClass = 'alert alert-warning';
+        heading = 'Real account unavailable in OpenD';
+    } else if (status.status === 'error') {
+        bannerClass = 'alert alert-danger';
+        heading = 'OpenD status error';
+    }
+
+    banner.className = bannerClass;
+    title.textContent = heading;
+    message.textContent = status.message || 'OpenD is not ready yet.';
+    meta.textContent = status.host && status.port ? `${status.host}:${status.port}` : '';
+}
+
+window.updateOpenDStatusBanner = updateOpenDStatusBanner;
+
+async function pollOpenDStatus() {
+    try {
+        const response = await fetch('/api/system/opend-status', {
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}`);
+        }
+
+        const status = await response.json();
+        if (status.status === 'connected' && window.appConnectionStatus && window.appConnectionStatus.status === 'real_account_unavailable') {
+            return;
+        }
+        updateOpenDStatusBanner(status);
+    } catch (error) {
+        updateOpenDStatusBanner({
+            status: 'error',
+            message: `Unable to check OpenD status: ${error.message}`
+        });
+    }
+}
+
 // Initialize tooltips and popovers when page loads
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize Bootstrap tooltips
@@ -153,6 +226,9 @@ document.addEventListener('DOMContentLoaded', function() {
         contentContainer.className = 'content-container';
         mainContainer.prepend(contentContainer);
     }
+
+    pollOpenDStatus();
+    window.setInterval(pollOpenDStatus, 10000);
 });
 
 // Add CustomEvent polyfill for older browsers
