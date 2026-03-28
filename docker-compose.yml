@@ -5,8 +5,8 @@ services:
     build:
       context: ./docker/opend
     container_name: moomoo-opend
-    ports:
-      - "${OPEND_PORT:-11111}:11111"
+    expose:
+      - "11111"
     environment:
       - MOOMOO_LOGIN=${MOOMOO_LOGIN}
       - MOOMOO_PASSWORD=${MOOMOO_PASSWORD}
@@ -29,8 +29,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: all-you-need-is-wheel
-    ports:
-      - "${PORT:-8000}:8000"
+    expose:
+      - "8000"
     environment:
       - CONNECTION_CONFIG=connection_docker.json
       - MOOMOO_TRADING_PASSWORD=${MOOMOO_TRADING_PASSWORD:-}
