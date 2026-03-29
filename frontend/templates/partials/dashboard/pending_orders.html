@@ -1,117 +1,108 @@
-<!-- Pending Orders Section -->
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Pending Option Orders</h5>
-                <div class="d-flex align-items-center">
-                    <button class="btn btn-sm btn-outline-danger me-2" id="cancel-all-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel all pending orders">
-                        <i class="bi bi-x-circle"></i> Cancel All
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary" id="refresh-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh pending orders list">
-                        <i class="bi bi-arrow-repeat"></i> Refresh
-                    </button>
-                </div>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-striped">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Type</th>
-                                <th>Strike</th>
-                                <th>Expiration</th>
-                                <th>Limit Price</th>
-                                <th>Quantity</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="pending-orders-table">
-                            <tr>
-                                <td colspan="8" class="text-center">Loading pending orders...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <div class="card-footer">
-                <div class="d-flex justify-content-between align-items-center">
-                    <small class="text-muted">Manage your pending option orders here. Click Execute to send an order to moomoo.</small>
-                </div>
-            </div>
+<section class="app-section order-stage-section">
+    <div class="app-section__header">
+        <div>
+            <span class="app-section__eyebrow">Execution queue</span>
+            <h2>Pending option orders</h2>
+            <p>Review staged trades, refresh statuses, or cancel orders before they are sent through moomoo.</p>
+        </div>
+        <div class="app-section__actions">
+            <button class="btn btn-outline-danger" id="cancel-all-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel all pending orders">
+                <i class="bi bi-x-circle"></i> Cancel all
+            </button>
+            <button class="btn btn-outline-primary" id="refresh-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh pending orders list">
+                <i class="bi bi-arrow-repeat"></i> Refresh queue
+            </button>
         </div>
     </div>
-</div>
 
-<!-- Filled Orders & Earnings Section -->
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Weekly Option Income (This Friday Expiration)</h5>
-                <div class="d-flex align-items-center">
-                    <button id="refresh-filled-orders" class="btn btn-sm btn-outline-secondary" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh filled orders and earnings data">
-                        <i class="bi bi-arrow-clockwise"></i> Refresh
-                    </button>
-                </div>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-striped">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Type</th>
-                                <th>Strike</th>
-                                <th>Expiration</th>
-                                <th>Avg Price</th>
-                                <th>Quantity</th>
-                                <th>Total Income</th>
-                                <th>Notional Value</th>
-                            </tr>
-                        </thead>
-                        <tbody id="filled-orders-table">
-                            <tr>
-                                <td colspan="8" class="text-center">Loading short options expiring this Friday...</td>
-                            </tr>
-                        </tbody>
-                        <tfoot class="table-dark">
-                            <tr id="weekly-earnings-summary">
-                                <td colspan="8" class="text-center">
-                                    <div class="d-flex justify-content-around align-items-center py-2">
-                                        <div class="text-center">
-                                            <h6 class="mb-0">Weekly Income</h6>
-                                            <span class="fs-5 fw-bold" id="weekly-earnings-total">$0.00</span>
-                                        </div>
-                                        <div class="text-center">
-                                            <h6 class="mb-0">Position Count</h6>
-                                            <span class="fs-5 fw-bold" id="weekly-order-count">0</span>
-                                        </div>
-                                        <div class="text-center">
-                                            <h6 class="mb-0">Average Income/Position</h6>
-                                            <span class="fs-5 fw-bold" id="weekly-average-premium">$0.00</span>
-                                        </div>
-                                        <div class="text-center">
-                                            <h6 class="mb-0">Total PUT Notional</h6>
-                                            <span class="fs-5 fw-bold" id="weekly-notional-value">$0.00</span>
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-            </div>
-            <div class="card-footer">
-                <small class="text-muted">Short option positions expiring this coming Friday and estimated income.</small>
-            </div>
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Type</th>
+                    <th>Strike</th>
+                    <th>Expiration</th>
+                    <th>Limit Price</th>
+                    <th>Quantity</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="pending-orders-table">
+                <tr>
+                    <td colspan="8" class="text-center">Loading pending orders...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="app-section__footer">
+        Manage queued option orders here. Execute sends an order to moomoo immediately.
+    </div>
+</section>
+
+<section class="app-section income-stage-section">
+    <div class="app-section__header">
+        <div>
+            <span class="app-section__eyebrow">Friday book</span>
+            <h2>Weekly option income</h2>
+            <p>Short option positions expiring this coming Friday with estimated premium totals and notional exposure.</p>
+        </div>
+        <div class="app-section__actions">
+            <button id="refresh-filled-orders" class="btn btn-outline-primary" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh filled orders and earnings data">
+                <i class="bi bi-arrow-clockwise"></i> Refresh Friday book
+            </button>
         </div>
     </div>
-</div>
 
-<!-- Include confirmation modal for order execution -->
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Type</th>
+                    <th>Strike</th>
+                    <th>Expiration</th>
+                    <th>Avg Price</th>
+                    <th>Quantity</th>
+                    <th>Total Income</th>
+                    <th>Notional Value</th>
+                </tr>
+            </thead>
+            <tbody id="filled-orders-table">
+                <tr>
+                    <td colspan="8" class="text-center">Loading short options expiring this Friday...</td>
+                </tr>
+            </tbody>
+            <tfoot class="income-stage-summary">
+                <tr id="weekly-earnings-summary">
+                    <td colspan="8">
+                        <div class="income-stage-summary__grid">
+                            <div>
+                                <span class="income-stage-summary__label">Weekly Income</span>
+                                <span class="income-stage-summary__value" id="weekly-earnings-total">$0.00</span>
+                            </div>
+                            <div>
+                                <span class="income-stage-summary__label">Position Count</span>
+                                <span class="income-stage-summary__value" id="weekly-order-count">0</span>
+                            </div>
+                            <div>
+                                <span class="income-stage-summary__label">Average Income</span>
+                                <span class="income-stage-summary__value" id="weekly-average-premium">$0.00</span>
+                            </div>
+                            <div>
+                                <span class="income-stage-summary__label">PUT Notional</span>
+                                <span class="income-stage-summary__value" id="weekly-notional-value">$0.00</span>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</section>
+
 {% with 
   modal_id="confirmOrderModal",
   title="Confirm Order Execution",
@@ -120,4 +111,4 @@
   confirm_button_class="btn-success"
 %}
   {% include "partials/components/confirm_modal.html" %}
-{% endwith %} 
+{% endwith %}

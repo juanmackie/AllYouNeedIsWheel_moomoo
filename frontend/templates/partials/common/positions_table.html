@@ -1,71 +1,62 @@
-<!-- Positions Tables Section -->
-<div class="row mb-4">
-    <!-- Stock Positions Table -->
-    <div class="col-md-12 mb-4">
-        <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Stock Positions</h5>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-striped">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Shares</th>
-                                <th>Avg Cost</th>
-                                <th>Current Price</th>
-                                <th>Market Value</th>
-                                <th>Unrealized P&L</th>
-                            </tr>
-                        </thead>
-                        <tbody id="stock-positions-table-body">
-                            <tr>
-                                <td colspan="6" class="text-center">Loading stock positions...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <div class="card-footer">
-                <small class="text-muted">This table shows your current stock positions with unrealized profit/loss.</small>
-            </div>
+<section class="app-section holdings-section">
+    <div class="app-section__header">
+        <div>
+            <span class="app-section__eyebrow">Equity book</span>
+            <h2>Stock positions</h2>
+            <p>Your live share inventory with cost basis, current price, market value, and unrealized profit or loss.</p>
         </div>
     </div>
 
-    <!-- Option Positions Table -->
-    <div class="col-md-12">
-        <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Option Positions</h5>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-striped">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Contracts</th>
-                                <th>Type</th>
-                                <th>Strike</th>
-                                <th>Expiration</th>
-                                <th>Avg Cost</th>
-                                <th>Current Price</th>
-                                <th>Market Value</th>
-                                <th>Unrealized P&L</th>
-                            </tr>
-                        </thead>
-                        <tbody id="option-positions-table-body">
-                            <tr>
-                                <td colspan="9" class="text-center">Loading option positions...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <div class="card-footer">
-                <small class="text-muted">This table shows your current option positions with details about strikes, expiration dates, and unrealized profit/loss.</small>
-            </div>
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Shares</th>
+                    <th>Avg Cost</th>
+                    <th>Current Price</th>
+                    <th>Market Value</th>
+                    <th>Unrealized P&amp;L</th>
+                </tr>
+            </thead>
+            <tbody id="stock-positions-table-body">
+                <tr>
+                    <td colspan="6" class="text-center">Loading stock positions...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="app-section holdings-section">
+    <div class="app-section__header">
+        <div>
+            <span class="app-section__eyebrow">Derivative book</span>
+            <h2>Option positions</h2>
+            <p>Open option contracts with strike, expiration, current mark, and unrealized profit or loss.</p>
         </div>
     </div>
-</div> 
+
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Contracts</th>
+                    <th>Type</th>
+                    <th>Strike</th>
+                    <th>Expiration</th>
+                    <th>Avg Cost</th>
+                    <th>Current Price</th>
+                    <th>Market Value</th>
+                    <th>Unrealized P&amp;L</th>
+                </tr>
+            </thead>
+            <tbody id="option-positions-table-body">
+                <tr>
+                    <td colspan="9" class="text-center">Loading option positions...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>

@@ -1,16 +1,19 @@
-<nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom shadow-sm">
-    <div class="container">
-        <a class="navbar-brand" href="/">All You Need Is Wheel</a>
+<nav class="navbar navbar-expand-lg app-navbar">
+    <div class="container app-nav-shell">
+        <a class="navbar-brand app-brand" href="/" aria-label="All You Need Is Wheel home">
+            <span class="app-brand__kicker">Modern brokerage workflow</span>
+            <span class="app-brand__title">All You Need Is Wheel</span>
+        </a>
         <div class="d-flex align-items-center gap-2 ms-auto ms-lg-0">
             <button id="theme-toggle" class="btn btn-outline-primary btn-sm rounded-circle theme-toggle-btn" type="button" aria-label="Toggle theme" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Toggle light/dark theme">
                 <i class="bi bi-moon-fill"></i>
             </button>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <button class="navbar-toggler app-navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
                 <span class="navbar-toggler-icon"></span>
             </button>
         </div>
         <div class="collapse navbar-collapse" id="navbarNav">
-            <ul class="navbar-nav ms-lg-3">
+            <ul class="navbar-nav app-nav-links ms-lg-auto">
                 <li class="nav-item">
                     <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Dashboard</a>
                 </li>
@@ -23,4 +26,4 @@
             </ul>
         </div>
     </div>
-</nav> 
+</nav>

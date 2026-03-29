@@ -1,84 +1,58 @@
-<!-- Options Opportunities Section -->
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Option Opportunities</h5>
-                <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse" data-bs-target="#optionsHelp" aria-expanded="false" aria-controls="optionsHelp">
-                    <i class="bi bi-question-circle"></i> Help
-                </button>
-            </div>
-            
-            <!-- Help Section - Collapsible -->
-            <div class="collapse" id="optionsHelp">
-                <div class="card-body bg-light border-bottom">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h6 class="fw-bold mb-2"><i class="bi bi-journal-text"></i> What Are These Options Strategies?</h6>
-                            <p class="small text-muted mb-2">
-                                <strong>Covered Calls:</strong> You own 100+ shares of stock and sell the right for someone else to buy them at a set price. You collect a premium upfront. Best for generating income from stocks you already own.
-                            </p>
-                            <p class="small text-muted mb-0">
-                                <strong>Cash-Secured Puts:</strong> You sell the right for someone to sell you their shares at a set price. You need cash in your account to "secure" this promise. Best for buying stocks you want at lower prices.
-                            </p>
-                        </div>
-                        <div class="col-md-6">
-                            <h6 class="fw-bold mb-2"><i class="bi bi-info-circle"></i> Understanding Your Results</h6>
-                            <ul class="list-unstyled small text-muted mb-0">
-                                <li class="mb-1"><span class="badge bg-success">Score 80+</span> High quality opportunity</li>
-                                <li class="mb-1"><span class="badge bg-primary">Score 65-79</span> Good opportunity</li>
-                                <li class="mb-1"><span class="badge bg-warning text-dark">Score &lt;65</span> Fair - check warnings</li>
-                                <li class="mb-1"><span class="badge bg-success">IV Rank 70%+</span> High volatility (good premiums)</li>
-                                <li class="mb-1"><span class="badge bg-danger">IV Rank &lt;30%</span> Low volatility (lower premiums)</li>
-                                <li><span class="badge bg-info">OTM %</span> Out-of-the-money % - buffer from current price</li>
-                            </ul>
-                        </div>
-                    </div>
-                    <hr class="my-3">
-                    <div class="row">
-                        <div class="col-12">
-                            <h6 class="fw-bold mb-2"><i class="bi bi-grid"></i> Column Guide</h6>
-                            <div class="row small text-muted">
-                                <div class="col-md-4">
-                                    <strong>OTM %:</strong> Distance from current price (higher = safer but less premium)<br>
-                                    <strong>Strike:</strong> Price where option activates<br>
-                                    <strong>Expiration:</strong> When the option expires (DTE = Days to Expiration)
-                                </div>
-                                <div class="col-md-4">
-                                    <strong>Mid Price:</strong> Average of buy/sell price you should aim for<br>
-                                    <strong>Delta:</strong> Chance option finishes profitable (0-1 scale)<br>
-                                    <strong>IV%:</strong> Implied Volatility - market's price movement expectation
-                                </div>
-                                <div class="col-md-4">
-                                    <strong>Qty:</strong> Number of contracts (100 shares each)<br>
-                                    <strong>Total Premium:</strong> Income you'll receive immediately<br>
-                                    <strong>Cash Required:</strong> For puts - money held as collateral
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+<section class="app-section market-table-section">
+    <div class="app-section__header">
+        <div>
+            <span class="app-section__eyebrow">Screening engine</span>
+            <h2>Option opportunities</h2>
+            <p>Compare covered calls and cash-secured puts in a denser table built for filtering, scoring, and order staging.</p>
+        </div>
+        <div class="app-section__actions">
+            <button class="btn btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#optionsHelp" aria-expanded="false" aria-controls="optionsHelp">
+                <i class="bi bi-question-circle"></i> Strategy guide
+            </button>
+        </div>
+    </div>
+
+    <div class="collapse" id="optionsHelp">
+        <div class="market-help-panel">
+            <div class="row g-4">
+                <div class="col-lg-6">
+                    <h3>Strategy context</h3>
+                    <p class="text-muted mb-2"><strong>Covered Calls:</strong> Generate income from shares you already own by selling the right for someone else to buy them at a set price.</p>
+                    <p class="text-muted mb-0"><strong>Cash-Secured Puts:</strong> Collect premium while setting aside enough cash to buy shares if assigned at your chosen strike.</p>
+                </div>
+                <div class="col-lg-6">
+                    <h3>Reading the score</h3>
+                    <ul class="market-help-list list-unstyled mb-0">
+                        <li><span class="badge bg-success">80+</span> High-quality opportunity</li>
+                        <li><span class="badge bg-primary">65-79</span> Good opportunity</li>
+                        <li><span class="badge bg-warning text-dark">&lt;65</span> Fair, review warnings</li>
+                        <li><span class="badge bg-success">IV 70%+</span> Premium-rich environment</li>
+                        <li><span class="badge bg-danger">IV &lt;30%</span> Lower premium environment</li>
+                    </ul>
                 </div>
             </div>
-            
-            <div class="card-body">
-                <div id="options-table-container" class="table-responsive">
-                    <div class="text-center my-4">
-                        <div class="spinner-border text-primary" role="status"></div>
-                        <p class="mt-2">Loading options data...</p>
-                    </div>
+            <div class="market-help-grid row g-4 mt-1">
+                <div class="col-md-4 text-muted small">
+                    <strong>OTM %</strong> controls the distance from current price. Higher values reduce assignment risk but also reduce premium.
                 </div>
-            </div>
-            <div class="card-footer">
-                <div class="d-flex justify-content-between align-items-center flex-wrap">
-                    <small class="text-muted me-3">
-                        <strong>Scoring:</strong> Balanced wheel ranking favors risk-adjusted annualized return, tighter spreads, healthier liquidity, and cleaner assignment profiles. 
-                        <span class="d-inline-block">OTM % acts as your preference, not a strict filter.</span>
-                    </small>
-                    <small class="text-muted">
-                        <i class="bi bi-arrow-left-right"></i> Switch tabs to compare calls vs puts for each ticker
-                    </small>
+                <div class="col-md-4 text-muted small">
+                    <strong>Delta</strong> approximates the probability an option finishes in the money. Lower generally means more buffer.
+                </div>
+                <div class="col-md-4 text-muted small">
+                    <strong>Total Premium</strong> and <strong>Cash Required</strong> help you compare income against capital committed.
                 </div>
             </div>
         </div>
     </div>
-</div>
+
+    <div id="options-table-container" class="market-table-section__body table-stage-shell">
+        <div class="text-center my-4">
+            <div class="spinner-border text-primary" role="status"></div>
+            <p class="mt-3 mb-0">Loading options data...</p>
+        </div>
+    </div>
+
+    <div class="app-section__footer">
+        Balanced wheel scoring favors risk-adjusted annualized return, tighter spreads, healthier liquidity, and cleaner assignment profiles.
+    </div>
+</section>

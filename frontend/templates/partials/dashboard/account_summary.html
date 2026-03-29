@@ -1,78 +1,67 @@
-<!-- Account Summary Cards -->
-<div class="row mb-4">
-    <!-- Portfolio Summary Card -->
-    <div class="col-md-4 mb-3 mb-md-0">
-        <div class="card shadow-sm h-100">
-            <div class="card-body d-flex flex-column">
-                <div class="d-flex align-items-center gap-2 mb-3">
-                    <h5 class="card-title text-secondary mb-0">Portfolio Summary</h5>
-                    <div id="data-status-container" class="d-flex align-items-center ms-auto">
-                        <span id="data-status-icon" class="me-1">
-                            <i class="bi bi-lightning-fill"></i>
-                        </span>
-                        <span id="data-status-indicator" class="badge bg-secondary">
-                            LOADING
-                        </span>
-                        <small id="data-update-time" class="text-muted ms-2"></small>
-                    </div>
+<section class="app-section dashboard-summary-section">
+    <div class="dashboard-summary-grid">
+        <div class="summary-panel summary-panel--primary">
+            <div class="summary-panel__header">
+                <div>
+                    <span class="app-section__eyebrow">Capital overview</span>
+                    <h2>Portfolio capital at a glance</h2>
+                    <p class="text-muted mb-0">Live account value, buying power, and leverage on one continuous surface.</p>
                 </div>
-                <div class="d-flex justify-content-between mt-2">
-                    <div class="text-center flex-grow-1 border-end pe-2">
-                        <p class="text-muted mb-1 small" data-bs-toggle="tooltip" data-bs-placement="top" title="Total value of all positions plus cash balance">Total Value</p>
-                        <h3 class="mb-0" id="account-value">$0.00</h3>
-                    </div>
-                    <div class="text-center flex-grow-1 ps-2">
-                        <p class="text-muted mb-1 small" data-bs-toggle="tooltip" data-bs-placement="top" title="Available cash in your account">Cash Balance</p>
-                        <h3 class="mb-0" id="cash-balance">$0.00</h3>
-                    </div>
+                <div id="data-status-container" class="d-flex align-items-center ms-auto">
+                    <span id="data-status-icon" class="me-1">
+                        <i class="bi bi-lightning-fill"></i>
+                    </span>
+                    <span id="data-status-indicator" class="badge bg-secondary">LOADING</span>
+                    <small id="data-update-time" class="text-muted ms-2"></small>
+                </div>
+            </div>
+
+            <div class="summary-metrics-grid">
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Total value of all positions plus cash balance">Total Value</p>
+                    <h3 class="summary-metric-value" id="account-value">$0.00</h3>
+                </div>
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Available cash in your account">Cash Balance</p>
+                    <h3 class="summary-metric-value" id="cash-balance">$0.00</h3>
+                </div>
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Available buying power after margin requirements">Excess Liquidity</p>
+                    <h3 class="summary-metric-value" id="excess-liquidity">$0.00</h3>
+                </div>
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Margin required to maintain current positions">Initial Margin</p>
+                    <h3 class="summary-metric-value" id="initial-margin">$0.00</h3>
+                </div>
+            </div>
+
+            <div class="summary-leverage-panel">
+                <label class="summary-leverage-label mb-2">
+                    <small>
+                        <span data-bs-toggle="tooltip" data-bs-placement="top" title="Leverage % = (Initial Margin / Portfolio Value) × 100">
+                            Leverage <i class="bi bi-info-circle-fill"></i>
+                        </span>
+                    </small>
+                    <small class="fw-bold" id="leverage-percentage">0.00%</small>
+                </label>
+                <div class="progress" style="height: 10px;">
+                    <div id="leverage-bar" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
                 </div>
             </div>
         </div>
-    </div>
-    
-    <!-- Margin Metrics Card -->
-    <div class="col-md-4 mb-3 mb-md-0">
-        <div class="card shadow-sm h-100">
-            <div class="card-body d-flex flex-column">
-                <h5 class="card-title text-secondary mb-3">Margin Metrics</h5>
-                <div class="d-flex justify-content-between mt-2">
-                    <div class="text-center flex-grow-1 border-end pe-2">
-                        <p class="text-muted mb-1 small" data-bs-toggle="tooltip" data-bs-placement="top" title="Available buying power after margin requirements">Excess Liquidity</p>
-                        <h3 class="mb-0" id="excess-liquidity">$0.00</h3>
-                    </div>
-                    <div class="text-center flex-grow-1 ps-2">
-                        <p class="text-muted mb-1 small" data-bs-toggle="tooltip" data-bs-placement="top" title="Margin required to maintain current positions">Initial Margin</p>
-                        <h3 class="mb-0" id="initial-margin">$0.00</h3>
-                    </div>
-                </div>
-                <div class="mt-3">
-                    <label class="form-label d-flex justify-content-between mb-1">
-                        <small class="text-muted">
-                            <span data-bs-toggle="tooltip" data-bs-placement="top" title="Leverage % = (Initial Margin / Portfolio Value) × 100">
-                                Leverage <i class="bi bi-info-circle-fill"></i>
-                            </span>
-                        </small>
-                        <small class="fw-bold" id="leverage-percentage">0.00%</small>
-                    </label>
-                    <div class="progress" style="height: 8px; border-radius: 4px;">
-                        <div id="leverage-bar" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Weekly Earnings Card -->
-    <div class="col-md-4">
-        <div class="card shadow-sm h-100">
-            <div class="card-body d-flex flex-column justify-content-center align-items-center text-center">
-                <h5 class="card-title text-secondary mb-3" data-bs-toggle="tooltip" data-bs-placement="top" title="Total premium expected from options expiring this Friday">Weekly Earnings</h5>
-                <h2 class="mb-1" id="weekly-income-summary">$0.00</h2>
-                <p class="text-muted">
-                    <span id="weekly-positions-count">0</span> positions expiring 
+
+        <div class="summary-panel summary-panel--accent">
+            <span class="app-section__eyebrow">Income focus</span>
+            <h2>Weekly option premium</h2>
+            <p class="text-muted mb-0">Expected premium from short positions expiring this Friday.</p>
+
+            <div class="summary-income-stack">
+                <h3 class="summary-income-value mb-1" id="weekly-income-summary">$0.00</h3>
+                <p class="summary-income-caption mb-0">
+                    <span id="weekly-positions-count">0</span> positions expiring
                     <span id="friday-date">this Friday</span>
                 </p>
             </div>
         </div>
     </div>
-</div> 
+</section>

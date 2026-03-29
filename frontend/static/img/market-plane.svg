@@ -1,0 +1,37 @@
+<svg width="960" height="720" viewBox="0 0 960 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="960" height="720" rx="48" fill="#F7F4ED"/>
+  <rect x="56" y="60" width="848" height="600" rx="34" fill="url(#panel)" stroke="#C9D4D9" stroke-width="2"/>
+  <path d="M120 588H840" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M120 492H840" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M120 396H840" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M120 300H840" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M120 204H840" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M216 124V596" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M360 124V596" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M504 124V596" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M648 124V596" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M792 124V596" stroke="#D4DFE3" stroke-width="2"/>
+  <path d="M124 511C187 491 208 447 257 439C301 432 329 468 377 465C437 461 474 390 534 370C597 348 642 405 696 390C743 377 788 300 836 256" stroke="url(#signal)" stroke-width="18" stroke-linecap="round"/>
+  <path d="M124 548C192 533 223 495 271 481C335 462 375 504 430 483C483 463 520 388 582 384C642 379 675 443 736 424C776 411 811 349 836 320" stroke="#12394A" stroke-opacity="0.18" stroke-width="7" stroke-linecap="round" stroke-dasharray="4 18"/>
+  <circle cx="257" cy="439" r="15" fill="#0F6D7A" stroke="#F7F4ED" stroke-width="8"/>
+  <circle cx="534" cy="370" r="15" fill="#B88946" stroke="#F7F4ED" stroke-width="8"/>
+  <circle cx="696" cy="390" r="15" fill="#0F6D7A" stroke="#F7F4ED" stroke-width="8"/>
+  <circle cx="836" cy="256" r="18" fill="#12394A" stroke="#F7F4ED" stroke-width="8"/>
+  <path d="M184 168C243 129 315 108 389 108C537 108 675 190 748 322" stroke="#B88946" stroke-width="10" stroke-linecap="round"/>
+  <path d="M184 168C210 225 224 287 224 352C224 443 197 528 150 600" stroke="#0F6D7A" stroke-opacity="0.5" stroke-width="10" stroke-linecap="round"/>
+  <path d="M749 322C778 367 794 420 794 477C794 529 781 577 756 620" stroke="#12394A" stroke-opacity="0.32" stroke-width="10" stroke-linecap="round"/>
+  <rect x="126" y="122" width="126" height="50" rx="25" fill="#12394A" fill-opacity="0.06"/>
+  <rect x="270" y="122" width="164" height="50" rx="25" fill="#0F6D7A" fill-opacity="0.08"/>
+  <rect x="452" y="122" width="142" height="50" rx="25" fill="#B88946" fill-opacity="0.12"/>
+  <defs>
+    <linearGradient id="panel" x1="480" y1="60" x2="480" y2="660" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF9"/>
+      <stop offset="1" stop-color="#F1EEE6"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="124" y1="512" x2="836" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#12394A"/>
+      <stop offset="0.55" stop-color="#0F6D7A"/>
+      <stop offset="1" stop-color="#B88946"/>
+    </linearGradient>
+  </defs>
+</svg>

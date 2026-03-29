@@ -1,28 +1,29 @@
-<!-- 
-Page Header Component
-Usage: Include this file at the top of your page content.
-Parameters: 
-- title: Page title
-- subtitle: Optional subtitle or description
-- show_actions: Whether to show action buttons (default: false)
--->
-
-<!-- Default parameter values -->
 {% set show_actions = show_actions|default(false) %}
+{% set page_key = page_key|default('workspace') %}
+{% set brand_mode = brand_mode|default(false) %}
+{% set brand_kicker = brand_kicker|default('Wheel strategy workspace') %}
+{% set brand_title = brand_title|default('All You Need Is Wheel') %}
 
-<div class="row mb-4">
-    <div class="col-md-{% if show_actions %}9{% else %}12{% endif %}">
-        <h1>{{ title }}</h1>
-        {% if subtitle %}
-        <p class="lead">{{ subtitle }}</p>
-        {% endif %}
-    </div>
-    
-    {% if show_actions %}
-    <div class="col-md-3 d-flex align-items-center justify-content-end">
-        <div class="btn-group">
-            {{ action_buttons|safe }}
+<section class="app-masthead app-masthead--{{ page_key }} {% if brand_mode %}app-masthead--brand{% endif %}">
+    <div class="app-masthead__content">
+        <div class="app-masthead__copy">
+            <div class="app-masthead__brand-block">
+                <span class="app-masthead__eyebrow">{{ brand_kicker }}</span>
+                <div class="app-masthead__brand-title">{{ brand_title }}</div>
+            </div>
+            <h1 class="app-masthead__headline">{{ title }}</h1>
+            {% if subtitle %}
+            <p class="app-masthead__summary">{{ subtitle }}</p>
+            {% endif %}
+            {% if show_actions %}
+            <div class="app-masthead__actions">
+                {{ action_buttons|safe }}
+            </div>
+            {% endif %}
+        </div>
+        <div class="app-masthead__visual" aria-hidden="true">
+            <div class="app-masthead__visual-screen"></div>
+            <div class="app-masthead__visual-grid"></div>
         </div>
     </div>
-    {% endif %}
-</div> 
+</section>

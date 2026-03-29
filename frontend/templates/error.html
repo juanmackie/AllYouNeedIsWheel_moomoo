@@ -2,15 +2,27 @@
 
 {% block title %}Error {{ error_code }} - All You Need Is Wheel{% endblock %}
 
+{% block body_class %}page-error{% endblock %}
+
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-8 col-lg-6 text-center py-5">
-        <h1 class="display-1 fw-bold">{{ error_code }}</h1>
-        <h2 class="mb-4">{{ message }}</h2>
-        <p class="lead mb-5">Sorry, something went wrong. Please try again later or contact support if the problem persists.</p>
-        <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg px-4">
-            <i class="bi bi-house-door me-2"></i> Return to Home
-        </a>
+<section class="app-masthead app-masthead--error app-masthead--brand error-masthead">
+    <div class="app-masthead__content">
+        <div class="app-masthead__copy">
+            <div class="app-masthead__brand-block">
+                <span class="app-masthead__eyebrow">System status</span>
+                <div class="app-masthead__brand-title">All You Need Is Wheel</div>
+            </div>
+            <h1 class="app-masthead__headline">Error {{ error_code }}</h1>
+            <p class="app-masthead__summary">{{ message }}. The page could not be loaded in the current workspace state.</p>
+            <div class="app-masthead__actions">
+                <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg px-4">
+                    <i class="bi bi-house-door me-2"></i> Return to dashboard
+                </a>
+            </div>
+        </div>
+        <div class="app-masthead__visual error-masthead__visual" aria-hidden="true">
+            <div class="error-masthead__code">{{ error_code }}</div>
+        </div>
     </div>
-</div>
-{% endblock %} 
+</section>
+{% endblock %}

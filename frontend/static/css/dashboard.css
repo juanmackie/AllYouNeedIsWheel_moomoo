@@ -1,280 +1,615 @@
-/* Dashboard CSS */
-
-/* Data status indicator styling */
 #data-status-indicator {
-    font-size: 0.65rem;
-    padding: 0.25rem 0.5rem;
+    font-size: 0.68rem;
+    padding: 0.38rem 0.62rem;
     white-space: nowrap;
-    font-weight: 600;
-    letter-spacing: 0.5px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
 }
 
 #data-status-container {
-    transition: all 0.3s ease;
+    gap: 0.25rem;
+    transition: transform 180ms ease, opacity 180ms ease;
 }
 
 #data-status-icon {
-    font-size: 0.9rem;
+    font-size: 0.92rem;
 }
 
 #data-status-icon .bi-lightning-fill {
-    color: #198754; /* Bootstrap success green */
+    color: var(--app-success);
 }
 
 #data-status-icon .bi-snow {
-    color: #ffc107; /* Bootstrap warning yellow */
+    color: var(--app-warning);
 }
 
 #data-update-time {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
 }
 
-/* Add transition for smooth color changes */
-.badge {
-    transition: background-color 0.3s ease;
+.dashboard-summary-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr);
+    gap: 1rem;
 }
 
-/* Top Recommendations Styles */
+.summary-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+    min-height: 100%;
+    padding: 1.35rem;
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-sm);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(247, 244, 237, 0.74));
+}
+
+[data-bs-theme="dark"] .summary-panel {
+    background: linear-gradient(180deg, rgba(30, 42, 49, 0.96), rgba(21, 30, 36, 0.94));
+}
+
+.summary-panel--accent {
+    justify-content: space-between;
+    color: #f6fbfd;
+    background:
+        linear-gradient(160deg, rgba(18, 57, 74, 0.94) 0%, rgba(15, 109, 122, 0.92) 68%, rgba(184, 137, 70, 0.84) 100%);
+    box-shadow: 0 26px 44px rgba(15, 109, 122, 0.18);
+}
+
+.summary-panel--accent h2,
+.summary-panel--accent .app-section__eyebrow,
+.summary-panel--accent .text-muted,
+.summary-panel--accent p,
+.summary-panel--accent small {
+    color: inherit !important;
+}
+
+.summary-panel__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.85rem;
+}
+
+.summary-panel__header h2,
+.summary-panel--accent h2 {
+    margin: 0;
+    font-size: clamp(1.5rem, 2.1vw, 2rem);
+}
+
+.summary-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.9rem;
+}
+
+.summary-metric-cell {
+    padding: 1rem 1.05rem;
+    border: 1px solid var(--app-border);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.58);
+}
+
+[data-bs-theme="dark"] .summary-metric-cell {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.summary-metric-label {
+    margin-bottom: 0.45rem;
+    color: var(--app-muted);
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.summary-metric-value {
+    margin: 0;
+    font-family: 'Newsreader', serif;
+    font-size: clamp(1.65rem, 2vw, 2.2rem);
+}
+
+.summary-leverage-panel {
+    padding: 1rem 1.05rem;
+    border: 1px solid var(--app-border);
+    border-radius: 18px;
+    background: rgba(17, 33, 43, 0.04);
+}
+
+[data-bs-theme="dark"] .summary-leverage-panel {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.summary-leverage-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.summary-income-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: auto;
+}
+
+.summary-income-value {
+    font-size: clamp(2.35rem, 5vw, 4rem);
+    line-height: 0.9;
+}
+
+.summary-income-caption {
+    max-width: 20ch;
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+.recommendation-stage__body {
+    position: relative;
+}
+
+.recommendation-stage__state {
+    padding: 2rem 1rem;
+    border: 1px dashed var(--app-border-strong);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.42);
+}
+
+[data-bs-theme="dark"] .recommendation-stage__state {
+    background: rgba(255, 255, 255, 0.02);
+}
+
 .recommendation-card {
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    border-radius: 8px;
+    overflow: hidden;
+    height: 100%;
+    border-width: 1px !important;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 240, 232, 0.82)),
+        var(--app-surface-strong);
+    transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+[data-bs-theme="dark"] .recommendation-card {
+    background:
+        linear-gradient(180deg, rgba(32, 44, 52, 0.98), rgba(22, 31, 38, 0.96)),
+        var(--app-surface-strong);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .recommendation-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    transform: translateY(-4px);
+    box-shadow: var(--app-shadow);
 }
 
-/* Rank Badge Styles */
+[data-bs-theme="dark"] .recommendation-card:hover {
+    box-shadow: 0 22px 48px rgba(0, 0, 0, 0.28);
+}
+
+.recommendation-card__header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+
+.rank-gold,
+.rank-silver,
+.rank-bronze,
+.rank-standard {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2rem;
+    min-height: 2rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    font-weight: 800;
+}
+
 .rank-gold {
-    background-color: #ffd700;
-    color: #000;
-    padding: 4px 8px;
-    border-radius: 50%;
-    font-weight: bold;
+    background: rgba(184, 137, 70, 0.18);
+    color: #835e2d;
+}
+
+[data-bs-theme="dark"] .rank-gold {
+    background: rgba(209, 165, 107, 0.18);
+    color: #f1cb90;
 }
 
 .rank-silver {
-    background-color: #c0c0c0;
-    color: #000;
-    padding: 4px 8px;
-    border-radius: 50%;
-    font-weight: bold;
+    background: rgba(111, 126, 135, 0.18);
+    color: #44535b;
+}
+
+[data-bs-theme="dark"] .rank-silver {
+    background: rgba(174, 185, 191, 0.15);
+    color: #d9e0e4;
 }
 
 .rank-bronze {
-    background-color: #cd7f32;
-    color: #fff;
-    padding: 4px 8px;
-    border-radius: 50%;
-    font-weight: bold;
+    background: rgba(150, 92, 57, 0.18);
+    color: #7b4b2e;
+}
+
+[data-bs-theme="dark"] .rank-bronze {
+    background: rgba(184, 137, 70, 0.18);
+    color: #e6b472;
 }
 
 .rank-standard {
-    background-color: #6c757d;
-    color: #fff;
-    padding: 4px 8px;
-    border-radius: 50%;
-    font-weight: bold;
+    background: rgba(17, 33, 43, 0.08);
+    color: var(--app-muted);
 }
 
-/* Card Header Styling */
-.recommendation-card .card-header {
-    background-color: #f8f9fa;
-    border-bottom: 1px solid #dee2e6;
-    border-radius: 8px 8px 0 0 !important;
+[data-bs-theme="dark"] .rank-standard {
+    background: rgba(255, 255, 255, 0.08);
 }
 
-/* Strike Price Display */
-.strike-price {
-    font-weight: 700;
-    color: #212529;
-}
-
-/* DTE Badge */
-.dte-badge {
-    font-size: 0.75rem;
-}
-
-/* Premium Amount */
-.premium-amount {
-    color: #198754;
-}
-
-/* Score Badge */
+.ticker-badge,
+.option-type-badge,
+.dte-badge,
 .score-badge {
-    font-weight: 600;
-    padding: 6px 12px;
+    border: 1px solid transparent;
 }
 
-/* Card Action Buttons */
-.recommendation-card .btn {
-    font-size: 0.875rem;
-    font-weight: 500;
+.ticker-badge {
+    background: rgba(18, 57, 74, 0.08);
+    color: var(--app-ink);
 }
 
-.recommendation-card .btn-primary {
-    background-color: #0d6efd;
-    border-color: #0d6efd;
+[data-bs-theme="dark"] .ticker-badge {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--app-ink);
 }
 
-.recommendation-card .btn-primary:hover {
-    background-color: #0b5ed7;
-    border-color: #0a58ca;
+.option-type-badge {
+    background: var(--app-accent-soft);
+    color: var(--app-accent-strong);
 }
 
-.recommendation-card .btn-success {
-    background-color: #198754;
-    border-color: #198754;
+[data-bs-theme="dark"] .option-type-badge {
+    border-color: rgba(255, 255, 255, 0.06);
 }
 
-.recommendation-card .btn-success:hover {
-    background-color: #157347;
-    border-color: #146c43;
+.recommendation-card__hero {
+    margin-bottom: 1.15rem;
+    padding: 1.15rem 1rem;
+    border-radius: 18px;
+    background: rgba(17, 33, 43, 0.04);
 }
 
-/* Warning Text */
+[data-bs-theme="dark"] .recommendation-card__hero {
+    background: rgba(255, 255, 255, 0.035);
+}
+
+.strike-price {
+    font-size: clamp(1.9rem, 2.4vw, 2.5rem);
+    font-weight: 700;
+}
+
+.dte-badge {
+    background: rgba(255, 255, 255, 0.8);
+    color: var(--app-muted);
+}
+
+[data-bs-theme="dark"] .dte-badge {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--app-ink);
+}
+
+.premium-amount {
+    color: var(--app-success);
+}
+
+.annualized-return {
+    color: var(--app-accent);
+}
+
+.score-badge {
+    padding: 0.55rem 0.95rem;
+    font-weight: 800;
+}
+
 .recommendation-warnings {
     min-height: 1.5rem;
+    color: var(--app-warning);
 }
 
-/* Recommendation Details */
 .recommendation-details {
-    background-color: #f8f9fa;
-    padding: 8px;
-    border-radius: 4px;
-    margin-top: 8px;
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--app-border);
+    border-radius: 16px;
+    background: rgba(17, 33, 43, 0.04);
 }
 
-/* Card Border Styles for Top 3 */
+[data-bs-theme="dark"] .recommendation-details {
+    background: rgba(255, 255, 255, 0.035);
+}
+
+[data-bs-theme="dark"] .recommendation-details .text-info {
+    background-color: rgba(103, 183, 192, 0.14);
+    color: #9ddbe2 !important;
+}
+
 .recommendation-card.border-warning {
-    box-shadow: 0 0 12px rgba(255, 193, 7, 0.4);
+    border-color: rgba(184, 137, 70, 0.45) !important;
 }
 
 .recommendation-card.border-secondary {
-    box-shadow: 0 0 8px rgba(108, 117, 125, 0.3);
+    border-color: rgba(93, 106, 115, 0.32) !important;
 }
 
 .recommendation-card.border-info {
-    box-shadow: 0 0 8px rgba(13, 202, 240, 0.3);
+    border-color: rgba(15, 109, 122, 0.34) !important;
 }
 
-/* Existing Position Indicator */
-.recommendation-details .text-info {
-    background-color: rgba(13, 202, 240, 0.1);
-    padding: 2px 6px;
-    border-radius: 4px;
-    margin-top: 4px;
+.market-table-section__body {
+    position: relative;
 }
 
-.recommendation-details .text-info i {
-    font-size: 0.8rem;
+.market-help-panel {
+    margin-bottom: 1rem;
+    padding: 1.1rem 1.2rem;
+    border: 1px solid var(--app-border);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.56);
 }
 
-/* Responsive Design */
-@media (max-width: 768px) {
-    .recommendation-card {
-        margin-bottom: 1rem;
-    }
-    
-    .recommendation-card .card-header {
-        padding: 0.75rem;
-    }
-    
-    .strike-price {
-        font-size: 1.5rem;
-    }
-    
-    .recommendation-card .btn {
-        padding: 0.375rem 0.75rem;
-    }
+[data-bs-theme="dark"] .market-help-panel {
+    background: rgba(255, 255, 255, 0.025);
 }
 
-/* Loading Skeleton Animation */
+.market-help-panel h3 {
+    margin-bottom: 0.65rem;
+    font-size: 1.2rem;
+}
+
+.market-help-list {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.table-stage-shell .nav-tabs {
+    gap: 0.6rem;
+    margin-bottom: 1rem !important;
+    border-bottom: none;
+}
+
+.table-stage-shell .nav-tabs .nav-link {
+    border: 1px solid var(--app-border);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.54);
+    color: var(--app-muted);
+    font-weight: 700;
+}
+
+[data-bs-theme="dark"] .table-stage-shell .nav-tabs .nav-link {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.table-stage-shell .nav-tabs .nav-link.active {
+    border-color: rgba(15, 109, 122, 0.2);
+    background: rgba(15, 109, 122, 0.12);
+    color: var(--app-accent-strong);
+}
+
+[data-bs-theme="dark"] .table-stage-shell .nav-tabs .nav-link.active {
+    border-color: rgba(103, 183, 192, 0.24);
+    background: rgba(103, 183, 192, 0.14);
+    color: #b8e9ee;
+}
+
+.table-stage-shell .tab-content > .tab-pane {
+    padding: 0.2rem 0 0;
+}
+
+.table-stage-shell .d-flex.justify-content-end.mb-2,
+.table-stage-shell .d-flex.justify-content-between.mb-2 {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1rem !important;
+}
+
+.table-stage-shell .input-group {
+    border-radius: 999px;
+    overflow: hidden;
+    box-shadow: none;
+}
+
+.table-stage-shell .form-control,
+.table-stage-shell .form-select {
+    border-color: var(--app-border);
+    background: rgba(255, 255, 255, 0.84);
+}
+
+[data-bs-theme="dark"] .table-stage-shell .form-control,
+[data-bs-theme="dark"] .table-stage-shell .form-select {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--app-ink);
+}
+
+[data-bs-theme="dark"] .table-stage-shell .form-control::placeholder {
+    color: var(--app-muted);
+}
+
+.table-stage-shell .form-control:focus,
+.table-stage-shell .form-select:focus {
+    border-color: rgba(15, 109, 122, 0.32);
+    box-shadow: 0 0 0 0.22rem rgba(15, 109, 122, 0.12);
+}
+
+.table-stage-shell .table-responsive {
+    overflow: auto;
+}
+
+.table-stage-shell .card.shadow-sm.mt-4 {
+    margin-top: 1rem !important;
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.72);
+}
+
+[data-bs-theme="dark"] .table-stage-shell .card.shadow-sm.mt-4 {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.table-stage-shell .card.shadow-sm.mt-4 .card-header {
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.table-stage-shell .card.shadow-sm.mt-4 .card-body {
+    padding-top: 0.85rem;
+}
+
+.table-stage-shell .card.shadow-sm.mt-4 .table-borderless td {
+    padding: 0.5rem 0.7rem;
+    border: none;
+}
+
+.order-stage-section .table-responsive,
+.income-stage-section .table-responsive,
+.holdings-section .table-responsive,
+.rollover-section .table-responsive {
+    overflow: auto;
+}
+
+.income-stage-summary {
+    background: transparent;
+}
+
+.income-stage-summary td {
+    padding: 1rem !important;
+    background: rgba(17, 33, 43, 0.04);
+}
+
+[data-bs-theme="dark"] .income-stage-summary td {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.income-stage-summary__grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.income-stage-summary__label {
+    display: block;
+    margin-bottom: 0.35rem;
+    color: var(--app-muted);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.income-stage-summary__value {
+    font-family: 'Newsreader', serif;
+    font-size: 1.6rem;
+    font-weight: 600;
+}
+
+.rollover-section .text-danger.fw-bold,
+.rollover-section .text-danger {
+    color: var(--app-danger) !important;
+}
+
+.error-masthead {
+    min-height: min(72vh, 620px);
+}
+
+.error-masthead__visual {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent),
+        linear-gradient(145deg, rgba(176, 74, 66, 0.16), rgba(18, 57, 74, 0.2));
+}
+
+[data-bs-theme="dark"] .error-masthead__visual {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+        linear-gradient(145deg, rgba(220, 139, 130, 0.12), rgba(103, 183, 192, 0.08));
+}
+
+.error-masthead__code {
+    color: rgba(17, 33, 43, 0.14);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: clamp(5rem, 14vw, 10rem);
+    font-weight: 600;
+    letter-spacing: -0.08em;
+    line-height: 1;
+}
+
+[data-bs-theme="dark"] .error-masthead__code {
+    color: rgba(237, 242, 244, 0.08);
+}
+
+.skeleton-loading {
+    background: linear-gradient(90deg, rgba(17, 33, 43, 0.06) 25%, rgba(17, 33, 43, 0.12) 50%, rgba(17, 33, 43, 0.06) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+[data-bs-theme="dark"] .skeleton-loading {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 25%, rgba(255, 255, 255, 0.08) 50%, rgba(255, 255, 255, 0.04) 75%);
+    background-size: 200% 100%;
+}
+
 @keyframes shimmer {
     0% {
         background-position: -200% 0;
     }
+
     100% {
         background-position: 200% 0;
     }
 }
 
-.skeleton-loading {
-    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
+@media (max-width: 991.98px) {
+    .dashboard-summary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .income-stage-summary__grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
-/* Card Hover Effects for Better Interactivity */
-.recommendation-card .btn:active {
-    transform: scale(0.98);
-}
+@media (max-width: 767.98px) {
+    .summary-panel {
+        padding: 1rem;
+    }
 
-/* Tooltip Styling Enhancement */
-[data-bs-toggle="tooltip"] {
-    cursor: help;
-}
+    .summary-panel__header {
+        flex-direction: column;
+    }
 
-/* Options Table Improvements */
-.option-score-cell {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-}
+    .summary-metrics-grid {
+        grid-template-columns: 1fr;
+    }
 
-/* Warning messages styling */
-.text-warning {
-    color: #ffc107 !important;
-}
+    .recommendation-card__header-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
 
-.text-warning i {
-    font-size: 0.8rem;
-}
+    .table-stage-shell .d-flex.justify-content-end.mb-2,
+    .table-stage-shell .d-flex.justify-content-between.mb-2 {
+        flex-direction: column;
+    }
 
-/* Table header tooltips */
-#call-options-table th,
-#put-options-table th {
-    white-space: nowrap;
-    font-size: 0.85rem;
-}
+    .table-stage-shell .input-group {
+        width: 100% !important;
+    }
 
-/* IV Rank badge styling */
-.badge[data-bs-toggle="tooltip"] {
-    cursor: help;
+    .income-stage-summary__grid {
+        grid-template-columns: 1fr;
+    }
 }
-
-/* Total premium highlight */
-.total-premium .fw-bold {
-    color: #198754;
-}
-
-/* Cash required styling */
-.cash-required {
-    font-weight: 500;
-}
-
-/* Help section styling */
-#optionsHelp .card-body {
-    font-size: 0.9rem;
-}
-
-#optionsHelp h6 {
-    color: #495057;
-    font-weight: 600;
-}
-
-#optionsHelp .badge {
-    font-size: 0.75rem;
-}
-
-/* Table responsive improvements */
-.table-responsive {
-    border-radius: 0.25rem;
-}
-
-/* Section Header Gradient */
-.bg-gradient-primary {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-} 

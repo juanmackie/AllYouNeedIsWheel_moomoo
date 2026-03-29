@@ -2,21 +2,21 @@
 
 {% block title %}Dashboard - All You Need Is Wheel{% endblock %}
 
-{% block extra_head %}
-<!-- Bootstrap Icons CSS -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.0/font/bootstrap-icons.css">
-{% endblock %}
+{% block body_class %}page-dashboard{% endblock %}
 
 {% block content %}
-<!-- Include page header -->
 {% with 
-  title="Dashboard",
-  subtitle="Overview of your portfolio and trading activity"
+  page_key="dashboard",
+  brand_mode=true,
+  brand_kicker="Wheel strategy command deck",
+  title="Trade the wheel with one live operating surface.",
+  subtitle="Monitor capital, evaluate contracts, and move from recommendation to order without leaving the desk.",
+  show_actions=true,
+  action_buttons='<a class="btn btn-primary" href="#top-recommendations-section">Review opportunities</a><a class="btn btn-outline-primary" href="/portfolio">View portfolio</a>'
 %}
   {% include "partials/components/page_header.html" %}
 {% endwith %}
 
-<!-- Include modular template sections -->
 {% include "partials/dashboard/account_summary.html" %}
 {% include "partials/dashboard/top_recommendations.html" %}
 {% include "partials/dashboard/options_table.html" %}
@@ -25,6 +25,5 @@
 {% endblock %}
 
 {% block scripts %}
-<!-- Import modular JavaScript files with ES modules -->
 <script type="module" src="{{ url_for('static', filename='js/dashboard/dashboard.js') }}"></script>
-{% endblock %} 
+{% endblock %}
