@@ -5,11 +5,13 @@ Options API routes
 from flask import Blueprint, request, jsonify, current_app
 from api.services.options_service import OptionsService
 from core.connection import probe_opend_status
+from core.cache_manager import recommendation_cache, RecommendationCache
 import traceback
 import logging
 import time
 import json
 import datetime
+import threading
 
 # Set up logger
 logger = logging.getLogger('api.routes.options')
@@ -17,6 +19,33 @@ logger = logging.getLogger('api.routes.options')
 bp = Blueprint('options', __name__, url_prefix='/api/options')
 options_service = OptionsService()
 
+
+def _trigger_background_refresh(cache_key, limit, portfolio_hash):
+    """
+    Trigger a background refresh of recommendations after returning stale cache.
+    """
+    def refresh_task():
+        try:
+            logger.info(f"Background refresh started for {cache_key}")
+            # Get fresh data
+            result = options_service.get_top_recommendations(limit=limit)
+            
+            if "error" not in result:
+                # Cache the fresh data
+                recommendation_cache.set(cache_key, result, portfolio_hash)
+                logger.info(f"Background refresh completed for {cache_key}")
+            else:
+                # Mark cache as invalid on failure
+                recommendation_cache.mark_background_refresh_failed(cache_key)
+                logger.error(f"Background refresh failed for {cache_key}: {result['error']}")
+        except Exception as e:
+            recommendation_cache.mark_background_refresh_failed(cache_key)
+            logger.error(f"Background refresh exception for {cache_key}: {e}")
+    
+    # Start background thread
+    thread = threading.Thread(target=refresh_task, daemon=True)
+    thread.start()
+    logger.info(f"Background refresh thread started for {cache_key}")
 
 def _ensure_opend_available():
     connection_config = current_app.config.get('connection_config', {})
@@ -33,6 +62,37 @@ def _ensure_opend_available():
         'error_code': error_code,
         'opend_status': status
     }), 503
+
+
+@bp.route('/connection-status', methods=['GET'])
+def connection_status():
+    """
+    Get detailed connection status for debugging connection cycling issues
+    """
+    try:
+        from core.connection import MoomooConnection
+        
+        # Get pool stats
+        pool_stats = MoomooConnection.get_connection_pool_stats()
+        
+        # Get connection info if available
+        conn_info = None
+        if options_service.connection:
+            conn_info = options_service.connection.get_connection_info()
+        
+        return jsonify({
+            'success': True,
+            'connection_pool': pool_stats,
+            'service_connection': conn_info,
+            'service_initialized': options_service.connection is not None
+        })
+    except Exception as e:
+        logger.error(f"Error getting connection status: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 
 # Market status is now checked directly in the route functions
 
@@ -427,6 +487,9 @@ def get_option_expirations():
     
     Query parameters:
         ticker (str): The ticker symbol (e.g., 'NVDA')
+        option_type (str, optional): 'CALL' or 'PUT' to filter by preferred DTE ranges
+                                    CALL: 5-35 days, PUT: 7-45 days
+                                    If not provided, returns all future expirations
         
     Returns:
         JSON response with a list of available expiration dates
@@ -442,9 +505,16 @@ def get_option_expirations():
         ticker = request.args.get('ticker')
         if not ticker:
             return jsonify({"error": "No ticker provided"}), 400
+        
+        # Get optional option_type parameter
+        option_type = request.args.get('option_type')
+        if option_type:
+            option_type = option_type.upper()
+            if option_type not in ['CALL', 'PUT']:
+                return jsonify({"error": "option_type must be 'CALL' or 'PUT'"}), 400
             
         # Call the service method to get option expirations
-        result = options_service.get_option_expirations(ticker)
+        result = options_service.get_option_expirations(ticker, option_type)
         
         # Check if there was an error
         if "error" in result:
@@ -457,6 +527,110 @@ def get_option_expirations():
             
     except Exception as e:
         logger.error(f"Error getting option expirations for {request.args.get('ticker', 'unknown')}: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/top-recommendations', methods=['GET'])
+def get_top_recommendations():
+    """
+    Get top N option recommendations across all portfolio positions.
+    
+    Returns the highest-scoring option opportunities (both calls and puts)
+    filtered by capital availability and ranked by composite score.
+    
+    Query parameters:
+        limit (int): Number of recommendations to return (default: 3, max: 10)
+        
+    Returns:
+        JSON response with ranked recommendations
+    """
+    logger.info("GET /top-recommendations request received")
+    
+    try:
+        unavailable_response = _ensure_opend_available()
+        if unavailable_response:
+            return unavailable_response
+        
+        # Get limit parameter (default 3)
+        limit = request.args.get('limit', 3)
+        try:
+            limit = int(limit)
+            if limit < 1:
+                limit = 3
+            elif limit > 10:
+                limit = 10
+        except (ValueError, TypeError):
+            limit = 3
+        
+        # Get portfolio context for cache key and hash calculation
+        try:
+            portfolio_context = options_service._get_portfolio_context()
+            current_portfolio_hash = RecommendationCache.calculate_portfolio_hash(portfolio_context)
+        except Exception as e:
+            logger.warning(f"Failed to get portfolio context for cache: {e}")
+            portfolio_context = {}
+            current_portfolio_hash = "no_portfolio"
+        
+        # Check for manual refresh parameter
+        manual_refresh = request.args.get('refresh', 'false').lower() == 'true'
+        
+        # Create cache key based on limit and portfolio state
+        cache_key = f"top_recommendations:limit={limit}:hash={current_portfolio_hash}"
+        
+        # Check cache unless manual refresh requested
+        if not manual_refresh:
+            cached_result, cache_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
+            
+            if cached_result is not None:
+                # Cache hit - add metadata to response
+                cached_result['_cache'] = cache_metadata
+                
+                response = jsonify(cached_result)
+                response.headers['X-Cache-Status'] = cache_metadata['cache_status']
+                response.headers['X-Cache-Age'] = str(cache_metadata['cache_age_seconds'])
+                
+                logger.info(f"Cache {cache_metadata['cache_status']} for top-recommendations "
+                          f"(age={cache_metadata['cache_age_seconds']}s, "
+                          f"portfolio_changed={cache_metadata['portfolio_changed']})")
+                
+                # If stale, trigger background refresh
+                if cache_metadata['cache_status'] == 'STALE':
+                    _trigger_background_refresh(cache_key, limit, current_portfolio_hash)
+                
+                return response, 200
+        
+        # Cache miss or manual refresh - get fresh data
+        logger.info(f"Fetching fresh top recommendations (manual_refresh={manual_refresh})")
+        result = options_service.get_top_recommendations(limit=limit)
+        
+        if "error" in result:
+            error_message = result["error"]
+            logger.error(f"Error getting top recommendations: {error_message}")
+            return jsonify({"error": error_message}), 500
+        
+        # Add cache metadata
+        result['_cache'] = {
+            'cache_status': 'MISS',
+            'cache_age_seconds': 0,
+            'portfolio_changed': False,
+            'is_valid': True,
+            'background_refresh_failed': False,
+            'cached_at': datetime.datetime.now().isoformat()
+        }
+        
+        # Store in cache
+        recommendation_cache.set(cache_key, result, current_portfolio_hash)
+        logger.info(f"Cached fresh top recommendations for key={cache_key[:80]}...")
+        
+        # Return response with headers
+        response = jsonify(result)
+        response.headers['X-Cache-Status'] = 'MISS'
+        response.headers['X-Cache-Age'] = '0'
+        
+        return response, 200
+        
+    except Exception as e:
+        logger.error(f"Error getting top recommendations: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
        

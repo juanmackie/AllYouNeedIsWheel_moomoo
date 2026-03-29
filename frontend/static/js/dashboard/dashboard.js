@@ -5,9 +5,10 @@
 import { loadPortfolioData } from './account.js';
 import { loadTickers } from './options-table.js';
 import { loadPendingOrders } from './orders.js';
+import { initializeTopRecommendations } from './top-recommendations.js';
 import { showAlert } from '../utils/alerts.js';
 import { fetchWeeklyOptionIncome } from './api.js';
-import { formatCurrency } from './account.js';
+import { formatCurrency } from '../utils/formatters.js';
 
 // Store weekly income data
 let weeklyIncomeData = null;
@@ -66,6 +67,9 @@ async function initializeDashboard() {
             loadPendingOrders(),
             updateWeeklyEarningsSummary()
         ]);
+        
+        // Initialize top recommendations (separate to avoid blocking other components)
+        initializeTopRecommendations();
         
         // Initialize Bootstrap tooltips
         const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));

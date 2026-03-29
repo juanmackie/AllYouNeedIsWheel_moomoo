@@ -4,6 +4,7 @@
  */
 import { fetchAccountData, fetchPositions } from './api.js';
 import { showAlert } from '../utils/alerts.js';
+import { formatCurrency, formatPercent } from '../utils/formatters.js';
 
 // Store account data
 let accountData = null;
@@ -37,7 +38,7 @@ function updateUnavailableAccountState() {
 
     const leveragePercentageElement = document.getElementById('leverage-percentage');
     if (leveragePercentageElement) {
-        leveragePercentageElement.textContent = formatPercentage(0);
+        leveragePercentageElement.textContent = formatPercent(0);
     }
 
     const leverageBar = document.getElementById('leverage-bar');
@@ -54,29 +55,6 @@ function updateUnavailableAccountState() {
 
     populateStockPositionsTable([]);
     populateOptionPositionsTable([]);
-}
-
-/**
- * Format currency value for display
- * @param {number} value - The currency value to format
- * @returns {string} Formatted currency string
- */
-function formatCurrency(value) {
-    if (value === null || value === undefined) return '$0.00';
-    return new Intl.NumberFormat('en-US', { 
-        style: 'currency', 
-        currency: 'USD' 
-    }).format(value);
-}
-
-/**
- * Format percentage for display
- * @param {number} value - The percentage value
- * @returns {string} Formatted percentage string
- */
-function formatPercentage(value) {
-    if (value === null || value === undefined) return '0.00%';
-    return `${value.toFixed(2)}%`;
 }
 
 /**
@@ -123,7 +101,7 @@ function updateAccountSummary() {
     // Leverage Percentage
     const leveragePercentageElement = document.getElementById('leverage-percentage');
     if (leveragePercentageElement) {
-        leveragePercentageElement.textContent = formatPercentage(accountData.leverage_percentage || 0);
+        leveragePercentageElement.textContent = formatPercent(accountData.leverage_percentage || 0);
     }
     
     // Update the leverage progress bar
@@ -220,7 +198,7 @@ function populateStockPositionsTable(stockPositions) {
             <td>${formatCurrency(avgCost)}</td>
             <td>${formatCurrency(position.market_price || 0)}</td>
             <td>${formatCurrency(marketValue)}</td>
-            <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
+            <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercent(unrealizedPnLPercent)})</td>
         `;
         
         stockTableBody.appendChild(row);
@@ -343,7 +321,7 @@ function addOptionsToTable(options, tableBody) {
             <td>${formatCurrency(avgCost)}</td>
             <td>${formatCurrency(position.market_price || 0)}</td>
             <td>${formatCurrency(marketValue)}</td>
-            <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercentage(unrealizedPnLPercent)})</td>
+            <td class="${pnlClass}">${formatCurrency(unrealizedPnL)} (${formatPercent(unrealizedPnLPercent)})</td>
         `;
         
         tableBody.appendChild(row);
@@ -449,7 +427,7 @@ document.addEventListener('opend-status-changed', () => {
 // Export functions
 export {
     formatCurrency,
-    formatPercentage,
+    formatPercent,
     updateAccountSummary,
     populatePositionsTable,
     loadPortfolioData,

@@ -32,4 +32,249 @@
 /* Add transition for smooth color changes */
 .badge {
     transition: background-color 0.3s ease;
+}
+
+/* Top Recommendations Styles */
+.recommendation-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    border-radius: 8px;
+}
+
+.recommendation-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Rank Badge Styles */
+.rank-gold {
+    background-color: #ffd700;
+    color: #000;
+    padding: 4px 8px;
+    border-radius: 50%;
+    font-weight: bold;
+}
+
+.rank-silver {
+    background-color: #c0c0c0;
+    color: #000;
+    padding: 4px 8px;
+    border-radius: 50%;
+    font-weight: bold;
+}
+
+.rank-bronze {
+    background-color: #cd7f32;
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 50%;
+    font-weight: bold;
+}
+
+.rank-standard {
+    background-color: #6c757d;
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 50%;
+    font-weight: bold;
+}
+
+/* Card Header Styling */
+.recommendation-card .card-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    border-radius: 8px 8px 0 0 !important;
+}
+
+/* Strike Price Display */
+.strike-price {
+    font-weight: 700;
+    color: #212529;
+}
+
+/* DTE Badge */
+.dte-badge {
+    font-size: 0.75rem;
+}
+
+/* Premium Amount */
+.premium-amount {
+    color: #198754;
+}
+
+/* Score Badge */
+.score-badge {
+    font-weight: 600;
+    padding: 6px 12px;
+}
+
+/* Card Action Buttons */
+.recommendation-card .btn {
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.recommendation-card .btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+.recommendation-card .btn-primary:hover {
+    background-color: #0b5ed7;
+    border-color: #0a58ca;
+}
+
+.recommendation-card .btn-success {
+    background-color: #198754;
+    border-color: #198754;
+}
+
+.recommendation-card .btn-success:hover {
+    background-color: #157347;
+    border-color: #146c43;
+}
+
+/* Warning Text */
+.recommendation-warnings {
+    min-height: 1.5rem;
+}
+
+/* Recommendation Details */
+.recommendation-details {
+    background-color: #f8f9fa;
+    padding: 8px;
+    border-radius: 4px;
+    margin-top: 8px;
+}
+
+/* Card Border Styles for Top 3 */
+.recommendation-card.border-warning {
+    box-shadow: 0 0 12px rgba(255, 193, 7, 0.4);
+}
+
+.recommendation-card.border-secondary {
+    box-shadow: 0 0 8px rgba(108, 117, 125, 0.3);
+}
+
+.recommendation-card.border-info {
+    box-shadow: 0 0 8px rgba(13, 202, 240, 0.3);
+}
+
+/* Existing Position Indicator */
+.recommendation-details .text-info {
+    background-color: rgba(13, 202, 240, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-top: 4px;
+}
+
+.recommendation-details .text-info i {
+    font-size: 0.8rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .recommendation-card {
+        margin-bottom: 1rem;
+    }
+    
+    .recommendation-card .card-header {
+        padding: 0.75rem;
+    }
+    
+    .strike-price {
+        font-size: 1.5rem;
+    }
+    
+    .recommendation-card .btn {
+        padding: 0.375rem 0.75rem;
+    }
+}
+
+/* Loading Skeleton Animation */
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+.skeleton-loading {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+/* Card Hover Effects for Better Interactivity */
+.recommendation-card .btn:active {
+    transform: scale(0.98);
+}
+
+/* Tooltip Styling Enhancement */
+[data-bs-toggle="tooltip"] {
+    cursor: help;
+}
+
+/* Options Table Improvements */
+.option-score-cell {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+/* Warning messages styling */
+.text-warning {
+    color: #ffc107 !important;
+}
+
+.text-warning i {
+    font-size: 0.8rem;
+}
+
+/* Table header tooltips */
+#call-options-table th,
+#put-options-table th {
+    white-space: nowrap;
+    font-size: 0.85rem;
+}
+
+/* IV Rank badge styling */
+.badge[data-bs-toggle="tooltip"] {
+    cursor: help;
+}
+
+/* Total premium highlight */
+.total-premium .fw-bold {
+    color: #198754;
+}
+
+/* Cash required styling */
+.cash-required {
+    font-weight: 500;
+}
+
+/* Help section styling */
+#optionsHelp .card-body {
+    font-size: 0.9rem;
+}
+
+#optionsHelp h6 {
+    color: #495057;
+    font-weight: 600;
+}
+
+#optionsHelp .badge {
+    font-size: 0.75rem;
+}
+
+/* Table responsive improvements */
+.table-responsive {
+    border-radius: 0.25rem;
+}
+
+/* Section Header Gradient */
+.bg-gradient-primary {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
 } 

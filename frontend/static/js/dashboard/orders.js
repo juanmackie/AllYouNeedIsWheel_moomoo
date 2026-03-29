@@ -3,7 +3,7 @@
  */
 import { fetchPendingOrders, cancelOrder, executeOrder, checkOrderStatus, fetchWeeklyOptionIncome } from './api.js';
 import { showAlert, getBadgeColor } from '../utils/alerts.js';
-import { formatCurrency } from './account.js';
+import { formatCurrency } from '../utils/formatters.js';
 
 // Store orders data
 let pendingOrdersData = [];
@@ -213,10 +213,10 @@ function updatePendingOrdersTable() {
             <td>${statusHtml}</td>
             <td>
                 <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary execute-order" data-order-id="${order.id}" data-pending-disabled="${order.status !== 'pending'}" ${order.status !== 'pending' ? 'disabled' : ''}>
+                    <button class="btn btn-outline-primary execute-order" data-order-id="${order.id}" data-pending-disabled="${order.status !== 'pending'}" ${order.status !== 'pending' ? 'disabled' : ''} data-bs-toggle="tooltip" data-bs-placement="top" title="Execute this order through moomoo">
                         <i class="bi bi-play-fill"></i> Execute
                     </button>
-                    <button class="btn btn-outline-danger cancel-order" data-order-id="${order.id}" ${['executed', 'canceled', 'rejected'].includes(order.status) ? 'disabled' : ''}>
+                    <button class="btn btn-outline-danger cancel-order" data-order-id="${order.id}" ${['executed', 'canceled', 'rejected'].includes(order.status) ? 'disabled' : ''} data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel this order">
                         <i class="bi bi-x-circle"></i> Cancel
                     </button>
                 </div>
@@ -230,8 +230,26 @@ function updatePendingOrdersTable() {
     addOrdersTableEventListeners();
     applyOpenDAvailabilityToOrderButtons();
     
+    // Initialize tooltips for dynamically created buttons
+    initializeTooltips();
+    
     // Also update the filled orders if any order was executed
     updateFilledOrdersTable();
+}
+
+/**
+ * Initialize Bootstrap tooltips for dynamically created elements
+ */
+function initializeTooltips() {
+    // Initialize tooltips for execute and cancel buttons
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('.execute-order[data-bs-toggle="tooltip"], .cancel-order[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+        // Check if tooltip is already initialized to avoid duplicates
+        const existingTooltip = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
+        if (!existingTooltip) {
+            new bootstrap.Tooltip(tooltipTriggerEl);
+        }
+    });
 }
 
 /**

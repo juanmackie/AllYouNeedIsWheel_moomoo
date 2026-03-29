@@ -4,7 +4,6 @@
  */
 import { fetchPositions, fetchOptionData, saveOptionOrder, fetchPendingOrders, cancelOrder, executeOrder, fetchStockPrices as apiFetchStockPrices, fetchOptionExpirations } from '../dashboard/api.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
-import { updateLegendDisplay } from '../utils/table-utils.js';
 
 // Store data
 let optionsData = null;
@@ -290,7 +289,8 @@ function populateOptionsTable(options) {
             <td>${formattedDifference}</td>
             <td>${percentDifferenceDisplay}</td>
             <td>
-                <button class="btn btn-sm btn-primary roll-option-btn" data-option-id="${options.indexOf(option)}">
+                <button class="btn btn-sm btn-primary roll-option-btn" data-option-id="${options.indexOf(option)}"
+                    data-bs-toggle="tooltip" data-bs-placement="top" title="Select this option to roll">
                     Roll
                 </button>
             </td>
@@ -307,6 +307,9 @@ function populateOptionsTable(options) {
             await selectOptionToRoll(parseInt(optionId));
         });
     });
+    
+    // Initialize tooltips for roll buttons
+    initializeRolloverTooltips();
 }
 
 /**
@@ -729,7 +732,8 @@ function populateRolloverSuggestionsTable(suggestions) {
             <td>${formattedDelta}</td>
             <td>${formattedIV}</td>
             <td>
-                <button class="btn btn-sm btn-success rollover-btn" data-suggestion-id="${index}">
+                <button class="btn btn-sm btn-success rollover-btn" data-suggestion-id="${index}"
+                    data-bs-toggle="tooltip" data-bs-placement="top" title="Execute this rollover order">
                     Execute Rollover
                 </button>
             </td>
@@ -762,15 +766,8 @@ function populateRolloverSuggestionsTable(suggestions) {
         });
     });
     
-    // Add event listener to execute button
-    const executeBtn = document.getElementById('execute-rollover-btn');
-    if (executeBtn) {
-        executeBtn.addEventListener('click', async () => {
-            if (suggestions.length > 0) {
-                await addRolloverOrder(0); // Execute with the first suggestion
-            }
-        });
-    }
+    // Initialize tooltips for dynamically created elements
+    initializeRolloverTooltips();
 }
 
 /**
@@ -910,14 +907,16 @@ function populatePendingOrdersTable(orders) {
                     <i class="bi bi-hourglass"></i> Pending Submission
                 </button>
             `;
-        } else if (statusText === 'Pending') {
+        } else         if (statusText === 'Pending') {
             // For pending orders, show execute and cancel buttons
             actionButtons = `
                 <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary execute-order-btn" data-order-id="${order.id}">
+                    <button class="btn btn-outline-primary execute-order-btn" data-order-id="${order.id}"
+                        data-bs-toggle="tooltip" data-bs-placement="top" title="Execute this rollover order">
                         <i class="bi bi-play-fill"></i> Execute
                     </button>
-                    <button class="btn btn-outline-danger cancel-order-btn" data-order-id="${order.id}">
+                    <button class="btn btn-outline-danger cancel-order-btn" data-order-id="${order.id}"
+                        data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel this order">
                         <i class="bi bi-x-circle"></i> Cancel
                     </button>
                 </div>
@@ -925,7 +924,8 @@ function populatePendingOrdersTable(orders) {
         } else if (statusText === 'Processing') {
             // For processing orders, show only cancel button
             actionButtons = `
-                <button class="btn btn-sm btn-warning cancel-order-btn" data-order-id="${order.id}">
+                <button class="btn btn-sm btn-warning cancel-order-btn" data-order-id="${order.id}"
+                    data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel this order">
                     <i class="bi bi-x-circle"></i> Cancel
                 </button>
             `;
@@ -970,27 +970,9 @@ function populatePendingOrdersTable(orders) {
         });
     });
     
-    // Add event listeners to quantity inputs
-    const quantityInputs = tableBody.querySelectorAll('.quantity-input');
-    quantityInputs.forEach(input => {
-        // Handle input change
-        input.addEventListener('change', async (event) => {
-            const orderId = event.target.dataset.orderId;
-            const newQuantity = parseInt(event.target.value, 10);
-            if (orderId && !isNaN(newQuantity) && newQuantity > 0) {
-                try {
-                    // Update the quantity via API
-                    const response = await fetch(`/api/options/order/${orderId}/quantity`, {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ quantity: newQuantity })
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error(`Failed to update quantity: ${response.statusText}`);
-                    }
+    // Initialize tooltips for dynamically created elements
+    initializeRolloverTooltips();
+}
                     
                     await response.json();
                     
@@ -1618,6 +1600,21 @@ async function fetchRolloverSuggestions() {
             tableBody.appendChild(errorRow);
         }
     }
+}
+
+/**
+ * Initialize Bootstrap tooltips for dynamically created elements in rollover tables
+ */
+function initializeRolloverTooltips() {
+    // Initialize tooltips for all elements with data-bs-toggle="tooltip" in rollover tables
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('.roll-option-btn[data-bs-toggle="tooltip"], .rollover-btn[data-bs-toggle="tooltip"], .execute-order-btn[data-bs-toggle="tooltip"], .cancel-order-btn[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+        // Check if tooltip is already initialized to avoid duplicates
+        const existingTooltip = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
+        if (!existingTooltip) {
+            new bootstrap.Tooltip(tooltipTriggerEl);
+        }
+    });
 }
 
 // Initialize the rollover page when the DOM is loaded

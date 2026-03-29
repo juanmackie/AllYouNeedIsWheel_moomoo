@@ -5,7 +5,7 @@ Database module for SQLite logging of trades
 import sqlite3
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import traceback
 
@@ -98,6 +98,38 @@ class OptionsDatabase:
                 
                 -- Rollover data
                 isRollover BOOLEAN DEFAULT 0
+            )
+        ''')
+        
+        # Create IV history table for tracking implied volatility
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS iv_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                implied_volatility REAL NOT NULL,
+                stock_price REAL,
+                option_type TEXT,
+                expiration TEXT,
+                dte INTEGER
+            )
+        ''')
+        
+        # Create index for fast IV lookups
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_iv_history_ticker_timestamp 
+            ON iv_history(ticker, timestamp)
+        ''')
+        
+        # Create earnings calendar table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS earnings_calendar (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL UNIQUE,
+                earnings_date TEXT,
+                last_updated TEXT NOT NULL,
+                fetch_status TEXT DEFAULT 'pending',
+                error_message TEXT
             )
         ''')
         
@@ -551,4 +583,254 @@ class OptionsDatabase:
             return orders
         except Exception as e:
             print(f"Error getting orders: {str(e)}")
+            return []
+    
+    # IV History Methods
+    def save_iv_data(self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None):
+        """
+        Save implied volatility data for a ticker
+        
+        Args:
+            ticker: Stock ticker symbol
+            implied_volatility: IV value (as decimal, e.g., 0.25 for 25%)
+            stock_price: Current stock price (optional)
+            option_type: Option type used for IV (optional)
+            expiration: Option expiration date (optional)
+            dte: Days to expiration (optional)
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                INSERT INTO iv_history 
+                (ticker, timestamp, implied_volatility, stock_price, option_type, expiration, dte)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (ticker, timestamp, implied_volatility, stock_price, option_type, expiration, dte))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error saving IV data for {ticker}: {str(e)}")
+            return False
+    
+    def get_iv_history(self, ticker, days=30):
+        """
+        Get IV history for a ticker over specified days
+        
+        Args:
+            ticker: Stock ticker symbol
+            days: Number of days of history (default 30)
+            
+        Returns:
+            list: List of IV records with timestamps
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                SELECT * FROM iv_history 
+                WHERE ticker = ? AND timestamp > ?
+                ORDER BY timestamp DESC
+            ''', (ticker, cutoff_date))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"Error getting IV history for {ticker}: {str(e)}")
+            return []
+    
+    def get_latest_iv(self, ticker):
+        """
+        Get the most recent IV data for a ticker
+        
+        Args:
+            ticker: Stock ticker symbol
+            
+        Returns:
+            dict: Latest IV record or None
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT * FROM iv_history 
+                WHERE ticker = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ''', (ticker,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            return dict(row) if row else None
+        except Exception as e:
+            print(f"Error getting latest IV for {ticker}: {str(e)}")
+            return None
+    
+    def purge_old_iv_data(self, days=45):
+        """
+        Purge IV data older than specified days
+        
+        Args:
+            days: Age threshold for purging (default 45)
+            
+        Returns:
+            int: Number of records deleted
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                DELETE FROM iv_history 
+                WHERE timestamp < ?
+            ''', (cutoff_date,))
+            
+            deleted = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            print(f"Purged {deleted} old IV history records")
+            return deleted
+        except Exception as e:
+            print(f"Error purging old IV data: {str(e)}")
+            return 0
+    
+    # Earnings Calendar Methods
+    def save_earnings_date(self, ticker, earnings_date, fetch_status='success', error_message=None):
+        """
+        Save or update earnings date for a ticker
+        
+        Args:
+            ticker: Stock ticker symbol
+            earnings_date: Earnings date string (YYYY-MM-DD) or None if not found
+            fetch_status: 'success', 'pending', 'error'
+            error_message: Error description if fetch failed
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO earnings_calendar 
+                (ticker, earnings_date, last_updated, fetch_status, error_message)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (ticker, earnings_date, timestamp, fetch_status, error_message))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error saving earnings date for {ticker}: {str(e)}")
+            return False
+    
+    def get_earnings_date(self, ticker):
+        """
+        Get earnings date for a ticker
+        
+        Args:
+            ticker: Stock ticker symbol
+            
+        Returns:
+            dict: Earnings data or None
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT * FROM earnings_calendar 
+                WHERE ticker = ?
+            ''', (ticker,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            return dict(row) if row else None
+        except Exception as e:
+            print(f"Error getting earnings date for {ticker}: {str(e)}")
+            return None
+    
+    def get_pending_earnings(self, days_threshold=7):
+        """
+        Get all tickers with pending earnings within threshold days
+        
+        Args:
+            days_threshold: Number of days to look ahead (default 7)
+            
+        Returns:
+            list: Ticker symbols with upcoming earnings
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            today = datetime.now().date()
+            future_date = (today + timedelta(days=days_threshold)).strftime('%Y-%m-%d')
+            today_str = today.strftime('%Y-%m-%d')
+            
+            cursor.execute('''
+                SELECT ticker, earnings_date FROM earnings_calendar 
+                WHERE earnings_date >= ? AND earnings_date <= ?
+                ORDER BY earnings_date
+            ''', (today_str, future_date))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            return [{'ticker': row[0], 'earnings_date': row[1]} for row in rows]
+        except Exception as e:
+            print(f"Error getting pending earnings: {str(e)}")
+            return []
+    
+    def get_tickers_needing_earnings_update(self, hours_threshold=24):
+        """
+        Get tickers that need earnings data refresh
+        
+        Args:
+            hours_threshold: Hours since last update to trigger refresh
+            
+        Returns:
+            list: Ticker symbols needing update
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cutoff_time = (datetime.now() - timedelta(hours=hours_threshold)).strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                SELECT ticker FROM earnings_calendar 
+                WHERE last_updated < ? OR fetch_status = 'pending' OR fetch_status = 'error'
+            ''', (cutoff_time,))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            return [row[0] for row in rows]
+        except Exception as e:
+            print(f"Error getting tickers needing earnings update: {str(e)}")
             return [] 

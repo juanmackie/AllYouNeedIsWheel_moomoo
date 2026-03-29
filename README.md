@@ -2,6 +2,8 @@
 
 A financial options trading assistant for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and manage orders through a local web dashboard.
 
+**🆕 NEW: Risk-Adjusted Scoring & IV Environment Analysis** — Intelligent option ranking with IV rank tracking, earnings warnings, and dynamic expiration profiles.
+
 <img width="1680" alt="Dashboard screenshot" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
 <img width="1321" alt="Portfolio screenshot" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
 <img width="1311" alt="Options screenshot" src="https://github.com/user-attachments/assets/0688ca0a-7fca-41fc-83b4-91881a2e9848" />
@@ -11,12 +13,57 @@ A financial options trading assistant for the "Wheel Strategy" powered by the [M
 
 ## Features
 
+### Core Features
 - **Portfolio Dashboard** — positions, cash balance, margin metrics, and weekly option income
 - **Wheel Strategy Focus** — cash-secured puts and covered calls with OTM analysis
 - **Options Rollover** — roll positions approaching strike price to later expirations
 - **Order Management** — create, execute, and cancel option orders from the browser
 - **OpenD Connection Status** — the web UI shows real-time OpenD connection and login state
 - **Auto Launch** — optional one-click start that can open OpenD for you on Windows
+
+### 🆕 Intelligent Option Scoring (Phase 1 & 2)
+- **Risk-Adjusted Scoring** — IV-adjusted returns, theta/delta risk ratio, expected value calculations
+- **IV Environment Awareness** — 30-day rolling IV rank tracking with color-coded badges (🔴 low, 🟢 high)
+- **Dynamic Screening Profiles** — Auto-detects weekly/monthly/quarterly expirations with optimized parameters
+- **Earnings Integration** — Automatic earnings warnings with score penalties for high-risk periods
+
+### Scoring Methodology
+
+The system uses a sophisticated multi-factor scoring algorithm to rank option plays:
+
+**Risk-Adjusted Metrics (Phase 1):**
+- **IV-Adjusted Return** — Annualized return normalized by implied volatility (filters low IV danger)
+- **Theta/Delta Ratio** — Daily income per unit of directional risk
+- **Expected Value** — Probability-weighted outcome accounting for win rate and loss magnitude
+- **Capital Efficiency** — CSP optimization based on capital usage vs account size
+
+**Weight Distribution (Fixed):**
+- **CALLs:** IV-Adjusted (25%), Theta/Delta (20%), Liquidity (18%), Expected Value (15%), Upside (12%), OTM Fit (10%)
+- **PUTs:** IV-Adjusted (25%), Theta/Delta (20%), Expected Value (18%), Liquidity (15%), Buffer (12%), Capital Efficiency (10%)
+
+**IV Environment Impact (Phase 2):**
+| IV Rank | Score Impact | Status |
+|---------|--------------|--------|
+| < 20% | -20% penalty | 🔴 Extreme low - dangerous |
+| 20-30% | -10% penalty | 🟡 Low IV warning |
+| 30-40% | -5% penalty | Slightly below average |
+| 40-60% | Neutral | ✓ Normal range |
+| 60-70% | +5% bonus | Slightly above average |
+| 70-80% | +10% bonus | 🟢 Good premium environment |
+| > 80% | +20% bonus | 🟢 Excellent IV |
+
+**Earnings Impact (Phase 2):**
+| Days to Earnings | Score Impact | Warning |
+|------------------|--------------|---------|
+| Today | -30% | 🚨 EARNINGS TODAY |
+| 1-3 days | -15% | ⚠️ High assignment risk |
+| 4-7 days | -5% | Caution advised |
+| > 7 days | No impact | — |
+
+**Dynamic Profiles (Auto-Detected by DTE):**
+- **Weeklies (0-14 DTE):** Tighter delta targeting (0.16-0.22), higher liquidity weight (35%), lower premium threshold
+- **Monthlies (15-45 DTE):** Standard delta (0.20-0.30), balanced approach, moderate premiums
+- **Quarterlies (46-90 DTE):** Wider delta (0.25-0.35), lower liquidity weight (15%), higher premium requirements
 
 ## Prerequisites
 
@@ -176,6 +223,14 @@ Live trading config. Not committed to version control.
 | `POST` | `/api/options/check-orders` | Sync order statuses |
 | `POST` | `/api/options/rollover` | Create rollover orders |
 
+### 🆕 Earnings & IV Tracking
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/earnings/status` | Background updater status & cache stats |
+| `GET` | `/api/earnings/update/<ticker>` | Manually update earnings for ticker |
+| `GET` | `/api/earnings/pending` | All tickers with earnings in next 7 days |
+
 ## Web Pages
 
 | URL | Description |
@@ -189,24 +244,28 @@ Live trading config. Not committed to version control.
 ```
 AllYouNeedIsWheel_moomoo/
 ├── api/                         # Flask API
-│   ├── routes/                  #   route modules
+│   ├── routes/                  #   route modules (options, portfolio)
 │   └── services/                #   business logic
+│       ├── options_service.py   #   Option scoring & analysis
+│       ├── iv_earnings_service.py  #   IV tracking & earnings (NEW)
+│       └── portfolio_service.py #   Portfolio operations
 ├── core/                        # Moomoo connection + helpers
 │   ├── connection.py            #   OpenD probe and connection
 │   ├── currency.py              #   currency conversion
 │   ├── logging_config.py        #   logging setup
 │   └── utils.py                 #   utility functions
 ├── db/                          # SQLite database
-│   └── database.py
-├── docker/opend/                # OpenD container (optional)
-│   ├── Dockerfile
-│   └── entrypoint.sh
+│   └── database.py              #   Tables: orders, iv_history, earnings_calendar
 ├── frontend/                    # Web UI
 │   ├── static/                  #   CSS + JS
+│   │   └── js/dashboard/        #     Dashboard interactions
 │   └── templates/               #   Jinja2 templates
-├── app.py                       # Flask app factory
+├── app.py                       # Flask app factory + background threads
 ├── run_api.py                   # WSGI server launcher
 ├── config.py                    # Config loader
+├── CHANGELOG.md                 # Version history (NEW)
+├── SCORING.md                   # Detailed scoring algorithm docs (NEW)
+├── API.md                       # Complete API documentation (NEW)
 ├── start_local.cmd              # Windows one-click launcher
 ├── start_local.ps1              # PowerShell launcher logic
 ├── connection.json.example      # Example local config
@@ -216,6 +275,110 @@ AllYouNeedIsWheel_moomoo/
 ├── requirements.txt             # Python dependencies
 └── .env.example                 # Example env file
 ```
+
+## Database Schema
+
+The application uses SQLite with automatic migrations. Key tables:
+
+### orders
+Stores all option orders with full details including Greeks, execution status, and rollover flags.
+
+### iv_history (NEW)
+Tracks implied volatility over time for IV rank calculations.
+- `ticker` — Stock symbol
+- `timestamp` — When recorded
+- `implied_volatility` — IV value
+- `stock_price` — Current price at time of recording
+- `dte` — Days to expiration
+
+### earnings_calendar (NEW)
+Stores earnings dates fetched from Yahoo Finance.
+- `ticker` — Stock symbol
+- `earnings_date` — Next earnings date (YYYY-MM-DD)
+- `last_updated` — When fetched
+- `fetch_status` — 'success', 'pending', or 'error'
+
+**Auto-Maintenance:**
+- IV data purged after 45 days
+- Earnings data refreshed every 6 hours (background thread)
+- In-memory caching: 4 hours for IV, 24 hours for earnings
+
+## Risk-Adjusted Scoring Details
+
+### How Scoring Works
+
+Every option play receives a composite score (0-100) based on multiple risk-adjusted factors:
+
+**1. IV-Adjusted Return (25% weight)**
+Formula: `annualized_return / implied_volatility`
+- Filters out dangerous "picking up pennies" scenarios
+- Rewards selling when IV is elevated (better risk compensation)
+
+**2. Theta/Delta Risk Ratio (20% weight)**
+Formula: `abs(theta) / (abs(delta) * stock_price)`
+- Measures daily income per unit of directional risk
+- Higher = better (more theta income, less delta exposure)
+
+**3. Expected Value (15-18% weight)**
+Formula: `(PoP × premium) - ((1-PoP) × max_loss_estimate)`
+- Uses delta as PoP approximation: `PoP = 1 - |delta|`
+- Accounts for both win probability and loss magnitude
+
+**4. Liquidity Score (15-18% weight)**
+Components: Open Interest (45%), Volume (20%), Bid-Ask Spread (35%)
+- Critical for weeklies (weight increases to 35%)
+- Less critical for quarterlies (weight decreases to 15%)
+
+**5. Additional Factors:**
+- **CALLs:** Upside potential (12%), OTM fit (10%), Cost basis protection (multiplier)
+- **PUTs:** Breakeven buffer (12%), Capital efficiency (10%), Cash fit (multiplier)
+
+### IV Environment Adjustments
+
+IV Rank is calculated over 30-day rolling window:
+```
+IV Rank = (current_IV - min_30d) / (max_30d - min_30d)
+```
+
+This rank (0-100%) determines score bonuses/penalties:
+- Red badge (< 30%): -20% score penalty (dangerous low IV)
+- Yellow badge (30-40%): -5% to -10% penalty
+- No badge (40-60%): Neutral
+- Green badge (> 60%): +5% to +20% bonus
+
+### Earnings Impact
+
+The background thread fetches earnings dates via Yahoo Finance every 6 hours:
+- No API key required (free)
+- Automatic warning badges in UI
+- Score penalties for earnings < 7 days away
+
+### Dynamic Profiles
+
+The system auto-detects expiration type by DTE:
+
+**Weeklies (0-14 days):**
+- Target delta: 0.16-0.22 (closer to ATM for faster decay)
+- Min premium: $8-10 (lower bar)
+- Liquidity weight: 35% (spreads matter more)
+- Delta fit weight: 8% (less critical with short duration)
+
+**Monthlies (15-45 days):**
+- Target delta: 0.20-0.30 (standard targeting)
+- Min premium: $12-15
+- Balanced weight distribution
+
+**Quarterlies (46-90 days):**
+- Target delta: 0.25-0.35 (more time for delta decay)
+- Min premium: $25-30 (higher bar for longer holds)
+- Liquidity weight: 15%
+- Delta fit weight: 18% (more time for strikes to work)
+
+**Manual Override:**
+You can force a specific profile by passing `profile_type` parameter:
+- `?profile_type=weekly`
+- `?profile_type=monthly`  
+- `?profile_type=quarterly`
 
 ## Docker (Optional)
 

@@ -468,11 +468,15 @@ async function fetchStockPrices(tickers) {
 /**
  * Fetch available option expiration dates for a ticker
  * @param {string} ticker - The ticker symbol
+ * @param {string} optionType - Optional 'CALL' or 'PUT' to filter by preferred DTE ranges
  * @returns {Promise<Object>} - Promise resolving to an object with expiration dates
  */
-async function fetchOptionExpirations(ticker) {
+async function fetchOptionExpirations(ticker, optionType = null) {
     try {
-        const url = `/api/options/expirations?ticker=${encodeURIComponent(ticker)}`;
+        let url = `/api/options/expirations?ticker=${encodeURIComponent(ticker)}`;
+        if (optionType) {
+            url += `&option_type=${encodeURIComponent(optionType)}`;
+        }
         const response = await fetch(url);
         const payload = await readJsonSafely(response);
         
@@ -492,6 +496,54 @@ async function fetchOptionExpirations(ticker) {
     }
 }
 
+/**
+ * Fetch top N option recommendations across portfolio
+ * @param {number} limit - Number of recommendations to fetch (default: 3)
+ * @returns {Promise<Object>} Promise with top recommendations
+ */
+async function fetchTopRecommendations(limit = 3, manualRefresh = false) {
+    try {
+        // Build URL with optional manual refresh parameter
+        let url = `/api/options/top-recommendations?limit=${limit}`;
+        if (manualRefresh) {
+            url += '&refresh=true';
+        }
+        
+        // Fetch WITHOUT cache-busting headers (allow browser cache)
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+            const payload = await readJsonSafely(response);
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return { recommendations: [], count: 0, error: payload?.error || 'OpenD unavailable' };
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
+        }
+        
+        clearUnavailableStatus();
+        const result = await response.json();
+        
+        // Extract cache headers for display
+        const cacheStatus = response.headers.get('X-Cache-Status') || 'MISS';
+        const cacheAge = parseInt(response.headers.get('X-Cache-Age') || '0', 10);
+        
+        return {
+            ...result,
+            _cacheInfo: {
+                status: cacheStatus,
+                age: cacheAge
+            }
+        };
+    } catch (error) {
+        console.error('Error fetching top recommendations:', error);
+        if (!isRealAccountUnavailableError(error)) {
+            showAlert(`Error fetching top recommendations: ${error.message}`, 'danger');
+        }
+        return { recommendations: [], count: 0, error: error.message };
+    }
+}
+
 // Export all API functions
 export {
     fetchAccountData,
@@ -505,5 +557,6 @@ export {
     executeOrder,
     checkOrderStatus,
     fetchStockPrices,
-    fetchOptionExpirations
-}; 
+    fetchOptionExpirations,
+    fetchTopRecommendations
+};

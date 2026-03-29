@@ -5,10 +5,10 @@
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Pending Option Orders</h5>
                 <div class="d-flex align-items-center">
-                    <button class="btn btn-sm btn-outline-danger me-2" id="cancel-all-pending-orders">
+                    <button class="btn btn-sm btn-outline-danger me-2" id="cancel-all-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel all pending orders">
                         <i class="bi bi-x-circle"></i> Cancel All
                     </button>
-                    <button class="btn btn-sm btn-outline-primary" id="refresh-pending-orders">
+                    <button class="btn btn-sm btn-outline-primary" id="refresh-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh pending orders list">
                         <i class="bi bi-arrow-repeat"></i> Refresh
                     </button>
                 </div>
@@ -52,7 +52,7 @@
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Weekly Option Income (This Friday Expiration)</h5>
                 <div class="d-flex align-items-center">
-                    <button id="refresh-filled-orders" class="btn btn-sm btn-outline-secondary">
+                    <button id="refresh-filled-orders" class="btn btn-sm btn-outline-secondary" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh filled orders and earnings data">
                         <i class="bi bi-arrow-clockwise"></i> Refresh
                     </button>
                 </div>

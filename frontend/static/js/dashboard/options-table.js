@@ -3,7 +3,7 @@
  */
 import { fetchOptionData, fetchTickers, saveOptionOrder, fetchAccountData, fetchOptionExpirations, fetchStockPrices } from './api.js';
 import { showAlert } from '../utils/alerts.js';
-import { formatCurrency, formatPercentage } from './account.js';
+import { formatCurrency, formatPercent } from '../utils/formatters.js';
 
 // Store options data
 let tickersData = {};
@@ -57,6 +57,61 @@ function formatExpirationLabel(expiration) {
     }
 
     return `${expiration.slice(0, 4)}-${expiration.slice(4, 6)}-${expiration.slice(6, 8)}`;
+}
+
+
+function getRenderExpirationValue(ticker, optionType, fallbackValue = '') {
+    return getSelectedExpirationPreference(ticker, optionType) || fallbackValue;
+}
+
+
+async function handleExpirationChange(selectElement) {
+    const ticker = selectElement.getAttribute('data-ticker');
+    const optionType = selectElement.getAttribute('data-option-type');
+    const selectedExpiration = selectElement.value;
+
+    console.log(`Expiration changed for ${ticker} ${optionType} to ${selectedExpiration}`);
+    setSelectedExpirationPreference(ticker, optionType, selectedExpiration);
+
+    try {
+        const row = selectElement.closest('tr');
+        const cells = row.querySelectorAll('td');
+        cells.forEach(cell => {
+            if (!cell.querySelector('select') && !cell.querySelector('input')) {
+                cell.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary" role="status"></div>';
+            }
+        });
+
+        const otmPercentage = optionType === 'CALL'
+            ? tickersData[ticker]?.callOtmPercentage || 10
+            : tickersData[ticker]?.putOtmPercentage || 10;
+
+        const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
+
+        if (optionData && optionData.data && optionData.data[ticker]) {
+            // Ensure errors object exists before setting
+            if (!tickersData[ticker].errors) {
+                tickersData[ticker].errors = {};
+            }
+            
+            if (optionType === 'CALL') {
+                tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
+                tickersData[ticker].errors.CALL = optionData.data[ticker].error || '';
+            } else {
+                tickersData[ticker].data.data[ticker].puts = optionData.data[ticker].puts || [];
+                tickersData[ticker].errors.PUT = optionData.data[ticker].error || '';
+            }
+
+            updateOptionsTable();
+            addOptionsTableEventListeners();
+        }
+    } catch (error) {
+        console.error(`Error updating options for new expiration: ${error.message}`);
+        showAlert(`Error updating options: ${error.message}`, 'danger');
+
+        updateOptionsTable();
+        addOptionsTableEventListeners();
+    }
 }
 
 // Reference to loadPendingOrders function from orders.js
@@ -463,17 +518,17 @@ function updateOptionsTable() {
                     <table class="table table-striped table-hover table-sm" id="call-options-table">
                         <thead>
                             <tr>
-                                <th>Ticker</th>
-                                <th>Shares</th>
-                                <th>Stock Price</th>
-                                <th>OTM %</th>
-                                <th>Strike</th>
-                                <th>Expiration</th>
-                                <th>Mid Price</th>
-                                <th>Delta</th>
-                                <th>IV%</th>
-                                <th>Qty</th>
-                                <th>Total Premium</th>
+                                <th data-bs-toggle="tooltip" title="Stock symbol and quality metrics">Ticker</th>
+                                <th data-bs-toggle="tooltip" title="Number of shares you own (need 100+ to sell calls)">Shares</th>
+                                <th data-bs-toggle="tooltip" title="Current stock market price">Stock Price</th>
+                                <th data-bs-toggle="tooltip" title="Out-of-the-Money %: Distance from current price. Higher = safer but less premium.">OTM %</th>
+                                <th data-bs-toggle="tooltip" title="Price where your shares would be called away">Strike</th>
+                                <th data-bs-toggle="tooltip" title="When the option expires">Expiration</th>
+                                <th data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price">Mid Price</th>
+                                <th data-bs-toggle="tooltip" title="Probability option finishes in-the-money (0-1 scale). Lower = safer.">Delta</th>
+                                <th data-bs-toggle="tooltip" title="Implied Volatility: Market's price movement expectation. Higher IV = more premium.">IV%</th>
+                                <th data-bs-toggle="tooltip" title="Number of contracts you can sell (1 = 100 shares)">Qty</th>
+                                <th data-bs-toggle="tooltip" title="Total income you'll receive from selling">Total Premium</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -483,40 +538,29 @@ function updateOptionsTable() {
             </div>
             
             <div class="tab-pane fade ${putTabWasActive ? 'show active' : ''}" id="put-options-section" role="tabpanel" aria-labelledby="put-options-tab">
-                <div class="d-flex justify-content-between mb-2">
-                    <div class="d-flex align-items-center">
-                        <div class="input-group input-group-sm" style="width: 250px;">
-                            <input type="text" class="form-control" id="custom-ticker-input" 
-                                placeholder="Add ticker (e.g., AAPL)" maxlength="5">
-                            <button class="btn btn-outline-primary" id="add-custom-ticker">
-                                <i class="bi bi-plus-circle"></i> Add
-                            </button>
-                        </div>
-                    </div>
-                    <div>
+                <div class="d-flex justify-content-end mb-2">
                     <button class="btn btn-sm btn-outline-success me-2" id="sell-all-puts">
                         <i class="bi bi-check2-all"></i> Add All
                     </button>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Puts
                     </button>
-                    </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-striped table-hover table-sm" id="put-options-table">
                         <thead>
                             <tr>
-                                <th>Ticker</th>
-                                <th>Stock Price</th>
-                                <th>OTM %</th>
-                                <th>Strike</th>
-                                <th>Expiration</th>
-                                <th>Mid Price</th>
-                                <th>Delta</th>
-                                <th>IV%</th>
-                                <th>Qty</th>
-                                <th>Total Premium</th>
-                                <th>Cash Required</th>
+                                <th data-bs-toggle="tooltip" title="Stock symbol and quality metrics">Ticker</th>
+                                <th data-bs-toggle="tooltip" title="Current stock market price">Stock Price</th>
+                                <th data-bs-toggle="tooltip" title="Out-of-the-Money %: Distance from current price. Higher = safer but less premium.">OTM %</th>
+                                <th data-bs-toggle="tooltip" title="Price where you'd be obligated to buy shares">Strike</th>
+                                <th data-bs-toggle="tooltip" title="When the option expires">Expiration</th>
+                                <th data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price">Mid Price</th>
+                                <th data-bs-toggle="tooltip" title="Probability option finishes in-the-money (0-1 scale). Lower = safer.">Delta</th>
+                                <th data-bs-toggle="tooltip" title="Implied Volatility: Market's price movement expectation. Higher IV = more premium.">IV%</th>
+                                <th data-bs-toggle="tooltip" title="Number of contracts to sell (1 = obligation to buy 100 shares)">Qty</th>
+                                <th data-bs-toggle="tooltip" title="Total income you'll receive from selling">Total Premium</th>
+                                <th data-bs-toggle="tooltip" title="Cash needed in your account as collateral">Cash Required</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -537,9 +581,6 @@ function updateOptionsTable() {
     // Calculate and display earnings summary
     const earningsSummary = calculateEarningsSummary();
     displayEarningsSummary(earningsSummary);
-    
-    // Set up event listeners for custom ticker form
-    setupCustomTickerEventListeners();
     
     // Set up event listeners for put quantity inputs
     addPutQtyInputEventListeners();
@@ -653,7 +694,7 @@ function addOptionsTableEventListeners() {
                     const inputGroup = button.closest('.input-group');
                     const otmInput = inputGroup.querySelector('.otm-input');
                     const otmPercentage = parseInt(otmInput.value, 10);
-                    const optionType = otmInput.dataset.optionType || 'CALL'; // Get option type from data attribute
+                    const optionType = otmInput.dataset.optionType || 'CALL';
                     
                     // Find the selected expiration from the dropdown in the same row
                     const row = button.closest('tr');
@@ -662,7 +703,6 @@ function addOptionsTableEventListeners() {
                         const expirationSelect = row.querySelector('.expiration-select');
                         if (expirationSelect) {
                             selectedExpiration = expirationSelect.value;
-                            console.log(`Using selected expiration: ${selectedExpiration} for ${ticker}`);
                         }
                     }
                     
@@ -670,10 +710,8 @@ function addOptionsTableEventListeners() {
                     if (tickersData[ticker]) {
                         if (optionType === 'CALL') {
                             tickersData[ticker].callOtmPercentage = otmPercentage;
-                            console.log(`Updated ${ticker} call OTM% to ${otmPercentage}`);
                         } else {
                             tickersData[ticker].putOtmPercentage = otmPercentage;
-                            console.log(`Updated ${ticker} put OTM% to ${otmPercentage}`);
                         }
                         
                         // Save OTM settings to localStorage
@@ -698,15 +736,29 @@ function addOptionsTableEventListeners() {
                             // Update the UI
                             updateOptionsTable();
                             addOptionsTableEventListeners();
+                            
+                            // Reset button style
+                            button.classList.remove('btn-primary');
+                            button.classList.add('btn-outline-secondary');
+                            button.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
+                            
+                            showToast('success', 'OTM Applied', `${ticker} ${optionType} options refreshed with ${otmPercentage}% OTM`);
                         }
                     } else {
                         // If no expiration is selected, use the normal refresh function
                         await refreshOptionsForTickerByType(ticker, optionType, true);
+                        
+                        // Reset button style
+                        button.classList.remove('btn-primary');
+                        button.classList.add('btn-outline-secondary');
+                        button.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
+                        
+                        showToast('success', 'OTM Applied', `${ticker} ${optionType} options refreshed`);
                     }
                 } catch (error) {
                     console.error(`Error refreshing ${ticker} with new OTM%:`, error);
+                    showToast('error', 'Refresh Failed', `Failed to refresh ${ticker} options. ${error.message || 'Please try again.'}`);
                 } finally {
-                    button.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
                     button.disabled = false;
                 }
             }
@@ -983,9 +1035,17 @@ function addOptionsTableEventListeners() {
             } finally {
                 refreshAllButton.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All';
                 refreshAllButton.disabled = false;
-            }
-        });
+        }
+    });
     }
+
+    // Expiration date change listener - always register regardless of refresh button
+    container.addEventListener('change', async (event) => {
+        const expirationSelect = event.target.closest('.expiration-select');
+        if (expirationSelect && container.contains(expirationSelect)) {
+            await handleExpirationChange(expirationSelect);
+        }
+    });
 
     // Refresh all calls button
     const refreshAllCallsButton = document.getElementById('refresh-all-calls');
@@ -1033,59 +1093,6 @@ function addOptionsTableEventListeners() {
     // Add input event listeners for OTM% inputs - these need to be added each time
     addOtmInputEventListeners();
     
-    // Add event listeners for expiration dropdowns
-    const expirationSelects = document.querySelectorAll('.expiration-select');
-    expirationSelects.forEach(select => {
-        select.addEventListener('change', async function() {
-            const ticker = this.getAttribute('data-ticker');
-            const optionType = this.getAttribute('data-option-type');
-            const selectedExpiration = this.value;
-            
-            console.log(`Expiration changed for ${ticker} ${optionType} to ${selectedExpiration}`);
-            setSelectedExpirationPreference(ticker, optionType, selectedExpiration);
-            
-            try {
-                // Show loading indicator on the row
-                const row = this.closest('tr');
-                const cells = row.querySelectorAll('td');
-                cells.forEach(cell => {
-                    if (!cell.querySelector('select') && !cell.querySelector('input')) {
-                        cell.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary" role="status"></div>';
-                    }
-                });
-                
-                // Get OTM percentage
-                const otmPercentage = optionType === 'CALL' 
-                    ? tickersData[ticker]?.callOtmPercentage || 10 
-                    : tickersData[ticker]?.putOtmPercentage || 10;
-                
-                // Fetch new option data with the selected expiration
-                const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
-                
-                if (optionData && optionData.data && optionData.data[ticker]) {
-                    // Update the specific option type data
-                    if (optionType === 'CALL') {
-                        tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
-                    } else {
-                        tickersData[ticker].data.data[ticker].puts = optionData.data[ticker].puts || [];
-                    }
-                    
-                    // Update the UI
-                    updateOptionsTable();
-                    
-                    // Add event listeners again
-                    addOptionsTableEventListeners();
-                }
-            } catch (error) {
-                console.error(`Error updating options for new expiration: ${error.message}`);
-                showAlert(`Error updating options: ${error.message}`, 'danger');
-                
-                // Refresh the table to restore original state
-                updateOptionsTable();
-                addOptionsTableEventListeners();
-            }
-        });
-    });
 }
 
 /**
@@ -1094,28 +1101,45 @@ function addOptionsTableEventListeners() {
  */
 function addOtmInputEventListeners() {
     document.querySelectorAll('.otm-input').forEach(input => {
-        input.addEventListener('change', function() {
+        // Remove any existing listeners to prevent duplicates
+        const newInput = input.cloneNode(true);
+        input.parentNode.replaceChild(newInput, input);
+        
+        newInput.addEventListener('change', function() {
             const ticker = this.dataset.ticker;
             const otmPercentage = parseInt(this.value, 10);
-            const optionType = this.dataset.optionType || 'CALL'; // Get option type from data attribute
+            const optionType = this.dataset.optionType || 'CALL';
+            
+            // Validate input
+            if (isNaN(otmPercentage) || otmPercentage < 1 || otmPercentage > 50) {
+                showToast('warning', 'Invalid Value', 'OTM% must be between 1 and 50');
+                return;
+            }
             
             // Update ticker's OTM percentage based on option type
             if (tickersData[ticker]) {
                 if (optionType === 'CALL') {
                     tickersData[ticker].callOtmPercentage = otmPercentage;
-                    console.log(`Updated ${ticker} call OTM% to ${otmPercentage}`);
                 } else {
                     tickersData[ticker].putOtmPercentage = otmPercentage;
-                    console.log(`Updated ${ticker} put OTM% to ${otmPercentage}`);
                 }
                 
                 // Save OTM settings to localStorage
                 saveOtmSettings();
+                
+                // Show visual feedback that user needs to click refresh
+                const refreshBtn = this.closest('.input-group')?.querySelector('.refresh-otm');
+                if (refreshBtn) {
+                    refreshBtn.classList.add('btn-primary');
+                    refreshBtn.classList.remove('btn-outline-secondary');
+                    refreshBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> <strong>Apply</strong>';
+                }
+                
+                showToast('info', 'OTM Updated', `Click the Apply button to refresh ${ticker} options with ${otmPercentage}% OTM`);
             }
         });
     });
 }
-
 /**
  * Save OTM settings for all tickers to localStorage
  */
@@ -1208,8 +1232,8 @@ function updateEarningsSummary() {
     if (weeklyCallsPremiumCell) weeklyCallsPremiumCell.textContent = `Calls: ${formatCurrency(earningsSummary.totalWeeklyCallPremium)}`;
     if (weeklyPutsPremiumCell) weeklyPutsPremiumCell.textContent = `Puts: ${formatCurrency(earningsSummary.totalWeeklyPutPremium)}`;
     if (weeklyTotalPremiumCell) weeklyTotalPremiumCell.textContent = `Total: ${formatCurrency(earningsSummary.totalWeeklyPremium)}`;
-    if (weeklyReturnCell) weeklyReturnCell.textContent = formatPercentage(earningsSummary.weeklyReturn);
-    if (annualReturnCell) annualReturnCell.textContent = `Annual: ${formatPercentage(earningsSummary.projectedAnnualReturn)}`;
+    if (weeklyReturnCell) weeklyReturnCell.textContent = formatPercent(earningsSummary.weeklyReturn);
+    if (annualReturnCell) annualReturnCell.textContent = `Annual: ${formatPercent(earningsSummary.projectedAnnualReturn)}`;
     
     if (stockValueCell) stockValueCell.textContent = `Stock: ${formatCurrency(earningsSummary.portfolioValue)}`;
     if (cashBalanceCell) cashBalanceCell.textContent = `Cash: ${formatCurrency(earningsSummary.cashBalance)}`;
@@ -1315,6 +1339,11 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
             
             // Update call options
             tickersData[ticker].data.data[ticker].calls = callOptionData.data[ticker].calls || [];
+            
+            // Ensure errors object exists before setting
+            if (!tickersData[ticker].errors) {
+                tickersData[ticker].errors = {};
+            }
             tickersData[ticker].errors.CALL = callOptionData.data[ticker].error || '';
             
             console.log(`Updated CALL data for ${ticker}`);
@@ -1329,6 +1358,11 @@ async function refreshOptionsForTicker(ticker, updateUI = false) {
         if (putOptionData && putOptionData.data && putOptionData.data[ticker]) {
             // Update put options
             tickersData[ticker].data.data[ticker].puts = putOptionData.data[ticker].puts || [];
+            
+            // Ensure errors object exists before setting
+            if (!tickersData[ticker].errors) {
+                tickersData[ticker].errors = {};
+            }
             tickersData[ticker].errors.PUT = putOptionData.data[ticker].error || '';
             console.log(`Updated PUT data for ${ticker}`);
         } else {
@@ -1533,7 +1567,7 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
         let allExpirations = [];
         try {
             console.log(`Fetching expiration dates for ${ticker}`);
-            const expirationData = await fetchOptionExpirations(ticker);
+            const expirationData = await fetchOptionExpirations(ticker, optionType);
             
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
                 // Store all expirations for this ticker
@@ -1589,6 +1623,11 @@ async function refreshOptionsForTickerByType(ticker, optionType, updateUI = fals
             }
             
             // Update the specific option type data
+            // Ensure errors object exists before setting
+            if (!tickersData[ticker].errors) {
+                tickersData[ticker].errors = {};
+            }
+            
             if (optionType === 'CALL') {
                 tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
                 tickersData[ticker].errors.CALL = optionData.data[ticker].error || '';
@@ -2211,13 +2250,14 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         // Instead of a warning message row with colSpan, create a row with empty data cells
         if (optionType === 'CALL') {
             const maxContracts = Math.floor(sharesOwned / 100);
+            const selectedExpirationValue = getRenderExpirationValue(ticker, 'CALL');
             
             // Create expiration dropdown options even for empty row
             let expirationOptionsHtml = '';
             const expirations = tickersData[ticker].expirations || [];
             if (expirations.length > 0) {
                 expirations.forEach((exp, index) => {
-                    const selected = index === 0 ? 'selected' : '';
+                    const selected = exp.value === selectedExpirationValue || (!selectedExpirationValue && index === 0) ? 'selected' : '';
                     expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
                 });
             } else {
@@ -2245,6 +2285,7 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="CALL">
                         ${expirationOptionsHtml}
                     </select>
+                    <div class="small text-muted mt-1">No ranked calls for this expiration yet</div>
                 </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
@@ -2254,7 +2295,9 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 <td class="align-middle">
                     <button class="btn btn-sm btn-outline-secondary refresh-option" 
                         data-ticker="${ticker}" 
-                        data-type="CALL">
+                        data-type="CALL"
+                        data-bs-toggle="tooltip" 
+                        title="Refresh options data">
                         <i class="bi bi-arrow-repeat"></i> Refresh
                     </button>
                 </td>
@@ -2262,13 +2305,14 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         } else {
             // PUT option empty row
             const putQuantity = tickerData.putQuantity || 1;
+            const selectedExpirationValue = getRenderExpirationValue(ticker, 'PUT');
             
             // Create expiration dropdown options even for empty row
             let expirationOptionsHtml = '';
             const expirations = tickersData[ticker].expirations || [];
             if (expirations.length > 0) {
                 expirations.forEach((exp, index) => {
-                    const selected = index === 0 ? 'selected' : '';
+                    const selected = exp.value === selectedExpirationValue || (!selectedExpirationValue && index === 0) ? 'selected' : '';
                     expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
                 });
             } else {
@@ -2283,23 +2327,25 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     </button>
                 </td>
                 <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
-                <td class="align-middle">
-                    <div class="input-group input-group-sm">
-                        <input type="number" class="form-control form-control-sm otm-input" 
-                            data-ticker="${ticker}" 
-                            data-option-type="PUT"
-                            min="1" max="50" step="1" 
-                            value="${tickerData.putOtmPercentage || 10}">
-                        <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}">
-                            <i class="bi bi-arrow-repeat"></i>
-                        </button>
-                    </div>
-                </td>
+            <td class="align-middle">
+                <div class="input-group input-group-sm">
+                    <input type="number" class="form-control form-control-sm otm-input" 
+                        data-ticker="${ticker}" 
+                        data-option-type="PUT"
+                        min="1" max="50" step="1" 
+                        value="${tickerData.putOtmPercentage || 10}">
+                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}"
+                        data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh with new OTM %">
+                        <i class="bi bi-arrow-repeat"></i>
+                    </button>
+                </div>
+            </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">
                     <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="PUT">
                         ${expirationOptionsHtml}
                     </select>
+                    <div class="small text-muted mt-1">No ranked puts for this expiration yet</div>
                 </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
@@ -2315,7 +2361,9 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                 <td class="align-middle d-flex">
                     <button class="btn btn-sm btn-outline-secondary refresh-option me-2" 
                         data-ticker="${ticker}" 
-                        data-type="PUT">
+                        data-type="PUT"
+                        data-bs-toggle="tooltip" 
+                        title="Refresh options data">
                         <i class="bi bi-arrow-repeat"></i> Refresh
                     </button>
                     <button class="btn btn-sm btn-outline-danger delete-ticker" 
@@ -2344,9 +2392,37 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     const score = option.score || 0;
     const annualizedReturn = option.annualized_return || 0;
     const rationaleText = (option.rationale || []).join(' | ').replace(/"/g, '&quot;');
-    const warningText = (option.warnings || []).join(' | ').replace(/"/g, '&quot;');
-    const scoreClass = score >= 80 ? 'text-success' : (score >= 65 ? 'text-primary' : 'text-warning');
-    const warningHtml = warningText ? `<div class="small text-warning">${warningText}</div>` : '';
+    
+    // Improve warning formatting with icons and context
+    const warnings = option.warnings || [];
+    const warningHtml = warnings.length > 0 ? 
+        `<div class="small mt-1">
+            ${warnings.map(w => {
+                // Add context to common warnings
+                let context = '';
+                let icon = 'bi-exclamation-triangle';
+                if (w.toLowerCase().includes('spread')) {
+                    context = ' - May be hard to exit profitably';
+                    icon = 'bi-arrows-angle-expand';
+                } else if (w.toLowerCase().includes('volume')) {
+                    context = ' - Low liquidity risk';
+                    icon = 'bi-graph-down';
+                } else if (w.toLowerCase().includes('iv')) {
+                    context = ' - Volatility may be declining';
+                    icon = 'bi-activity';
+                } else if (w.toLowerCase().includes('dte') || w.toLowerCase().includes('expiration')) {
+                    context = ' - Time decay accelerates';
+                    icon = 'bi-clock';
+                } else if (w.toLowerCase().includes('delta')) {
+                    context = ' - Higher assignment risk';
+                    icon = 'bi-shield-exclamation';
+                }
+                return `<div class="text-warning"><i class="bi ${icon} me-1"></i>${w}${context}</div>`;
+            }).join('')}
+        </div>` : '';
+    
+    // Visual score badge with color coding
+    const scoreBadgeClass = score >= 80 ? 'bg-success' : (score >= 65 ? 'bg-primary' : 'bg-warning text-dark');
     
     const midPrice = calculatePremium(option.bid, option.ask, option.last);
 
@@ -2354,12 +2430,22 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     row.dataset.premium = midPrice * 100;
     row.dataset.strike = option.strike || 0;
     
-    // Format IV% value
+    // Format IV% value with clear labeling
     const ivPercent = option.implied_volatility ? option.implied_volatility.toFixed(2) : 'N/A';
+    
+    // IV Rank badge with better labeling and tooltip info
+    const ivRankBadge = option.iv_rank !== undefined ? 
+        `<span class="badge ${option.iv_rank < 30 ? 'bg-danger' : option.iv_rank > 70 ? 'bg-success' : 'bg-secondary'}" 
+               data-bs-toggle="tooltip" 
+               data-bs-placement="top" 
+               title="IV Rank shows if volatility is ${option.iv_rank < 30 ? 'LOW (cheaper options)' : option.iv_rank > 70 ? 'HIGH (expensive options - good for selling)' : 'moderate'} relative to the past year">
+            IV Rank: ${option.iv_rank.toFixed(0)}%
+        </span>` : '';
     
     // For CALL options
     if (optionType === 'CALL') {
         const maxContracts = Math.floor(sharesOwned / 100);
+        const selectedExpirationValue = getRenderExpirationValue(ticker, 'CALL', option.expiration);
         
         // Calculate premium and return values
         const premiumPerContract = midPrice * 100; // Use midPrice instead of option.ask
@@ -2373,18 +2459,28 @@ function addTickerRowToTable(tableId, optionType, ticker) {
         const expirations = tickersData[ticker].expirations || [];
         if (expirations.length > 0) {
             expirations.forEach(exp => {
-                const selected = exp.value === option.expiration ? 'selected' : '';
+                const selected = exp.value === selectedExpirationValue ? 'selected' : '';
                 expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
             });
         } else {
             // If no expiration data is available, just show the current one
-            expirationOptionsHtml = `<option value="${option.expiration}" selected>${formatExpirationLabel(option.expiration)}</option>`;
+            expirationOptionsHtml = `<option value="${selectedExpirationValue}" selected>${formatExpirationLabel(selectedExpirationValue)}</option>`;
         }
         
         row.innerHTML = `
             <td class="align-middle">
                 <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
-                <div class="small ${scoreClass}">Score ${score.toFixed(1)} • ${annualizedReturn.toFixed(1)}% ann.</div>
+                <div class="d-flex align-items-center gap-1 mt-1">
+                    <span class="badge ${scoreBadgeClass}" style="font-size: 0.7rem;" 
+                          data-bs-toggle="tooltip" 
+                          title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
+                        Score: ${score.toFixed(1)}
+                    </span>
+                    <span class="small text-muted">|</span>
+                    <span class="small" data-bs-toggle="tooltip" title="Annualized return if you sell this option every week for a year">
+                        ${annualizedReturn.toFixed(1)}% annualized
+                    </span>
+                </div>
                 ${warningHtml}
             </td>
             <td class="align-middle">${sharesOwned}</td>
@@ -2395,26 +2491,32 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                         data-ticker="${ticker}" 
                         data-option-type="CALL"
                         min="1" max="50" step="1" 
-                        value="${tickerData.callOtmPercentage || 10}">
-                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}">
+                        value="${tickerData.callOtmPercentage || 10}"
+                        data-bs-toggle="tooltip" 
+                        title="Out-of-the-Money %: Distance from current stock price. Higher = safer but less premium.">
+                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}"
+                        data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh with new OTM %">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
                 </div>
             </td>
-            <td class="align-middle">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-bs-toggle="tooltip" title="Price where your shares would be called away">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="CALL">
                     ${expirationOptionsHtml}
                 </select>
-                <div class="small text-muted mt-1">${option.dte || '-'} DTE</div>
+                <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Days To Expiration: Time until option expires">${option.dte || '-'} DTE</div>
             </td>
-            <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
-            <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
-            <td class="align-middle">${ivPercent}%</td>
-            <td class="align-middle">${maxContracts}</td>
+            <td class="align-middle" data-field="mid-price" data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price when selling">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-bs-toggle="tooltip" title="Delta: Probability this option finishes in-the-money (0-1 scale). Lower = safer.">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
-                <div>$ ${totalPremium.toFixed(2)}</div>
-                <div class="small text-muted">Max if-called: ${formatPercentage(option.if_called_return || 0)}</div>
+                <div data-bs-toggle="tooltip" title="Implied Volatility: Market's expectation of price movement. Higher IV = more premium.">${ivPercent}%</div>
+                <div>${ivRankBadge}</div>
+            </td>
+            <td class="align-middle" data-bs-toggle="tooltip" title="Number of contracts you can sell (1 contract = 100 shares)">${maxContracts}</td>
+            <td class="align-middle">
+                <div class="fw-bold" data-bs-toggle="tooltip" title="Total premium you'll receive immediately when selling">$ ${totalPremium.toFixed(2)}</div>
+                <div class="small text-muted" data-bs-toggle="tooltip" title="Return if your shares get called away at the strike price">Max if-called: ${formatPercent(option.if_called_return || 0)}</div>
             </td>
             <td class="align-middle d-flex">
                 <button class="btn btn-sm btn-outline-success sell-option me-2" 
@@ -2431,7 +2533,9 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     data-vega="${option.vega || 0}"
                     data-implied-volatility="${option.implied_volatility || 0}"
                     data-volume="${option.volume || 0}"
-                    data-open-interest="${option.open_interest || 0}">
+                    data-open-interest="${option.open_interest || 0}"
+                    data-bs-toggle="tooltip" 
+                    title="Add this covered call order to pending orders">
                     <i class="bi bi-check-circle"></i> Add
                 </button>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
@@ -2448,24 +2552,35 @@ function addTickerRowToTable(tableId, optionType, ticker) {
     // For PUT options
     else {
         const putQuantity = tickerData.putQuantity || 1;
+        const selectedExpirationValue = getRenderExpirationValue(ticker, 'PUT', option.expiration);
         
         // Create expiration dropdown options
         let expirationOptionsHtml = '';
         const expirations = tickersData[ticker].expirations || [];
         if (expirations.length > 0) {
             expirations.forEach(exp => {
-                const selected = exp.value === option.expiration ? 'selected' : '';
+                const selected = exp.value === selectedExpirationValue ? 'selected' : '';
                 expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
             });
         } else {
             // If no expiration data is available, just show the current one
-            expirationOptionsHtml = `<option value="${option.expiration}" selected>${formatExpirationLabel(option.expiration)}</option>`;
+            expirationOptionsHtml = `<option value="${selectedExpirationValue}" selected>${formatExpirationLabel(selectedExpirationValue)}</option>`;
         }
         
         row.innerHTML = `
             <td class="align-middle">
                 <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
-                <div class="small ${scoreClass}">Score ${score.toFixed(1)} • ${annualizedReturn.toFixed(1)}% ann.</div>
+                <div class="d-flex align-items-center gap-1 mt-1">
+                    <span class="badge ${scoreBadgeClass}" style="font-size: 0.7rem;" 
+                          data-bs-toggle="tooltip" 
+                          title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
+                        Score: ${score.toFixed(1)}
+                    </span>
+                    <span class="small text-muted">|</span>
+                    <span class="small" data-bs-toggle="tooltip" title="Annualized return if you sell this option every week for a year">
+                        ${annualizedReturn.toFixed(1)}% annualized
+                    </span>
+                </div>
                 ${warningHtml}
             </td>
             <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
@@ -2475,35 +2590,41 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                         data-ticker="${ticker}" 
                         data-option-type="PUT"
                         min="1" max="50" step="1" 
-                        value="${tickerData.putOtmPercentage || 10}">
-                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}">
+                        value="${tickerData.putOtmPercentage || 10}"
+                        data-bs-toggle="tooltip" 
+                        title="Out-of-the-Money %: Distance from current stock price. Higher = safer but less premium.">
+                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}"
+                        data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh with new OTM %">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
                 </div>
             </td>
-            <td class="align-middle">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-bs-toggle="tooltip" title="Price where you'd be obligated to buy shares">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="PUT">
                     ${expirationOptionsHtml}
                 </select>
-                <div class="small text-muted mt-1">${option.dte || '-'} DTE</div>
+                <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Days To Expiration: Time until option expires">${option.dte || '-'} DTE</div>
             </td>
-            <td class="align-middle" data-field="mid-price">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
-            <td class="align-middle">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
-            <td class="align-middle">${ivPercent}%</td>
+            <td class="align-middle" data-field="mid-price" data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price when selling">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-bs-toggle="tooltip" title="Delta: Probability this option finishes in-the-money (0-1 scale). Lower = safer.">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
+                <div data-bs-toggle="tooltip" title="Implied Volatility: Market's expectation of price movement. Higher IV = more premium.">${ivPercent}%</div>
+                <div>${ivRankBadge}</div>
+            </td>
+            <td class="align-middle" data-bs-toggle="tooltip" title="Number of contracts to sell (1 contract = obligation to buy 100 shares)">
                 <input type="number" class="form-control form-control-sm put-qty-input" 
                     data-ticker="${ticker}" 
                     value="${putQuantity}" 
                     min="1" max="100" step="1" style="width: 70px;">
             </td>
             <td class="align-middle total-premium">
-                <div>$ ${(midPrice * 100 * putQuantity).toFixed(2)}</div>
-                <div class="small text-muted">BE: ${formatCurrency(option.breakeven || 0)}</div>
+                <div class="fw-bold" data-bs-toggle="tooltip" title="Total premium you'll receive immediately when selling">$ ${(midPrice * 100 * putQuantity).toFixed(2)}</div>
+                <div class="small text-muted" data-bs-toggle="tooltip" title="Breakeven: Stock price where you neither gain nor lose">BE: ${formatCurrency(option.breakeven || 0)}</div>
             </td>
             <td class="align-middle cash-required">
-                <div>$ ${((option.strike || 0) * 100 * putQuantity).toFixed(2)}</div>
-                <div class="small text-muted">Buffer: ${formatPercentage(option.breakeven_buffer_pct || 0)}</div>
+                <div data-bs-toggle="tooltip" title="Cash needed in your account as collateral">$ ${((option.strike || 0) * 100 * putQuantity).toFixed(2)}</div>
+                <div class="small text-muted" data-bs-toggle="tooltip" title="How far stock can fall before you lose money">Buffer: ${formatPercent(option.breakeven_buffer_pct || 0)}</div>
             </td>
             <td class="align-middle d-flex">
                 <button class="btn btn-sm btn-outline-success sell-option me-2" 
@@ -2520,7 +2641,9 @@ function addTickerRowToTable(tableId, optionType, ticker) {
                     data-vega="${option.vega || 0}"
                     data-implied-volatility="${option.implied_volatility || 0}"
                     data-volume="${option.volume || 0}"
-                    data-open-interest="${option.open_interest || 0}">
+                    data-open-interest="${option.open_interest || 0}"
+                    data-bs-toggle="tooltip" 
+                    title="Add this cash-secured put order to pending orders">
                     <i class="bi bi-check-circle"></i> Add
                 </button>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
@@ -2602,6 +2725,24 @@ function buildOptionsTable(tableId, optionType) {
         `;
         tbody.appendChild(row);
     }
+    
+    // Initialize tooltips for dynamically created elements
+    initializeOptionsTableTooltips();
+}
+
+/**
+ * Initialize Bootstrap tooltips for dynamically created elements in options table
+ */
+function initializeOptionsTableTooltips() {
+    // Initialize tooltips for all elements with data-bs-toggle="tooltip" in the options tables
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('#call-options-table [data-bs-toggle="tooltip"], #put-options-table [data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+        // Check if tooltip is already initialized to avoid duplicates
+        const existingTooltip = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
+        if (!existingTooltip) {
+            new bootstrap.Tooltip(tooltipTriggerEl);
+        }
+    });
 }
 
 /**
@@ -2663,17 +2804,17 @@ async function loadTickers() {
                     <table class="table table-striped table-hover table-sm" id="call-options-table">
                         <thead>
                             <tr>
-                                <th>Ticker</th>
-                                <th>Shares</th>
-                                <th>Stock Price</th>
-                                <th>OTM %</th>
-                                <th>Strike</th>
-                                <th>Expiration</th>
-                                <th>Mid Price</th>
-                                <th>Delta</th>
-                                <th>IV%</th>
-                                <th>Qty</th>
-                                <th>Total Premium</th>
+                                <th data-bs-toggle="tooltip" title="Stock symbol and quality metrics">Ticker</th>
+                                <th data-bs-toggle="tooltip" title="Number of shares you own (need 100+ to sell calls)">Shares</th>
+                                <th data-bs-toggle="tooltip" title="Current stock market price">Stock Price</th>
+                                <th data-bs-toggle="tooltip" title="Out-of-the-Money %: Distance from current price. Higher = safer but less premium.">OTM %</th>
+                                <th data-bs-toggle="tooltip" title="Price where your shares would be called away">Strike</th>
+                                <th data-bs-toggle="tooltip" title="When the option expires">Expiration</th>
+                                <th data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price">Mid Price</th>
+                                <th data-bs-toggle="tooltip" title="Probability option finishes in-the-money (0-1 scale). Lower = safer.">Delta</th>
+                                <th data-bs-toggle="tooltip" title="Implied Volatility: Market's price movement expectation. Higher IV = more premium.">IV%</th>
+                                <th data-bs-toggle="tooltip" title="Number of contracts you can sell (1 = 100 shares)">Qty</th>
+                                <th data-bs-toggle="tooltip" title="Total income you'll receive from selling">Total Premium</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -2701,29 +2842,29 @@ async function loadTickers() {
                         </div>
                     </div>
                     <div>
-                    <button class="btn btn-sm btn-outline-success me-2" id="sell-all-puts">
-                        <i class="bi bi-check2-all"></i> Add All
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
-                        <i class="bi bi-arrow-repeat"></i> Refresh All Puts
-                    </button>
+                        <button class="btn btn-sm btn-outline-success me-2" id="sell-all-puts">
+                            <i class="bi bi-check2-all"></i> Add All
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
+                            <i class="bi bi-arrow-repeat"></i> Refresh All Puts
+                        </button>
                     </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-striped table-hover table-sm" id="put-options-table">
                         <thead>
                             <tr>
-                                <th>Ticker</th>
-                                <th>Stock Price</th>
-                                <th>OTM %</th>
-                                <th>Strike</th>
-                                <th>Expiration</th>
-                                <th>Mid Price</th>
-                                <th>Delta</th>
-                                <th>IV%</th>
-                                <th>Qty</th>
-                                <th>Total Premium</th>
-                                <th>Cash Required</th>
+                                <th data-bs-toggle="tooltip" title="Stock symbol and quality metrics">Ticker</th>
+                                <th data-bs-toggle="tooltip" title="Current stock market price">Stock Price</th>
+                                <th data-bs-toggle="tooltip" title="Out-of-the-Money %: Distance from current price. Higher = safer but less premium.">OTM %</th>
+                                <th data-bs-toggle="tooltip" title="Price where you'd be obligated to buy shares">Strike</th>
+                                <th data-bs-toggle="tooltip" title="When the option expires">Expiration</th>
+                                <th data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price">Mid Price</th>
+                                <th data-bs-toggle="tooltip" title="Probability option finishes in-the-money (0-1 scale). Lower = safer.">Delta</th>
+                                <th data-bs-toggle="tooltip" title="Implied Volatility: Market's price movement expectation. Higher IV = more premium.">IV%</th>
+                                <th data-bs-toggle="tooltip" title="Number of contracts to sell (1 = obligation to buy 100 shares)">Qty</th>
+                                <th data-bs-toggle="tooltip" title="Total income you'll receive from selling">Total Premium</th>
+                                <th data-bs-toggle="tooltip" title="Cash needed in your account as collateral">Cash Required</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -2950,8 +3091,8 @@ function displayEarningsSummary(summary) {
                             <td width="14%">Puts: ${formatCurrency(summary.totalWeeklyPutPremium)}</td>
                             <td width="18%" class="fw-bold">Total: ${formatCurrency(summary.totalWeeklyPremium)}</td>
                             <td width="14%" class="fw-bold">Weekly Return:</td>
-                            <td width="12%">${formatPercentage(summary.weeklyReturn)}</td>
-                            <td width="14%" class="fw-bold text-success">Annual: ${formatPercentage(summary.projectedAnnualReturn)}</td>
+                            <td width="12%">${formatPercent(summary.weeklyReturn)}</td>
+                            <td width="14%" class="fw-bold text-success">Annual: ${formatPercent(summary.projectedAnnualReturn)}</td>
                         </tr>
                         <tr>
                             <td class="fw-bold">Projected Income:</td>
