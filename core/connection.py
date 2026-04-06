@@ -160,6 +160,8 @@ def _first_non_zero(*values):
 def probe_opend_status(host='127.0.0.1', port=11111):
     """
     Probe the local OpenD endpoint and return a UI-friendly status payload.
+    Uses only a lightweight TCP socket check - no OpenQuoteContext creation
+    to avoid connection cycling issues.
     """
     status = {
         'status': 'unknown',
@@ -187,50 +189,9 @@ def probe_opend_status(host='127.0.0.1', port=11111):
         status['message'] = 'OpenD is not running on the configured host and port.'
         return status
 
-    quote_ctx = None
-    try:
-        quote_ctx = OpenQuoteContext(host=host, port=port)
-        ret, data = quote_ctx.get_global_state()
-
-        details = {}
-        if hasattr(data, 'empty') and not data.empty and hasattr(data, 'to_dict'):
-            try:
-                records = data.to_dict('records')
-                if records:
-                    details = records[0]
-            except Exception:
-                details = {}
-
-        status['details'] = details
-
-        if ret == RET_OK:
-            login_flags = [
-                details[key] for key in details
-                if 'login' in key.lower() or 'logined' in key.lower() or 'logged' in key.lower()
-            ]
-            if login_flags and not all(_is_truthy_flag(flag) for flag in login_flags):
-                status['status'] = 'login_required'
-                status['message'] = 'OpenD is running, but you still need to log in or complete verification.'
-            else:
-                status['status'] = 'connected'
-                status['connected'] = True
-                status['message'] = 'OpenD is running and ready.'
-        else:
-            error_text = str(data)
-            if 'login' in error_text.lower() or 'verify' in error_text.lower():
-                status['status'] = 'login_required'
-                status['message'] = 'OpenD is running, but a manual login or verification step is still required.'
-            else:
-                status['status'] = 'available'
-                status['message'] = 'OpenD is reachable but not fully ready yet.'
-            status['details'] = {'error': error_text}
-    except Exception as exc:
-        status['status'] = 'available'
-        status['message'] = f'OpenD is reachable but not ready yet: {exc}'
-        status['details'] = {'error': str(exc)}
-    finally:
-        _safe_close_context(quote_ctx)
-
+    status['status'] = 'connected'
+    status['connected'] = True
+    status['message'] = 'OpenD is reachable (TCP probe passed).'
     return status
 
 class MoomooConnection:

@@ -153,6 +153,57 @@ score = base_score * (1 + iv_env_adjustment / 100)
 - Post-earnings IV crush can make rolls difficult
 - Binary event risk not captured by delta alone
 
+### Phase 3: VIX Market Regime Adaptation
+
+**VIX Regime Detection:**
+System fetches VIX from OpenBB (primary) or yfinance (fallback) with 5-minute cache.
+
+**Regime Classifications:**
+| VIX Level | Regime | Delta Adjustment | Exposure Limit | Rationale |
+|-----------|--------|-----------------|----------------|-----------|
+| < 15 | Complacency | +0.10 | 70% | Premiums compressed, move closer to ATM for better yields |
+| 15-30 | Normal | 0.00 | 100% | Standard delta targets |
+| > 30 | Fear | -0.05 | 50% | Premiums rich, stay further OTM for safety margin |
+
+**Application in Screening Profile:**
+```
+adjusted_delta = base_target_delta + delta_adjustment
+adjusted_premium_threshold = base_threshold * (1.2 if fear else 0.8 if complacency else 1.0)
+```
+
+**Example Delta Targets with VIX Adjustment:**
+| Profile | Base PUT Delta | Complacency | Normal | Fear |
+|---------|---------------|------------|--------|------|
+| Weekly | 0.16 | 0.26 | 0.16 | 0.11 |
+| Monthly | 0.22 | 0.32 | 0.22 | 0.17 |
+| Quarterly | 0.26 | 0.36 | 0.26 | 0.21 |
+
+**Frontend Display:**
+The dashboard shows a VIX regime panel with:
+- Current VIX level and regime classification
+- Delta adjustment applied to screening
+- Exposure multiplier for position sizing
+- Color-coded badges: green (complacency), blue (normal), red (fear)
+
+**API Endpoint:**
+```
+GET /api/options/vix-regime
+```
+
+Returns:
+```json
+{
+  "success": true,
+  "vix_regime": {
+    "vix": 18.5,
+    "regime": "normal",
+    "delta_adjustment": 0.0,
+    "exposure_multiplier": 1.0,
+    "description": "Normal volatility (VIX 15-30) - standard delta targets"
+  }
+}
+```
+
 ### Option-Specific Components
 
 #### CALL-Specific (Covered Calls)
@@ -436,7 +487,7 @@ This transparency helps users understand why a play ranked where it did.
 Potential scoring improvements:
 1. **Historical Win Rate** — Track actual outcomes to validate PoP assumptions
 2. **Sector-Specific Adjustments** — Different IV norms by sector
-3. **VIX Correlation** — Factor in overall market volatility
+3. **VIX Correlation** — ✅ Implemented in Phase 3 (see Phase 3 section)
 4. **Assignment History** — Penalize tickers with recent bad assignments
 5. **Correlation Scoring** — Prefer uncorrelated underlyings for diversification
 
@@ -448,5 +499,5 @@ Potential scoring improvements:
 
 ---
 
-**Last Updated:** 2026-03-29
-**Version:** Phase 1 & 2 Implementation
+**Last Updated:** 2026-04-06
+**Version:** Phase 1, 2 & 3 Implementation

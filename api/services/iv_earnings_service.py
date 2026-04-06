@@ -158,7 +158,7 @@ class IVEarningsService:
     
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
-        Fetch earnings date using yfinance
+        Fetch earnings date using OpenBB with yfinance fallback.
         
         Args:
             ticker: Stock ticker symbol
@@ -167,16 +167,33 @@ class IVEarningsService:
             dict: {'success': bool, 'earnings_date': str or None, 'error': str or None}
         """
         try:
+            from api.services.openbb_service import get_openbb_service
+            openbb = get_openbb_service()
+            if openbb and openbb._ensure_initialized():
+                earnings_data = openbb.get_earnings_calendar(ticker)
+                if earnings_data and earnings_data.get('earnings'):
+                    earnings = earnings_data['earnings']
+                    if earnings:
+                        first = earnings[0]
+                        earnings_date = first.get('date', first.get('report_date', ''))
+                        if earnings_date:
+                            return {
+                                'success': True,
+                                'earnings_date': earnings_date,
+                                'error': None
+                            }
+        except Exception as e:
+            logger.debug(f"OpenBB earnings fetch failed for {ticker}, falling back to yfinance: {e}")
+
+        try:
             import yfinance as yf
             
-            # Add delay to be polite to yfinance
             time.sleep(1)
             
             stock = yf.Ticker(ticker)
             calendar = stock.calendar
             
             if calendar is not None and not calendar.empty:
-                # Get the next earnings date
                 earnings_date = calendar.index[0] if hasattr(calendar.index[0], 'strftime') else str(calendar.index[0])
                 if hasattr(earnings_date, 'strftime'):
                     earnings_date = earnings_date.strftime('%Y-%m-%d')

@@ -13,7 +13,14 @@ DEFAULT_CONNECTION_CONFIG = {
     'account_id': '',
     'db_path': 'options.db',
     'auto_launch_opend': False,
-    'opend_path': ''
+    'opend_path': '',
+    'openbb_enabled': False,
+    'cash_reserve_enabled': True,
+    'watchlist': [
+        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'AMD',
+        'NFLX', 'UBER', 'SOFI', 'PLTR', 'BABA', 'DIS', 'BA', 'JPM',
+        'V', 'MA', 'KO', 'PEP', 'WMT', 'COST', 'HD', 'INTC', 'F'
+    ],
 }
 
 
@@ -43,6 +50,18 @@ def apply_env_overrides(config):
     readonly_override = os.environ.get('MOOMOO_READONLY')
     if readonly_override is not None and readonly_override != '':
         config['readonly'] = readonly_override.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+    openbb_enabled = os.environ.get('OPENBB_ENABLED')
+    if openbb_enabled is not None and openbb_enabled != '':
+        config['openbb_enabled'] = openbb_enabled.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+    cash_reserve_enabled = os.environ.get('CASH_RESERVE_ENABLED')
+    if cash_reserve_enabled is not None and cash_reserve_enabled != '':
+        config['cash_reserve_enabled'] = cash_reserve_enabled.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+    watchlist_env = os.environ.get('WATCHLIST')
+    if watchlist_env is not None and watchlist_env != '':
+        config['watchlist'] = [t.strip().upper() for t in watchlist_env.split(',') if t.strip()]
 
     return config
 

@@ -551,16 +551,16 @@ def get_top_recommendations():
         if unavailable_response:
             return unavailable_response
         
-        # Get limit parameter (default 3)
-        limit = request.args.get('limit', 3)
+        # Get limit parameter (default 5)
+        limit = request.args.get('limit', 5)
         try:
             limit = int(limit)
             if limit < 1:
-                limit = 3
+                limit = 5
             elif limit > 10:
                 limit = 10
         except (ValueError, TypeError):
-            limit = 3
+            limit = 5
         
         # Get portfolio context for cache key and hash calculation
         try:
@@ -601,13 +601,37 @@ def get_top_recommendations():
         
         # Cache miss or manual refresh - get fresh data
         logger.info(f"Fetching fresh top recommendations (manual_refresh={manual_refresh})")
-        result = options_service.get_top_recommendations(limit=limit)
-        
+        try:
+            result = options_service.get_top_recommendations(limit=limit)
+        except Exception as e:
+            logger.error(f"Error getting top recommendations (exception): {str(e)}")
+            logger.error(traceback.format_exc())
+            result = {"error": str(e)}
+
         if "error" in result:
             error_message = result["error"]
             logger.error(f"Error getting top recommendations: {error_message}")
+            # Try to return stale cache as fallback before giving up
+            try:
+                stale_result, _ = recommendation_cache.get(cache_key, current_portfolio_hash)
+                if stale_result is not None:
+                    logger.warning("Returning stale cached recommendations as fallback")
+                    stale_result['_cache'] = {
+                        'cache_status': 'STALE_FALLBACK',
+                        'cache_age_seconds': stale_result.get('_cache', {}).get('cache_age_seconds', 0),
+                        'portfolio_changed': False,
+                        'is_valid': True,
+                        'background_refresh_failed': True,
+                        'cached_at': stale_result.get('_cache', {}).get('cached_at', ''),
+                        'error': error_message
+                    }
+                    response = jsonify(stale_result)
+                    response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
+                    return response, 200
+            except Exception:
+                pass
             return jsonify({"error": error_message}), 500
-        
+
         # Add cache metadata
         result['_cache'] = {
             'cache_status': 'MISS',
@@ -617,20 +641,139 @@ def get_top_recommendations():
             'background_refresh_failed': False,
             'cached_at': datetime.datetime.now().isoformat()
         }
-        
+
         # Store in cache
         recommendation_cache.set(cache_key, result, current_portfolio_hash)
         logger.info(f"Cached fresh top recommendations for key={cache_key[:80]}...")
-        
+
         # Return response with headers
         response = jsonify(result)
         response.headers['X-Cache-Status'] = 'MISS'
         response.headers['X-Cache-Age'] = '0'
-        
+
         return response, 200
-        
+
     except Exception as e:
         logger.error(f"Error getting top recommendations: {str(e)}")
         logger.error(traceback.format_exc())
+        # Last resort: try to return any stale cache
+        try:
+            stale_result, _ = recommendation_cache.get(cache_key, current_portfolio_hash)
+            if stale_result is not None:
+                logger.warning("Returning stale cached recommendations as last-resort fallback")
+                stale_result['_cache'] = {
+                    'cache_status': 'STALE_FALLBACK',
+                    'cache_age_seconds': stale_result.get('_cache', {}).get('cache_age_seconds', 0),
+                    'portfolio_changed': False,
+                    'is_valid': True,
+                    'background_refresh_failed': True,
+                    'cached_at': stale_result.get('_cache', {}).get('cached_at', ''),
+                    'error': str(e)
+                }
+                response = jsonify(stale_result)
+                response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
+                return response, 200
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 500
-       
+
+
+@bp.route('/cash-status', methods=['GET'])
+def get_cash_status():
+    """
+    Get cash balance, reserved cash for open short puts, and available cash.
+    
+    Returns:
+        JSON with cash status including:
+        - cash_balance: Total cash balance
+        - cash_reserved: Cash reserved for existing short puts
+        - cash_available: Cash available for new CSPs (balance - reserved)
+        - reserve_enabled: Whether cash reserve is enabled
+        - open_puts: List of open short put positions with cash requirements
+    """
+    try:
+        # Ensure OpenD is available
+        opend_error = _ensure_opend_available()
+        if opend_error:
+            return opend_error
+        
+        # Get portfolio service
+        from api.services.portfolio_service import PortfolioService
+        portfolio_service = PortfolioService()
+        
+        # Get portfolio summary and positions
+        summary = portfolio_service.get_portfolio_summary() or {}
+        option_positions = portfolio_service.get_positions('OPT') or []
+        
+        cash_balance = float(summary.get('cash_balance', 0) or 0)
+        
+        # Calculate cash reserved for open short puts
+        cash_reserved = 0.0
+        open_puts = []
+        
+        for position in option_positions:
+            pos_qty = int(position.get('position', 0) or 0)
+            option_type = str(position.get('option_type', '') or '').upper()
+            
+            # Only count short puts (negative quantity)
+            if pos_qty < 0 and option_type == 'PUT':
+                ticker = str(position.get('symbol', '') or '').replace('US.', '')
+                strike = float(position.get('strike', 0) or 0)
+                contracts = abs(pos_qty)
+                expiration = position.get('expiration', '')
+                cash_required = strike * 100 * contracts
+                cash_reserved += cash_required
+                
+                open_puts.append({
+                    'ticker': ticker,
+                    'strike': strike,
+                    'contracts': contracts,
+                    'expiration': expiration,
+                    'cash_required': round(cash_required, 2)
+                })
+        
+        cash_available = max(0, cash_balance - cash_reserved)
+        reserve_enabled = options_service.config.get('cash_reserve_enabled', True)
+        
+        return jsonify({
+            'success': True,
+            'cash_balance': round(cash_balance, 2),
+            'cash_reserved': round(cash_reserved, 2),
+            'cash_available': round(cash_available, 2),
+            'reserve_enabled': reserve_enabled,
+            'open_puts': open_puts,
+            'open_puts_count': len(open_puts)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting cash status: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/vix-regime', methods=['GET'])
+def get_vix_regime():
+    """
+    Get current VIX market regime and adaptive adjustments.
+    
+    Returns:
+        JSON with VIX level, regime classification, and delta adjustments
+    """
+    logger.info("GET /vix-regime request received")
+    
+    try:
+        from api.services.options_service import OptionsService
+        options_service = OptionsService()
+        regime = options_service._get_vix_regime()
+        
+        return jsonify({
+            'success': True,
+            'vix_regime': regime
+        })
+    except Exception as e:
+        logger.error(f"Error fetching VIX regime: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+        

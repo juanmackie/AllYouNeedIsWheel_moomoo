@@ -34,6 +34,7 @@ function initElements() {
  * @returns {string} CSS class
  */
 function getScoreColorClass(score) {
+    if (score == null) return 'bg-secondary';
     if (score >= 90) return 'bg-success';
     if (score >= 80) return 'bg-success';
     if (score >= 70) return 'bg-info';
@@ -95,26 +96,26 @@ function createRecommendationCard(rec) {
     optionTypeBadge.classList.add(rec.option_type === 'CALL' ? 'bg-success' : 'bg-danger');
     
     // Strike price
-    clone.querySelector('.strike-price').textContent = `$${rec.strike.toFixed(2)}`;
+    clone.querySelector('.strike-price').textContent = rec.strike != null ? `$${rec.strike.toFixed(2)}` : 'N/A';
     
     // Expiration
-    clone.querySelector('.expiration-date').textContent = formatExpiration(rec.expiration);
+    clone.querySelector('.expiration-date').textContent = rec.expiration ? formatExpiration(rec.expiration) : 'N/A';
     
     // DTE badge
     const dteBadge = clone.querySelector('.dte-badge');
-    dteBadge.textContent = `${rec.dte} DTE`;
+    dteBadge.textContent = rec.dte != null ? `${rec.dte} DTE` : 'N/A DTE';
     
     // Premium
-    clone.querySelector('.premium-amount').textContent = formatCurrency(rec.premium_per_contract);
+    clone.querySelector('.premium-amount').textContent = rec.premium_per_contract != null ? formatCurrency(rec.premium_per_contract) : 'N/A';
     
     // Annualized return
     const annualizedEl = clone.querySelector('.annualized-return');
-    annualizedEl.textContent = `${rec.annualized_return.toFixed(1)}%`;
-    annualizedEl.classList.add(rec.annualized_return > 0 ? 'text-success' : 'text-danger');
+    annualizedEl.textContent = rec.annualized_return != null ? `${rec.annualized_return.toFixed(1)}%` : 'N/A';
+    annualizedEl.classList.add(rec.annualized_return != null && rec.annualized_return > 0 ? 'text-success' : 'text-danger');
     
     // Score badge
     const scoreBadge = clone.querySelector('.score-badge');
-    scoreBadge.textContent = `Score: ${rec.score.toFixed(1)}`;
+    scoreBadge.textContent = rec.score != null ? `Score: ${rec.score.toFixed(1)}` : 'Score: N/A';
     scoreBadge.classList.add(getScoreColorClass(rec.score));
     
     // Warnings
@@ -140,9 +141,9 @@ function createRecommendationCard(rec) {
     }
     
     // Details
-    clone.querySelector('.otm-pct').textContent = `${rec.otm_pct.toFixed(1)}%`;
-    clone.querySelector('.delta-value').textContent = rec.delta.toFixed(3);
-    clone.querySelector('.iv-rank').textContent = `${rec.iv_rank.toFixed(0)}%`;
+    clone.querySelector('.otm-pct').textContent = rec.otm_pct != null ? `${rec.otm_pct.toFixed(1)}%` : 'N/A';
+    clone.querySelector('.delta-value').textContent = rec.delta != null ? rec.delta.toFixed(3) : 'N/A';
+    clone.querySelector('.iv-rank').textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
     
     // Show existing positions if any
     if (rec.existing_position > 0) {
@@ -201,7 +202,8 @@ async function handleAddOrder(rec) {
         const result = await saveOptionOrder(orderData);
         
         if (result && result.order_id) {
-            showAlert(`Order added for ${rec.ticker} ${rec.option_type} $${rec.strike.toFixed(2)}. Check Pending Orders to execute.`, 'success');
+            const strikeStr = rec.strike != null ? `$${rec.strike.toFixed(2)}` : 'N/A';
+            showAlert(`Order added for ${rec.ticker} ${rec.option_type} ${strikeStr}. Check Pending Orders to execute.`, 'success');
         } else {
             showAlert('Failed to add order. Please try again.', 'danger');
         }
@@ -243,7 +245,8 @@ async function handleExecuteNow(rec) {
         const executeResult = await executeOrder(saveResult.order_id);
         
         if (executeResult && executeResult.success) {
-            showAlert(`Order executed successfully for ${rec.ticker} ${rec.option_type} $${rec.strike.toFixed(2)}!`, 'success');
+            const strikeStr = rec.strike != null ? `$${rec.strike.toFixed(2)}` : 'N/A';
+            showAlert(`Order executed successfully for ${rec.ticker} ${rec.option_type} ${strikeStr}!`, 'success');
         } else {
             showAlert(`Order created but execution failed: ${executeResult?.error || 'Unknown error'}. Check Pending Orders.`, 'warning');
         }
@@ -304,7 +307,6 @@ function updateTimestamp(timestamp, cacheInfo = null) {
         const date = new Date(timestamp);
         const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         
-        // Add cache status indicator
         let cacheIndicator = '';
         if (cacheInfo) {
             const ageMinutes = Math.floor(cacheInfo.age / 60);
@@ -312,14 +314,15 @@ function updateTimestamp(timestamp, cacheInfo = null) {
                 cacheIndicator = ` (cached ${ageMinutes}m ago)`;
             } else if (cacheInfo.status === 'STALE') {
                 cacheIndicator = ` (refreshing...)`;
+            } else if (cacheInfo.status === 'STALE_FALLBACK') {
+                cacheIndicator = ` (stale - refresh failed)`;
             }
         }
         
         lastUpdatedEl.textContent = `Updated: ${timeStr}${cacheIndicator}`;
         lastUpdatedEl.classList.remove('d-none');
         
-        // Add visual indicator for stale data
-        if (cacheInfo && cacheInfo.status === 'STALE') {
+        if (cacheInfo && (cacheInfo.status === 'STALE' || cacheInfo.status === 'STALE_FALLBACK')) {
             lastUpdatedEl.classList.add('text-warning');
         } else {
             lastUpdatedEl.classList.remove('text-warning');
@@ -375,8 +378,18 @@ export async function loadTopRecommendations(manualRefresh = false) {
         
         recommendationsData = result;
         
-        // Extract cache info from response
-        const cacheInfo = result._cacheInfo || null;
+        const cacheInfo = result._cache || null;
+        
+        if (cacheInfo && cacheInfo.cache_status === 'STALE_FALLBACK') {
+            renderRecommendations(result.recommendations, result.generated_at, cacheInfo);
+            if (lastUpdatedEl) {
+                const errorMsg = cacheInfo.error ? ` (refresh failed: ${cacheInfo.error})` : '';
+                lastUpdatedEl.textContent = `Showing cached data${errorMsg}`;
+                lastUpdatedEl.classList.add('text-warning');
+                lastUpdatedEl.classList.remove('d-none');
+            }
+            return;
+        }
         
         renderRecommendations(result.recommendations, result.generated_at, cacheInfo);
         

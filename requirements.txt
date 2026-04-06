@@ -6,6 +6,10 @@ python-dotenv>=1.1.0
 loguru>=0.7.2
 pytz>=2024.1
 yfinance>=0.2.28
+protobuf>=3.5.1,<4
+
+# OpenBB SDK for financial data enrichment (free, no API keys needed)
+openbb>=4.0.0
 
 # Web application dependencies
 flask>=3.0.2

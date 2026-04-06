@@ -16,9 +16,9 @@ class PortfolioService:
     """
     Service for handling portfolio operations
     """
-    def __init__(self):
+    def __init__(self, connection=None):
         self.config = Config()
-        self.connection = None
+        self.connection = connection
         self.last_error = None
 
     def _set_error(self, message):
@@ -27,24 +27,31 @@ class PortfolioService:
         
     def _ensure_connection(self):
         """
-        Ensure that the moomoo connection exists and is connected
+        Ensure that the moomoo connection exists and is connected.
+        If a shared connection was provided, use it. Otherwise create one.
         """
         try:
             self.last_error = None
-            if self.connection is None or not self.connection.is_connected():
-                logger.info("Creating new moomoo connection for portfolio")
-                
-                self.connection = MoomooConnection(
-                    host=str(self.config.get('host', '127.0.0.1')),
-                    port=int(self.config.get('port', 11111)),
-                    readonly=bool(self.config.get('readonly', True)),
-                    account_id=self.config.get('account_id'),
-                    portfolio_env=self.config.get('portfolio_env'),
-                    security_firm=self.config.get('security_firm')
-                )
-                
-                if not self.connection.connect():
-                    self._set_error(self.connection.last_error or "Failed to connect to moomoo OpenD")
+            if self.connection is not None:
+                if self.connection.is_connected():
+                    return self.connection
+                logger.info("Shared connection found but disconnected, attempting to reconnect")
+                if self.connection.connect():
+                    return self.connection
+                logger.warning("Failed to reconnect shared connection, will create new one")
+
+            logger.info("Creating new moomoo connection for portfolio")
+            self.connection = MoomooConnection(
+                host=str(self.config.get('host', '127.0.0.1')),
+                port=int(self.config.get('port', 11111)),
+                readonly=bool(self.config.get('readonly', True)),
+                account_id=self.config.get('account_id'),
+                portfolio_env=self.config.get('portfolio_env'),
+                security_firm=self.config.get('security_firm')
+            )
+
+            if not self.connection.connect():
+                self._set_error(self.connection.last_error or "Failed to connect to moomoo OpenD")
             return self.connection
         except Exception as e:
             self._set_error(f"Error ensuring connection: {str(e)}")

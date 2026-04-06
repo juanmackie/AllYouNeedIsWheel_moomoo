@@ -16,6 +16,7 @@ from core.utils import get_closest_friday, get_next_monthly_expiration
 from config import Config
 from db.database import OptionsDatabase
 from api.services.iv_earnings_service import IVEarningsService
+from api.services.openbb_service import get_openbb_service
 import traceback
 
 logger = logging.getLogger('api.services.options')
@@ -30,7 +31,27 @@ class OptionsService:
         db_path = self.config.get('db_path')
         self.db = OptionsDatabase(db_path)
         self.iv_earnings_service = IVEarningsService(self.db)
-        self.portfolio_service = None  # Will be initialized when needed
+        self.portfolio_service = None
+        self._openbb_service = None
+        
+    def _get_openbb_service(self):
+        """
+        Lazy initialization of OpenBB service.
+        Returns the service if available, None otherwise.
+        Uses a sentinel (False) to avoid repeated failed initialization attempts.
+        """
+        if self._openbb_service is None:
+            try:
+                self._openbb_service = get_openbb_service()
+                if self._openbb_service and self._openbb_service._ensure_initialized():
+                    logger.info("OpenBB service initialized successfully")
+                else:
+                    logger.debug("OpenBB service not available, skipping quality checks")
+                    self._openbb_service = False
+            except Exception as e:
+                logger.debug(f"OpenBB service initialization failed: {e}, skipping quality checks")
+                self._openbb_service = False
+        return self._openbb_service if self._openbb_service else None
         
     def _ensure_connection(self):
         """
@@ -38,12 +59,10 @@ class OptionsService:
         Reuses existing connection if already established.
         """
         try:
-            # If we already have a connected instance, just return it
             if self.connection is not None and self.connection.is_connected():
                 logger.debug("Reusing existing moomoo connection")
                 return self.connection
-            
-            # If connection exists but is disconnected, try to reconnect
+
             if self.connection is not None:
                 logger.info("Existing connection found but disconnected, attempting to reconnect")
                 if self.connection.connect():
@@ -51,10 +70,9 @@ class OptionsService:
                     return self.connection
                 else:
                     logger.warning("Failed to reconnect, will create new connection")
-        
-            # No connection or reconnection failed, create a new one
+
             logger.info("Creating new moomoo connection")
-            
+
             self.connection = MoomooConnection(
                 host=str(self.config.get('host', '127.0.0.1')),
                 port=int(self.config.get('port', 11111)),
@@ -62,13 +80,14 @@ class OptionsService:
                 account_id=self.config.get('account_id'),
                 security_firm=self.config.get('security_firm')
             )
-            
-            # Try to connect with proper error handling
+
             if not self.connection.connect():
                 logger.error("Failed to connect to moomoo OpenD")
                 return None
             else:
                 logger.info("Successfully connected to moomoo OpenD")
+                if self.portfolio_service is not None:
+                    self.portfolio_service.connection = self.connection
                 return self.connection
         except Exception as e:
             logger.error(f"Error ensuring connection: {str(e)}")
@@ -197,13 +216,98 @@ class OptionsService:
                 "error": str(e)
             }, 500
       
+    def _get_vix_regime(self):
+        """
+        Get current VIX market regime for adaptive delta targeting.
+        Uses OpenBB as primary source with yfinance fallback.
+        
+        Returns:
+            dict: {
+                'vix': float,
+                'regime': str ('complacency', 'normal', 'fear'),
+                'delta_adjustment': float,
+                'exposure_multiplier': float,
+                'description': str
+            }
+        """
+        cache_key = '_vix_regime_cache'
+        if hasattr(self, cache_key):
+            cache_entry = getattr(self, cache_key)
+            age = (datetime.now() - cache_entry['timestamp']).total_seconds()
+            if age < 300:
+                return cache_entry['data']
+        
+        vix_value = None
+        
+        try:
+            openbb = self._get_openbb_service()
+            if openbb:
+                vix_data = openbb.get_vix()
+                if vix_data and 'vix' in vix_data:
+                    vix_value = float(vix_data['vix'])
+                    logger.debug(f"VIX from OpenBB: {vix_value}")
+        except Exception as e:
+            logger.debug(f"OpenBB VIX fetch failed, trying yfinance: {e}")
+        
+        if vix_value is None:
+            try:
+                import yfinance as yf
+                vix_ticker = yf.Ticker('^VIX')
+                hist = vix_ticker.history(period='1d')
+                if not hist.empty:
+                    vix_value = float(hist['Close'].iloc[-1])
+                    logger.debug(f"VIX from yfinance: {vix_value}")
+            except Exception as e:
+                logger.debug(f"yfinance VIX fetch failed: {e}")
+        
+        if vix_value is None:
+            logger.warning("Unable to fetch VIX, using default normal regime")
+            result = {
+                'vix': 20.0,
+                'regime': 'normal',
+                'delta_adjustment': 0.0,
+                'exposure_multiplier': 1.0,
+                'description': 'Normal volatility (VIX 15-30) - standard delta targets'
+            }
+            setattr(self, cache_key, {'data': result, 'timestamp': datetime.now()})
+            return result
+        
+        if vix_value < 15:
+            result = {
+                'vix': round(vix_value, 2),
+                'regime': 'complacency',
+                'delta_adjustment': 0.10,
+                'exposure_multiplier': 0.7,
+                'description': 'Low volatility (VIX < 15) - higher delta targets, reduced exposure'
+            }
+        elif vix_value <= 30:
+            result = {
+                'vix': round(vix_value, 2),
+                'regime': 'normal',
+                'delta_adjustment': 0.0,
+                'exposure_multiplier': 1.0,
+                'description': 'Normal volatility (VIX 15-30) - standard delta targets'
+            }
+        else:
+            result = {
+                'vix': round(vix_value, 2),
+                'regime': 'fear',
+                'delta_adjustment': -0.05,
+                'exposure_multiplier': 0.5,
+                'description': 'High volatility (VIX > 30) - lower delta targets, conservative exposure'
+            }
+        
+        setattr(self, cache_key, {'data': result, 'timestamp': datetime.now()})
+        return result
+
     def _get_portfolio_context(self):
         context = {
             'cash_balance': 0.0,
             'account_value': 0.0,
             'positions': {},
-            'short_calls': {},  # Track existing short calls per ticker
-            'short_puts': {}     # Track existing short puts per ticker
+            'short_calls': {},
+            'short_puts': {},
+            'vix_regime': self._get_vix_regime()
         }
 
         try:
@@ -218,14 +322,12 @@ class OptionsService:
             context['cash_balance'] = float(summary.get('cash_balance', 0) or 0)
             context['account_value'] = float(summary.get('account_value', 0) or 0)
 
-            # Process stock positions
             for position in stock_positions:
                 symbol = str(position.get('symbol', '') or '').replace('US.', '')
                 if not symbol:
                     continue
                 context['positions'][symbol] = position
 
-            # Process option positions to track short positions
             for position in option_positions:
                 symbol = str(position.get('symbol', '') or '').replace('US.', '')
                 if not symbol:
@@ -234,7 +336,6 @@ class OptionsService:
                 pos_qty = int(position.get('position', 0) or 0)
                 option_type = str(position.get('option_type', '') or '').upper()
                 
-                # Negative position = short (sold to open)
                 if pos_qty < 0:
                     contracts = abs(pos_qty)
                     if option_type == 'CALL':
@@ -245,10 +346,150 @@ class OptionsService:
         except Exception as exc:
             logger.error(f"Error building portfolio context for options scoring: {exc}")
 
+        watchlist = self.config.get('watchlist', [])
+        owned = set(context['positions'].keys())
+        context['watchlist'] = [t for t in watchlist if t not in owned]
+        if context['watchlist']:
+            logger.debug(f"Watchlist tickers for CSP scanning: {context['watchlist']}")
+
         return context
 
     def _get_position_snapshot(self, portfolio_context, ticker):
         return portfolio_context.get('positions', {}).get(ticker, {})
+
+    def _get_yfinance_price(self, ticker):
+        """Get stock price from yfinance as fallback when Moomoo lacks quote rights."""
+        try:
+            import yfinance as yf
+            yf_ticker = yf.Ticker(ticker)
+            hist = yf_ticker.history(period="1d")
+            if hist.empty:
+                logger.debug(f"yfinance: No price data for {ticker}")
+                return None
+            price = float(hist['Close'].iloc[-1])
+            logger.debug(f"yfinance: Got price {price} for {ticker}")
+            return price
+        except Exception as e:
+            logger.debug(f"yfinance: Failed to get price for {ticker}: {e}")
+            return None
+
+    def _get_yfinance_option_chain(self, ticker, expiration, option_type):
+        """Get option chain from yfinance as fallback when Moomoo lacks quote rights."""
+        try:
+            import yfinance as yf
+            yf_ticker = yf.Ticker(ticker)
+            exp_formatted = expiration.replace('-', '')
+            if len(exp_formatted) == 8:
+                exp_yf = f"{exp_formatted[0:4]}-{exp_formatted[4:6]}-{exp_formatted[6:8]}"
+            else:
+                exp_yf = expiration
+
+            all_exps = yf_ticker.options
+            if not all_exps:
+                return None
+
+            target_exp = None
+            for exp in all_exps:
+                if exp == exp_yf or exp.startswith(exp_formatted[:10]):
+                    target_exp = exp
+                    break
+
+            if not target_exp:
+                logger.debug(f"yfinance: Expiration {expiration} not found for {ticker}, using closest")
+                from datetime import datetime
+                today = datetime.now()
+                target_date = None
+                for exp in all_exps:
+                    exp_date = datetime.strptime(exp, '%Y-%m-%d')
+                    dte = (exp_date - today).days
+                    if 7 <= dte <= 45:
+                        target_exp = exp
+                        break
+                if not target_exp:
+                    target_exp = all_exps[0]
+
+            chain = yf_ticker.option_chain(target_exp)
+            if option_type == 'C':
+                df = chain.calls
+            else:
+                df = chain.puts
+
+            if df.empty:
+                return None
+
+            options = []
+            for _, row in df.iterrows():
+                opt = {
+                    'strike': float(row.get('strike', 0)),
+                    'expiration': target_exp.replace('-', ''),
+                    'option_type': 'CALL' if option_type == 'C' else 'PUT',
+                    'bid': float(row.get('bid', 0)) if not pd.isna(row.get('bid')) else 0,
+                    'ask': float(row.get('ask', 0)) if not pd.isna(row.get('ask')) else 0,
+                    'last': float(row.get('lastPrice', 0)) if not pd.isna(row.get('lastPrice')) else 0,
+                    'volume': int(row.get('volume', 0)) if not pd.isna(row.get('volume')) else 0,
+                    'open_interest': int(row.get('openInterest', 0)) if not pd.isna(row.get('openInterest')) else 0,
+                    'implied_volatility': float(row.get('impliedVolatility', 0)) if not pd.isna(row.get('impliedVolatility')) else 0,
+                    'delta': None,
+                    'gamma': None,
+                    'theta': None,
+                    'vega': None,
+                }
+                options.append(opt)
+
+            result = {
+                'symbol': ticker,
+                'expiration': target_exp.replace('-', ''),
+                'stock_price': None,
+                'right': option_type,
+                'options': options
+            }
+            logger.debug(f"yfinance: Got {len(options)} options for {ticker} {expiration} {option_type}")
+            return result
+        except Exception as e:
+            logger.debug(f"yfinance: Failed to get option chain for {ticker}: {e}")
+            return None
+
+    def _calculate_cash_reserved(self, portfolio_context):
+        """
+        Calculate cash reserved for existing short put positions.
+        Each short put requires cash equal to strike * 100 per contract.
+        
+        Args:
+            portfolio_context: Dict with 'short_puts' and 'cash_balance'
+            
+        Returns:
+            float: Total cash reserved for open short puts
+        """
+        reserved = 0.0
+        short_puts = portfolio_context.get('short_puts', {})
+        
+        if not short_puts:
+            return reserved
+            
+        try:
+            # Get option positions to find strike prices
+            if self.portfolio_service is None:
+                from api.services.portfolio_service import PortfolioService
+                self.portfolio_service = PortfolioService()
+                
+            option_positions = self.portfolio_service.get_positions('OPT') or []
+            
+            for position in option_positions:
+                symbol = str(position.get('symbol', '') or '').replace('US.', '')
+                pos_qty = int(position.get('position', 0) or 0)
+                option_type = str(position.get('option_type', '') or '').upper()
+                
+                # Only count short puts (negative quantity)
+                if pos_qty < 0 and option_type == 'PUT':
+                    strike = float(position.get('strike', 0) or 0)
+                    contracts = abs(pos_qty)
+                    cash_required = strike * 100 * contracts
+                    reserved += cash_required
+                    
+        except Exception as e:
+            logger.error(f"Error calculating cash reserved: {e}")
+            
+        return reserved
 
     def _get_fallback_stock_price(self, portfolio_context, ticker):
         position = self._get_position_snapshot(portfolio_context, ticker)
@@ -262,19 +503,19 @@ class OptionsService:
                 return numeric_value
         return 0.0
 
-    def _get_screening_profile(self, option_type, dte=None, profile_type=None):
+    def _get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None):
         """
-        Get screening profile based on option type and DTE
+        Get screening profile based on option type, DTE, and VIX regime.
         
         Args:
             option_type: 'CALL' or 'PUT'
             dte: Days to expiration (auto-detects profile if None)
             profile_type: 'weekly', 'monthly', 'quarterly', or None (auto-detect)
+            vix_regime: dict from _get_vix_regime() with delta_adjustment, exposure_multiplier
             
         Returns:
-            dict: Screening profile parameters
+            dict: Screening profile parameters with VIX regime adjustments
         """
-        # Determine profile type based on DTE if not specified
         if profile_type is None and dte is not None:
             if dte <= 14:
                 profile_type = 'weekly'
@@ -283,7 +524,7 @@ class OptionsService:
             else:
                 profile_type = 'quarterly'
         elif profile_type is None:
-            profile_type = 'monthly'  # Default
+            profile_type = 'monthly'
         
         # Base profile with targets from Phase 1
         base_profile = {
@@ -380,6 +621,25 @@ class OptionsService:
                     'liquidity_weight_multiplier': 1.0,
                     'delta_fit_weight_multiplier': 1.0,
                 })
+        
+        if vix_regime:
+            delta_adj = vix_regime.get('delta_adjustment', 0.0)
+            regime_name = vix_regime.get('regime', 'normal')
+            
+            if 'target_delta' in base_profile:
+                base_profile['target_delta'] = max(0.10, min(0.40,
+                    base_profile['target_delta'] + delta_adj))
+            
+            if 'delta_tolerance' in base_profile:
+                base_profile['delta_tolerance'] = max(0.08,
+                    base_profile['delta_tolerance'] + (delta_adj * 0.5))
+            
+            if regime_name == 'fear':
+                base_profile['min_premium_per_contract'] *= 1.2
+            elif regime_name == 'complacency':
+                base_profile['min_premium_per_contract'] *= 0.8
+            
+            base_profile['vix_regime'] = regime_name
         
         return base_profile
 
@@ -495,6 +755,13 @@ class OptionsService:
         if open_interest < profile['min_open_interest'] and volume < profile['min_volume']:
             return None
 
+        openbb = self._get_openbb_service()
+        if openbb:
+            quality = openbb.get_quality_check(ticker)
+            if quality and not quality.get('passes', True):
+                logger.debug(f"Quality gate failed for {ticker}: {quality.get('reasons', [])}")
+                return None
+
         position = portfolio_context.get('positions', {}).get(ticker, {})
         shares_owned = float(position.get('position', 0) or 0)
         avg_cost = float(position.get('avg_cost', 0) or 0)
@@ -543,8 +810,9 @@ class OptionsService:
         tdr_score = self._score_positive_metric(theta_delta_ratio, profile.get('target_theta_delta_ratio', 0.005))
         
         # Phase 2: IV Environment and Earnings Integration
-        # Get dynamic profile based on DTE (overrides the passed profile)
-        dynamic_profile = self._get_screening_profile(option_type, dte)
+        # Get dynamic profile based on DTE and VIX regime
+        vix_regime = portfolio_context.get('vix_regime')
+        dynamic_profile = self._get_screening_profile(option_type, dte, vix_regime=vix_regime)
         
         # Record IV data for this ticker
         if implied_volatility > 0:
@@ -631,11 +899,12 @@ class OptionsService:
                 'earnings_total_premium': round(premium_per_contract * max_contracts, 2),
                 'earnings_return_on_capital': round(annualized_return, 2),
                 'score': round(score, 2),
-                # Phase 2 metadata
                 'iv_rank': round(iv_rank * 100, 1),
                 'iv_status': iv_status,
                 'iv_env_adjustment': iv_env_adjustment,
                 'profile_type': dynamic_profile.get('profile_type', 'monthly'),
+                'vix_regime': vix_regime.get('regime', 'normal') if vix_regime else 'normal',
+                'vix_level': vix_regime.get('vix', 20.0) if vix_regime else 20.0,
                 'earnings_date': earnings_info.get('earnings_date'),
                 'days_to_earnings': earnings_info.get('days_to_earnings'),
                 'earnings_adjustment': earnings_adjustment,
@@ -680,12 +949,27 @@ class OptionsService:
                 candidate['warnings'].append(f'⚠️ Earnings in {earnings_info.get("days_to_earnings")}d - high assignment risk')
             elif earnings_info.get('warning_level') == 'soon':
                 candidate['warnings'].append(f'Earnings in {earnings_info.get("days_to_earnings")} days')
+            
+            # Phase 3: VIX regime warnings
+            if vix_regime:
+                if vix_regime.get('regime') == 'complacency':
+                    candidate['warnings'].append(f'Low VIX ({vix_regime["vix"]}) - premiums compressed')
+                elif vix_regime.get('regime') == 'fear':
+                    candidate['warnings'].append(f'High VIX ({vix_regime["vix"]}) - elevated risk, wider stops')
         else:
             if stock_price <= 0 or strike >= stock_price:
                 return None
 
             otm_pct = ((stock_price - strike) / stock_price) * 100
             cash_required = strike * 100
+            
+            # Cash reserve check - early exit if this CSP would exceed available cash
+            if self.config.get('cash_reserve_enabled', True) and cash_balance > 0:
+                reserved = self._calculate_cash_reserved(portfolio_context)
+                available_for_new = max(0, cash_balance - reserved)
+                if cash_required > available_for_new:
+                    return None  # Don't suggest CSPs we can't afford
+            
             annualized_return = (premium_per_contract / cash_required) * (365 / dte) * 100 if cash_required > 0 else 0
             breakeven = strike - mid_price
             breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
@@ -726,16 +1010,18 @@ class OptionsService:
                 'breakeven': round(breakeven, 2),
                 'breakeven_buffer_pct': round(breakeven_buffer_pct, 2),
                 'cash_required': round(cash_required, 2),
+                'cash_reserve_enabled': self.config.get('cash_reserve_enabled', True),
                 'earnings_max_contracts': 1,
                 'earnings_premium_per_contract': round(premium_per_contract, 2),
                 'earnings_total_premium': round(premium_per_contract, 2),
                 'earnings_return_on_cash': round(annualized_return, 2),
                 'score': round(score, 2),
-                # Phase 2 metadata
                 'iv_rank': round(iv_rank * 100, 1),
                 'iv_status': iv_status,
                 'iv_env_adjustment': iv_env_adjustment,
                 'profile_type': dynamic_profile.get('profile_type', 'monthly'),
+                'vix_regime': vix_regime.get('regime', 'normal') if vix_regime else 'normal',
+                'vix_level': vix_regime.get('vix', 20.0) if vix_regime else 20.0,
                 'earnings_date': earnings_info.get('earnings_date'),
                 'days_to_earnings': earnings_info.get('days_to_earnings'),
                 'earnings_adjustment': earnings_adjustment,
@@ -830,9 +1116,12 @@ class OptionsService:
 
         stock_price = conn.get_stock_price(ticker)
         if stock_price is None or stock_price <= 0:
+            logger.debug(f"Moomoo returned no/invalid price for {ticker}, trying yfinance fallback")
+            stock_price = self._get_yfinance_price(ticker)
+        if stock_price is None or stock_price <= 0:
             stock_price = self._get_fallback_stock_price(portfolio_context, ticker)
         if stock_price is None or stock_price <= 0:
-            return {'error': 'Unable to obtain valid stock price from moomoo'}
+            return {'error': 'Unable to obtain valid stock price from any source'}
 
         position = self._get_position_snapshot(portfolio_context, ticker)
         result['stock_price'] = stock_price
@@ -855,9 +1144,14 @@ class OptionsService:
                 )
                 if chain and chain.get('options'):
                     options_chains.append(chain)
+                else:
+                    logger.debug(f"Moomoo returned no options for {ticker} {expiry} {side}, trying yfinance fallback")
+                    yf_chain = self._get_yfinance_option_chain(ticker, expiry, 'C' if side == 'CALL' else 'P')
+                    if yf_chain and yf_chain.get('options'):
+                        options_chains.append(yf_chain)
 
         if not options_chains:
-            return {'error': 'No options data available from moomoo'}
+            return {'error': 'No options data available from any source'}
 
         formatted_data = self._process_options_chain(
             options_chains,
@@ -1082,7 +1376,7 @@ class OptionsService:
         except Exception as e:
             return {"error": str(e)}
 
-    def get_top_recommendations(self, limit=3):
+    def get_top_recommendations(self, limit=5):
         """
         Get top N option recommendations across all portfolio positions.
         
@@ -1122,15 +1416,16 @@ class OptionsService:
             cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
             short_calls = portfolio_context.get('short_calls', {})
             short_puts = portfolio_context.get('short_puts', {})
+            watchlist = portfolio_context.get('watchlist', [])
             
-            if not positions:
+            if not positions and not watchlist:
                 return {
                     'success': True,
                     'count': 0,
                     'total_scored': 0,
                     'generated_at': datetime.now().isoformat(),
                     'recommendations': [],
-                    'message': 'No positions found in portfolio'
+                    'message': 'No positions or watchlist configured'
                 }
             
             # Collect all options across all tickers
@@ -1209,6 +1504,155 @@ class OptionsService:
                     
                 except Exception as e:
                     logger.error(f"Error processing {ticker} for recommendations: {e}")
+                    continue
+            
+            # Process watchlist tickers for CSP candidates (stocks not in portfolio)
+            # Use yfinance since Moomoo account doesn't have US stock quote rights
+            for ticker in portfolio_context.get('watchlist', []):
+                try:
+                    # Use yfinance for stock price (no Moomoo quote rights needed)
+                    import yfinance as yf
+                    yf_ticker = yf.Ticker(ticker)
+                    hist = yf_ticker.history(period="1d")
+                    if hist.empty:
+                        logger.debug(f"Watchlist {ticker}: No price data from yfinance")
+                        continue
+                    stock_price = float(hist['Close'].iloc[-1])
+                    
+                    # Calculate available cash after reserves
+                    reserved = self._calculate_cash_reserved(portfolio_context)
+                    available_cash = max(0, cash_balance - reserved)
+                    
+                    # Skip if even a 10% OTM put would exceed available cash
+                    min_strike = stock_price * 0.9
+                    if min_strike * 100 > available_cash:
+                        logger.debug(f"Watchlist {ticker}: min strike ${min_strike:.0f} exceeds available cash ${available_cash:.0f}")
+                        continue
+                    
+                    # Get option chain from yfinance
+                    try:
+                        opts = yf_ticker.options
+                        if not opts:
+                            logger.debug(f"Watchlist {ticker}: No options available")
+                            continue
+                        
+                        # Find expiration within 7-45 days (CSP sweet spot)
+                        from datetime import datetime, timedelta
+                        today = datetime.now()
+                        target_exp = None
+                        for exp in opts:
+                            exp_date = datetime.strptime(exp, '%Y-%m-%d')
+                            dte = (exp_date - today).days
+                            if 7 <= dte <= 45:
+                                target_exp = exp
+                                break
+                        
+                        if not target_exp:
+                            logger.debug(f"Watchlist {ticker}: No suitable expiration found")
+                            continue
+                        
+                        # Get option chain for target expiration
+                        chain = yf_ticker.option_chain(target_exp)
+                        puts = chain.puts
+                        if puts.empty:
+                            logger.debug(f"Watchlist {ticker}: No puts available")
+                            continue
+                        
+                        # Filter for OTM puts (~10% OTM)
+                        target_strike = stock_price * 0.9
+                        puts['strike_diff'] = abs(puts['strike'] - target_strike)
+                        best_put = puts.loc[puts['strike_diff'].idxmin()]
+                        
+                        strike = float(best_put['strike'])
+                        cash_required = strike * 100
+                        
+                        # Skip if exceeds available cash
+                        if cash_required > available_cash:
+                            logger.debug(f"Watchlist {ticker}: Strike ${strike:.0f} requires ${cash_required:.0f} > available ${available_cash:.0f}")
+                            continue
+                        
+                        # Calculate metrics
+                        last_price = float(best_put['lastPrice']) if not pd.isna(best_put['lastPrice']) else 0
+                        bid = float(best_put['bid']) if not pd.isna(best_put['bid']) else 0
+                        ask = float(best_put['ask']) if not pd.isna(best_put['ask']) else 0
+                        mid_price = (bid + ask) / 2 if bid > 0 and ask > 0 else last_price
+                        
+                        if mid_price <= 0:
+                            logger.debug(f"Watchlist {ticker}: Invalid option price")
+                            continue
+                        
+                        dte = (datetime.strptime(target_exp, '%Y-%m-%d') - today).days
+                        premium_per_contract = mid_price * 100
+                        annualized_return = (premium_per_contract / cash_required) * (365 / dte) * 100 if cash_required > 0 and dte > 0 else 0
+                        otm_pct = ((stock_price - strike) / stock_price) * 100
+                        
+                        # Simple scoring (no Greeks available from yfinance)
+                        # Score based on annualized return with basic modifiers
+                        score = min(100, max(0, annualized_return))  # Cap at 100
+                        
+                        # Add to candidates
+                        put_data = {
+                            'ticker': ticker,
+                            'stock_price': stock_price,
+                            'option_type': 'PUT',
+                            'max_contracts': 1,
+                            'existing_position': 0,
+                            'from_watchlist': True,
+                            'strike': strike,
+                            'expiration': target_exp.replace('-', ''),
+                            'dte': dte,
+                            'mid_price': mid_price,
+                            'premium_per_contract': round(premium_per_contract, 2),
+                            'bid': bid,
+                            'ask': ask,
+                            'annualized_return': round(annualized_return, 2),
+                            'iv_adjusted_return': round(annualized_return, 2),  # No IV data
+                            'otm_pct': round(otm_pct, 2),
+                            'delta': None,  # Not available from yfinance
+                            'implied_volatility': float(best_put['impliedVolatility']) if not pd.isna(best_put.get('impliedVolatility')) else 0,
+                            'open_interest': int(best_put['openInterest']) if not pd.isna(best_put['openInterest']) else 0,
+                            'volume': int(best_put['volume']) if not pd.isna(best_put['volume']) else 0,
+                            'score': round(score, 2),
+                            'iv_rank': 50,  # Neutral (no IV history)
+                            'iv_status': 'unknown',
+                            'iv_env_adjustment': 0,
+                            'profile_type': 'monthly' if dte > 14 else 'weekly',
+                            'earnings_date': None,
+                            'days_to_earnings': None,
+                            'earnings_adjustment': 0,
+                            'score_details': {
+                                'annualized': round(annualized_return, 1),
+                                'liquidity': 50,  # Neutral without real data
+                                'otm_fit': 80 if 5 <= otm_pct <= 15 else 50,
+                                'iv_adjusted': 50,
+                                'iv_environment': 50,
+                                'openbb_technical': 0,
+                                'openbb_quality': 0,
+                                'openbb_unusual_activity': False,
+                            },
+                            'rationale': [
+                                f"{annualized_return:.1f}% ann. yield (from yfinance data)",
+                                f"{otm_pct:.1f}% OTM | ${cash_required:.0f} cash required",
+                                f"From watchlist (not in portfolio)"
+                            ],
+                            'warnings': [
+                                'Data from yfinance (not Moomoo) - prices may differ',
+                                'No Greeks available from yfinance'
+                            ] if not best_put.get('impliedVolatility') else [
+                                'Data from yfinance (not Moomoo) - verify before trading'
+                            ],
+                            'cash_reserve_enabled': self.config.get('cash_reserve_enabled', True),
+                        }
+                        
+                        all_options.append(put_data)
+                        logger.info(f"Watchlist {ticker}: Found CSP candidate - ${strike}P exp {target_exp}, {annualized_return:.1f}% annualized")
+                        
+                    except Exception as opt_err:
+                        logger.debug(f"Watchlist {ticker}: Option chain error: {opt_err}")
+                        continue
+                        
+                except Exception as e:
+                    logger.error(f"Error processing watchlist ticker {ticker}: {e}")
                     continue
             
             # Sort by score descending
