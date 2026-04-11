@@ -10,7 +10,6 @@ import sys
 import platform
 import argparse
 import subprocess
-import importlib.util
 import shutil
 from dotenv import load_dotenv
 from core.logging_config import get_logger
@@ -48,77 +47,28 @@ def ensure_local_connection_config():
 
 def check_and_install_dependencies():
     """
-    Check for required dependencies and install them if needed
+    Install all dependencies from requirements.txt.
+    Uses pip directly to handle version specifiers and transitive deps correctly.
     """
     logger.info("Checking dependencies...")
-    try:
-        # First, ensure pip is available
-        import pip
-    except ImportError:
-        logger.error("pip is not available. Please install pip first.")
-        return
-        
-    # Get platform-specific WSGI server
-    is_windows = platform.system() == 'Windows'
-    
+
     # Find requirements.txt file
-    requirements_path = "requirements.txt"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    requirements_path = os.path.join(script_dir, "requirements.txt")
     if not os.path.exists(requirements_path):
-        # Check if we're running from a different directory
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        requirements_path = os.path.join(script_dir, "requirements.txt")
-        if not os.path.exists(requirements_path):
-            logger.error(f"Could not find requirements.txt")
-            return
-    
-    # Read requirements
-    try:
-        with open(requirements_path, 'r') as f:
-            requirements = [line.strip() for line in f.readlines() 
-                        if line.strip() and not line.strip().startswith('#')]
-    except Exception as e:
-        logger.error(f"Error reading requirements.txt: {str(e)}")
+        logger.error(f"Could not find requirements.txt at {requirements_path}")
         return
-        
-    # Install missing requirements
-    missing_deps = []
-    for req in requirements:
-        # Extract package name (everything before any comparison operator)
-        package_name = req.split('>=')[0].split('==')[0].split('>')[0].split('<')[0].split('<=')[0].strip()
-        
-        if not importlib.util.find_spec(package_name.replace('-', '_')):
-            missing_deps.append(req)
-    
-    if missing_deps:
-        logger.info(f"Installing missing dependencies: {', '.join(missing_deps)}")
-        try:
-            # Install all missing dependencies at once for efficiency
-            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_deps)
-            logger.info("Successfully installed all missing dependencies.")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to install dependencies: {str(e)}")
-            logger.error("Please manually install them with: pip install -r requirements.txt")
-    else:
-        logger.info("All dependencies are already installed.")
-        
-    # Double-check platform-specific WSGI server is available
-    # This is especially important since it's critical for the app to start
-    if is_windows and importlib.util.find_spec("waitress") is None:
-        logger.warning("Waitress is still not installed. Attempting to install it directly...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "waitress>=2.0.0"])
-            logger.info("Successfully installed waitress.")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to install waitress: {str(e)}")
-            logger.error("Please manually install it with: pip install waitress>=2.0.0")
-    elif not is_windows and importlib.util.find_spec("gunicorn") is None:
-        logger.warning("Gunicorn is still not installed. Attempting to install it directly...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "gunicorn>=20.1.0"])
-            logger.info("Successfully installed gunicorn.")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to install gunicorn: {str(e)}")
-            logger.error("Please manually install it with: pip install gunicorn>=20.1.0")
+
+    # Install all requirements in one pip call (same approach as start_local.ps1)
+    logger.info(f"Installing dependencies from {requirements_path}")
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "-r", requirements_path, "--quiet"
+        ])
+        logger.info("Successfully installed all dependencies.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to install dependencies: {str(e)}")
+        logger.error("Please manually install them with: pip install -r requirements.txt")
 
 def main():
     """

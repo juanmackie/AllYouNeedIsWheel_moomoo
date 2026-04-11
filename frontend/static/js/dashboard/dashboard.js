@@ -6,6 +6,7 @@ import { loadPortfolioData } from './account.js';
 import { loadTickers } from './options-table.js';
 import { loadPendingOrders } from './orders.js';
 import { initializeTopRecommendations } from './top-recommendations.js';
+import { loadMacroRegime } from './macro.js';
 import { showAlert } from '../utils/alerts.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { formatCurrency } from '../utils/formatters.js';
@@ -226,7 +227,8 @@ async function initializeDashboard() {
             loadPendingOrders(),
             updateWeeklyEarningsSummary(),
             updateCashReserveStatus(),
-            loadVixRegime()
+            loadVixRegime(),
+            loadMacroRegime()
         ]);
         
         // Set up cash reserve toggle listener

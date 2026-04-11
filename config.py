@@ -15,6 +15,7 @@ DEFAULT_CONNECTION_CONFIG = {
     'auto_launch_opend': False,
     'opend_path': '',
     'openbb_enabled': False,
+    'fred_enabled': True,
     'cash_reserve_enabled': True,
     'watchlist': [
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'AMD',
@@ -54,6 +55,10 @@ def apply_env_overrides(config):
     openbb_enabled = os.environ.get('OPENBB_ENABLED')
     if openbb_enabled is not None and openbb_enabled != '':
         config['openbb_enabled'] = openbb_enabled.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+    fred_enabled = os.environ.get('FRED_ENABLED')
+    if fred_enabled is not None and fred_enabled != '':
+        config['fred_enabled'] = fred_enabled.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
 
     cash_reserve_enabled = os.environ.get('CASH_RESERVE_ENABLED')
     if cash_reserve_enabled is not None and cash_reserve_enabled != '':

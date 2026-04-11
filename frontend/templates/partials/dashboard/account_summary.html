@@ -87,7 +87,7 @@
             </div>
         </div>
 
-        <div class="summary-panel summary-panel--vix">
+        <div class="summary-panel summary-panel--vix" data-bs-theme="dark">
             <span class="app-section__eyebrow">Market regime</span>
             <h2>VIX volatility level</h2>
             <p class="text-muted mb-0">Adaptive delta targeting based on market conditions.</p>
@@ -109,27 +109,42 @@
                 </div>
             </div>
         </div>
+
+        <div class="summary-panel summary-panel--macro" data-bs-theme="dark">
+            <span class="app-section__eyebrow">Macro environment</span>
+            <h2>Economic regime</h2>
+            <p class="text-muted mb-0">Macro regime detection for strategy context.</p>
+
+            <div class="macro-metrics-grid">
+                <div class="macro-metric">
+                    <small class="text-muted">Rates</small>
+                    <h4 id="macro-rates">--</h4>
+                    <span class="badge" id="macro-rates-badge">--</span>
+                </div>
+                <div class="macro-metric">
+                    <small class="text-muted">Credit</small>
+                    <h4 id="macro-credit">--</h4>
+                    <span class="badge" id="macro-credit-badge">--</span>
+                </div>
+                <div class="macro-metric">
+                    <small class="text-muted">Growth</small>
+                    <h4 id="macro-growth">--</h4>
+                    <span class="badge" id="macro-growth-badge">--</span>
+                </div>
+                <div class="macro-metric">
+                    <small class="text-muted">Inflation</small>
+                    <h4 id="macro-inflation">--</h4>
+                    <span class="badge" id="macro-inflation-badge">--</span>
+                </div>
+            </div>
+
+            <div id="macro-advice-banner" class="mt-3 p-2 rounded">
+                <small id="macro-advice-text">Loading macro environment...</small>
+            </div>
+
+            <div class="mt-2 small text-muted">
+                Yield curve (10y-2y): <span id="macro-yield-curve">--</span>
+            </div>
+        </div>
     </div>
 </section>
-
-<style>
-.summary-panel--vix {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    color: white;
-}
-.summary-panel--vix .app-section__eyebrow {
-    color: #8892b0;
-}
-.summary-panel--vix h2 {
-    color: #ccd6f6;
-    font-size: 1.1rem;
-}
-.summary-panel--vix .text-muted {
-    color: #8892b0 !important;
-}
-.summary-vix-value {
-    font-size: 2.5rem;
-    font-weight: 700;
-    line-height: 1;
-}
-</style>

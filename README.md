@@ -2,7 +2,7 @@
 
 A financial options trading assistant for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and manage orders through a local web dashboard.
 
-**🆕 NEW: Risk-Adjusted Scoring & IV Environment Analysis** — Intelligent option ranking with IV rank tracking, earnings warnings, and dynamic expiration profiles.
+**🆕 NEW: Risk-Adjusted Scoring, IV Environment Analysis & Macro Regime Detection** — Intelligent option ranking with IV rank tracking, earnings warnings, dynamic expiration profiles, and FRED-powered macro economic context.
 
 <img width="1680" alt="Dashboard screenshot" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
 <img width="1321" alt="Portfolio screenshot" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
@@ -26,6 +26,15 @@ A financial options trading assistant for the "Wheel Strategy" powered by the [M
 - **IV Environment Awareness** — 30-day rolling IV rank tracking with color-coded badges (🔴 low, 🟢 high)
 - **Dynamic Screening Profiles** — Auto-detects weekly/monthly/quarterly expirations with optimized parameters
 - **Earnings Integration** — Automatic earnings warnings with score penalties for high-risk periods
+- **Macro Regime Detection** — FRED-powered economic context (rates, credit stress, growth, inflation) influencing scores and recommendations
+
+### 🆕 Macro Regime Detection (Phase 3)
+- **Interest Rate Environment** — Detects rising/falling/stable rate regimes from Fed funds data
+- **Credit Stress Monitoring** — Tracks high-yield corporate bond spreads for market stress signals
+- **Economic Growth Regime** — Uses yield curve slope (10y-2y) to detect expansion/slowdown risks
+- **Inflation Trends** — Monitors CPI trends for inflation context
+- **Score Impact** — Macro multiplier (0.80x to 1.05x) adjusts all option scores based on economic conditions
+- **Dashboard Integration** — Real-time macro regime card with actionable strategy advice
 
 ### Scoring Methodology
 
@@ -74,6 +83,7 @@ The system uses a sophisticated multi-factor scoring algorithm to rank option pl
 | [Moomoo OpenD](https://www.moomoo.com/download/OpenAPI) | Runs locally alongside the app |
 | Moomoo account | With US options market data subscriptions |
 | OPRA Options Real-time Quote card | Free if total assets > $3,000 |
+| FRED API Key (optional) | Free key for macro regime detection: [Get here](https://fred.stlouisfed.org/docs/api/api_key.html) |
 
 ## Quick Start (Windows)
 
@@ -184,6 +194,8 @@ Live trading config. Not committed to version control.
 | `MOOMOO_LANG` | No | Language: `en` (default) or `ch` |
 | `CONNECTION_CONFIG` | No | Override config file (default: `connection.json`) |
 | `PORT` | No | App port (default: `8000`) |
+| `FRED_API_KEY` | No | FRED API key for macro regime detection (free: https://fred.stlouisfed.org/docs/api/api_key.html) |
+| `FRED_ENABLED` | No | Enable/disable FRED integration (default: `true`) |
 
 ## API Endpoints
 
@@ -230,6 +242,14 @@ Live trading config. Not committed to version control.
 | `GET` | `/api/earnings/status` | Background updater status & cache stats |
 | `GET` | `/api/earnings/update/<ticker>` | Manually update earnings for ticker |
 | `GET` | `/api/earnings/pending` | All tickers with earnings in next 7 days |
+
+### 🆕 Macro Regime Detection
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/macro/regime` | Current macro economic regime and score impact |
+| `GET` | `/api/macro/cache/status` | Macro cache status and age |
+| `POST` | `/api/macro/cache/clear` | Clear macro cache (forces fresh FRED fetch) |
 
 ## Web Pages
 

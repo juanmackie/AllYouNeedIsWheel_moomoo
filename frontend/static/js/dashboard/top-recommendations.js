@@ -5,6 +5,7 @@
 import { fetchTopRecommendations, saveOptionOrder, executeOrder } from './api.js';
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
+import { getMacroData } from './macro.js';
 
 // Module state
 let recommendationsData = null;
@@ -144,7 +145,26 @@ function createRecommendationCard(rec) {
     clone.querySelector('.otm-pct').textContent = rec.otm_pct != null ? `${rec.otm_pct.toFixed(1)}%` : 'N/A';
     clone.querySelector('.delta-value').textContent = rec.delta != null ? rec.delta.toFixed(3) : 'N/A';
     clone.querySelector('.iv-rank').textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
-    
+
+    // Macro impact line
+    const macroImpactEl = clone.querySelector('.macro-impact');
+    const macroData = getMacroData();
+    if (macroImpactEl && rec.macro_multiplier != null && macroData) {
+        const multiplier = rec.macro_multiplier;
+        const impactPct = ((multiplier - 1.0) * 100).toFixed(0);
+        const impactSign = impactPct > 0 ? '+' : '';
+        const impactText = multiplier > 1.0 ? 'boost' : multiplier < 1.0 ? 'penalty' : 'neutral';
+        const impactColor = multiplier > 1.0 ? 'text-success' : multiplier < 1.0 ? 'text-warning' : 'text-muted';
+
+        macroImpactEl.innerHTML = `
+            <span class="${impactColor}">
+                Macro: ${impactSign}${impactPct}% ${impactText} (${macroData.rate_regime}/${macroData.credit_stress})
+            </span>
+        `;
+    } else if (macroImpactEl) {
+        macroImpactEl.innerHTML = '<span class="text-muted">Macro: N/A</span>';
+    }
+
     // Show existing positions if any
     if (rec.existing_position > 0) {
         const detailsEl = clone.querySelector('.recommendation-details');

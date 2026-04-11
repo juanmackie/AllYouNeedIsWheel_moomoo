@@ -17,6 +17,7 @@ from config import Config
 from db.database import OptionsDatabase
 from api.services.iv_earnings_service import IVEarningsService
 from api.services.openbb_service import get_openbb_service
+from api.services.macro_regime_service import get_macro_service
 import traceback
 
 logger = logging.getLogger('api.services.options')
@@ -889,6 +890,11 @@ class OptionsService:
             # Apply cost basis multiplier
             score *= (0.65 + (0.35 * cost_basis_score))
 
+            # Phase 3: Apply macro regime multiplier
+            macro_regime = get_macro_service().get_macro_regime()
+            macro_multiplier = macro_regime.get('macro_multiplier', 1.0)
+            score *= macro_multiplier
+
             candidate.update({
                 'otm_pct': round(otm_pct, 2),
                 'annualized_return': round(annualized_return, 2),
@@ -905,6 +911,11 @@ class OptionsService:
                 'profile_type': dynamic_profile.get('profile_type', 'monthly'),
                 'vix_regime': vix_regime.get('regime', 'normal') if vix_regime else 'normal',
                 'vix_level': vix_regime.get('vix', 20.0) if vix_regime else 20.0,
+                'macro_multiplier': macro_multiplier,
+                'macro_regime': macro_regime.get('rate_regime', 'unknown'),
+                'macro_credit_stress': macro_regime.get('credit_stress', 'unknown'),
+                'macro_summary': macro_regime.get('summary', ''),
+                'macro_advice': macro_regime.get('advice', ''),
                 'earnings_date': earnings_info.get('earnings_date'),
                 'days_to_earnings': earnings_info.get('days_to_earnings'),
                 'earnings_adjustment': earnings_adjustment,
@@ -956,6 +967,10 @@ class OptionsService:
                     candidate['warnings'].append(f'Low VIX ({vix_regime["vix"]}) - premiums compressed')
                 elif vix_regime.get('regime') == 'fear':
                     candidate['warnings'].append(f'High VIX ({vix_regime["vix"]}) - elevated risk, wider stops')
+
+            # Phase 3: Macro regime warnings
+            if macro_multiplier < 1.0:
+                candidate['warnings'].append(f"⚠️ {macro_regime.get('summary', 'Macro headwinds')}")
         else:
             if stock_price <= 0 or strike >= stock_price:
                 return None
@@ -1003,6 +1018,11 @@ class OptionsService:
             # Apply capital fit multiplier
             score *= (0.75 + (0.25 * capital_fit))
 
+            # Phase 3: Apply macro regime multiplier
+            macro_regime = get_macro_service().get_macro_regime()
+            macro_multiplier = macro_regime.get('macro_multiplier', 1.0)
+            score *= macro_multiplier
+
             candidate.update({
                 'otm_pct': round(otm_pct, 2),
                 'annualized_return': round(annualized_return, 2),
@@ -1022,6 +1042,11 @@ class OptionsService:
                 'profile_type': dynamic_profile.get('profile_type', 'monthly'),
                 'vix_regime': vix_regime.get('regime', 'normal') if vix_regime else 'normal',
                 'vix_level': vix_regime.get('vix', 20.0) if vix_regime else 20.0,
+                'macro_multiplier': macro_multiplier,
+                'macro_regime': macro_regime.get('rate_regime', 'unknown'),
+                'macro_credit_stress': macro_regime.get('credit_stress', 'unknown'),
+                'macro_summary': macro_regime.get('summary', ''),
+                'macro_advice': macro_regime.get('advice', ''),
                 'earnings_date': earnings_info.get('earnings_date'),
                 'days_to_earnings': earnings_info.get('days_to_earnings'),
                 'earnings_adjustment': earnings_adjustment,
@@ -1067,6 +1092,10 @@ class OptionsService:
                 candidate['warnings'].append(f'⚠️ Earnings in {earnings_info.get("days_to_earnings")}d - high assignment risk')
             elif earnings_info.get('warning_level') == 'soon':
                 candidate['warnings'].append(f'Earnings in {earnings_info.get("days_to_earnings")} days')
+
+            # Phase 3: Macro regime warnings
+            if macro_multiplier < 1.0:
+                candidate['warnings'].append(f"⚠️ {macro_regime.get('summary', 'Macro headwinds')}")
 
         return candidate
 

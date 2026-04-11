@@ -42,9 +42,10 @@ def create_app(config=None):
         logger.debug("Applied custom configuration")
     
     # Register blueprints
-    from api.routes import portfolio, options
+    from api.routes import portfolio, options, macro
     app.register_blueprint(portfolio.bp)
     app.register_blueprint(options.bp)
+    app.register_blueprint(macro.bp)
     logger.info("Registered API blueprints")
     
     @app.route('/health')
