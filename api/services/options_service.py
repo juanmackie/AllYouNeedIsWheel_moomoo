@@ -12,6 +12,11 @@ import pandas as pd
 from moomoo import RET_OK
 from core.connection import MoomooConnection
 from core.cache_manager import recommendation_cache, RecommendationCache
+from core.wheel_decision import (
+    score_contract,
+    score_existing_position,
+    WheelDecision,
+)
 from core.utils import get_closest_friday, get_next_monthly_expiration
 from config import Config
 from db.database import OptionsDatabase
@@ -199,7 +204,43 @@ class OptionsService:
                 executed=True,
                 execution_details=execution_details
             )
-            
+
+            # Auto-capture lifecycle event
+            try:
+                is_rollover = bool(order.get('isRollover', False))
+                event_type = 'roll' if is_rollover else 'entry'
+
+                event_data = {
+                    'event_type': event_type,
+                    'ticker': ticker,
+                    'option_type': option_type,
+                    'strike': float(strike),
+                    'expiration': str(expiry),
+                    'premium_in': round(limit_price * 100, 2) if action == 'BUY' else round(limit_price * 100, 2),
+                    'premium_out': 0,
+                    'pnl': 0,
+                    'leakage': 0,
+                    'reason': 'rollover' if is_rollover else 'new_entry',
+                    'details': {
+                        'order_id': order_id,
+                        'moomoo_order_id': result.get('order_id'),
+                        'action': action,
+                        'quantity': quantity,
+                        'limit_price': limit_price,
+                    }
+                }
+
+                # For rollovers, capture from/to transition
+                if is_rollover:
+                    event_data['from_strike'] = float(order.get('from_strike', 0) or 0)
+                    event_data['from_expiration'] = str(order.get('from_expiration', '') or '')
+                    event_data['to_strike'] = float(order.get('to_strike', 0) or strike)
+                    event_data['to_expiration'] = str(order.get('to_expiration', '') or expiry)
+
+                db.save_trade_event(event_data)
+            except Exception as event_err:
+                logger.warning(f"Failed to save trade event: {event_err}")
+
             return {
                 "success": True,
                 "message": "Order sent to moomoo",
@@ -713,389 +754,117 @@ class OptionsService:
             return [get_closest_friday().strftime('%Y%m%d')]
 
     def _build_candidate(self, ticker, option, stock_price, desired_otm, profile, portfolio_context):
-        strike = float(option.get('strike', 0) or 0)
-        expiration = str(option.get('expiration', '') or '')
-        if strike <= 0 or not expiration:
-            return None
+        """
+        Build a scored candidate for a single option contract.
 
-        try:
-            expiry_date = datetime.strptime(expiration, '%Y%m%d').date()
-        except ValueError:
-            return None
-
-        dte = (expiry_date - datetime.now().date()).days
-        if dte <= 0:
-            return None
-
-        bid = float(option.get('bid', 0) or 0)
-        ask = float(option.get('ask', 0) or 0)
-        last = float(option.get('last', 0) or 0)
-        mid_price = self._calculate_mid_price(bid, ask, last)
-        if mid_price < profile['min_mid_price']:
-            return None
-
-        spread_pct = 100.0
-        if bid > 0 and ask > 0 and mid_price > 0:
-            spread_pct = ((ask - bid) / mid_price) * 100
-        elif bid == 0 and ask == 0:
-            spread_pct = 100.0
-
-        if spread_pct > profile['max_spread_pct']:
-            return None
-
-        option_type = str(option.get('option_type', '') or '').upper()
-        delta = float(option.get('delta', 0) or 0)
-        abs_delta = abs(delta)
-        implied_volatility = float(option.get('implied_volatility', 0) or 0)
-        open_interest = int(option.get('open_interest', 0) or 0)
-        volume = int(option.get('volume', 0) or 0)
-        premium_per_contract = mid_price * 100
-
-        if premium_per_contract < profile['min_premium_per_contract']:
-            return None
-        if open_interest < profile['min_open_interest'] and volume < profile['min_volume']:
-            return None
-
-        openbb = self._get_openbb_service()
-        if openbb:
-            quality = openbb.get_quality_check(ticker)
-            if quality and not quality.get('passes', True):
-                logger.debug(f"Quality gate failed for {ticker}: {quality.get('reasons', [])}")
-                return None
-
-        position = portfolio_context.get('positions', {}).get(ticker, {})
-        shares_owned = float(position.get('position', 0) or 0)
-        avg_cost = float(position.get('avg_cost', 0) or 0)
-        cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
-
-        candidate = {
-            'symbol': f"{ticker}{expiration}{'C' if option_type == 'CALL' else 'P'}{int(strike)}",
-            'strike': strike,
-            'expiration': expiration,
-            'option_type': option_type,
-            'bid': bid,
-            'ask': ask,
-            'last': last if last > 0 else round(mid_price, 4),
-            'mid_price': round(mid_price, 4),
-            'open_interest': open_interest,
-            'volume': volume,
-            'implied_volatility': round(implied_volatility, 2),
-            'delta': round(delta, 5),
-            'gamma': round(float(option.get('gamma', 0) or 0), 5),
-            'theta': round(float(option.get('theta', 0) or 0), 5),
-            'vega': round(float(option.get('vega', 0) or 0), 5),
-            'dte': dte,
-            'premium_per_contract': round(premium_per_contract, 2),
-            'spread_pct': round(spread_pct, 2),
-            'score': 0.0,
-            'score_details': {},
-            'rationale': [],
-            'warnings': []
-        }
-
-        delta_score = self._score_proximity(abs_delta, profile['target_delta'], profile['delta_tolerance'])
-        dte_score = self._score_proximity(dte, profile['preferred_dte'], max(profile['preferred_dte'], 10))
-        oi_score = self._score_positive_metric(open_interest, profile['ideal_open_interest'])
-        volume_score = self._score_positive_metric(volume, profile['ideal_volume'])
-        spread_score = self._clamp(1 - (spread_pct / max(profile['ideal_spread_pct'], 1)))
-        liquidity_score = (oi_score * 0.45) + (volume_score * 0.2) + (spread_score * 0.35)
-
-        # Phase 1: Risk-Adjusted Scoring Metrics
-        # IV-Adjusted Return: annualized return normalized by implied volatility
-        annualized_return_raw = (premium_per_contract / (stock_price * 100)) * (365 / dte) * 100 if stock_price > 0 and dte > 0 else 0
-        iv_adjusted_return = annualized_return_raw / max(implied_volatility, 0.05)  # Avoid div by zero
-        iv_adjusted_score = self._score_positive_metric(iv_adjusted_return, profile.get('target_iv_adjusted', 50))
-        
-        # Theta-to-Delta Risk Ratio: income per unit of directional risk
-        theta_val = candidate["theta"]; theta_delta_ratio = abs(theta_val) / (abs_delta * stock_price) if stock_price > 0 and abs_delta > 0 else 0
-        tdr_score = self._score_positive_metric(theta_delta_ratio, profile.get('target_theta_delta_ratio', 0.005))
-        
-        # Phase 2: IV Environment and Earnings Integration
-        # Get dynamic profile based on DTE and VIX regime
+        Delegates to the unified WheelDecision engine, then converts
+        the result back to the legacy dict format for API compatibility.
+        """
+        # Gather IV / earnings / macro context
         vix_regime = portfolio_context.get('vix_regime')
-        dynamic_profile = self._get_screening_profile(option_type, dte, vix_regime=vix_regime)
-        
-        # Record IV data for this ticker
-        if implied_volatility > 0:
+        if option.get('implied_volatility', 0) > 0:
             self.iv_earnings_service.record_iv_data(
-                ticker, implied_volatility, stock_price, option_type, expiration, dte
+                ticker,
+                float(option.get('implied_volatility', 0)),
+                stock_price,
+                str(option.get('option_type', '') or '').upper(),
+                str(option.get('expiration', '') or ''),
+                int((datetime.strptime(str(option.get('expiration', '')), '%Y%m%d').date() - datetime.now().date()).days)
+                if option.get('expiration') else 0,
             )
-        
-        # Get IV environment score
+
         iv_env_adjustment, iv_rank, iv_status = self.iv_earnings_service.get_iv_environment_score(
-            ticker, implied_volatility if implied_volatility > 0 else 0.20
+            ticker, float(option.get('implied_volatility', 0) or 0.20)
         )
-        
-        # Get earnings impact
         earnings_adjustment, earnings_warning = self.iv_earnings_service.get_earnings_score_impact(ticker)
         earnings_info = self.iv_earnings_service.get_earnings_info(ticker)
-        
-        # Calculate IV environment score (-20 to +20 mapped to 0-100 for weighting)
-        iv_env_score = self._clamp((iv_env_adjustment + 20) / 40)  # Maps -20..+20 to 0..1
-        
-        # Adjust base metrics with dynamic profile weight multipliers
-        liquidity_weight = 0.20 * dynamic_profile.get('liquidity_weight_multiplier', 1.0)
-        delta_fit_weight = 0.12 * dynamic_profile.get('delta_fit_weight_multiplier', 1.0)
-        
-        # Apply dynamic liquidity score adjustment
-        liquidity_score = liquidity_score * dynamic_profile.get('liquidity_weight_multiplier', 1.0)
-        
-        # Expected Value: probability-weighted outcome
-        pop = 1 - abs_delta  # Probability of Profit approximation
-        if option_type == 'CALL':
-            max_loss_estimate = stock_price * 100 * 0.05  # Assume 5% loss on called stock
-        else:
-            max_loss_estimate = strike * 100 * 0.10  # Assume 10% assignment drop for CSPs
-        
-        expected_value = (pop * premium_per_contract) - ((1 - pop) * max_loss_estimate)
-        ev_score = self._clamp(expected_value / max(premium_per_contract, 0.01))  # Normalize to premium
-        
-        # Capital Efficiency Score for CSPs (pre-calculate for use in PUT section)
-        account_value = portfolio_context.get('account_value', cash_balance)
-        capital_efficiency = 0
-        ce_score = 0
+        macro_regime = get_macro_service().get_macro_regime()
 
-        if option_type == 'CALL':
-            if stock_price <= 0 or strike <= stock_price:
-                return None
-            max_contracts = max(int(shares_owned // 100), 0)
-            if max_contracts < 1:
-                return None
+        # Delegate to unified scorer
+        decision = score_contract(
+            ticker=ticker,
+            option=option,
+            stock_price=stock_price,
+            profile=profile,
+            portfolio_context=portfolio_context,
+            iv_env_adjustment=iv_env_adjustment,
+            iv_rank=iv_rank,
+            iv_status_str=iv_status,
+            earnings_adjustment=earnings_adjustment,
+            earnings_info=earnings_info,
+            macro_regime=macro_regime,
+        )
 
-            otm_pct = ((strike - stock_price) / stock_price) * 100
-            annualized_return = (premium_per_contract / (stock_price * 100)) * (365 / dte) * 100 if stock_price > 0 else 0
-            if_called_return = (((strike - stock_price) + mid_price) / stock_price) * 100 if stock_price > 0 else 0
-            cost_basis_score = 1.0 if avg_cost <= 0 or strike >= avg_cost else self._clamp(1 - ((avg_cost - strike) / avg_cost) * 4)
-            otm_score = self._score_proximity(otm_pct, desired_otm, max(desired_otm * 0.75, 6))
-            annualized_score = self._score_positive_metric(annualized_return, 24)
-            upside_score = self._score_positive_metric(if_called_return, 12)
+        if decision is None:
+            return None
 
-            # Phase 2: Apply IV environment and earnings adjustments
-            # Base score with Phase 1 weights
-            base_score = (
-                iv_adjusted_score * 0.25 +
-                tdr_score * 0.20 +
-                liquidity_score * 0.18 +
-                ev_score * 0.15 +
-                upside_score * 0.12 +
-                otm_score * 0.10
-            ) * 100
-            
-            # Apply IV environment bonus/penalty (scaled to not overwhelm)
-            iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
-            
-            # Apply earnings adjustment
-            score = iv_adjusted_score_final * (1 + earnings_adjustment / 100)
-            
-            # Apply cost basis multiplier
-            score *= (0.65 + (0.35 * cost_basis_score))
+        # Convert WheelDecision back to legacy dict format for API compatibility
+        candidate = {
+            'symbol': decision.ticker + decision.expiration + ('C' if decision.option_type == 'CALL' else 'P') + str(int(decision.strike)),
+            'strike': decision.strike,
+            'expiration': decision.expiration,
+            'option_type': decision.option_type,
+            'bid': decision.bid,
+            'ask': decision.ask,
+            'last': decision.last if hasattr(decision, 'last') else round(decision.mid_price, 4),
+            'mid_price': round(decision.mid_price, 4),
+            'open_interest': decision.open_interest,
+            'volume': decision.volume,
+            'implied_volatility': round(decision.implied_volatility, 2),
+            'delta': round(decision.delta, 5),
+            'gamma': round(decision.gamma, 5),
+            'theta': round(decision.theta, 5),
+            'vega': round(getattr(decision, 'vega', 0), 5),
+            'dte': decision.dte,
+            'premium_per_contract': round(decision.premium_per_contract, 2),
+            'spread_pct': round(decision.spread_pct, 2),
+            'score': round(decision.contract_score, 2),
+            'score_details': decision.score_details,
+            'rationale': decision.rationale,
+            'warnings': decision.warnings,
+            'otm_pct': decision.otm_pct,
+            'annualized_return': decision.annualized_return,
+            'iv_adjusted_return': decision.iv_adjusted_return,
+            'iv_rank': decision.iv_rank,
+            'iv_status': decision.iv_status,
+            'iv_env_adjustment': decision.iv_env_adjustment,
+            'profile_type': decision.profile_type,
+            'vix_regime': decision.vix_regime,
+            'vix_level': decision.vix_level,
+            'macro_multiplier': decision.macro_multiplier,
+            'macro_regime': decision.macro_regime,
+            'macro_credit_stress': decision.macro_credit_stress,
+            'macro_summary': decision.macro_summary,
+            'macro_advice': decision.macro_advice,
+            'earnings_date': decision.earnings_date,
+            'days_to_earnings': decision.days_to_earnings,
+            'earnings_adjustment': decision.earnings_adjustment,
+            # Additional unified fields
+            'size_fit': decision.size_fit,
+            'expected_move_buffer': decision.expected_move_buffer,
+            'wheel_decision': decision.to_dict(),
+        }
 
-            # Phase 3: Apply macro regime multiplier
-            macro_regime = get_macro_service().get_macro_regime()
-            macro_multiplier = macro_regime.get('macro_multiplier', 1.0)
-            score *= macro_multiplier
-
+        # Add CALL/PUT specific fields
+        if decision.option_type == 'CALL':
             candidate.update({
-                'otm_pct': round(otm_pct, 2),
-                'annualized_return': round(annualized_return, 2),
-                'iv_adjusted_return': round(iv_adjusted_return, 2),
-                'if_called_return': round(if_called_return, 2),
-                'earnings_max_contracts': max_contracts,
-                'earnings_premium_per_contract': round(premium_per_contract, 2),
-                'earnings_total_premium': round(premium_per_contract * max_contracts, 2),
-                'earnings_return_on_capital': round(annualized_return, 2),
-                'score': round(score, 2),
-                'iv_rank': round(iv_rank * 100, 1),
-                'iv_status': iv_status,
-                'iv_env_adjustment': iv_env_adjustment,
-                'profile_type': dynamic_profile.get('profile_type', 'monthly'),
-                'vix_regime': vix_regime.get('regime', 'normal') if vix_regime else 'normal',
-                'vix_level': vix_regime.get('vix', 20.0) if vix_regime else 20.0,
-                'macro_multiplier': macro_multiplier,
-                'macro_regime': macro_regime.get('rate_regime', 'unknown'),
-                'macro_credit_stress': macro_regime.get('credit_stress', 'unknown'),
-                'macro_summary': macro_regime.get('summary', ''),
-                'macro_advice': macro_regime.get('advice', ''),
-                'earnings_date': earnings_info.get('earnings_date'),
-                'days_to_earnings': earnings_info.get('days_to_earnings'),
-                'earnings_adjustment': earnings_adjustment,
-                'score_details': {
-                    'annualized': round(annualized_score * 100, 1),
-                    'upside': round(upside_score * 100, 1),
-                    'liquidity': round(liquidity_score * 100, 1),
-                    'delta_fit': round(delta_score * 100, 1),
-                    'otm_fit': round(otm_score * 100, 1),
-                    'cost_basis_fit': round(cost_basis_score * 100, 1),
-                    'iv_adjusted': round(iv_adjusted_score * 100, 1),
-                    'theta_delta': round(tdr_score * 100, 1),
-                    'expected_value': round(ev_score * 100, 1),
-                    'iv_environment': round(iv_env_score * 100, 1),
-                },
-                'rationale': [
-                    f"{annualized_return:.1f}% ann. yield (IV-adj: {iv_adjusted_return:.1f}, rank: {iv_rank*100:.0f}%)",
-                    f"Theta/Delta: {theta_delta_ratio:.4f} | EV: ${expected_value:.2f} | Profile: {dynamic_profile.get('profile_type', 'monthly')}",
-                    f"{otm_pct:.1f}% OTM, {abs_delta:.2f}δ | {open_interest} OI / {volume} vol"
-                ]
+                'if_called_return': decision.if_called_return,
+                'earnings_max_contracts': decision.max_contracts,
+                'earnings_premium_per_contract': round(decision.premium_per_contract, 2),
+                'earnings_total_premium': round(decision.premium_per_contract * decision.max_contracts, 2),
+                'earnings_return_on_capital': round(decision.annualized_return, 2),
             })
-
-            if spread_pct > profile['ideal_spread_pct']:
-                candidate['warnings'].append('Wide bid/ask spread')
-            if open_interest < profile['ideal_open_interest']:
-                candidate['warnings'].append('Below ideal open interest')
-            if avg_cost > 0 and strike < avg_cost:
-                candidate['warnings'].append('Strike below stock cost basis')
-            
-            # Phase 2: IV environment warnings
-            if iv_status == 'extreme_low':
-                candidate['warnings'].append(f'IV extremely low ({iv_rank*100:.0f}%) - poor risk/reward')
-            elif iv_status == 'low':
-                candidate['warnings'].append(f'IV below average ({iv_rank*100:.0f}%)')
-            elif iv_status == 'extreme_high':
-                candidate['warnings'].append(f'IV extremely high ({iv_rank*100:.0f}%) - excellent premium')
-            
-            # Phase 2: Earnings warnings
-            if earnings_info.get('warning_level') == 'today':
-                candidate['warnings'].append('🚨 EARNINGS TODAY - extreme risk')
-            elif earnings_info.get('warning_level') == 'very_soon':
-                candidate['warnings'].append(f'⚠️ Earnings in {earnings_info.get("days_to_earnings")}d - high assignment risk')
-            elif earnings_info.get('warning_level') == 'soon':
-                candidate['warnings'].append(f'Earnings in {earnings_info.get("days_to_earnings")} days')
-            
-            # Phase 3: VIX regime warnings
-            if vix_regime:
-                if vix_regime.get('regime') == 'complacency':
-                    candidate['warnings'].append(f'Low VIX ({vix_regime["vix"]}) - premiums compressed')
-                elif vix_regime.get('regime') == 'fear':
-                    candidate['warnings'].append(f'High VIX ({vix_regime["vix"]}) - elevated risk, wider stops')
-
-            # Phase 3: Macro regime warnings
-            if macro_multiplier < 1.0:
-                candidate['warnings'].append(f"⚠️ {macro_regime.get('summary', 'Macro headwinds')}")
         else:
-            if stock_price <= 0 or strike >= stock_price:
-                return None
-
-            otm_pct = ((stock_price - strike) / stock_price) * 100
-            cash_required = strike * 100
-            
-            # Cash reserve check - early exit if this CSP would exceed available cash
-            if self.config.get('cash_reserve_enabled', True) and cash_balance > 0:
-                reserved = self._calculate_cash_reserved(portfolio_context)
-                available_for_new = max(0, cash_balance - reserved)
-                if cash_required > available_for_new:
-                    return None  # Don't suggest CSPs we can't afford
-            
-            annualized_return = (premium_per_contract / cash_required) * (365 / dte) * 100 if cash_required > 0 else 0
-            breakeven = strike - mid_price
-            breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
-            otm_score = self._score_proximity(otm_pct, desired_otm, max(desired_otm * 0.75, 6))
-            annualized_score = self._score_positive_metric(annualized_return, 18)
-            buffer_score = self._score_positive_metric(breakeven_buffer_pct, max(desired_otm, 8))
-            capital_fit = 1.0 if cash_balance <= 0 else self._clamp(cash_balance / cash_required)
-            
-            # Capital Efficiency Score for CSPs
-            if account_value > 0 and cash_required > 0:
-                capital_efficiency = annualized_return / (cash_required / account_value)
-                ce_score = self._score_positive_metric(capital_efficiency, profile.get('target_capital_efficiency', 100))
-
-            # Phase 2: Apply IV environment and earnings adjustments
-            # Base score with Phase 1 weights
-            base_score = (
-                iv_adjusted_score * 0.25 +
-                tdr_score * 0.20 +
-                ev_score * 0.18 +
-                liquidity_score * 0.15 +
-                buffer_score * 0.12 +
-                ce_score * 0.10
-            ) * 100
-            
-            # Apply IV environment bonus/penalty
-            iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
-            
-            # Apply earnings adjustment
-            score = iv_adjusted_score_final * (1 + earnings_adjustment / 100)
-            
-            # Apply capital fit multiplier
-            score *= (0.75 + (0.25 * capital_fit))
-
-            # Phase 3: Apply macro regime multiplier
-            macro_regime = get_macro_service().get_macro_regime()
-            macro_multiplier = macro_regime.get('macro_multiplier', 1.0)
-            score *= macro_multiplier
-
             candidate.update({
-                'otm_pct': round(otm_pct, 2),
-                'annualized_return': round(annualized_return, 2),
-                'iv_adjusted_return': round(iv_adjusted_return, 2),
-                'breakeven': round(breakeven, 2),
-                'breakeven_buffer_pct': round(breakeven_buffer_pct, 2),
-                'cash_required': round(cash_required, 2),
+                'breakeven': decision.breakeven,
+                'breakeven_buffer_pct': decision.breakeven_buffer_pct,
+                'cash_required': decision.cash_required,
                 'cash_reserve_enabled': self.config.get('cash_reserve_enabled', True),
                 'earnings_max_contracts': 1,
-                'earnings_premium_per_contract': round(premium_per_contract, 2),
-                'earnings_total_premium': round(premium_per_contract, 2),
-                'earnings_return_on_cash': round(annualized_return, 2),
-                'score': round(score, 2),
-                'iv_rank': round(iv_rank * 100, 1),
-                'iv_status': iv_status,
-                'iv_env_adjustment': iv_env_adjustment,
-                'profile_type': dynamic_profile.get('profile_type', 'monthly'),
-                'vix_regime': vix_regime.get('regime', 'normal') if vix_regime else 'normal',
-                'vix_level': vix_regime.get('vix', 20.0) if vix_regime else 20.0,
-                'macro_multiplier': macro_multiplier,
-                'macro_regime': macro_regime.get('rate_regime', 'unknown'),
-                'macro_credit_stress': macro_regime.get('credit_stress', 'unknown'),
-                'macro_summary': macro_regime.get('summary', ''),
-                'macro_advice': macro_regime.get('advice', ''),
-                'earnings_date': earnings_info.get('earnings_date'),
-                'days_to_earnings': earnings_info.get('days_to_earnings'),
-                'earnings_adjustment': earnings_adjustment,
-                'score_details': {
-                    'annualized': round(annualized_score * 100, 1),
-                    'buffer': round(buffer_score * 100, 1),
-                    'liquidity': round(liquidity_score * 100, 1),
-                    'delta_fit': round(delta_score * 100, 1),
-                    'otm_fit': round(otm_score * 100, 1),
-                    'capital_fit': round(capital_fit * 100, 1),
-                    'iv_adjusted': round(iv_adjusted_score * 100, 1),
-                    'theta_delta': round(tdr_score * 100, 1),
-                    'expected_value': round(ev_score * 100, 1),
-                    'capital_efficiency': round(ce_score * 100, 1),
-                    'iv_environment': round(iv_env_score * 100, 1),
-                },
-                'rationale': [
-                    f"{annualized_return:.1f}% ann. yield (IV-adj: {iv_adjusted_return:.1f}, rank: {iv_rank*100:.0f}%)",
-                    f"Theta/Delta: {theta_delta_ratio:.4f} | EV: ${expected_value:.2f} | CapEff: {capital_efficiency:.1f}",
-                    f"{otm_pct:.1f}% OTM, {breakeven_buffer_pct:.1f}% buffer | Profile: {dynamic_profile.get('profile_type', 'monthly')}"
-                ]
+                'earnings_premium_per_contract': round(decision.premium_per_contract, 2),
+                'earnings_total_premium': round(decision.premium_per_contract, 2),
+                'earnings_return_on_cash': round(decision.annualized_return, 2),
             })
-
-            if spread_pct > profile['ideal_spread_pct']:
-                candidate['warnings'].append('Wide bid/ask spread')
-            if open_interest < profile['ideal_open_interest']:
-                candidate['warnings'].append('Below ideal open interest')
-            if cash_balance > 0 and cash_required > cash_balance:
-                candidate['warnings'].append('Cash required exceeds current cash balance')
-            
-            # Phase 2: IV environment warnings
-            if iv_status == 'extreme_low':
-                candidate['warnings'].append(f'IV extremely low ({iv_rank*100:.0f}%) - poor risk/reward')
-            elif iv_status == 'low':
-                candidate['warnings'].append(f'IV below average ({iv_rank*100:.0f}%)')
-            elif iv_status == 'extreme_high':
-                candidate['warnings'].append(f'IV extremely high ({iv_rank*100:.0f}%) - excellent premium')
-            
-            # Phase 2: Earnings warnings
-            if earnings_info.get('warning_level') == 'today':
-                candidate['warnings'].append('🚨 EARNINGS TODAY - extreme risk')
-            elif earnings_info.get('warning_level') == 'very_soon':
-                candidate['warnings'].append(f'⚠️ Earnings in {earnings_info.get("days_to_earnings")}d - high assignment risk')
-            elif earnings_info.get('warning_level') == 'soon':
-                candidate['warnings'].append(f'Earnings in {earnings_info.get("days_to_earnings")} days')
-
-            # Phase 3: Macro regime warnings
-            if macro_multiplier < 1.0:
-                candidate['warnings'].append(f"⚠️ {macro_regime.get('summary', 'Macro headwinds')}")
 
         return candidate
 
@@ -1614,67 +1383,98 @@ class OptionsService:
                         premium_per_contract = mid_price * 100
                         annualized_return = (premium_per_contract / cash_required) * (365 / dte) * 100 if cash_required > 0 and dte > 0 else 0
                         otm_pct = ((stock_price - strike) / stock_price) * 100
-                        
-                        # Simple scoring (no Greeks available from yfinance)
-                        # Score based on annualized return with basic modifiers
-                        score = min(100, max(0, annualized_return))  # Cap at 100
-                        
-                        # Add to candidates
-                        put_data = {
-                            'ticker': ticker,
-                            'stock_price': stock_price,
-                            'option_type': 'PUT',
-                            'max_contracts': 1,
-                            'existing_position': 0,
-                            'from_watchlist': True,
+
+                        # Build a normalized contract dict for the unified scorer
+                        # Greeks are None from yfinance; scorer handles missing data gracefully
+                        wl_contract = {
                             'strike': strike,
                             'expiration': target_exp.replace('-', ''),
-                            'dte': dte,
-                            'mid_price': mid_price,
-                            'premium_per_contract': round(premium_per_contract, 2),
+                            'option_type': 'PUT',
                             'bid': bid,
                             'ask': ask,
-                            'annualized_return': round(annualized_return, 2),
-                            'iv_adjusted_return': round(annualized_return, 2),  # No IV data
-                            'otm_pct': round(otm_pct, 2),
-                            'delta': None,  # Not available from yfinance
+                            'last': last_price,
+                            'delta': 0,        # Not available from yfinance
+                            'gamma': 0,
+                            'theta': 0,
+                            'vega': 0,
                             'implied_volatility': float(best_put['impliedVolatility']) if not pd.isna(best_put.get('impliedVolatility')) else 0,
                             'open_interest': int(best_put['openInterest']) if not pd.isna(best_put['openInterest']) else 0,
                             'volume': int(best_put['volume']) if not pd.isna(best_put['volume']) else 0,
-                            'score': round(score, 2),
-                            'iv_rank': 50,  # Neutral (no IV history)
-                            'iv_status': 'unknown',
-                            'iv_env_adjustment': 0,
-                            'profile_type': 'monthly' if dte > 14 else 'weekly',
-                            'earnings_date': None,
-                            'days_to_earnings': None,
-                            'earnings_adjustment': 0,
-                            'score_details': {
-                                'annualized': round(annualized_return, 1),
-                                'liquidity': 50,  # Neutral without real data
-                                'otm_fit': 80 if 5 <= otm_pct <= 15 else 50,
-                                'iv_adjusted': 50,
-                                'iv_environment': 50,
-                                'openbb_technical': 0,
-                                'openbb_quality': 0,
-                                'openbb_unusual_activity': False,
-                            },
-                            'rationale': [
-                                f"{annualized_return:.1f}% ann. yield (from yfinance data)",
-                                f"{otm_pct:.1f}% OTM | ${cash_required:.0f} cash required",
-                                f"From watchlist (not in portfolio)"
-                            ],
-                            'warnings': [
-                                'Data from yfinance (not Moomoo) - prices may differ',
-                                'No Greeks available from yfinance'
-                            ] if not best_put.get('impliedVolatility') else [
-                                'Data from yfinance (not Moomoo) - verify before trading'
-                            ],
-                            'cash_reserve_enabled': self.config.get('cash_reserve_enabled', True),
                         }
-                        
-                        all_options.append(put_data)
-                        logger.info(f"Watchlist {ticker}: Found CSP candidate - ${strike}P exp {target_exp}, {annualized_return:.1f}% annualized")
+
+                        # Use a lenient profile for watchlist (yfinance data has gaps)
+                        wl_profile = self._get_screening_profile('PUT', dte=dte)
+                        # Relax minimums for watchlist candidates
+                        wl_profile['min_open_interest'] = 0
+                        wl_profile['min_volume'] = 0
+                        wl_profile['min_premium_per_contract'] = 0
+
+                        # Use neutral IV/earnings/macro for watchlist
+                        wl_decision = score_contract(
+                            ticker=ticker,
+                            option=wl_contract,
+                            stock_price=stock_price,
+                            profile=wl_profile,
+                            portfolio_context=portfolio_context,
+                            iv_env_adjustment=0,
+                            iv_rank=0.5,
+                            iv_status_str='normal',
+                            earnings_adjustment=0,
+                            earnings_info={},
+                            macro_regime=get_macro_service().get_macro_regime(),
+                        )
+
+                        if wl_decision is not None:
+                            put_data = {
+                                'ticker': ticker,
+                                'stock_price': stock_price,
+                                'option_type': 'PUT',
+                                'max_contracts': 1,
+                                'existing_position': 0,
+                                'from_watchlist': True,
+                                'strike': wl_decision.strike,
+                                'expiration': wl_decision.expiration,
+                                'dte': wl_decision.dte,
+                                'mid_price': round(wl_decision.mid_price, 4),
+                                'premium_per_contract': round(wl_decision.premium_per_contract, 2),
+                                'bid': wl_decision.bid,
+                                'ask': wl_decision.ask,
+                                'annualized_return': wl_decision.annualized_return,
+                                'iv_adjusted_return': wl_decision.iv_adjusted_return,
+                                'otm_pct': wl_decision.otm_pct,
+                                'delta': wl_decision.delta,
+                                'implied_volatility': wl_decision.implied_volatility,
+                                'open_interest': wl_decision.open_interest,
+                                'volume': wl_decision.volume,
+                                'score': round(wl_decision.contract_score, 2),
+                                'iv_rank': wl_decision.iv_rank,
+                                'iv_status': wl_decision.iv_status,
+                                'iv_env_adjustment': wl_decision.iv_env_adjustment,
+                                'profile_type': wl_decision.profile_type,
+                                'earnings_date': None,
+                                'days_to_earnings': None,
+                                'earnings_adjustment': 0,
+                                'size_fit': wl_decision.size_fit,
+                                'expected_move_buffer': wl_decision.expected_move_buffer,
+                                'wheel_decision': wl_decision.to_dict(),
+                                'score_details': wl_decision.score_details,
+                                'rationale': wl_decision.rationale,
+                                'warnings': wl_decision.warnings + [
+                                    'Data from yfinance (not Moomoo) - verify before trading'
+                                ],
+                                'cash_reserve_enabled': self.config.get('cash_reserve_enabled', True),
+                                'breakeven': wl_decision.breakeven,
+                                'breakeven_buffer_pct': wl_decision.breakeven_buffer_pct,
+                                'cash_required': wl_decision.cash_required,
+                                'earnings_max_contracts': 1,
+                                'earnings_premium_per_contract': round(wl_decision.premium_per_contract, 2),
+                                'earnings_total_premium': round(wl_decision.premium_per_contract, 2),
+                                'earnings_return_on_cash': round(wl_decision.annualized_return, 2),
+                            }
+                            all_options.append(put_data)
+                            logger.info(f"Watchlist {ticker}: Found CSP candidate - ${strike}P exp {target_exp}, score={wl_decision.contract_score:.1f}")
+                        else:
+                            logger.debug(f"Watchlist {ticker}: Unified scorer rejected the candidate")
                         
                     except Exception as opt_err:
                         logger.debug(f"Watchlist {ticker}: Option chain error: {opt_err}")
@@ -1722,7 +1522,12 @@ class OptionsService:
                     'open_interest': option.get('open_interest'),
                     'volume': option.get('volume'),
                     'implied_volatility': option.get('implied_volatility'),
-                    'score_details': option.get('score_details', {})
+                    'score_details': option.get('score_details', {}),
+                    # Unified WheelDecision fields
+                    'size_fit': option.get('size_fit', 0),
+                    'expected_move_buffer': option.get('expected_move_buffer', 0),
+                    'wheel_decision': option.get('wheel_decision', {}),
+                    'from_watchlist': option.get('from_watchlist', False),
                 }
                 recommendations.append(rec)
             

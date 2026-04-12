@@ -3,7 +3,7 @@
         <div>
             <span class="app-section__eyebrow">Risk watch</span>
             <h2>Option positions near the strike</h2>
-            <p>Scan active contracts, current price distance, and the positions most likely to need action soon.</p>
+            <p>Scan active contracts, roll-pressure ranking, and positions most likely to need action soon.</p>
         </div>
     </div>
 
@@ -17,6 +17,9 @@
                     <th>Strike</th>
                     <th>Expiration</th>
                     <th>Current Price</th>
+                    <th>% OTM</th>
+                    <th>Roll Pressure</th>
+                    <th>Profit Target</th>
                     <th>Strike Difference</th>
                     <th>% Difference</th>
                     <th>Actions</th>
@@ -24,14 +27,14 @@
             </thead>
             <tbody id="option-positions-table-body">
                 <tr>
-                    <td colspan="9" class="text-center">Loading option positions...</td>
+                    <td colspan="12" class="text-center">Loading option positions...</td>
                 </tr>
             </tbody>
         </table>
     </div>
 
     <div class="app-section__footer">
-        Rows highlighted in yellow or red are approaching their strike price and may need attention.
+        Rows highlighted by roll pressure: red = urgent (&ge;70%), yellow = watch (&ge;40%). Distance columns show legacy strike-distance view.
     </div>
 </section>
 

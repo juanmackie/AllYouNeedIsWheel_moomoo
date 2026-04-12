@@ -2,7 +2,7 @@
  * Rollover module
  * Handles options approaching strike price and rollover suggestions
  */
-import { fetchPositions, fetchOptionData, saveOptionOrder, fetchPendingOrders, cancelOrder, executeOrder, fetchStockPrices as apiFetchStockPrices, fetchOptionExpirations } from '../dashboard/api.js';
+import { fetchPositions, fetchOptionData, saveOptionOrder, fetchPendingOrders, cancelOrder, executeOrder, fetchStockPrices as apiFetchStockPrices, fetchOptionExpirations, fetchRollPressure } from '../dashboard/api.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 
 // Store data
@@ -106,31 +106,68 @@ async function initializeRollover() {
 
 /**
  * Load option positions and identify those approaching strike price
+ * Uses the backend roll-pressure endpoint for ranking, with client-side fallback.
  */
 async function loadOptionPositions() {
     try {
-        // Fetch positions data
+        // First try the backend roll-pressure endpoint
+        const rollPressureData = await fetchRollPressure();
+
+        if (rollPressureData.positions && rollPressureData.positions.length > 0) {
+            // Use backend data — convert to the format expected by the table
+            const processedOptions = rollPressureData.positions.map(pos => ({
+                ...pos,
+                // Map wheel_decision fields to the format the table expects
+                strike: pos.strike,
+                optionType: pos.option_type,
+                stockPrice: pos.stock_price,
+                percentDifference: pos.otm_pct,
+                isApproachingStrike: pos.otm_pct >= 0 && pos.otm_pct < 10,
+                difference: pos.option_type === 'CALL'
+                    ? pos.strike - pos.stock_price
+                    : pos.stock_price - pos.strike,
+                roll_pressure: pos.roll_pressure,
+                extrinsic_remaining: pos.extrinsic_remaining,
+                profit_target_progress: pos.profit_target_progress,
+                wheel_decision: pos.wheel_decision,
+                // Keep compatibility with existing table rendering
+                symbol: pos.ticker,
+                contract: {
+                    strike: pos.strike,
+                    right: pos.option_type === 'PUT' ? 'P' : 'C',
+                    lastTradeDateOrContractMonth: pos.expiration
+                        ? pos.expiration.substring(0, 4) + '-' + pos.expiration.substring(4, 6) + '-' + pos.expiration.substring(6, 8)
+                        : '-',
+                },
+                market_price: pos.mid_price,
+                bid: pos.bid,
+                ask: pos.ask,
+            }));
+
+            optionsData = processedOptions;
+            populateOptionsTable(processedOptions);
+
+            if (!selectedOption && (!rolloverSuggestions || rolloverSuggestions.length === 0)) {
+                clearRolloverSuggestions();
+            }
+            return;
+        }
+
+        // Fallback: use client-side processing if backend returns no data
+        console.log('Roll-pressure endpoint returned no data, using client-side fallback');
         const positionsData = await fetchPositions();
         if (!positionsData) {
             throw new Error('Failed to fetch positions data');
         }
-        
-        // Filter only option positions
-        const optionPositions = positionsData.filter(position => 
+
+        const optionPositions = positionsData.filter(position =>
             position.security_type === 'OPT' || position.securityType === 'OPT' || position.sec_type === 'OPT');
-        
+
         console.log('Option positions loaded:', optionPositions.length);
-        
-        // Process all option positions with stock prices
         const processedOptions = await processOptionPositions(optionPositions);
-        
-        // Store the options data
         optionsData = processedOptions;
-        
-        // Populate the options table
         populateOptionsTable(processedOptions);
-        
-        // Only clear rollover suggestions if no option is selected AND we have no existing suggestions
+
         if (!selectedOption && (!rolloverSuggestions || rolloverSuggestions.length === 0)) {
             clearRolloverSuggestions();
         }
@@ -227,87 +264,111 @@ async function processOptionPositions(optionPositions) {
 function populateOptionsTable(options) {
     const tableBody = document.getElementById('option-positions-table-body');
     if (!tableBody) return;
-    
+
     // Clear table
     tableBody.innerHTML = '';
-    
+
     if (options.length === 0) {
         const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = '<td colspan="9" class="text-center">No option positions found</td>';
+        noDataRow.innerHTML = '<td colspan="12" class="text-center">No option positions found</td>';
         tableBody.appendChild(noDataRow);
         return;
     }
-    
+
     // Add options to table
-    options.forEach(option => {
+    options.forEach((option, index) => {
         const row = document.createElement('tr');
-        
-        // Add row class based on percentage difference for approaching strike options
-        if (option.isApproachingStrike) {
+
+        // Row highlighting based on roll pressure (new primary signal)
+        const rollPressure = option.roll_pressure || 0;
+        if (rollPressure >= 70) {
+            row.classList.add('table-danger'); // Urgent
+        } else if (rollPressure >= 40) {
+            row.classList.add('table-warning'); // Watch
+        } else if (option.isApproachingStrike) {
+            // Fallback: legacy strike-distance highlighting
             if (option.percentDifference < 5) {
-                row.classList.add('table-danger'); // Very close to strike
+                row.classList.add('table-danger');
             } else if (option.percentDifference < 10) {
-                row.classList.add('table-warning'); // Getting close to strike
+                row.classList.add('table-warning');
             }
         }
-        
+
         // Extract expiration date
         let expiration = '-';
         if (option.contract && option.contract.lastTradeDateOrContractMonth) {
             expiration = option.contract.lastTradeDateOrContractMonth;
+        } else if (option.expiration) {
+            // Format YYYYMMDD to YYYY-MM-DD
+            const exp = option.expiration.toString();
+            if (exp.length >= 8) {
+                expiration = `${exp.substring(0, 4)}-${exp.substring(4, 6)}-${exp.substring(6, 8)}`;
+            } else {
+                expiration = option.expiration;
+            }
         } else {
-            expiration = option.expiration || '-';
+            expiration = '-';
         }
-        
-        // Make sure stockPrice is not undefined or zero
+
         const stockPrice = option.stockPrice > 0 ? option.stockPrice : 'Fetching...';
-        
-        // Format the difference with its sign (can be negative)
         const formattedDifference = formatCurrency(option.difference);
-        
-        // Format percent difference (still showing as absolute for highlighting)
-        const absolutePercentDifference = Math.abs(option.percentDifference);
-        
-        // Color-code based on how close to strike (smaller is closer)
+        const absolutePercentDifference = Math.abs(option.percentDifference || 0);
+
         let differenceColorClass = '';
         if (absolutePercentDifference < 5) {
             differenceColorClass = 'text-danger fw-bold';
         } else if (absolutePercentDifference < 10) {
             differenceColorClass = 'text-danger';
         }
-        
-        // Format percent difference display with the sign
-        const percentDifferenceDisplay = `<span class="${differenceColorClass}">${option.percentDifference.toFixed(2)}%</span>`;
-        
+        const percentDifferenceDisplay = `<span class="${differenceColorClass}">${(option.percentDifference || 0).toFixed(2)}%</span>`;
+
+        // Roll pressure display
+        const pressureDisplay = rollPressure > 0
+            ? `<span class="${rollPressure >= 70 ? 'text-danger fw-bold' : rollPressure >= 40 ? 'text-warning fw-bold' : ''}">${rollPressure.toFixed(0)}%</span>`
+            : '<span class="text-muted">—</span>';
+
+        // Profit target progress display
+        const profitProgress = option.profit_target_progress || 0;
+        const profitProgressDisplay = profitProgress > 0
+            ? `<div class="progress" style="height: 6px; min-width: 60px;">
+                 <div class="progress-bar" role="progressbar" style="width: ${Math.min(profitProgress, 100)}%;"
+                      aria-valuenow="${profitProgress}" aria-valuemin="0" aria-valuemax="100"></div>
+               </div>
+               <small class="text-muted">${profitProgress.toFixed(0)}%</small>`
+            : '<span class="text-muted">—</span>';
+
         row.innerHTML = `
-            <td>${option.symbol}</td>
-            <td>${option.position}</td>
+            <td>${option.ticker || option.symbol}</td>
+            <td>${Math.abs(option.position || 0)}</td>
             <td>${option.optionType}</td>
             <td>${formatCurrency(option.strike)}</td>
             <td>${expiration}</td>
             <td>${typeof stockPrice === 'number' ? formatCurrency(stockPrice) : stockPrice}</td>
+            <td>${option.otm_pct !== undefined ? `${option.otm_pct.toFixed(1)}%` : '<span class="text-muted">—</span>'}</td>
+            <td>${pressureDisplay}</td>
+            <td>${profitProgressDisplay}</td>
             <td>${formattedDifference}</td>
             <td>${percentDifferenceDisplay}</td>
             <td>
-                <button class="btn btn-sm btn-primary roll-option-btn" data-option-id="${options.indexOf(option)}"
+                <button class="btn btn-sm btn-primary roll-option-btn" data-option-index="${index}"
                     data-bs-toggle="tooltip" data-bs-placement="top" title="Select this option to roll">
                     Roll
                 </button>
             </td>
         `;
-        
+
         tableBody.appendChild(row);
     });
-    
+
     // Add event listeners to roll buttons
     const rollButtons = tableBody.querySelectorAll('.roll-option-btn');
     rollButtons.forEach(button => {
         button.addEventListener('click', async (event) => {
-            const optionId = event.target.getAttribute('data-option-id');
-            await selectOptionToRoll(parseInt(optionId));
+            const optionIndex = parseInt(event.target.getAttribute('data-option-index'));
+            await selectOptionToRoll(optionIndex);
         });
     });
-    
+
     // Initialize tooltips for roll buttons
     initializeRolloverTooltips();
 }

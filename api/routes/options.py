@@ -776,4 +776,208 @@ def get_vix_regime():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@bp.route('/analytics/lifecycle', methods=['GET'])
+def get_trade_lifecycle():
+    """
+    Get trade lifecycle events and analytics.
+
+    Query Parameters:
+        ticker: Filter by ticker (optional)
+        event_type: Filter by event type (entry|roll|exit|target_hit|stopped)
+        limit: Max results (default: 100)
+
+    Returns:
+        JSON with trade events and summary analytics
+    """
+    logger.info("GET /analytics/lifecycle request received")
+
+    try:
+        from db.database import OptionsDatabase
+        from config import Config
+
+        db = OptionsDatabase(Config().get('db_path'))
+
+        ticker = request.args.get('ticker')
+        event_type = request.args.get('event_type')
+        limit = int(request.args.get('limit', 100))
+
+        events = db.get_trade_events(ticker=ticker, event_type=event_type, limit=limit)
+        analytics = db.get_trade_analytics()
+
+        return jsonify({
+            'success': True,
+            'events': events,
+            'analytics': analytics,
+            'count': len(events),
+        })
+    except Exception as e:
+        logger.error(f"Error fetching trade lifecycle: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@bp.route('/analytics/leakage', methods=['GET'])
+def get_leakage_analytics():
+    """
+    Get leakage analysis from trade events.
+
+    Returns:
+        JSON with leakage metrics, win rate, and per-symbol stats
+    """
+    logger.info("GET /analytics/leakage request received")
+
+    try:
+        from db.database import OptionsDatabase
+        from config import Config
+
+        db = OptionsDatabase(Config().get('db_path'))
+        analytics = db.get_trade_analytics()
+
+        return jsonify({
+            'success': True,
+            'analytics': {
+                'win_rate': analytics.get('win_rate', 0),
+                'avg_leakage': analytics.get('avg_leakage', 0),
+                'total_exits': analytics.get('total_exits', 0),
+                'wins': analytics.get('wins', 0),
+                'roll_count': analytics.get('roll_count', 0),
+                'per_symbol': analytics.get('per_symbol', []),
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error fetching leakage analytics: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@bp.route('/prefilled-close', methods=['POST'])
+def create_prefilled_close_order():
+    """
+    Dry quote preview for a buy-to-close order on an existing short option position.
+
+    Returns the calculated limit price (mid-price) and order details WITHOUT
+    creating any database record or sending anything to the broker.
+
+    Request body:
+    {
+        "ticker": "AAPL",
+        "option_type": "PUT",
+        "strike": 180.0,
+        "expiration": "20240510",
+        "quantity": 1,
+        "limit_price": 0.50  // Optional: overrides calculated mid-price
+    }
+
+    Returns:
+    {
+        "success": true,
+        "quote": {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": 180.0,
+            "expiration": "20240510",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "LIMIT",
+            "limit_price": 0.50,
+            "bid": 0.45,
+            "ask": 0.55,
+            "mid_price": 0.50
+        }
+    }
+    """
+    logger.info("POST /prefilled-close request received")
+
+    try:
+        from api.services.options_service import OptionsService
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+        required = ['ticker', 'option_type', 'strike', 'expiration', 'quantity']
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify({'success': False, 'error': f'Missing fields: {", ".join(missing)}'}), 400
+
+        ticker = data['ticker']
+        option_type = data['option_type'].upper()
+        strike = float(data['strike'])
+        expiration = str(data['expiration'])
+        quantity = int(data['quantity'])
+
+        # Get current option price for limit price
+        options_service = OptionsService()
+        conn = options_service._ensure_connection()
+        if not conn:
+            return jsonify({'success': False, 'error': 'Failed to connect to moomoo'}), 503
+
+        # Get option chain to find current bid/ask
+        try:
+            chain = conn.get_option_chain(
+                ticker,
+                expiration,
+                'P' if option_type == 'PUT' else 'C',
+                target_strike=strike
+            )
+            if chain and chain.get('options'):
+                # Find matching contract
+                matching = [
+                    opt for opt in chain['options']
+                    if float(opt.get('strike', 0)) == strike
+                ]
+                if matching:
+                    contract = matching[0]
+                    bid = float(contract.get('bid', 0) or 0)
+                    ask = float(contract.get('ask', 0) or 0)
+                    mid_price = (bid + ask) / 2 if bid > 0 and ask > 0 else 0
+                else:
+                    bid = ask = mid_price = 0
+            else:
+                bid = ask = mid_price = 0
+        except Exception as chain_err:
+            logger.warning(f"Could not fetch option chain for prefilled close: {chain_err}")
+            bid = ask = mid_price = 0
+
+        # Use provided limit price or calculate mid-price
+        limit_price = float(data.get('limit_price', 0) or 0)
+        if limit_price <= 0 and mid_price > 0:
+            limit_price = round(mid_price, 2)
+        elif limit_price <= 0:
+            limit_price = 0.05  # Fallback
+
+        order = {
+            'ticker': ticker,
+            'option_type': option_type,
+            'strike': strike,
+            'expiration': expiration,
+            'action': 'BUY',  # Buy to close
+            'quantity': quantity,
+            'order_type': 'LIMIT',
+            'limit_price': limit_price,
+            'bid': bid,
+            'ask': ask,
+            'mid_price': round(mid_price, 4),
+        }
+
+        return jsonify({
+            'success': True,
+            'quote': order,
+        })
+
+    except Exception as e:
+        logger.error(f"Error creating prefilled close order: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
         

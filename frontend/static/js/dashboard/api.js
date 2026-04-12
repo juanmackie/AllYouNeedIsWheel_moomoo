@@ -544,6 +544,44 @@ async function fetchTopRecommendations(limit = 3, manualRefresh = false) {
     }
 }
 
+/**
+ * Fetch roll-pressure analysis for all open option positions.
+ * Returns positions ranked by roll_pressure (0-100).
+ */
+async function fetchRollPressure() {
+    try {
+        const timestamp = new Date().getTime();
+        const response = await fetch(`/api/portfolio/roll-pressure?t=${timestamp}`, {
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        });
+
+        if (!response.ok) {
+            const payload = await readJsonSafely(response);
+            if (isOpenDUnavailable(payload)) {
+                return { positions: [], count: 0, error: 'OpenD unavailable' };
+            }
+            throw new Error(payload?.error || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        return {
+            positions: data.positions || [],
+            count: data.count || 0,
+            generated_at: data.generated_at,
+        };
+    } catch (error) {
+        console.error('Error fetching roll pressure:', error);
+        if (!isRealAccountUnavailableError(error)) {
+            showAlert(`Error fetching roll pressure: ${error.message}`, 'danger');
+        }
+        return { positions: [], count: 0, error: error.message };
+    }
+}
+
 // Export all API functions
 export {
     fetchAccountData,
@@ -558,5 +596,6 @@ export {
     checkOrderStatus,
     fetchStockPrices,
     fetchOptionExpirations,
-    fetchTopRecommendations
+    fetchTopRecommendations,
+    fetchRollPressure,
 };
