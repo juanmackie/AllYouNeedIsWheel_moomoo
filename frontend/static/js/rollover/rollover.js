@@ -1033,8 +1033,28 @@ function populatePendingOrdersTable(orders) {
     
     // Initialize tooltips for dynamically created elements
     initializeRolloverTooltips();
-}
-                    
+
+    // Add event listener for quantity updates
+    const quantityInputs = tableBody.querySelectorAll('.quantity-input');
+    quantityInputs.forEach(input => {
+        input.addEventListener('change', async (event) => {
+            const orderId = event.target.getAttribute('data-order-id');
+            const newQuantity = parseInt(event.target.value, 10);
+
+            if (newQuantity > 0) {
+                try {
+                    const response = await fetch(`/api/portfolio/orders/${orderId}/quantity`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ quantity: newQuantity })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Failed to update quantity');
+                    }
+
                     await response.json();
                     
                     // Reload pending orders
@@ -1042,18 +1062,13 @@ function populatePendingOrdersTable(orders) {
                 } catch (error) {
                     console.error(`Error updating quantity for order ${orderId}:`, error);
                     
-                    // Reset to previous value
-                    const order = pendingOrders.find(o => o.id === parseInt(orderId, 10));
-                    if (order) {
-                        event.target.value = order.quantity || 1;
-                    }
+                    // Reset to previous value - we'll need to find it from the global state if available
+                    // or just reload to be sure
+                    await loadPendingOrders();
                 }
             } else {
                 // Reset to previous value if invalid
-                const order = pendingOrders.find(o => o.id === parseInt(orderId, 10));
-                if (order) {
-                    event.target.value = order.quantity || 1;
-                }
+                await loadPendingOrders();
             }
         });
     });

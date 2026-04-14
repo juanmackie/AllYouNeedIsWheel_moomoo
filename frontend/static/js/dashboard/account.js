@@ -368,10 +368,13 @@ async function loadPositionsTable() {
  */
 function updateDataStatusIndicator(isFrozen) {
     const dataStatusIndicator = document.getElementById('data-status-indicator');
-    const dataStatusIcon = document.getElementById('data-status-icon').querySelector('i');
+    const dataStatusIconContainer = document.getElementById('data-status-icon');
     const dataUpdateTime = document.getElementById('data-update-time');
     
-    if (!dataStatusIndicator || !dataStatusIcon || !dataUpdateTime) return;
+    if (!dataStatusIndicator || !dataStatusIconContainer || !dataUpdateTime) return;
+
+    const dataStatusIcon = dataStatusIconContainer.querySelector('i');
+    if (!dataStatusIcon) return;
     
     // Get current time for the update timestamp
     const now = new Date();
