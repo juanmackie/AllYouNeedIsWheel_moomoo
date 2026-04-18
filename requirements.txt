@@ -11,6 +11,10 @@ protobuf>=3.5.1,<4
 # OpenBB SDK for financial data enrichment (free, no API keys needed)
 openbb>=4.0.0
 
+# Greeks calculation and option strategy analysis
+greeks-package>=1.2.0
+optionlab>=1.5.1
+
 # FRED API for macro economic regime detection (free API key required)
 fredapi>=0.4.2
 
