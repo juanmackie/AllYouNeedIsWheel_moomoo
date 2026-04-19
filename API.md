@@ -575,6 +575,22 @@ Check the background earnings updater status and cache statistics.
 - `running` — Background thread active
 - `stopped` — Background thread not running
 
+### Refresh All Earnings
+
+Trigger a global update for all active symbols (positions and pending orders) in the database.
+
+**Endpoint:** `POST /api/earnings/refresh`
+
+**Response:**
+```json
+{
+  "success": true,
+  "updated_count": 5,
+  "failed_count": 1,
+  "total_attempted": 6
+}
+```
+
 ### Update Single Earnings
 
 Manually fetch and update earnings data for a specific ticker.

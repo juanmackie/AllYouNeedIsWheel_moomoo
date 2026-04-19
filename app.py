@@ -7,8 +7,9 @@ import os
 import json
 import threading
 import time
+import atexit
 from datetime import datetime, timedelta
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, redirect, url_for, jsonify, current_app
 from api import create_app
 from core.logging_config import get_logger
 from db.database import OptionsDatabase
@@ -45,20 +46,38 @@ def start_earnings_updater(app):
     def earnings_worker():
         """Background worker to fetch earnings data"""
         with app.app_context():
-            db = OptionsDatabase()
+            db = app.config.get("database") or OptionsDatabase()
             service = IVEarningsService(db)
             
             logger.info("Earnings updater worker started")
             
             while not _stop_earnings_thread.is_set():
                 try:
-                    # Get unique tickers from recent orders
+                    # Get tickers from recent orders
                     recent_orders = db.get_orders(limit=100)
-                    tickers = list(set(order['ticker'] for order in recent_orders if order.get('ticker')))
+                    order_tickers = list(set(order['ticker'] for order in recent_orders if order.get('ticker')))
                     
-                    if tickers:
-                        logger.info(f"Updating earnings for {len(tickers)} tickers")
-                        result = service.batch_update_earnings(tickers)
+                    # Also get tickers from portfolio positions
+                    position_tickers = []
+                    try:
+                        from api.services.portfolio_service import PortfolioService
+                        portfolio_service = PortfolioService()
+                        portfolio_data = portfolio_service.get_positions()
+                        if portfolio_data:
+                            position_tickers = [
+                                pos.get('symbol') 
+                                for pos in portfolio_data 
+                                if pos.get('security_type') == 'STK'
+                            ]
+                    except Exception as e:
+                        logger.warning(f"Could not fetch portfolio positions for earnings: {e}")
+                    
+                    # Combine and deduplicate tickers
+                    all_tickers = list(set(order_tickers + position_tickers))
+                    
+                    if all_tickers:
+                        logger.info(f"Updating earnings for {len(all_tickers)} tickers (orders + positions)")
+                        result = service.batch_update_earnings(all_tickers)
                         logger.info(f"Earnings update complete: {result['successful']} successful, {result['failed']} failed")
                     
                     # Purge old IV data
@@ -67,11 +86,8 @@ def start_earnings_updater(app):
                 except Exception as e:
                     logger.error(f"Error in earnings updater: {e}")
                 
-                # Sleep for 6 hours before next update
-                for _ in range(21600):  # 6 hours in seconds
-                    if _stop_earnings_thread.is_set():
-                        break
-                    time.sleep(1)
+                                # Better practice: wait on the event instead of sleeping in a loop
+                _stop_earnings_thread.wait(timeout=21600)  # 6 hours in seconds
             
             logger.info("Earnings updater worker stopped")
     
@@ -148,6 +164,8 @@ app = create_application()
 # Start background earnings updater (runs every 6 hours)
 try:
     start_earnings_updater(app)
+    # Register stop signal for graceful shutdown
+    atexit.register(stop_earnings_updater)
 except Exception as e:
     logger.error(f"Failed to start earnings updater: {e}")
 
@@ -190,7 +208,7 @@ def earnings_status():
     Get earnings updater status and cache statistics
     """
     from api.services.iv_earnings_service import IVEarningsService
-    db = OptionsDatabase()
+    db = current_app.config.get('database') or OptionsDatabase()
     service = IVEarningsService(db)
     
     return jsonify({
@@ -204,7 +222,7 @@ def update_single_earnings(ticker):
     Manually update earnings for a single ticker
     """
     from api.services.iv_earnings_service import IVEarningsService
-    db = OptionsDatabase()
+    db = current_app.config.get('database') or OptionsDatabase()
     service = IVEarningsService(db)
     
     success = service.update_earnings_data(ticker)
@@ -216,12 +234,51 @@ def update_single_earnings(ticker):
         'earnings_info': info
     })
 
+@app.route('/api/earnings/refresh', methods=['POST'])
+def refresh_all_earnings():
+    """
+    Trigger a global update for all active symbols in background
+    """
+    from api.services.iv_earnings_service import IVEarningsService
+    from api.services.portfolio_service import PortfolioService
+    
+    db = current_app.config.get('database') or OptionsDatabase()
+    service = IVEarningsService(db)
+    portfolio = PortfolioService()
+    
+    # Get all active items
+    positions = portfolio.get_positions() or []
+    recent_orders = db.get_orders(limit=100) or []
+    
+    all_tickers = set()
+    for p in positions:
+        all_tickers.add(p.get('symbol'))
+        
+    for o in recent_orders:
+        if o.get('ticker'):
+            all_tickers.add(o.get('ticker'))
+            
+    if not all_tickers:
+        return jsonify({'success': True, 'updated': 0, 'message': 'No active symbols found'})
+
+    # Update in foreground for the API response, or just trigger?
+    # For better UX, let's update a few or just start a thread.
+    # Actually, we can just run it synchronously if it's not too many.
+    result = service.batch_update_earnings(list(all_tickers))
+    
+    return jsonify({
+        'success': True,
+        'updated_count': result['successful'],
+        'failed_count': result['failed'],
+        'total_attempted': len(all_tickers)
+    })
+
 @app.route('/api/earnings/pending')
 def get_pending_earnings():
     """
     Get all tickers with pending earnings in the next 7 days
     """
-    db = OptionsDatabase()
+    db = current_app.config.get('database') or OptionsDatabase()
     pending = db.get_pending_earnings(days_threshold=7)
     
     return jsonify({

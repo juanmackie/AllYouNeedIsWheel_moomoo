@@ -499,5 +499,5 @@ Potential scoring improvements:
 
 ---
 
-**Last Updated:** 2026-04-06
-**Version:** Phase 1, 2 & 3 Implementation
+**Last Updated:** 2026-04-19
+**Version:** Phase 1, 2, 3 & 4 (Pipeline Restoration)

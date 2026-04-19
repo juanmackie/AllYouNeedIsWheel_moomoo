@@ -18,15 +18,17 @@ class OptionsDatabase:
         Initialize the options database
         
         Args:
-            db_path (str, optional): Path to the SQLite database. 
-                                    If None, creates 'options.db' in current directory.
+            db_name (str, optional): Path to the SQLite database. 
+                                    If None, resolves 'options.db' relative to project root.
         """
+        # Resolve path - if none provided, use default location relative to this file
         if db_name is None:
-            db_path = Path.cwd() / 'options.db'
+            # Default to options.db in the project root (one level up from db/ directory)
+            self.db_path = Path(__file__).parent.parent / 'options.db'
         else:
-            db_path = Path.cwd() / db_name
+            # Use the provided path, making it absolute
+            self.db_path = Path(db_name).resolve()
             
-        self.db_path = db_path
         self._create_tables_if_not_exist()
         self._migrate_database()
     

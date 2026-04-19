@@ -580,7 +580,7 @@ function updateOptionsTable() {
     
     // Calculate and display earnings summary
     const earningsSummary = calculateEarningsSummary();
-    displayEarningsSummary(earningsSummary);
+    displayPremiumSummary(earningsSummary);
     
     // Set up event listeners for put quantity inputs
     addPutQtyInputEventListeners();
@@ -3014,7 +3014,7 @@ async function loadTickers() {
         
         // Calculate and update earnings summary after each ticker is processed
         const earningsSummary = calculateEarningsSummary();
-        displayEarningsSummary(earningsSummary);
+        displayPremiumSummary(earningsSummary);
     }
     
     // Clean up any remaining status rows
@@ -3048,7 +3048,7 @@ async function loadTickers() {
     
     // Calculate and display earnings summary once after all tickers are processed
     const earningsSummary = calculateEarningsSummary();
-    displayEarningsSummary(earningsSummary);
+    displayPremiumSummary(earningsSummary);
     
     console.log("All ticker data loaded and table updated incrementally");
 }
@@ -3066,7 +3066,7 @@ export {
  * Display the earnings summary in a compact format
  * @param {Object} summary - The earnings summary to display
  */
-function displayEarningsSummary(summary) {
+function displayPremiumSummary(summary) {
     const optionsTableContainer = document.getElementById('options-table-container');
     if (!optionsTableContainer) return;
     

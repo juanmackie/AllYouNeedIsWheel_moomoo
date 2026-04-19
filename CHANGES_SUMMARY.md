@@ -1,3 +1,50 @@
+# Changes Summary - April 19, 2026 (Phase 4)
+
+## Overview
+Restored the non-functional earnings `(e)` service by auditing and fixing the end-to-end data pipeline. Improved robustness of API fetching, standardized database management, and added manual refresh UI for better terminal-user interaction.
+
+## Changes Made
+
+### 1. Robust Earnings Pipeline (P0) ✓
+**Files Modified:**
+- `api/services/iv_earnings_service.py`
+- `api/services/portfolio_service.py`
+- `app.py`
+
+**Changes:**
+- Implemented multi-layered fallback strategy for Yahoo Finance (get_earnings_dates -> stock.info -> Calendars -> earnings_dates).
+- Added automatic underlying symbol extraction from option ticker strings.
+- Fixed systemic database path resolution issues by ensuring project-root relative paths.
+- Migrated all services to use a shared database instance from `current_app.config`.
+
+### 2. UI/UX Enhancements (P3-P4) ✓
+**Files Modified:**
+- `frontend/static/js/dashboard/account.js`
+- `frontend/templates/partials/dashboard/account_summary.html`
+- `frontend/static/css/dashboard.css`
+- `frontend/static/js/dashboard/options-table.js`
+
+**Changes:**
+- Added global "Earnings Status" badge and "Refresh All" button to dashboard.
+- Added per-ticker refresh icons next to results in the positions table.
+- Extracted earnings badge rendering to a shared utility in `account.js`.
+- Renamed confusing `displayEarningsSummary` (premium projections) to `displayPremiumSummary`.
+- Added CSS animations for refresh feedback.
+
+### 3. Stability & Security (P1-P2) ✓
+**Files Modified:**
+- `api/routes/portfolio.py`
+- `.env` / `.env.example`
+- `.gitignore`
+
+**Changes:**
+- Fixed list vs dictionary return type inconsistencies that were crashing legacy routes (/roll-pressure, /alerts).
+- Removed leaked FRED API key from plaintext environment files.
+- Replaced CPU-intensive sleep loops with `threading.Event` synchronization.
+- Removed multiple stray/backup files in repository root.
+
+---
+
 # Changes Summary - March 29, 2026
 
 ## Overview

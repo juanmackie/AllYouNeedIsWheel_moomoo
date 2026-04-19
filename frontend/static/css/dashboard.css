@@ -675,3 +675,19 @@
     display: block;
 }
 
+/* Animations and Utilities */
+.btn-spin {
+    animation: btn-spin 1.2s linear infinite;
+    display: inline-block;
+}
+
+@keyframes btn-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.earnings-refresh-btn:hover {
+    color: var(--app-accent) !important;
+    transform: scale(1.1);
+}
+

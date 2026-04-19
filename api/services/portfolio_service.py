@@ -21,6 +21,19 @@ class PortfolioService:
         self.connection = connection
         self.last_error = None
 
+    def _get_db(self):
+        if not hasattr(self, '_db') or self._db is None:
+            from db.database import OptionsDatabase
+            db_path = self.config.get('db_path')
+            self._db = OptionsDatabase(db_path)
+        return self._db
+
+    def _get_earnings_service(self):
+        if not hasattr(self, '_earnings_service') or self._earnings_service is None:
+            from api.services.iv_earnings_service import IVEarningsService
+            self._earnings_service = IVEarningsService(self._get_db())
+        return self._earnings_service
+
     def _set_error(self, message):
         self.last_error = message
         logger.error(message)
@@ -49,73 +62,78 @@ class PortfolioService:
                 portfolio_env=self.config.get('portfolio_env'),
                 security_firm=self.config.get('security_firm')
             )
-
+            
             if not self.connection.connect():
                 self._set_error(self.connection.last_error or "Failed to connect to moomoo OpenD")
+            
             return self.connection
         except Exception as e:
             self._set_error(f"Error ensuring connection: {str(e)}")
             return None
-        
+
     def get_portfolio_summary(self):
         """
-        Get account summary information
+        Get a summary of the current portfolio state.
         """
         try:
             conn = self._ensure_connection()
             if not conn:
-                return None
-            
-            portfolio = conn.get_portfolio()
-            if not portfolio:
-                self._set_error(conn.last_error or 'Failed to load portfolio summary from moomoo')
-                return None
-            
-            return {
-                'account_id': portfolio.get('account_id', ''),
-                'trading_env': portfolio.get('trading_env', ''),
-                'currency': portfolio.get('currency', 'USD'),
-                'cash_balance': portfolio.get('available_cash', 0),
-                'account_value': portfolio.get('account_value', 0),
-                'excess_liquidity': portfolio.get('excess_liquidity', 0),
-                'initial_margin': portfolio.get('initial_margin', 0),
-                'leverage_percentage': portfolio.get('leverage_percentage', 0),
-                'is_frozen': portfolio.get('is_frozen', False)
-            }
+                return {'error': self.last_error or 'Failed to connect to moomoo'}
+                
+            summary = conn.get_portfolio()
+            if not summary:
+                self._set_error(conn.last_error or "Failed to load summary from moomoo")
+                return {'error': self.last_error}
+                
+            if 'positions' in summary:
+                del summary['positions']
+            return summary
         except Exception as e:
             self._set_error(f"Error getting portfolio summary: {e}")
-            return None
-    
+            return {'error': str(e)}
+
     def get_positions(self, security_type=None):
         """
-        Get portfolio positions
+        Get current portfolio positions.
         """
         try:
             conn = self._ensure_connection()
             if not conn:
                 return None
-            
+                
+            # Get positions from moomoo
             portfolio = conn.get_portfolio()
-            if not portfolio:
-                self._set_error(conn.last_error or 'Failed to load positions from moomoo')
+            if portfolio is None:
+                self._set_error(conn.last_error or "Failed to load portfolio from moomoo")
                 return None
+                
+            positions_dict = portfolio.get('positions', {})
+            positions = []
             
-            positions = portfolio.get('positions', {})
+            # Map dict into list format
+            for symbol, pos in positions_dict.items():
+                p = pos.copy()
+                p['symbol'] = symbol
+                p['position'] = pos.get('shares', 0)
+                positions.append(p)
+                
+            # Filter by type if requested
+            if security_type:
+                positions = [p for p in positions if p.get('security_type') == security_type]
+                
+            # Enrich with earnings data
             positions_list = []
-
-            for key, pos in positions.items():
-                pos_type = pos.get('security_type', '')
-                if security_type and pos_type != security_type:
-                    continue
-
-                symbol = key.split('.')[-1] if '.' in key else key
-
+            for pos in positions:
+                symbol = pos.get('symbol', 'UNKNOWN')
+                pos_type = pos.get('security_type', 'STK')
+                avg_cost = pos.get('avg_cost', 0)
+                
                 position_data = {
                     'symbol': symbol,
-                    'position': pos.get('shares', 0),
+                    'position': pos.get('position', 0),
+                    'avg_cost': avg_cost,
                     'market_price': pos.get('market_price', 0),
                     'market_value': pos.get('market_value', 0),
-                    'avg_cost': pos.get('avg_cost', 0),
                     'unrealized_pnl': pos.get('unrealized_pnl', 0),
                     'security_type': pos_type
                 }
@@ -127,11 +145,37 @@ class PortfolioService:
                         'option_type': pos.get('option_type', '')
                     })
                 
+                # Add earnings info for stock AND option positions
+                if pos_type in ['STK', 'OPT']:
+                    try:
+                        import re
+                        underlying_symbol = symbol
+                        if pos_type == 'OPT':
+                            # Extract underlying from standard option format
+                            match = re.match(r'^([A-Z]+)\d{6}[CP]\d+', symbol)
+                            if not match: match = re.match(r'^([A-Z]+)', symbol)
+                            if match: underlying_symbol = match.group(1)
+                        
+                        earnings_service = self._get_earnings_service()
+                        info = earnings_service.get_earnings_info(underlying_symbol)
+                        
+                        # Only include if earnings upcoming (today to 30 days)
+                        if info.get('warning_level') in ['today', 'very_soon', 'soon', 'upcoming']:
+                            position_data['earnings'] = {
+                                'days': info.get('days_to_earnings'),
+                                'date': info.get('earnings_date'),
+                                'level': info.get('warning_level')
+                            }
+                    except Exception as e:
+                        # Log at debug but continue
+                        logger.debug(f"Failed to fetch earnings for {symbol}: {e}")
+                
                 positions_list.append(position_data)
             
             return positions_list
         except Exception as e:
             self._set_error(f"Error getting positions: {e}")
+            logger.error(traceback.format_exc())
             return None
     
     def get_weekly_option_income(self):
@@ -159,7 +203,7 @@ class PortfolioService:
             for pos in positions:
                 # Filter for short positions expiring this week
                 if pos.get('position', 0) >= 0: continue
-
+                
                 expiration = pos.get('expiration', '')
                 if expiration and expiration <= this_friday_str:
                     contracts = abs(pos.get('position', 0))

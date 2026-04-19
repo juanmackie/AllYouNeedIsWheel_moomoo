@@ -25,7 +25,8 @@ A financial options trading assistant for the "Wheel Strategy" powered by the [M
 - **Risk-Adjusted Scoring** — IV-adjusted returns, theta/delta risk ratio, expected value calculations
 - **IV Environment Awareness** — 30-day rolling IV rank tracking with color-coded badges (🔴 low, 🟢 high)
 - **Dynamic Screening Profiles** — Auto-detects weekly/monthly/quarterly expirations with optimized parameters
-- **Earnings Integration** — Automatic earnings warnings with score penalties for high-risk periods
+- **Earnings Integration** — Automatic earnings warnings with multi-source fallback and manual refresh UI
+- **Background Health Monitoring** — Real-time earnings worker status and manual trigger buttons
 - **Macro Regime Detection** — FRED-powered economic context (rates, credit stress, growth, inflation) influencing scores and recommendations
 
 ### 🆕 Macro Regime Detection (Phase 3)
@@ -240,6 +241,7 @@ Live trading config. Not committed to version control.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/earnings/status` | Background updater status & cache stats |
+| `POST` | `/api/earnings/refresh` | Trigger global update for all active symbols (NEW) |
 | `GET` | `/api/earnings/update/<ticker>` | Manually update earnings for ticker |
 | `GET` | `/api/earnings/pending` | All tickers with earnings in next 7 days |
 

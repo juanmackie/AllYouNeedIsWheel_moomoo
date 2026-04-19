@@ -582,6 +582,52 @@ async function fetchRollPressure() {
     }
 }
 
+/**
+ * Fetch earnings updater status and cache stats
+ * @returns {Promise<Object>} Status object
+ */
+async function fetchEarningsStatus() {
+    try {
+        const response = await fetch('/api/earnings/status');
+        return await readJsonSafely(response);
+    } catch (error) {
+        console.error('Error fetching earnings status:', error);
+        return null;
+    }
+}
+
+/**
+ * Trigger global earnings refresh
+ * @returns {Promise<Object>} Result object
+ */
+async function refreshAllEarnings() {
+    try {
+        const response = await fetch('/api/earnings/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return await readJsonSafely(response);
+    } catch (error) {
+        console.error('Error refreshing all earnings:', error);
+        throw error;
+    }
+}
+
+/**
+ * Update earnings for a single ticker
+ * @param {string} ticker - The ticker symbol
+ * @returns {Promise<Object>} Result object
+ */
+async function updateSingleEarnings(ticker) {
+    try {
+        const response = await fetch(`/api/earnings/update/${ticker}`);
+        return await readJsonSafely(response);
+    } catch (error) {
+        console.error(`Error updating earnings for ${ticker}:`, error);
+        throw error;
+    }
+}
+
 // Export all API functions
 export {
     fetchAccountData,
@@ -598,4 +644,7 @@ export {
     fetchOptionExpirations,
     fetchTopRecommendations,
     fetchRollPressure,
+    fetchEarningsStatus,
+    refreshAllEarnings,
+    updateSingleEarnings
 };

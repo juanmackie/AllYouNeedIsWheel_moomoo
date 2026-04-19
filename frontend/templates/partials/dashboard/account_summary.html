@@ -7,11 +7,22 @@
                     <h2>Portfolio capital at a glance</h2>
                     <p class="text-muted mb-0">Live account value, buying power, and leverage on one continuous surface.</p>
                 </div>
-                <div id="data-status-container" class="d-flex align-items-center ms-auto">
-                    <span id="data-status-icon" class="me-1">
-                        <i class="bi bi-lightning-fill"></i>
-                    </span>
-                    <span id="data-status-indicator" class="badge bg-secondary">LOADING</span>
+                <div id="data-status-container" class="d-flex align-items-center ms-auto gap-3">
+                    <div id="opend-status" class="d-flex align-items-center">
+                        <span id="data-status-icon" class="me-1">
+                            <i class="bi bi-lightning-fill"></i>
+                        </span>
+                        <span id="data-status-indicator" class="badge bg-secondary">OPEND: LOADING</span>
+                    </div>
+                    
+                    <div id="earnings-status" class="d-flex align-items-center border-start ps-3">
+                        <span class="me-1 text-muted"><i class="bi bi-calendar-event"></i></span>
+                        <span id="earnings-status-indicator" class="badge bg-secondary">EARNINGS: ...</span>
+                        <button id="refresh-earnings-btn" class="btn btn-link btn-sm p-0 ms-2 text-primary" title="Refresh all earnings manually">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </div>
+                    
                     <small id="data-update-time" class="text-muted ms-2"></small>
                 </div>
             </div>

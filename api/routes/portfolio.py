@@ -12,6 +12,9 @@ from datetime import datetime
 bp = Blueprint('portfolio', __name__, url_prefix='/api/portfolio')
 portfolio_service = PortfolioService()
 
+from core.logging_config import get_logger
+logger = get_logger('api.routes.portfolio', 'api')
+
 
 def _is_real_account_unavailable(message):
     if not message:
@@ -241,17 +244,12 @@ def get_roll_pressure():
         from api.services.macro_regime_service import get_macro_service
         from db.database import OptionsDatabase
 
-        options_service = OptionsService()
-        conn = options_service._ensure_connection()
-        if not conn:
-            return jsonify({'error': 'Failed to establish connection to moomoo'}), 503
-
         # Get option positions
         positions = portfolio_service.get_positions('OPT')
         if positions is None:
             return jsonify({'error': 'Failed to load positions'}), 500
 
-        option_positions = positions.get('positions', [])
+        option_positions = positions if isinstance(positions, list) else positions.get('positions', [])
         if not option_positions:
             return jsonify({
                 'positions': [],
@@ -446,16 +444,12 @@ def get_position_alerts():
         from api.services.iv_earnings_service import IVEarningsService
         from db.database import OptionsDatabase
 
-        options_service = OptionsService()
-        conn = options_service._ensure_connection()
-        if not conn:
-            return jsonify({'error': 'Failed to establish connection to moomoo'}), 503
-
+        # Get option positions
         positions = portfolio_service.get_positions('OPT')
         if positions is None:
             return jsonify({'error': 'Failed to load positions'}), 500
 
-        option_positions = positions.get('positions', [])
+        option_positions = positions if isinstance(positions, list) else positions.get('positions', [])
         if not option_positions:
             return jsonify({'alerts': [], 'count': 0})
 

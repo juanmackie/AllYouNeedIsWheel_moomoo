@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added - Phase 4: Earnings Pipeline Restoration & UX Enhancement
+
+#### Earnings Pipeline Robustness
+- **Multi-Source Fetching** — Refactored `IVEarningsService` with a four-layer fallback strategy for Yahoo Finance (get_earnings_dates -> stock.info -> Calendars -> earnings_dates property).
+- **Underlyer Extraction** — Added logic to automatically resolve underlying stock symbols from standardized option contract names (e.g., `AAPL260508C195` -> `AAPL`).
+- **Shared DB Instance** — Standardized all services and background workers to use the shared database instance from `app.config`, eliminating connection leaks and path inconsistencies.
+
+#### Manual Refresh UI & UX
+- **Global Refresh Button** — Added a "Refresh All" button in the dashboard header to trigger a background update for all active symbols.
+- **Ticker-Level Refresh** — Added tiny refresh icons next to earnings badges in the positions table for targeted manual updates.
+- **Earnings Status Indicator** — Added a real-time status badge to the header showing the background worker's state (RUNNING, STOPPED, or REFRESHING).
+- **Premium Summary Renaming** — Renamed confusing `displayEarningsSummary` (income projections) to `displayPremiumSummary` to avoid feature confusion with actual stock earnings.
+
+#### Stability & Reliability
+- **Return Type Standardization** — Fixed a systemic bug in `PortfolioService` where list vs dict return types were crashing legacy routes like `/roll-pressure` and `/alerts`.
+- **Thread Optimization** — Replaced CPU-intensive sleep loops in background threads with `threading.Event.wait()`.
+- **Graceful Shutdown** — Implemented `atexit` handlers to stop background threads cleanly on app exit.
+- **Path Resolution** — Ensured the database path always resolves relative to the project root, regardless of the launch directory.
+
+#### Security & Quality
+- **Credential Cleanup** — Removed hardcoded FRED API key from `.env`.
+- **Improved Logging** — Added structured logging throughout the portfolio and earnings services for better diagnostic visibility.
+- **Repo Hygiene** — Cleaned up stray files (`0.2.28`, `README.md.bak`, etc.) and updated `.gitignore`.
+
+---
+
+## [Unreleased - Phase 3] - Macro Regime Detection
+
 ### Added - Phase 1: Risk-Adjusted Scoring
 
 #### Risk-Adjusted Metrics

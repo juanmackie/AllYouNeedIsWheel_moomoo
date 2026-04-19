@@ -1,4 +1,34 @@
-# Smoke Test Checklist - AllYouNeedIsWheel
+# Smoke Test Checklist - April 19, 2026
+
+## Phase 8: Earnings Pipeline Restoration & Manual Refresh (NEW)
+
+### 8.1 Earnings Dashboard UI
+- [ ] Observe "Earnings: RUNNING" badge in the dashboard header.
+- [ ] Hover over an `(e)` badge in the positions table — verify date/days tooltip.
+- [ ] Verify that ticker names are correctly displayed next to earnings badges.
+
+### 8.2 Manual Global Refresh
+- [ ] Click the "Refresh" (arrow-clockwise) icon in the dashboard header.
+- [ ] Verify the icon spins (`btn-spin` class).
+- [ ] Verify the badge text changes to "EARNINGS: REFRESHING...".
+- [ ] Verify a success alert appears after completion.
+- [ ] Verify the positions table reloads with fresh badges.
+
+### 8.3 Manual Ticker Refresh
+- [ ] Click the small refresh icon directly next to an `(e)` badge on a specific row.
+- [ ] Verify ONLY that row's icon spins.
+- [ ] Verify the row updating matches the clicked ticker.
+- [ ] Verify the table reloads correctly.
+
+### 8.4 Server Stability
+- [ ] Verify that `/api/portfolio/roll-pressure` loads without a 500 error.
+- [ ] Verify that `/api/portfolio/alerts` loads without a 500 error.
+- [ ] Verify that background threads stop gracefully when the server is killed.
+
+---
+
+# Smoke Test Checklist - March 29, 2026
+AllYouNeedIsWheel
 
 ## Pre-Test Setup
 1. Start the application: `start_local.cmd` or `python run_api.py`

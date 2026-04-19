@@ -2,7 +2,7 @@
  * Account module for handling portfolio data
  * Manages account summary and positions display
  */
-import { fetchAccountData, fetchPositions } from './api.js';
+import { fetchAccountData, fetchPositions, fetchEarningsStatus, refreshAllEarnings, updateSingleEarnings } from './api.js';
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 
@@ -192,8 +192,11 @@ function populateStockPositionsTable(stockPositions) {
         
         const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
         
+        		// Earnings badge - data included in positions API response
+		const earningsBadge = createEarningsBadgeHTML(position.earnings, position.symbol);
+        
         row.innerHTML = `
-            <td>${position.symbol}</td>
+            <td>${position.symbol}${earningsBadge}</td>
             <td>${position.position}</td>
             <td>${formatCurrency(avgCost)}</td>
             <td>${formatCurrency(position.market_price || 0)}</td>
@@ -312,8 +315,11 @@ function addOptionsToTable(options, tableBody) {
 
         const pnlClass = unrealizedPnL >= 0 ? 'text-success' : 'text-danger';
         
+        		// Earnings badge - data included in positions API response
+		const earningsBadge = createEarningsBadgeHTML(position.earnings, position.symbol);
+        
         row.innerHTML = `
-            <td>${position.symbol}</td>
+            <td>${position.symbol}${earningsBadge}</td>
             <td>${position.position}</td>
             <td>${optionType}</td>
             <td>${strike}</td>
@@ -428,6 +434,83 @@ document.addEventListener('opend-status-changed', () => {
 });
 
 // Export functions
+
+/**
+ * Initialize Earnings UI monitoring and refresh
+ */
+function initEarningsUI() {
+    const refreshBtn = document.getElementById('refresh-earnings-btn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', async () => {
+            try {
+                // Show loading state
+                refreshBtn.disabled = true;
+                const icon = refreshBtn.querySelector('i');
+                if (icon) icon.className = 'bi bi-arrow-clockwise btn-spin';
+                updateEarningsStatusIndicator('REFRESHING...');
+
+                const result = await refreshAllEarnings();
+                
+                if (result && result.success) {
+                    showAlert(`Successfully refreshed earnings for ${result.updated_count} symbols.`, 'success');
+                    // Reload positions to show new badges
+                    if (typeof loadPositionsTable === 'function') {
+                        loadPositionsTable();
+                    }
+                } else {
+                    showAlert('Failed to refresh earnings.', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error refreshing earnings: ' + error.message, 'danger');
+            } finally {
+                refreshBtn.disabled = false;
+                const icon = refreshBtn.querySelector('i');
+                if (icon) icon.className = 'bi bi-arrow-clockwise';
+                updateEarningsStatus();
+            }
+        });
+    }
+    
+    // Initial status check
+    updateEarningsStatus();
+    
+    // Periodically update status (every 30 seconds)
+    setInterval(updateEarningsStatus, 30000);
+}
+
+/**
+ * Update the global earnings status indicator
+ */
+async function updateEarningsStatus() {
+    const indicator = document.getElementById('earnings-status-indicator');
+    if (!indicator) return;
+    
+    const data = await fetchEarningsStatus();
+    if (data) {
+        updateEarningsStatusIndicator(data.status.toUpperCase());
+    } else {
+        updateEarningsStatusIndicator('UNKNOWN');
+    }
+}
+
+/**
+ * Update indicator UI
+ * @param {string} statusText 
+ */
+function updateEarningsStatusIndicator(statusText) {
+    const indicator = document.getElementById('earnings-status-indicator');
+    if (!indicator) return;
+    
+    indicator.textContent = `EARNINGS: ${statusText}`;
+    if (statusText === 'RUNNING') {
+        indicator.className = 'badge bg-success';
+    } else if (statusText === 'REFRESHING...') {
+        indicator.className = 'badge bg-info text-dark';
+    } else {
+        indicator.className = 'badge bg-secondary';
+    }
+}
+
 export {
     formatCurrency,
     formatPercent,
@@ -437,3 +520,56 @@ export {
     loadPositionsTable,
     updateDataStatusIndicator
 }; 
+
+/**
+ * Creates HTML for the earnings badge
+ * @param {Object} earnings - Earnings data from API
+ * @returns {string} HTML string
+ */
+
+/**
+ * Creates HTML for the earnings badge
+ * @param {Object} earnings - Earnings data from API
+ * @param {string} ticker - The stock symbol
+ * @returns {string} HTML string
+ */
+function createEarningsBadgeHTML(earnings, ticker) {
+	if (!earnings) {
+        // Even if no earnings, return a tiny refresh icon if it's a known symbol
+        return ` <i class="bi bi-arrow-clockwise earnings-refresh-btn text-muted" 
+            data-ticker="${ticker}" 
+            title="Update earnings data for ${ticker}"
+            style="cursor: pointer; font-size: 0.75rem;"></i>`;
+    }
+	
+	const dateStr = earnings.date 
+		? new Date(earnings.date + 'T00:00:00').toLocaleDateString() 
+		: '';
+	const daysText = earnings.days === 0 
+		? 'today' 
+		: (earnings.days === 1 ? 'tomorrow' : `in ${earnings.days} days`);
+	const level = earnings.level || 'soon';
+	
+	// Three-tier badge: red (today), yellow (1-7 days), blue (8-30 days)
+	let badgeClass;
+	if (level === 'today') {
+		badgeClass = 'badge bg-danger';
+	} else if (level === 'upcoming') {
+		badgeClass = 'badge bg-info text-dark';
+	} else {
+		badgeClass = 'badge bg-warning text-dark';
+	}
+	
+	return ` <span class="${badgeClass}" 
+		title="Earnings ${daysText} (${dateStr})"
+		style="font-size: 0.65rem; font-weight: 600; cursor: help;">(e)</span><i class="bi bi-arrow-clockwise earnings-refresh-btn ms-1 text-muted" 
+            data-ticker="${ticker}" 
+            title="Refresh earnings data for ${ticker}"
+            style="cursor: pointer; font-size: 0.6rem;"></i>`;
+}
+
+
+// Initialize Earnings UI
+document.addEventListener('DOMContentLoaded', () => {
+    initEarningsUI();
+});
