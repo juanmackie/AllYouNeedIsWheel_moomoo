@@ -6,7 +6,6 @@ Manages portfolio data and calculations for moomoo
 import logging
 import time
 from core.connection import MoomooConnection
-from config import Config
 import traceback
 from datetime import datetime, timedelta
 
@@ -17,9 +16,15 @@ class PortfolioService:
     Service for handling portfolio operations
     """
     def __init__(self, connection=None):
-        self.config = Config()
+        from api.services.config import get_config
+        self.config = get_config()
         self.connection = connection
         self.last_error = None
+        
+        # Portfolio cache for in-memory storage
+        self._portfolio_cache = None
+        self._portfolio_cache_time = None
+        self._portfolio_cache_ttl = 30  # seconds
 
     def _get_db(self):
         if not hasattr(self, '_db') or self._db is None:
@@ -71,22 +76,50 @@ class PortfolioService:
             self._set_error(f"Error ensuring connection: {str(e)}")
             return None
 
+    def _fetch_portfolio(self):
+        """Internal method to actually fetch from connection."""
+        conn = self._ensure_connection()
+        if not conn:
+            return None
+        return conn.get_portfolio()
+
+    def _get_cached_portfolio(self):
+        """
+        Get portfolio with in-memory caching.
+        
+        Returns cached data if within TTL, otherwise fetches fresh data.
+        """
+        now = datetime.now()
+        
+        # Check cache validity
+        if (self._portfolio_cache is not None and 
+            self._portfolio_cache_time is not None):
+            age = (now - self._portfolio_cache_time).total_seconds()
+            if age < self._portfolio_cache_ttl:
+                return self._portfolio_cache
+        
+        # Fetch fresh data
+        self._portfolio_cache = self._fetch_portfolio()
+        self._portfolio_cache_time = now
+        return self._portfolio_cache
+
+    def invalidate_cache(self):
+        """Manually invalidate portfolio cache (call after trades)."""
+        self._portfolio_cache = None
+        self._portfolio_cache_time = None
+
     def get_portfolio_summary(self):
         """
         Get a summary of the current portfolio state.
+        Uses cached portfolio data when available.
         """
         try:
-            conn = self._ensure_connection()
-            if not conn:
-                return {'error': self.last_error or 'Failed to connect to moomoo'}
+            portfolio = self._get_cached_portfolio()
+            if not portfolio:
+                return {'error': self.last_error or 'Failed to load portfolio'}
                 
-            summary = conn.get_portfolio()
-            if not summary:
-                self._set_error(conn.last_error or "Failed to load summary from moomoo")
-                return {'error': self.last_error}
-                
-            if 'positions' in summary:
-                del summary['positions']
+            # Create a copy without positions
+            summary = {k: v for k, v in portfolio.items() if k != 'positions'}
             return summary
         except Exception as e:
             self._set_error(f"Error getting portfolio summary: {e}")
@@ -95,16 +128,11 @@ class PortfolioService:
     def get_positions(self, security_type=None):
         """
         Get current portfolio positions.
+        Uses cached portfolio data when available.
         """
         try:
-            conn = self._ensure_connection()
-            if not conn:
-                return None
-                
-            # Get positions from moomoo
-            portfolio = conn.get_portfolio()
+            portfolio = self._get_cached_portfolio()
             if portfolio is None:
-                self._set_error(conn.last_error or "Failed to load portfolio from moomoo")
                 return None
                 
             positions_dict = portfolio.get('positions', {})

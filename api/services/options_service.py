@@ -16,9 +16,12 @@ from core.wheel_decision import (
     score_contract,
     score_existing_position,
     WheelDecision,
+    _clamp,
+    _score_proximity,
+    _score_positive_metric,
+    _calculate_mid_price,
 )
 from core.utils import get_closest_friday, get_next_monthly_expiration
-from config import Config
 from db.database import OptionsDatabase
 from api.services.iv_earnings_service import IVEarningsService
 from api.services.openbb_service import get_openbb_service
@@ -32,13 +35,15 @@ class OptionsService:
     Service for handling options data operations
     """
     def __init__(self):
-        self.config = Config()
+        from api.services.config import get_config
+        self.config = get_config()
         self.connection = None
         db_path = self.config.get('db_path')
         self.db = OptionsDatabase(db_path)
         self.iv_earnings_service = IVEarningsService(self.db)
         self.portfolio_service = None
         self._openbb_service = None
+        self._tvscreener_service = None
         
     def _get_openbb_service(self):
         """
@@ -58,6 +63,68 @@ class OptionsService:
                 logger.debug(f"OpenBB service initialization failed: {e}, skipping quality checks")
                 self._openbb_service = False
         return self._openbb_service if self._openbb_service else None
+
+    def _get_tvscreener_service(self):
+        """
+        Lazy initialization of tvscreener service.
+        Returns the service if available, None otherwise.
+        Uses a sentinel (False) to avoid repeated failed initialization attempts.
+        """
+        if self._tvscreener_service is None:
+            try:
+                from api import get_service
+                self._tvscreener_service = get_service('tvscreener')
+                logger.info("tvscreener service initialized")
+            except Exception as e:
+                logger.debug(f"tvscreener service not available: {e}")
+                self._tvscreener_service = False
+        return self._tvscreener_service if self._tvscreener_service else None
+
+    def get_effective_watchlist(self):
+        """
+        Get effective watchlist based on configuration.
+        Supports static, dynamic, and hybrid modes.
+
+        Returns:
+            List of ticker symbols
+        """
+        static_watchlist = self.config.get('watchlist', [])
+
+        # Check watchlist mode
+        watchlist_mode = self.config.get('watchlist_mode', 'static')
+
+        if watchlist_mode == 'static':
+            return static_watchlist
+
+        # Try dynamic screening
+        try:
+            tvscreener = self._get_tvscreener_service()
+            if tvscreener:
+                criteria = self.config.get('screening_criteria', {})
+                min_iv_rank = criteria.get('min_iv_rank', 30)
+                min_volume = criteria.get('min_volume', 1000000)
+                max_stocks = criteria.get('max_stocks', 50)
+
+                dynamic = tvscreener.get_wheel_candidates(
+                    min_iv_rank=min_iv_rank,
+                    min_volume=min_volume,
+                    limit=max_stocks
+                )
+
+                if dynamic:
+                    if watchlist_mode == 'hybrid':
+                        # Combine dynamic and static watchlists
+                        combined = list(set(dynamic + static_watchlist))
+                        logger.info(f"Hybrid watchlist: {len(dynamic)} dynamic + {len(static_watchlist)} static = {len(combined)} total")
+                        return combined
+                    else:  # 'dynamic'
+                        logger.info(f"Dynamic watchlist: {len(dynamic)} stocks")
+                        return dynamic
+        except Exception as e:
+            logger.warning(f"Dynamic screening failed: {e}, using static watchlist")
+
+        # Fallback to static watchlist
+        return static_watchlist
         
     def _ensure_connection(self):
         """
@@ -241,6 +308,10 @@ class OptionsService:
             except Exception as event_err:
                 logger.warning(f"Failed to save trade event: {event_err}")
 
+            # Invalidate portfolio cache after trade
+            if self.portfolio_service:
+                self.portfolio_service.invalidate_cache()
+
             return {
                 "success": True,
                 "message": "Order sent to moomoo",
@@ -388,28 +459,30 @@ class OptionsService:
         except Exception as exc:
             logger.error(f"Error building portfolio context for options scoring: {exc}")
 
-        watchlist = self.config.get('watchlist', [])
-        owned = set(context['positions'].keys())
-        context['watchlist'] = [t for t in watchlist if t not in owned]
-        if context['watchlist']:
-            logger.debug(f"Watchlist tickers for CSP scanning: {context['watchlist']}")
-
         return context
 
     def _get_position_snapshot(self, portfolio_context, ticker):
         return portfolio_context.get('positions', {}).get(ticker, {})
 
+    def _strip_ticker_prefix(self, ticker):
+        """Strip market prefix (e.g., 'US.') from a ticker for use with yfinance."""
+        if '.' in ticker:
+            parts = ticker.split('.', 1)
+            return parts[1]
+        return ticker
+
     def _get_yfinance_price(self, ticker):
         """Get stock price from yfinance as fallback when Moomoo lacks quote rights."""
         try:
             import yfinance as yf
-            yf_ticker = yf.Ticker(ticker)
+            bare_ticker = self._strip_ticker_prefix(ticker)
+            yf_ticker = yf.Ticker(bare_ticker)
             hist = yf_ticker.history(period="1d")
             if hist.empty:
-                logger.debug(f"yfinance: No price data for {ticker}")
+                logger.debug(f"yfinance: No price data for {bare_ticker}")
                 return None
             price = float(hist['Close'].iloc[-1])
-            logger.debug(f"yfinance: Got price {price} for {ticker}")
+            logger.debug(f"yfinance: Got price {price} for {bare_ticker}")
             return price
         except Exception as e:
             logger.debug(f"yfinance: Failed to get price for {ticker}: {e}")
@@ -419,7 +492,8 @@ class OptionsService:
         """Get option chain from yfinance as fallback when Moomoo lacks quote rights."""
         try:
             import yfinance as yf
-            yf_ticker = yf.Ticker(ticker)
+            bare_ticker = self._strip_ticker_prefix(ticker)
+            yf_ticker = yf.Ticker(bare_ticker)
             exp_formatted = expiration.replace('-', '')
             if len(exp_formatted) == 8:
                 exp_yf = f"{exp_formatted[0:4]}-{exp_formatted[4:6]}-{exp_formatted[6:8]}"
@@ -685,33 +759,7 @@ class OptionsService:
         
         return base_profile
 
-    def _calculate_mid_price(self, bid, ask, last):
-        bid = float(bid or 0)
-        ask = float(ask or 0)
-        last = float(last or 0)
 
-        if bid > 0 and ask > 0:
-            return (bid + ask) / 2
-        if bid > 0:
-            return bid
-        if ask > 0:
-            return ask
-        if last > 0:
-            return last
-        return 0.0
-
-    def _clamp(self, value, minimum=0.0, maximum=1.0):
-        return max(minimum, min(maximum, value))
-
-    def _score_proximity(self, value, target, tolerance):
-        if tolerance <= 0:
-            return 0.0
-        return self._clamp(1 - (abs(value - target) / tolerance))
-
-    def _score_positive_metric(self, value, ideal_value):
-        if ideal_value <= 0:
-            return 0.0
-        return self._clamp(value / ideal_value)
 
     def _get_candidate_expirations(self, conn, ticker, profile, expiration=None):
         if expiration:
@@ -722,6 +770,7 @@ class OptionsService:
             ret, data = conn.get_option_expiration_dates(ticker)
             if ret != RET_OK or data is None or data.empty:
                 fallback = get_closest_friday().strftime('%Y%m%d')
+                logger.debug(f"get_option_expiration_dates failed for {ticker}: ret={ret}, data empty or None")
                 return [fallback]
 
             today = datetime.now().date()
@@ -737,20 +786,33 @@ class OptionsService:
                 else:
                     raise KeyError('No expiration column returned by moomoo')
 
+            min_dte = profile.get('min_dte', 0)
+            max_dte = profile.get('max_dte', 365)
+            logger.debug(f"_get_candidate_expirations for {ticker}: min_dte={min_dte} (type={type(min_dte)}), max_dte={max_dte} (type={type(max_dte)})")
+
             for raw_date in data[expiration_column].tolist():
                 normalized = raw_date.replace('-', '')
                 expiry_date = datetime.strptime(normalized, '%Y%m%d').date()
                 dte = (expiry_date - today).days
+                logger.debug(f"  Checking expiration {normalized}: dte={dte} (type={type(dte)})")
                 if dte <= 0:
                     continue
                 fallback.append((normalized, dte))
-                if profile['min_dte'] <= dte <= profile['max_dte']:
-                    filtered.append((normalized, dte))
+                try:
+                    if min_dte <= dte <= max_dte:
+                        filtered.append((normalized, dte))
+                except TypeError as te:
+                    logger.error(f"TypeError in DTE comparison: min_dte={min_dte}, dte={dte}, max_dte={max_dte}")
+                    logger.error(f"  Types: min_dte={type(min_dte)}, dte={type(dte)}, max_dte={type(max_dte)}")
+                    raise
 
             expirations = filtered or fallback
-            return [value for value, _ in expirations[:profile['max_expirations']]] or [get_closest_friday().strftime('%Y%m%d')]
+            result = [value for value, _ in expirations[:profile.get('max_expirations', 5)]] or [get_closest_friday().strftime('%Y%m%d')]
+            logger.debug(f"_get_candidate_expirations returning {len(result)} expirations: {result}")
+            return result
         except Exception as exc:
             logger.error(f"Error loading option expirations for {ticker}: {exc}")
+            logger.error(traceback.format_exc())
             return [get_closest_friday().strftime('%Y%m%d')]
 
     def _build_candidate(self, ticker, option, stock_price, desired_otm, profile, portfolio_context):
@@ -912,54 +974,69 @@ class OptionsService:
             'puts': []
         }
 
-        stock_price = conn.get_stock_price(ticker)
-        if stock_price is None or stock_price <= 0:
-            logger.debug(f"Moomoo returned no/invalid price for {ticker}, trying yfinance fallback")
-            stock_price = self._get_yfinance_price(ticker)
-        if stock_price is None or stock_price <= 0:
-            stock_price = self._get_fallback_stock_price(portfolio_context, ticker)
-        if stock_price is None or stock_price <= 0:
-            return {'error': 'Unable to obtain valid stock price from any source'}
+        try:
+            stock_price = conn.get_stock_price(ticker)
+            if stock_price is None or stock_price <= 0:
+                logger.debug(f"Moomoo returned no/invalid price for {ticker}, trying yfinance fallback")
+                stock_price = self._get_yfinance_price(ticker)
+            if stock_price is None or stock_price <= 0:
+                stock_price = self._get_fallback_stock_price(portfolio_context, ticker)
+            if stock_price is None or stock_price <= 0:
+                result['error'] = 'Unable to obtain valid stock price from any source'
+                return result
 
-        position = self._get_position_snapshot(portfolio_context, ticker)
-        result['stock_price'] = stock_price
-        result['position'] = float(position.get('position', 0) or 0)
-        result['avg_cost'] = float(position.get('avg_cost', 0) or 0)
+            position = self._get_position_snapshot(portfolio_context, ticker)
+            result['stock_price'] = stock_price
+            result['position'] = float(position.get('position', 0) or 0)
+            result['avg_cost'] = float(position.get('avg_cost', 0) or 0)
 
-        sides = [option_type] if option_type else ['CALL', 'PUT']
-        options_chains = []
+            sides = [option_type] if option_type else ['CALL', 'PUT']
+            options_chains = []
 
-        for side in sides:
-            profile = self._get_screening_profile(side)
-            expirations = self._get_candidate_expirations(conn, ticker, profile, expiration)
-            target_strike = stock_price * (1 + (otm_percentage / 100)) if side == 'CALL' else stock_price * (1 - (otm_percentage / 100))
-            for expiry in expirations:
-                chain = conn.get_option_chain(
-                    ticker,
-                    expiry,
-                    'C' if side == 'CALL' else 'P',
-                    target_strike=target_strike
-                )
-                if chain and chain.get('options'):
-                    options_chains.append(chain)
-                else:
-                    logger.debug(f"Moomoo returned no options for {ticker} {expiry} {side}, trying yfinance fallback")
-                    yf_chain = self._get_yfinance_option_chain(ticker, expiry, 'C' if side == 'CALL' else 'P')
-                    if yf_chain and yf_chain.get('options'):
-                        options_chains.append(yf_chain)
+            for side in sides:
+                profile = self._get_screening_profile(side)
+                logger.debug(f"Processing {ticker} {side} with profile: min_dte={profile.get('min_dte')}, max_dte={profile.get('max_dte')}, preferred_dte={profile.get('preferred_dte')}")
+                expirations = self._get_candidate_expirations(conn, ticker, profile, expiration)
+                logger.debug(f"Got {len(expirations)} expirations for {ticker} {side}: {expirations[:3]}...")
+                
+                target_strike = stock_price * (1 + (otm_percentage / 100)) if side == 'CALL' else stock_price * (1 - (otm_percentage / 100))
+                for expiry in expirations:
+                    try:
+                        chain = conn.get_option_chain(
+                            ticker,
+                            expiry,
+                            'C' if side == 'CALL' else 'P',
+                            target_strike=target_strike
+                        )
+                        if chain and chain.get('options'):
+                            options_chains.append(chain)
+                        else:
+                            logger.debug(f"Moomoo returned no options for {ticker} {expiry} {side}, trying yfinance fallback")
+                            yf_chain = self._get_yfinance_option_chain(ticker, expiry, 'C' if side == 'CALL' else 'P')
+                            if yf_chain and yf_chain.get('options'):
+                                options_chains.append(yf_chain)
+                    except Exception as chain_exc:
+                        logger.error(f"Error getting option chain for {ticker} {expiry} {side}: {chain_exc}")
+                        logger.error(traceback.format_exc())
 
-        if not options_chains:
-            return {'error': 'No options data available from any source'}
+            if not options_chains:
+                result['error'] = 'No options data available from any source'
+                return result
 
-        formatted_data = self._process_options_chain(
-            options_chains,
-            ticker,
-            stock_price,
-            otm_percentage,
-            portfolio_context,
-            option_type
-        )
-        result.update(formatted_data)
+            formatted_data = self._process_options_chain(
+                options_chains,
+                ticker,
+                stock_price,
+                otm_percentage,
+                portfolio_context,
+                option_type
+            )
+            result.update(formatted_data)
+        except Exception as exc:
+            logger.error(f"Error in _process_ticker_for_otm for {ticker}: {exc}")
+            logger.error(traceback.format_exc())
+            result['error'] = str(exc)
+            
         return result
 
     def _process_options_chain(self, options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type=None):
@@ -1214,9 +1291,12 @@ class OptionsService:
             cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
             short_calls = portfolio_context.get('short_calls', {})
             short_puts = portfolio_context.get('short_puts', {})
-            watchlist = portfolio_context.get('watchlist', [])
-            
-            if not positions and not watchlist:
+
+            # Get effective watchlist (static, dynamic, or hybrid)
+            effective_watchlist = self.get_effective_watchlist()
+            logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers")
+
+            if not positions and not effective_watchlist:
                 return {
                     'success': True,
                     'count': 0,
@@ -1225,7 +1305,6 @@ class OptionsService:
                     'recommendations': [],
                     'message': 'No positions or watchlist configured'
                 }
-            
             # Collect all options across all tickers
             all_options = []
             
@@ -1306,7 +1385,7 @@ class OptionsService:
             
             # Process watchlist tickers for CSP candidates (stocks not in portfolio)
             # Use yfinance since Moomoo account doesn't have US stock quote rights
-            for ticker in portfolio_context.get('watchlist', []):
+            for ticker in effective_watchlist:
                 try:
                     # Use yfinance for stock price (no Moomoo quote rights needed)
                     import yfinance as yf

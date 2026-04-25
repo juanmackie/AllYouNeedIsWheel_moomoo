@@ -2,7 +2,7 @@
 
 A financial options trading assistant for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and manage orders through a local web dashboard.
 
-**🆕 NEW: Risk-Adjusted Scoring, IV Environment Analysis & Macro Regime Detection** — Intelligent option ranking with IV rank tracking, earnings warnings, dynamic expiration profiles, and FRED-powered macro economic context.
+**Risk-Adjusted Scoring, IV Environment Analysis & Macro Regime Detection** — Intelligent option ranking with IV rank tracking, earnings warnings, dynamic expiration profiles, and FRED-powered macro economic context.
 
 <img width="1680" alt="Dashboard screenshot" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
 <img width="1321" alt="Portfolio screenshot" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
@@ -20,8 +20,9 @@ A financial options trading assistant for the "Wheel Strategy" powered by the [M
 - **Order Management** — create, execute, and cancel option orders from the browser
 - **OpenD Connection Status** — the web UI shows real-time OpenD connection and login state
 - **Auto Launch** — optional one-click start that can open OpenD for you on Windows
+- **Dynamic Watchlist** — optional TradingView-powered stock screening for wheel strategy candidates
 
-### 🆕 Intelligent Option Scoring (Phase 1 & 2)
+### Intelligent Option Scoring (Phase 1 & 2)
 - **Risk-Adjusted Scoring** — IV-adjusted returns, theta/delta risk ratio, expected value calculations
 - **IV Environment Awareness** — 30-day rolling IV rank tracking with color-coded badges (🔴 low, 🟢 high)
 - **Dynamic Screening Profiles** — Auto-detects weekly/monthly/quarterly expirations with optimized parameters
@@ -29,7 +30,7 @@ A financial options trading assistant for the "Wheel Strategy" powered by the [M
 - **Background Health Monitoring** — Real-time earnings worker status and manual trigger buttons
 - **Macro Regime Detection** — FRED-powered economic context (rates, credit stress, growth, inflation) influencing scores and recommendations
 
-### 🆕 Macro Regime Detection (Phase 3)
+### Macro Regime Detection (Phase 3)
 - **Interest Rate Environment** — Detects rising/falling/stable rate regimes from Fed funds data
 - **Credit Stress Monitoring** — Tracks high-yield corporate bond spreads for market stress signals
 - **Economic Growth Regime** — Uses yield curve slope (10y-2y) to detect expansion/slowdown risks
@@ -193,101 +194,157 @@ Live trading config. Not committed to version control.
 | `MOOMOO_PASSWORD` | Yes | Your Moomoo login password |
 | `MOOMOO_TRADING_PASSWORD` | For live | Your trading password |
 | `MOOMOO_LANG` | No | Language: `en` (default) or `ch` |
+| `MOOMOO_LOG_LEVEL` | No | OpenD log level: `no`, `debug`, `info` (default: `info`) |
 | `CONNECTION_CONFIG` | No | Override config file (default: `connection.json`) |
 | `PORT` | No | App port (default: `8000`) |
+| `OPEND_PORT` | No | OpenD port override |
 | `FRED_API_KEY` | No | FRED API key for macro regime detection (free: https://fred.stlouisfed.org/docs/api/api_key.html) |
+  - *Uncomment the FRED_API_KEY line in your `.env` file after obtaining a free key* |
 | `FRED_ENABLED` | No | Enable/disable FRED integration (default: `true`) |
+| `WATCHLIST_MODE` | No | Watchlist mode: `static`, `dynamic`, or `hybrid` (default: `hybrid`) |
+| `SCREENING_MIN_IV_RANK` | No | Min IV rank for dynamic screening (default: `30`) |
+| `SCREENING_MIN_VOLUME` | No | Min volume for dynamic screening (default: `1000000`) |
+| `SCREENING_MAX_STOCKS` | No | Max stocks for dynamic screening (default: `50`) |
+| `LLM_ENABLED` | No | Enable AI trade advisor (default: `false`) |
+| `LLM_PROVIDER` | No | LLM provider: `openai`, `anthropic`, `openrouter`, `ollama`, `custom` |
+| `LLM_API_KEY` | For LLM | API key for the LLM provider |
+| `LLM_MODEL` | No | Model name (default: `gpt-4o`) |
+| `LLM_BASE_URL` | No | Override base URL for OpenAI-compatible APIs |
+| `LLM_TEMPERATURE` | No | LLM temperature (0.0-1.0, default: `0.3`) |
+| `LLM_MAX_TOKENS` | No | Max tokens in response (default: `2000`) |
 
 ## API Endpoints
 
-### System
+The app exposes a full REST API for system status, portfolio data, options analysis, orders, earnings, and macro regime detection.
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | App health check |
-| `GET` | `/api/system/opend-status` | Live OpenD connection probe |
+**Base URL:** `http://127.0.0.1:8000`
 
-### Portfolio
+| Category | Key Endpoints |
+|---|---|
+| **System** | `GET /health`, `GET /api/system/opend-status` |
+| **Portfolio** | `GET /api/portfolio/`, `GET /api/portfolio/positions`, `GET /api/portfolio/weekly-income`, `GET /api/portfolio/roll-pressure`, `GET /api/portfolio/alerts` |
+| **Options** | `GET /api/options/otm`, `GET /api/options/stock-price`, `GET /api/options/expirations`, `GET /api/options/top-recommendations`, `GET /api/options/cash-status` |
+| **Orders** | CRUD + execute/cancel/rollover under `/api/options/order/*` |
+| **Earnings & IV** | `GET /api/earnings/status`, `POST /api/earnings/refresh`, `GET /api/earnings/pending` |
+| **Macro Regime** | `GET /api/macro/regime`, `GET /api/macro/cache/status` |
+| **VIX Regime** | `GET /api/options/vix-regime` |
+| **Analytics** | `GET /api/options/analytics/lifecycle`, `GET /api/options/analytics/leakage`, `POST /api/options/prefilled-close` |
+| **System Tasks** | `GET /api/system/tasks`, `POST /api/system/tasks/<name>/restart`, `GET /api/system/tasks/<name>/status` |
+| **LLM** | `POST /api/llm/suggestions` |
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/portfolio/` | Portfolio summary |
-| `GET` | `/api/portfolio/positions` | Positions (filter: `?type=STK` or `?type=OPT`) |
-| `GET` | `/api/portfolio/weekly-income` | Weekly option income from short options expiring this Friday |
-
-### Options
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/options/otm?tickers=<t>&otm=<pct>` | OTM options analysis |
-| `GET` | `/api/options/stock-price?tickers=<t>` | Current stock prices |
-| `GET` | `/api/options/expirations?ticker=<t>` | Available option expirations |
-
-### Orders
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/options/pending-orders` | Pending/processing orders |
-| `POST` | `/api/options/order` | Create an order |
-| `DELETE` | `/api/options/order/<id>` | Delete an order |
-| `PUT` | `/api/options/order/<id>/quantity` | Update order quantity |
-| `POST` | `/api/options/execute/<id>` | Execute an order via moomoo |
-| `POST` | `/api/options/cancel/<id>` | Cancel a processing order |
-| `POST` | `/api/options/check-orders` | Sync order statuses |
-| `POST` | `/api/options/rollover` | Create rollover orders |
-
-### 🆕 Earnings & IV Tracking
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/earnings/status` | Background updater status & cache stats |
-| `POST` | `/api/earnings/refresh` | Trigger global update for all active symbols (NEW) |
-| `GET` | `/api/earnings/update/<ticker>` | Manually update earnings for ticker |
-| `GET` | `/api/earnings/pending` | All tickers with earnings in next 7 days |
-
-### 🆕 Macro Regime Detection
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/macro/regime` | Current macro economic regime and score impact |
-| `GET` | `/api/macro/cache/status` | Macro cache status and age |
-| `POST` | `/api/macro/cache/clear` | Clear macro cache (forces fresh FRED fetch) |
+> 📖 **Full API reference with request/response examples:** see [API.md](API.md)
 
 ## Web Pages
 
 | URL | Description |
 |---|---|
-| `http://127.0.0.1:8000/` | Dashboard |
+| `http://127.0.0.1:8000/` | Dashboard (options analysis, positions, orders) |
 | `http://127.0.0.1:8000/portfolio` | Detailed portfolio view |
 | `http://127.0.0.1:8000/rollover` | Option rollover manager |
+
+---
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [README.md](README.md) | This file — features, quick start, configuration, troubleshooting |
+| [API.md](API.md) | Complete API reference with request/response examples |
+| [SCORING.md](SCORING.md) | Detailed scoring algorithm, weights, and IV/earnings methodology |
+| [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
+| [frontend/templates/partials/README.md](frontend/templates/partials/README.md) | Template partials structure and usage |
+| [tests/README.md](tests/README.md) | Unit tests and smoke test checklist |
+
+## Dynamic Watchlist (tvscreener Integration)
+
+**TradingView-Powered Stock Screening** — Automatically discover optimal wheel strategy candidates using free TradingView data.
+
+### Overview
+The dynamic watchlist feature uses [tvscreener](https://github.com/deepentropy/tvscreener) to screen stocks based on:
+- **High Volatility** (TradingView's volatility metric as IV proxy)
+- **High Liquidity** (average daily volume)
+- **Configurable Criteria** (customize for your strategy)
+
+### Watchlist Modes
+| Mode | Description |
+|---|---|
+| `static` | Uses the static watchlist from config (default fallback) |
+| `dynamic` | Uses TradingView screening exclusively |
+| `hybrid` | Combines dynamic screening + static watchlist (default) |
+
+### Configuration
+Edit `connection.json` or set environment variables:
+
+```json
+{
+  "watchlist_mode": "hybrid",
+  "screening_criteria": {
+    "min_iv_rank": 30,
+    "min_volume": 1000000,
+    "max_stocks": 50
+  }
+}
+```
+
+### Environment Variables
+```bash
+WATCHLIST_MODE=hybrid
+SCREENING_MIN_IV_RANK=30
+SCREENING_MIN_VOLUME=1000000
+SCREENING_MAX_STOCKS=50
+```
+
+### How It Works
+1. **When enabled**: `get_effective_watchlist()` checks the mode and fetches candidates
+2. **Dynamic mode**: Calls TradingView API via tvscreener library
+3. **Hybrid mode**: Combines dynamic results with your static watchlist
+4. **Fallback**: If TradingView API is unavailable, falls back to static watchlist
+5. **Caching**: Results cached for 5 minutes to avoid rate limits
+
+### Benefits
+- ✅ **No API key required** — tvscreener uses free TradingView data
+- ✅ **Automatic discovery** — find new opportunities automatically
+- ✅ **Graceful degradation** — always works, even if API fails
+- ✅ **Single-click start** — automatic installation via requirements.txt
 
 ## Project Structure
 
 ```
 AllYouNeedIsWheel_moomoo/
-├── api/                         # Flask API
-│   ├── routes/                  #   route modules (options, portfolio)
-│   └── services/                #   business logic
-│       ├── options_service.py   #   Option scoring & analysis
-│       ├── iv_earnings_service.py  #   IV tracking & earnings (NEW)
-│       └── portfolio_service.py #   Portfolio operations
-├── core/                        # Moomoo connection + helpers
-│   ├── connection.py            #   OpenD probe and connection
-│   ├── currency.py              #   currency conversion
-│   ├── logging_config.py        #   logging setup
-│   └── utils.py                 #   utility functions
-├── db/                          # SQLite database
-│   └── database.py              #   Tables: orders, iv_history, earnings_calendar
-├── frontend/                    # Web UI
-│   ├── static/                  #   CSS + JS
-│   │   └── js/dashboard/        #     Dashboard interactions
-│   └── templates/               #   Jinja2 templates
+├── api/
+│   ├── routes/                  # Flask route modules (options, portfolio, system)
+│   └── services/
+│       ├── options_service.py   # Option scoring, screening, VIX regime
+│       ├── iv_earnings_service.py  # IV tracking, earnings (Yahoo Finance)
+│       ├── portfolio_service.py # Portfolio operations
+│       ├── openbb_service.py    # OpenBB integration (VIX, macro data)
+│       └── tvscreener_service.py   # TradingView stock screener
+├── core/
+│   ├── connection.py            # Moomoo OpenD connection + rate limiter
+│   ├── rate_limiter.py          # Thread-safe rate limiting
+│   ├── currency.py              # Currency conversion
+│   ├── logging_config.py        # Logging setup
+│   ├── utils.py                 # Utility functions
+│   └── wheel_decision.py        # Scoring helpers and decision logic
+├── db/
+│   └── database.py              # SQLite: orders, iv_history, earnings_calendar
+├── frontend/
+│   ├── static/
+│   │   ├── css/                 # Stylesheets
+│   │   └── js/dashboard/        # Dashboard JS modules
+│   └── templates/
+│       ├── partials/             # Reusable Jinja2 components
+│       └── base.html
+├── tests/
+│   ├── test_rate_limiter.py
+│   ├── test_tvscreener_service.py
+│   └── README.md                # Smoke test checklist
 ├── app.py                       # Flask app factory + background threads
 ├── run_api.py                   # WSGI server launcher
 ├── config.py                    # Config loader
-├── CHANGELOG.md                 # Version history (NEW)
-├── SCORING.md                   # Detailed scoring algorithm docs (NEW)
-├── API.md                       # Complete API documentation (NEW)
+├── API.md                       # Complete API reference
+├── SCORING.md                   # Scoring algorithm documentation
+├── CHANGELOG.md                 # Version history
 ├── start_local.cmd              # Windows one-click launcher
 ├── start_local.ps1              # PowerShell launcher logic
 ├── connection.json.example      # Example local config
@@ -300,107 +357,34 @@ AllYouNeedIsWheel_moomoo/
 
 ## Database Schema
 
-The application uses SQLite with automatic migrations. Key tables:
+The application uses SQLite (`options.db`) with automatic migrations. Key tables:
 
-### orders
-Stores all option orders with full details including Greeks, execution status, and rollover flags.
+| Table | Purpose |
+|---|---|
+| `orders` | Option orders with Greeks, execution status, rollover flags |
+| `iv_history` | IV data over time for 30-day rolling IV rank (purged after 45 days) |
+| `earnings_calendar` | Earnings dates from Yahoo Finance (refreshed every 6 hours) |
 
-### iv_history (NEW)
-Tracks implied volatility over time for IV rank calculations.
-- `ticker` — Stock symbol
-- `timestamp` — When recorded
-- `implied_volatility` — IV value
-- `stock_price` — Current price at time of recording
-- `dte` — Days to expiration
+Caching: in-memory — 4 hours (IV), 24 hours (earnings). See [SCORING.md](SCORING.md) for full schema.
 
-### earnings_calendar (NEW)
-Stores earnings dates fetched from Yahoo Finance.
-- `ticker` — Stock symbol
-- `earnings_date` — Next earnings date (YYYY-MM-DD)
-- `last_updated` — When fetched
-- `fetch_status` — 'success', 'pending', or 'error'
+## Scoring Methodology
 
-**Auto-Maintenance:**
-- IV data purged after 45 days
-- Earnings data refreshed every 6 hours (background thread)
-- In-memory caching: 4 hours for IV, 24 hours for earnings
+The system uses a multi-factor scoring algorithm (0-100) to rank option plays.
 
-## Risk-Adjusted Scoring Details
+**Core factors:** IV-adjusted return (25%), Theta/Delta risk ratio (20%), Expected Value (15-18%), Liquidity (15-18%), plus CALL/PUT-specific metrics.
 
-### How Scoring Works
+**IV Environment:** 30-day rolling IV rank applies -20% to +20% score adjustments, shown as color-coded badges (🔴 🟡 ⚫ 🟢).
 
-Every option play receives a composite score (0-100) based on multiple risk-adjusted factors:
+**Earnings Impact:** Background thread fetches earnings dates (Yahoo Finance, no API key). Score penalties: -30% (today), -15% (1-3 days), -5% (4-7 days).
 
-**1. IV-Adjusted Return (25% weight)**
-Formula: `annualized_return / implied_volatility`
-- Filters out dangerous "picking up pennies" scenarios
-- Rewards selling when IV is elevated (better risk compensation)
+**Dynamic Profiles (auto-detected by DTE):**
+| Profile | DTE | Target Delta | Liquidity Weight |
+|---------|-----|--------------|------------------|
+| Weeklies | 0-14 | 0.16-0.22 | 35% |
+| Monthlies | 15-45 | 0.20-0.30 | 18% |
+| Quarterlies | 46-90 | 0.25-0.35 | 15% |
 
-**2. Theta/Delta Risk Ratio (20% weight)**
-Formula: `abs(theta) / (abs(delta) * stock_price)`
-- Measures daily income per unit of directional risk
-- Higher = better (more theta income, less delta exposure)
-
-**3. Expected Value (15-18% weight)**
-Formula: `(PoP × premium) - ((1-PoP) × max_loss_estimate)`
-- Uses delta as PoP approximation: `PoP = 1 - |delta|`
-- Accounts for both win probability and loss magnitude
-
-**4. Liquidity Score (15-18% weight)**
-Components: Open Interest (45%), Volume (20%), Bid-Ask Spread (35%)
-- Critical for weeklies (weight increases to 35%)
-- Less critical for quarterlies (weight decreases to 15%)
-
-**5. Additional Factors:**
-- **CALLs:** Upside potential (12%), OTM fit (10%), Cost basis protection (multiplier)
-- **PUTs:** Breakeven buffer (12%), Capital efficiency (10%), Cash fit (multiplier)
-
-### IV Environment Adjustments
-
-IV Rank is calculated over 30-day rolling window:
-```
-IV Rank = (current_IV - min_30d) / (max_30d - min_30d)
-```
-
-This rank (0-100%) determines score bonuses/penalties:
-- Red badge (< 30%): -20% score penalty (dangerous low IV)
-- Yellow badge (30-40%): -5% to -10% penalty
-- No badge (40-60%): Neutral
-- Green badge (> 60%): +5% to +20% bonus
-
-### Earnings Impact
-
-The background thread fetches earnings dates via Yahoo Finance every 6 hours:
-- No API key required (free)
-- Automatic warning badges in UI
-- Score penalties for earnings < 7 days away
-
-### Dynamic Profiles
-
-The system auto-detects expiration type by DTE:
-
-**Weeklies (0-14 days):**
-- Target delta: 0.16-0.22 (closer to ATM for faster decay)
-- Min premium: $8-10 (lower bar)
-- Liquidity weight: 35% (spreads matter more)
-- Delta fit weight: 8% (less critical with short duration)
-
-**Monthlies (15-45 days):**
-- Target delta: 0.20-0.30 (standard targeting)
-- Min premium: $12-15
-- Balanced weight distribution
-
-**Quarterlies (46-90 days):**
-- Target delta: 0.25-0.35 (more time for delta decay)
-- Min premium: $25-30 (higher bar for longer holds)
-- Liquidity weight: 15%
-- Delta fit weight: 18% (more time for strikes to work)
-
-**Manual Override:**
-You can force a specific profile by passing `profile_type` parameter:
-- `?profile_type=weekly`
-- `?profile_type=monthly`  
-- `?profile_type=quarterly`
+> 📖 **Full scoring algorithm, formulas, weights, and data models:** see [SCORING.md](SCORING.md)
 
 ## Docker (Optional)
 

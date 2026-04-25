@@ -16,6 +16,7 @@ from moomoo import *
 
 # Import our logging configuration
 from core.logging_config import get_logger
+from core.rate_limiter import RateLimiter
 
 # Configure logging
 logger = get_logger('autotrader.connection', 'moomoo')
@@ -262,12 +263,12 @@ class MoomooConnection:
         
         # Rate limiting for API calls (moomoo allows max 10 requests per 30 seconds)
         # Using 8 to be conservative and account for burst scenarios
-        self._request_timestamps = []
-        self._rate_limit_lock = threading.Lock()
-        self._max_requests_per_window = 8  # Conservative: 8 instead of 10
-        self._rate_limit_window = 30  # seconds
-        self._burst_threshold = 5  # requests in 5 seconds triggers burst protection
-        self._burst_window = 5  # seconds for burst detection
+        self._rate_limiter = RateLimiter(
+            max_requests_per_window=8,
+            rate_limit_window=30,
+            burst_threshold=5,
+            burst_window=5
+        )
         
         # Stock price cache (cache for 30 seconds)
         self._stock_price_cache = {}
@@ -290,61 +291,8 @@ class MoomooConnection:
         
         # Connection metrics
         self._connection_created_at = datetime.now()
-        self._api_calls_count = 0
-        self._rate_limit_waits = 0
 
-    def _check_rate_limit(self):
-        """
-        Check and enforce rate limiting for API requests.
-        Waits if necessary to stay within moomoo's rate limits.
-        Includes burst detection to prevent rapid-fire requests.
-        """
-        with self._rate_limit_lock:
-            now = time.time()
-            
-            # Remove timestamps older than the window
-            self._request_timestamps = [
-                ts for ts in self._request_timestamps 
-                if now - ts < self._rate_limit_window
-            ]
-            
-            # Check for burst: too many requests in short time
-            recent_requests = [ts for ts in self._request_timestamps if now - ts < self._burst_window]
-            if len(recent_requests) >= self._burst_threshold:
-                # Burst detected, add extra cooldown
-                burst_wait = 5.0  # 5 second cooldown for burst
-                logger.warning(f"Burst detected ({len(recent_requests)} requests in {self._burst_window}s). Adding {burst_wait}s cooldown...")
-                time.sleep(burst_wait)
-                self._rate_limit_waits += 1
-                
-                # Recalculate after cooldown
-                now = time.time()
-                self._request_timestamps = [
-                    ts for ts in self._request_timestamps 
-                    if now - ts < self._rate_limit_window
-                ]
-            
-            # If we've hit the limit, wait until we can make another request
-            if len(self._request_timestamps) >= self._max_requests_per_window:
-                # Calculate how long to wait
-                oldest_request = min(self._request_timestamps)
-                wait_time = self._rate_limit_window - (now - oldest_request) + 0.5  # larger buffer
-                
-                if wait_time > 0:
-                    logger.warning(f"Rate limit reached ({len(self._request_timestamps)}/{self._max_requests_per_window}). Waiting {wait_time:.1f}s...")
-                    time.sleep(wait_time)
-                    self._rate_limit_waits += 1
-                    
-                    # Recalculate after waiting
-                    now = time.time()
-                    self._request_timestamps = [
-                        ts for ts in self._request_timestamps 
-                        if now - ts < self._rate_limit_window
-                    ]
-            
-            # Add current request timestamp and increment counter
-            self._request_timestamps.append(now)
-            self._api_calls_count += 1
+
     
     def _get_cached_option_chain(self, symbol, expiration, right):
         """
@@ -618,15 +566,14 @@ class MoomooConnection:
             'portfolio_env': _env_name(self.portfolio_env),
             'security_firm': str(self.security_firm),
             'account_id': self.account_id if self.account_id else 'auto',
-            'api_calls_count': self._api_calls_count,
-            'rate_limit_waits': self._rate_limit_waits,
             'stock_price_cache_size': stock_price_cache_size,
             'failed_tickers_count': failed_tickers_count,
+            'rate_limit_stats': self._rate_limiter.get_stats(),
             'rate_limit_config': {
-                'max_requests_per_window': self._max_requests_per_window,
-                'rate_limit_window': self._rate_limit_window,
-                'burst_threshold': self._burst_threshold,
-                'burst_window': self._burst_window,
+                'max_requests_per_window': self._rate_limiter.max_requests_per_window,
+                'rate_limit_window': self._rate_limiter.rate_limit_window,
+                'burst_threshold': self._rate_limiter.burst_threshold,
+                'burst_window': self._rate_limiter.burst_window,
             }
         }
 
@@ -722,6 +669,50 @@ class MoomooConnection:
         
         return None  # Caller should proceed with the request
 
+    def get_option_expiration_dates(self, symbol):
+        """
+        Get available option expiration dates for a symbol.
+        
+        Args:
+            symbol: The ticker symbol (e.g., 'US.AAPL')
+            
+        Returns:
+            tuple: (ret_code, data) where data is a DataFrame with expiration dates
+        """
+        symbol = self._format_symbol(symbol)
+        request_key = f"option_expirations:{symbol}"
+        
+        # Check for pending duplicate request
+        event, is_new = self._get_or_create_pending_request(request_key)
+        
+        if not is_new:
+            # Wait for the existing request to complete
+            logger.debug(f"Waiting for pending request: {request_key}")
+            event.wait(timeout=30)
+            
+            # Retry the API call since we need to return the result
+            # (not using cache here for simplicity)
+        
+        try:
+            # Check rate limit before making API call
+            self._rate_limiter.check_rate_limit()
+            
+            if not self.is_connected():
+                if not self.connect():
+                    result = (RET_ERROR, None)
+                    self._complete_pending_request(request_key, result)
+                    return result
+            
+            ret, data = self.quote_ctx.get_option_expiration_date(code=symbol)
+            result = (ret, data)
+            self._complete_pending_request(request_key, result)
+            return result
+        except Exception as e:
+            logger.error(f"Error getting option expirations for {symbol}: {str(e)}")
+            result = (RET_ERROR, None)
+            self._complete_pending_request(request_key, result)
+            return result
+
     def get_stock_price(self, symbol):
         """
         Get the current price of a stock with caching, failure tracking, and request deduplication.
@@ -748,94 +739,27 @@ class MoomooConnection:
         # This thread will make the actual API call
         try:
             # Check rate limit before making API call
-            self._check_rate_limit()
+            self._rate_limiter.check_rate_limit()
             
             if not self.is_connected():
                 if not self.connect():
-                    self._complete_pending_request(request_key, None)
                     return None
             
+            # Get market snapshot to retrieve current price
             ret, data = self.quote_ctx.get_market_snapshot([symbol])
-            if ret == RET_OK and not data.empty:
-                price = data.iloc[0].get('last_price')
-                if price is None or price == 0:
-                    price = data.iloc[0].get('prev_close_price')
-                price = float(price)
-                # Cache successful result
-                self._cache_stock_price(symbol, price)
-                # Complete pending request for other threads
-                self._complete_pending_request(request_key, price)
-                return price
-            else:
-                error_msg = str(data) if data else "Unknown error"
-                logger.error(f"Failed to get price for {symbol}: {error_msg}")
-                # Check if it's a quote rights error
-                if "No right to get the quote" in error_msg or "quote right" in error_msg.lower():
-                    self._mark_ticker_failed(symbol)
-                self._complete_pending_request(request_key, None)
+            if ret != RET_OK or data is None or data.empty:
+                logger.error(f"Failed to get stock price for {symbol}: {data}")
                 return None
+            
+            # Extract the last price from snapshot
+            price = float(data.iloc[0].get('last_price', 0))
+            
+            # Cache the result
+            self._cache_stock_price(symbol, price)
+            return price
         except Exception as e:
-            error_str = str(e)
-            logger.error(f"Error getting {symbol} price: {error_str}")
-            # Check if it's a quote rights error
-            if "No right to get the quote" in error_str or "quote right" in error_str.lower():
-                self._mark_ticker_failed(symbol)
-            self._complete_pending_request(request_key, None)
+            logger.error(f"Error getting stock price for {symbol}: {str(e)}")
             return None
-
-    def get_option_expiration_dates(self, symbol):
-        """
-        Get available option expiration dates for a symbol.
-        This method is rate-limited and deduplicated.
-        
-        Args:
-            symbol: Stock symbol (e.g., 'AAPL' or 'US.AAPL')
-            
-        Returns:
-            tuple: (ret_code, data) where data is a DataFrame with expiration dates
-        """
-        symbol = self._format_symbol(symbol)
-        request_key = f"option_exp:{symbol}"
-        
-        # Check for pending duplicate request
-        # Note: We use the same pattern but need to return tuple
-        event, is_new = self._get_or_create_pending_request(request_key)
-        
-        if not is_new:
-            # Wait for the existing request to complete
-            logger.debug(f"Waiting for pending request: {request_key}")
-            event.wait(timeout=30)
-            
-            # Get the result
-            with self._pending_requests_lock:
-                result_key = f"{request_key}_result"
-                if result_key in self._pending_requests:
-                    return self._pending_requests.pop(result_key)
-            
-            # Timeout or no result
-            logger.warning(f"Timeout waiting for pending request: {request_key}")
-            return RET_ERROR, None
-        
-        # This thread will make the actual API call
-        try:
-            # Check rate limit before making API call
-            self._check_rate_limit()
-            
-            if not self.is_connected():
-                if not self.connect():
-                    result = (RET_ERROR, None)
-                    self._complete_pending_request(request_key, result)
-                    return result
-            
-            ret, data = self.quote_ctx.get_option_expiration_date(code=symbol)
-            result = (ret, data)
-            self._complete_pending_request(request_key, result)
-            return result
-        except Exception as e:
-            logger.error(f"Error getting option expirations for {symbol}: {str(e)}")
-            result = (RET_ERROR, None)
-            self._complete_pending_request(request_key, result)
-            return result
 
     def get_option_chain(self, symbol, expiration=None, right='C', target_strike=None):
         """
@@ -870,7 +794,7 @@ class MoomooConnection:
         # This thread will make the actual API call
         try:
             # Check rate limit before making API call
-            self._check_rate_limit()
+            self._rate_limiter.check_rate_limit()
             
             if not self.is_connected():
                 if not self.connect():

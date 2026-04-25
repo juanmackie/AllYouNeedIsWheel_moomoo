@@ -3,14 +3,24 @@ Portfolio API routes
 """
 
 from flask import Blueprint, request, jsonify, current_app
-from api.services.portfolio_service import PortfolioService
 from api.services.macro_regime_service import get_macro_service
 from core.connection import probe_opend_status
 import traceback
 from datetime import datetime
 
 bp = Blueprint('portfolio', __name__, url_prefix='/api/portfolio')
-portfolio_service = PortfolioService()
+
+# Lazy service access - service created on first use
+_portfolio_service_instance = None
+
+
+def get_portfolio_service():
+    """Get or create the portfolio service instance."""
+    global _portfolio_service_instance
+    if _portfolio_service_instance is None:
+        import api
+        _portfolio_service_instance = api.get_service('portfolio')
+    return _portfolio_service_instance
 
 from core.logging_config import get_logger
 logger = get_logger('api.routes.portfolio', 'api')
@@ -67,10 +77,10 @@ def get_portfolio():
         if unavailable_response:
             return unavailable_response
 
-        results = portfolio_service.get_portfolio_summary()
+        results = get_portfolio_service().get_portfolio_summary()
         if results is None:
             return _service_unavailable_response(
-                portfolio_service.last_error,
+                get_portfolio_service().last_error,
                 'Failed to load portfolio summary'
             )
 
@@ -120,10 +130,10 @@ def get_positions():
         if position_type and position_type not in ['STK', 'OPT']:
             return jsonify({'error': 'Invalid position type. Supported types: STK, OPT'}), 400
             
-        results = portfolio_service.get_positions(position_type)
+        results = get_portfolio_service().get_positions(position_type)
         if results is None:
             return _service_unavailable_response(
-                portfolio_service.last_error,
+                get_portfolio_service().last_error,
                 'Failed to load positions'
             )
         return jsonify(results)
@@ -169,7 +179,7 @@ def get_weekly_income():
         if unavailable_response:
             return unavailable_response
 
-        results = portfolio_service.get_weekly_option_income()
+        results = get_portfolio_service().get_weekly_option_income()
         
         if 'error' in results:
             payload = {
@@ -245,7 +255,7 @@ def get_roll_pressure():
         from db.database import OptionsDatabase
 
         # Get option positions
-        positions = portfolio_service.get_positions('OPT')
+        positions = get_portfolio_service().get_positions('OPT')
         if positions is None:
             return jsonify({'error': 'Failed to load positions'}), 500
 
@@ -259,7 +269,7 @@ def get_roll_pressure():
 
         # Build portfolio context for scoring
         try:
-            summary = portfolio_service.get_portfolio_summary()
+            summary = get_portfolio_service().get_portfolio_summary()
             cash_balance = float(summary.get('cash_balance', 0) or 0)
             account_value = float(summary.get('account_value', 0) or 0)
         except Exception:
@@ -292,7 +302,7 @@ def get_roll_pressure():
                     portfolio_context['short_puts'][ticker] = abs(pos_qty)
 
         # Score each position
-        iv_earnings_service = IVEarningsService(OptionsDatabase(options_service.config.get('db_path')))
+        iv_earnings_service = IVEarningsService(OptionsDatabase(get_config().get('db_path')))
         scored_positions = []
 
         for pos in option_positions:
@@ -310,7 +320,7 @@ def get_roll_pressure():
             try:
                 current_price = conn.get_stock_price(ticker)
                 if current_price is None or current_price <= 0:
-                    current_price = options_service._get_fallback_stock_price(portfolio_context, ticker)
+                    current_price = get_portfolio_service()._get_fallback_stock_price(portfolio_context, ticker)
                 if current_price is None or current_price <= 0:
                     continue
             except Exception:
@@ -445,7 +455,7 @@ def get_position_alerts():
         from db.database import OptionsDatabase
 
         # Get option positions
-        positions = portfolio_service.get_positions('OPT')
+        positions = get_portfolio_service().get_positions('OPT')
         if positions is None:
             return jsonify({'error': 'Failed to load positions'}), 500
 
@@ -455,7 +465,7 @@ def get_position_alerts():
 
         # Build portfolio context
         try:
-            summary = portfolio_service.get_portfolio_summary()
+            summary = get_portfolio_service().get_portfolio_summary()
             cash_balance = float(summary.get('cash_balance', 0) or 0)
             account_value = float(summary.get('account_value', 0) or 0)
         except Exception:
@@ -486,7 +496,7 @@ def get_position_alerts():
                 elif opt_type == 'PUT':
                     portfolio_context['short_puts'][ticker] = abs(pos_qty)
 
-        iv_earnings_service = IVEarningsService(OptionsDatabase(options_service.config.get('db_path')))
+        iv_earnings_service = IVEarningsService(OptionsDatabase(get_config().get('db_path')))
         alerts = []
 
         for pos in option_positions:
@@ -502,7 +512,7 @@ def get_position_alerts():
             try:
                 current_price = conn.get_stock_price(ticker)
                 if current_price is None or current_price <= 0:
-                    current_price = options_service._get_fallback_stock_price(portfolio_context, ticker)
+                    current_price = get_portfolio_service()._get_fallback_stock_price(portfolio_context, ticker)
                 if current_price is None or current_price <= 0:
                     continue
             except Exception:

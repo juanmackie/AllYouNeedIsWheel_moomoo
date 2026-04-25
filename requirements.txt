@@ -24,3 +24,9 @@ flask-cors>=4.0.0
 gunicorn>=21.2.0
 waitress>=2.1.2  # Windows-compatible WSGI server alternative to gunicorn
 werkzeug>=3.0.1
+
+# TradingView screener for dynamic stock screening (free, no API key)
+tvscreener>=0.2.0
+
+# OpenAI client for LLM-powered trade advisor
+openai>=1.0.0

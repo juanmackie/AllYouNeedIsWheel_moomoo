@@ -156,13 +156,26 @@ class IVEarningsService:
         else:
             return (20, iv_rank, 'extreme_high')  # Excellent - very high IV
     
+    def _strip_moomoo_prefix(self, ticker: str) -> str:
+        """
+        Strip moomoo prefix (e.g., 'US.UBER' -> 'UBER') for external APIs.
+        """
+        if '.' in ticker:
+            parts = ticker.split('.', 1)
+            if len(parts) == 2 and parts[0] in ['US', 'HK', 'SZ', 'SH']:
+                return parts[1]
+        return ticker
+
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
         Fetch earnings date using OpenBB with yfinance fallback.
         """
+        # Strip moomoo prefix for external APIs
+        clean_ticker = self._strip_moomoo_prefix(ticker)
+        
         try:
             from openbb import obb
-            result = obb.equity.earnings.calendar(symbol=ticker)
+            result = obb.equity.earnings.calendar(symbol=clean_ticker)
             df = result.to_df() if hasattr(result, 'to_df') else result
             if df is not None and not df.empty:
                 date_col = None
@@ -179,7 +192,7 @@ class IVEarningsService:
                             'error': None
                         }
         except Exception as e:
-            logger.debug(f"OpenBB earnings fetch failed for {ticker}, falling back to yfinance: {e}")
+            logger.debug(f"OpenBB earnings fetch failed for {clean_ticker}, falling back to yfinance: {e}")
 
         try:
             import yfinance as yf
@@ -187,7 +200,7 @@ class IVEarningsService:
             
             import time
             time.sleep(1)
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(clean_ticker)
             
             # Try get_earnings_dates
             try:
@@ -208,7 +221,7 @@ class IVEarningsService:
                                         'error': None
                                     }
             except Exception as e:
-                logger.debug(f"get_earnings_dates failed for {ticker}: {e}")
+                logger.debug(f"get_earnings_dates failed for {clean_ticker}: {e}")
 
             # Try stock.info
             try:
@@ -228,9 +241,9 @@ class IVEarningsService:
                                 'error': None
                             }
             except Exception as e:
-                logger.debug(f"stock.info earnings check failed for {ticker}: {e}")
+                logger.debug(f"stock.info earnings check failed for {clean_ticker}: {e}")
         except Exception as e:
-            logger.debug(f"yfinance fallback failed for {ticker}: {e}")
+            logger.debug(f"yfinance fallback failed for {clean_ticker}: {e}")
 
         return {
             'success': False,
@@ -238,125 +251,6 @@ class IVEarningsService:
             'error': "No data from OpenBB or yfinance"
         }
 
-    def record_iv_data(self, ticker: str, implied_volatility: float, 
-                      stock_price: Optional[float] = None,
-                      option_type: Optional[str] = None,
-                      expiration: Optional[str] = None,
-                      dte: Optional[int] = None):
-        """
-        Record IV data for a ticker
-        
-        Args:
-            ticker: Stock ticker symbol
-            implied_volatility: IV as decimal (e.g., 0.25 for 25%)
-            stock_price: Current stock price
-            option_type: CALL or PUT
-            expiration: Expiration date
-            dte: Days to expiration
-        """
-        if not self.db:
-            return
-        
-        try:
-            # Save to database
-            self.db.save_iv_data(ticker, implied_volatility, stock_price, 
-                                option_type, expiration, dte)
-            
-            # Calculate IV rank
-            iv_rank = self._calculate_iv_rank(ticker, implied_volatility)
-            
-            # Update cache
-            self._iv_cache[ticker] = {
-                'iv': implied_volatility,
-                'timestamp': datetime.now(),
-                'iv_rank': iv_rank
-            }
-            
-            logger.debug(f"Recorded IV for {ticker}: {implied_volatility:.2%} (rank: {iv_rank:.1%})")
-            
-        except Exception as e:
-            logger.error(f"Error recording IV data for {ticker}: {e}")
-    
-    def _calculate_iv_rank(self, ticker: str, current_iv: float, days: int = 30) -> float:
-        """
-        Calculate IV Rank: where current IV falls in 30-day range
-        
-        Args:
-            ticker: Stock ticker symbol
-            current_iv: Current implied volatility
-            days: Number of days to look back
-            
-        Returns:
-            float: IV rank as percentage (0-1)
-        """
-        if not self.db:
-            return 0.5  # Neutral if no DB
-        
-        try:
-            # Get historical IV data
-            history = self.db.get_iv_history(ticker, days)
-            
-            if len(history) < 5:  # Need at least 5 data points
-                return 0.5  # Neutral if insufficient data
-            
-            iv_values = [record['implied_volatility'] for record in history]
-            iv_values.append(current_iv)  # Include current
-            
-            min_iv = min(iv_values)
-            max_iv = max(iv_values)
-            
-            if max_iv == min_iv:
-                return 0.5  # Neutral if no range
-            
-            iv_rank = (current_iv - min_iv) / (max_iv - min_iv)
-            return max(0.0, min(1.0, iv_rank))  # Clamp to 0-1
-            
-        except Exception as e:
-            logger.error(f"Error calculating IV rank for {ticker}: {e}")
-            return 0.5
-    
-    def get_iv_environment_score(self, ticker: str, current_iv: float) -> tuple:
-        """
-        Get IV environment score and metadata
-        
-        Args:
-            ticker: Stock ticker symbol
-            current_iv: Current implied volatility
-            
-        Returns:
-            tuple: (score_adjustment, iv_rank, status_message)
-                score_adjustment: -20 to +20 percentage points
-                iv_rank: 0-1 (percentile)
-                status_message: 'low', 'neutral', 'high', 'extreme'
-        """
-        # Check cache first
-        cache_entry = self._iv_cache.get(ticker)
-        if self._is_cache_valid(cache_entry, self._cache_duration_hours):
-            iv_rank = cache_entry.get('iv_rank', 0.5)
-        else:
-            iv_rank = self._calculate_iv_rank(ticker, current_iv)
-            self._iv_cache[ticker] = {
-                'iv': current_iv,
-                'timestamp': datetime.now(),
-                'iv_rank': iv_rank
-            }
-        
-        # Determine score adjustment and status
-        if iv_rank < 0.20:
-            return (-20, iv_rank, 'extreme_low')  # Dangerous - very low IV
-        elif iv_rank < 0.30:
-            return (-10, iv_rank, 'low')  # Low IV warning
-        elif iv_rank < 0.40:
-            return (-5, iv_rank, 'below_avg')  # Slightly below average
-        elif iv_rank < 0.60:
-            return (0, iv_rank, 'neutral')  # Normal range
-        elif iv_rank < 0.70:
-            return (5, iv_rank, 'above_avg')  # Slightly above average
-        elif iv_rank < 0.80:
-            return (10, iv_rank, 'high')  # Good premium environment
-        else:
-            return (20, iv_rank, 'extreme_high')  # Excellent - very high IV
-    
     def update_earnings_data(self, ticker: str) -> bool:
         """
         Update earnings data for a ticker

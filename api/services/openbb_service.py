@@ -306,19 +306,35 @@ class OpenBBService:
 
         def _fetch():
             try:
+                # Try OpenBB first
                 hist = self._obb.equity.price.historical("VIX", interval="1d")
                 df = hist.to_df()
-                if df is None or df.empty or 'close' not in df.columns:
-                    return None
-
-                current = float(df['close'].iloc[-1])
-                return {
-                    'vix': round(current, 2),
-                    'status': 'low' if current < 15 else ('normal' if current < 25 else ('elevated' if current < 35 else 'high')),
-                }
+                if df is not None and not df.empty and 'close' in df.columns:
+                    current = float(df['close'].iloc[-1])
+                    return {
+                        'vix': round(current, 2),
+                        'status': 'low' if current < 15 else ('normal' if current < 25 else ('elevated' if current < 35 else 'high')),
+                    }
             except Exception as e:
-                logger.warning(f"VIX fetch failed: {e}")
-                return None
+                logger.debug(f"OpenBB VIX fetch failed: {e}")
+            
+            # Fallback to yfinance
+            try:
+                import yfinance as yf
+                import time
+                time.sleep(0.5)
+                vix_ticker = yf.Ticker("^VIX")
+                info = vix_ticker.info
+                if info and 'previousClose' in info:
+                    current = float(info['previousClose'])
+                    return {
+                        'vix': round(current, 2),
+                        'status': 'low' if current < 15 else ('normal' if current < 25 else ('elevated' if current < 35 else 'high')),
+                    }
+            except Exception as e:
+                logger.debug(f"yfinance VIX fallback failed: {e}")
+            
+            return None
 
         return self._safe_fetch(cache_key, self._ttl['vix'], _fetch)
 

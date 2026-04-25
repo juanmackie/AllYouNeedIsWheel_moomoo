@@ -6,6 +6,8 @@ Main entry point for the web application
 import os
 import json
 import threading
+from dotenv import load_dotenv
+load_dotenv()  # Load .env before any config is read
 import time
 import atexit
 from datetime import datetime, timedelta
@@ -16,13 +18,14 @@ from db.database import OptionsDatabase
 from core.connection import MoomooConnection
 from config import apply_env_overrides
 from api.services.iv_earnings_service import IVEarningsService
+from core.background_manager import BackgroundTaskManager, TaskConfig
 
 # Configure logging
 logger = get_logger('autotrader.app', 'api')
 
-# Global background thread reference
-_earnings_thread = None
-_stop_earnings_thread = threading.Event()
+# Global task manager for background tasks
+task_manager = BackgroundTaskManager()
+
 
 def _resolve_local_path(path_value, base_dir):
     if not path_value:
@@ -31,75 +34,76 @@ def _resolve_local_path(path_value, base_dir):
         return path_value
     return os.path.join(base_dir, path_value)
 
+
+def _earnings_worker(app):
+    """
+    Background worker to fetch earnings data.
+    This function is called periodically by the task manager.
+    """
+    with app.app_context():
+        db = app.config.get("database") or OptionsDatabase()
+        service = IVEarningsService(db)
+        
+        logger.info("Earnings updater worker executing")
+        
+        try:
+            # Get tickers from recent orders
+            recent_orders = db.get_orders(limit=100)
+            order_tickers = list(set(order['ticker'] for order in recent_orders if order.get('ticker')))
+            
+            # Also get tickers from portfolio positions
+            position_tickers = []
+            try:
+                import api
+                portfolio_service = api.get_service('portfolio')
+                portfolio_data = portfolio_service.get_positions()
+                if portfolio_data:
+                    position_tickers = [
+                        pos.get('symbol') 
+                        for pos in portfolio_data 
+                        if pos.get('security_type') == 'STK'
+                    ]
+            except Exception as e:
+                logger.warning(f"Could not fetch portfolio positions for earnings: {e}")
+            
+            # Combine and deduplicate tickers
+            all_tickers = list(set(order_tickers + position_tickers))
+            
+            if all_tickers:
+                logger.info(f"Updating earnings for {len(all_tickers)} tickers (orders + positions)")
+                result = service.batch_update_earnings(all_tickers)
+                logger.info(f"Earnings update complete: {result['successful']} successful, {result['failed']} failed")
+            
+            # Purge old IV data
+            service.purge_old_data()
+            
+        except Exception as e:
+            logger.error(f"Error in earnings updater: {e}")
+            raise  # Re-raise to trigger restart if configured
+
+
 def start_earnings_updater(app):
     """
-    Start background thread to periodically update earnings data
+    Start background earnings updater using BackgroundTaskManager.
     """
-    global _earnings_thread, _stop_earnings_thread
+    # Register the earnings task
+    task_manager.register(TaskConfig(
+        name='earnings_updater',
+        worker_fn=lambda: _earnings_worker(app),
+        restart_on_failure=True,
+        max_restart_attempts=5,
+        restart_delay_seconds=60,
+    ))
     
-    if _earnings_thread and _earnings_thread.is_alive():
-        logger.info("Earnings updater already running")
-        return
-    
-    _stop_earnings_thread.clear()
-    
-    def earnings_worker():
-        """Background worker to fetch earnings data"""
-        with app.app_context():
-            db = app.config.get("database") or OptionsDatabase()
-            service = IVEarningsService(db)
-            
-            logger.info("Earnings updater worker started")
-            
-            while not _stop_earnings_thread.is_set():
-                try:
-                    # Get tickers from recent orders
-                    recent_orders = db.get_orders(limit=100)
-                    order_tickers = list(set(order['ticker'] for order in recent_orders if order.get('ticker')))
-                    
-                    # Also get tickers from portfolio positions
-                    position_tickers = []
-                    try:
-                        from api.services.portfolio_service import PortfolioService
-                        portfolio_service = PortfolioService()
-                        portfolio_data = portfolio_service.get_positions()
-                        if portfolio_data:
-                            position_tickers = [
-                                pos.get('symbol') 
-                                for pos in portfolio_data 
-                                if pos.get('security_type') == 'STK'
-                            ]
-                    except Exception as e:
-                        logger.warning(f"Could not fetch portfolio positions for earnings: {e}")
-                    
-                    # Combine and deduplicate tickers
-                    all_tickers = list(set(order_tickers + position_tickers))
-                    
-                    if all_tickers:
-                        logger.info(f"Updating earnings for {len(all_tickers)} tickers (orders + positions)")
-                        result = service.batch_update_earnings(all_tickers)
-                        logger.info(f"Earnings update complete: {result['successful']} successful, {result['failed']} failed")
-                    
-                    # Purge old IV data
-                    service.purge_old_data()
-                    
-                except Exception as e:
-                    logger.error(f"Error in earnings updater: {e}")
-                
-                                # Better practice: wait on the event instead of sleeping in a loop
-                _stop_earnings_thread.wait(timeout=21600)  # 6 hours in seconds
-            
-            logger.info("Earnings updater worker stopped")
-    
-    _earnings_thread = threading.Thread(target=earnings_worker, daemon=True)
-    _earnings_thread.start()
-    logger.info("Earnings updater background thread started")
+    # Start the task
+    task_manager.start('earnings_updater')
+    logger.info("Earnings updater background task started")
+
 
 def stop_earnings_updater():
-    """Stop the earnings updater thread"""
-    global _stop_earnings_thread
-    _stop_earnings_thread.set()
-    logger.info("Earnings updater stop signal sent")
+    """Stop all background tasks."""
+    task_manager.stop_all()
+    logger.info("All background tasks stopped")
 
 
 # Create Flask application with necessary configs
@@ -158,12 +162,15 @@ def create_application():
     
     return app
 
+
 # Create the application
 app = create_application()
 
 # Start background earnings updater (runs every 6 hours)
 try:
     start_earnings_updater(app)
+    # Start health monitor
+    task_manager.start_health_monitor(interval=60)
     # Register stop signal for graceful shutdown
     atexit.register(stop_earnings_updater)
 except Exception as e:
@@ -211,8 +218,12 @@ def earnings_status():
     db = current_app.config.get('database') or OptionsDatabase()
     service = IVEarningsService(db)
     
+    # Check task status using the task manager
+    earnings_task_status = task_manager.get_status('earnings_updater')
+    is_running = earnings_task_status and earnings_task_status.get('running', False)
+    
     return jsonify({
-        'status': 'running' if (_earnings_thread and _earnings_thread.is_alive()) else 'stopped',
+        'status': 'running' if is_running else 'stopped',
         'cache_stats': service.get_cache_stats()
     })
 

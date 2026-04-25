@@ -15,6 +15,11 @@ Complete reference for all API endpoints in AllYouNeedIsWheel.
 - [Options Analysis](#options-analysis)
 - [Orders](#orders)
 - [Earnings & IV Tracking](#earnings--iv-tracking)
+- [VIX Regime](#vix-regime)
+- [Macro Regime Detection](#macro-regime-detection)
+- [Analytics](#analytics)
+- [System Tasks](#system-tasks)
+- [LLM](#llm)
 - [Error Handling](#error-handling)
 - [Data Models](#data-models)
 
@@ -58,6 +63,22 @@ Check the current OpenD connection and login state.
 - `login_required` — OpenD connected but needs login
 - `disconnected` — Cannot reach OpenD
 - `error` — Connection error
+
+### Connection Status (Debug)
+
+Get detailed connection status for debugging connection cycling issues.
+
+**Endpoint:** `GET /api/options/connection-status`
+
+**Response:**
+```json
+{
+  "success": true,
+  "connection_pool": {...},
+  "service_connection": {...},
+  "service_initialized": true
+}
+```
 
 ---
 
@@ -146,6 +167,53 @@ Get expected income from short options expiring this week.
   "total_income": 350.00,
   "positions_count": 1,
   "this_friday": "2026-04-04"
+}
+```
+
+---
+
+### Get Roll Pressure
+
+Analyze which open positions are approaching strike price and may need to be rolled.
+
+**Endpoint:** `GET /api/portfolio/roll-pressure`
+
+**Response:**
+```json
+{
+  "positions": [
+    {
+      "ticker": "AAPL",
+      "option_type": "CALL",
+      "strike": 195.00,
+      "expiration": "20260417",
+      "dte": 5,
+      "stock_price": 192.50,
+      "roll_pressure": 72.3,
+      "extrinsic_remaining": 0.15,
+      "profit_target_progress": 68.0
+    }
+  ]
+}
+```
+
+### Get Alerts
+
+Retrieve portfolio alerts for positions needing attention.
+
+**Endpoint:** `GET /api/portfolio/alerts`
+
+**Response:**
+```json
+{
+  "alerts": [
+    {
+      "ticker": "AAPL",
+      "type": "roll",
+      "severity": "warning",
+      "message": "AAPL 195C approaching strike - 5 DTE remaining"
+    }
+  ]
 }
 ```
 
@@ -321,6 +389,57 @@ Get available expiration dates for a ticker.
 - `CALL`: 5-35 days
 - `PUT`: 7-45 days
 - `null`: All future expirations
+
+---
+
+### Get Top Recommendations
+
+Retrieve the top-ranked option plays across all watchlist tickers. Uses multi-threaded scoring with caching.
+
+**Endpoint:** `GET /api/options/top-recommendations`
+
+**Query Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `limit` | integer | No | 10 | Max recommendations to return |
+
+**Response:**
+```json
+{
+  "success": true,
+  "recommendations": [
+    {
+      "ticker": "AAPL",
+      "option_type": "PUT",
+      "strike": 170.00,
+      "expiration": "20260515",
+      "score": 88.5,
+      "annualized_return": 22.3,
+      "iv_rank": 72.0,
+      "rationale": "..."
+    }
+  ],
+  "cache_status": "fresh",
+  "cache_age": 45
+}
+```
+
+### Get Cash Status
+
+Check available cash for trading after margin requirements.
+
+**Endpoint:** `GET /api/options/cash-status`
+
+**Response:**
+```json
+{
+  "success": true,
+  "cash_balance": 25000.00,
+  "buying_power": 22000.00,
+  "cash_available_for_csp": 20000.00,
+  "max_put_contracts_at_avg_strike": 5
+}
+```
 
 ---
 
@@ -664,6 +783,268 @@ Get all tickers with earnings scheduled in the next 7 days.
 
 ---
 
+## VIX Regime
+
+### Get VIX Regime
+
+Returns the current VIX level, market regime classification, and delta/exposure adjustments applied to option screening.
+
+**Endpoint:** `GET /api/options/vix-regime`
+
+**Response:**
+```json
+{
+  "success": true,
+  "vix_regime": {
+    "vix": 18.5,
+    "regime": "normal",
+    "delta_adjustment": 0.0,
+    "exposure_multiplier": 1.0,
+    "description": "Normal volatility (VIX 15-30) - standard delta targets"
+  }
+}
+```
+
+**Regime Classifications:**
+| VIX Level | Regime | Delta Adjustment | Exposure Limit |
+|-----------|--------|-----------------|----------------|
+| < 15 | Complacency | +0.10 | 70% |
+| 15-30 | Normal | 0.00 | 100% |
+| > 30 | Fear | -0.05 | 50% |
+
+---
+
+## Macro Regime Detection
+
+### Get Macro Regime
+
+Returns the current macroeconomic regime based on FRED data (rates, credit stress, growth, inflation).
+
+**Endpoint:** `GET /api/macro/regime`
+
+**Response:**
+```json
+{
+  "success": true,
+  "regime": {
+    "interest_rate_regime": "rising",
+    "credit_stress": "low",
+    "growth_regime": "expansion",
+    "inflation_trend": "stable",
+    "macro_multiplier": 1.05,
+    "summary": "Favorable macro environment - consider slightly more aggressive plays"
+  }
+}
+```
+
+### Get Macro Cache Status
+
+Check the age and validity of cached FRED data.
+
+**Endpoint:** `GET /api/macro/cache/status`
+
+**Response:**
+```json
+{
+  "success": true,
+  "cached": true,
+  "age_seconds": 1200,
+  "max_age_seconds": 3600
+}
+```
+
+### Clear Macro Cache
+
+Force a fresh fetch from FRED on the next request.
+
+**Endpoint:** `POST /api/macro/cache/clear`
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Macro cache cleared"
+}
+```
+
+---
+
+## Analytics
+
+### Get Option Lifecycle Analytics
+
+Get lifecycle metrics for option positions (age, time decay, history).
+
+**Endpoint:** `GET /api/options/analytics/lifecycle`
+
+**Response:**
+```json
+{
+  "success": true,
+  "analytics": [
+    {
+      "ticker": "AAPL",
+      "option_type": "CALL",
+      "strike": 195.00,
+      "expiration": "20260417",
+      "days_open": 14,
+      "decay_rate": 0.08,
+      "theta_decayed": 60.5
+    }
+  ]
+}
+```
+
+### Get Option Leakage Analytics
+
+Analyze option spread leakage (slippage cost between bid/ask).
+
+**Endpoint:** `GET /api/options/analytics/leakage`
+
+**Response:**
+```json
+{
+  "success": true,
+  "leakage": [
+    {
+      "ticker": "AAPL",
+      "option_type": "CALL",
+      "strike": 195.00,
+      "spread_cost": 10.50,
+      "leakage_pct": 6.67
+    }
+  ]
+}
+```
+
+### Prefill Close Order Data
+
+Get prefilled data for closing a position, used for rollover workflows.
+
+**Endpoint:** `POST /api/options/prefilled-close`
+
+**Request Body:**
+```json
+{
+  "ticker": "AAPL",
+  "option_type": "CALL",
+  "strike": 195.00,
+  "expiration": "20260417"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "prefilled": {
+    "bid": 0.75,
+    "ask": 0.85,
+    "last": 0.80,
+    "mid_price": 0.80,
+    "delta": -0.18,
+    "premium_per_contract": 80.00
+  }
+}
+```
+
+---
+
+## System Tasks
+
+### List Background Tasks
+
+Get the status of all registered background tasks.
+
+**Endpoint:** `GET /api/system/tasks`
+
+**Response:**
+```json
+{
+  "tasks": [
+    {
+      "name": "earnings_updater",
+      "running": true,
+      "uptime_seconds": 3600,
+      "restart_count": 0
+    }
+  ]
+}
+```
+
+### Restart Background Task
+
+Restart a specific background task by name.
+
+**Endpoint:** `POST /api/system/tasks/<name>/restart`
+
+**Response:**
+```json
+{
+  "success": true,
+  "task": "earnings_updater",
+  "message": "Task restarted"
+}
+```
+
+### Get Task Status
+
+Get detailed status of a specific background task.
+
+**Endpoint:** `GET /api/system/tasks/<name>/status`
+
+**Response:**
+```json
+{
+  "name": "earnings_updater",
+  "running": true,
+  "uptime_seconds": 3600,
+  "last_run": "2026-04-25T10:00:00Z",
+  "next_run": "2026-04-25T16:00:00Z",
+  "restart_count": 0,
+  "last_error": null
+}
+```
+
+---
+
+## LLM
+
+### Get LLM Suggestions
+
+Get AI-driven suggestions for option plays based on current market conditions.
+
+**Endpoint:** `POST /api/llm/suggestions`
+
+**Request Body:**
+```json
+{
+  "tickers": ["AAPL", "MSFT", "TSLA"],
+  "context": {
+    "market_regime": "normal",
+    "risk_tolerance": "moderate"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "suggestions": [
+    {
+      "ticker": "AAPL",
+      "strategy": "cash_secured_put",
+      "strike": 170.00,
+      "rationale": "Strong support level with elevated IV"
+    }
+  ],
+  "enabled": true
+}
+```
+
+---
+
 ## Error Handling
 
 ### Standard Error Response
@@ -928,10 +1309,11 @@ The API does not use API keys or tokens. Access control is through:
 
 ## Version History
 
-- **Current** — Phase 1 & 2: Risk-adjusted scoring, IV environment, earnings integration
-- **1.0.0** — Initial release with basic portfolio and order management
+- **2.1** — Analytics, System Tasks, LLM endpoints; expanded Portfolio and Options endpoints
+- **2.0** — Phase 1-4: Risk-adjusted scoring, IV environment, earnings integration, macro regime
+- **1.0** — Initial release with basic portfolio and order management
 
 ---
 
-**Last Updated:** 2026-03-29
-**API Version:** 2.0
+**Last Updated:** 2026-04-25
+**API Version:** 2.1

@@ -5,8 +5,6 @@ One canonical decision model for both candidate contracts and open positions.
 All surfaces (recommendations, rollover, dashboard) read from this single source.
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import Optional

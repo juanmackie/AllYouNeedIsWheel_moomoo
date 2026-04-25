@@ -3,7 +3,6 @@ Options API routes
 """
 
 from flask import Blueprint, request, jsonify, current_app
-from api.services.options_service import OptionsService
 from core.connection import probe_opend_status
 from core.cache_manager import recommendation_cache, RecommendationCache
 import traceback
@@ -17,7 +16,18 @@ import threading
 logger = logging.getLogger('api.routes.options')
 
 bp = Blueprint('options', __name__, url_prefix='/api/options')
-options_service = OptionsService()
+
+# Lazy service access - service created on first use
+_options_service_instance = None
+
+
+def get_options_service():
+    """Get or create the options service instance."""
+    global _options_service_instance
+    if _options_service_instance is None:
+        import api
+        _options_service_instance = api.get_service('options')
+    return _options_service_instance
 
 
 def _trigger_background_refresh(cache_key, limit, portfolio_hash):
@@ -28,7 +38,7 @@ def _trigger_background_refresh(cache_key, limit, portfolio_hash):
         try:
             logger.info(f"Background refresh started for {cache_key}")
             # Get fresh data
-            result = options_service.get_top_recommendations(limit=limit)
+            result = get_options_service().get_top_recommendations(limit=limit)
             
             if "error" not in result:
                 # Cache the fresh data
@@ -77,14 +87,14 @@ def connection_status():
         
         # Get connection info if available
         conn_info = None
-        if options_service.connection:
-            conn_info = options_service.connection.get_connection_info()
+        if get_options_service().connection:
+            conn_info = get_options_service().connection.get_connection_info()
         
         return jsonify({
             'success': True,
             'connection_pool': pool_stats,
             'service_connection': conn_info,
-            'service_initialized': options_service.connection is not None
+            'service_initialized': get_options_service().connection is not None
         })
     except Exception as e:
         logger.error(f"Error getting connection status: {e}")
@@ -118,7 +128,7 @@ def otm_options():
     
     # Use the existing module-level instance instead of creating a new one
     # Call the service with appropriate parameters including the new option_type and expiration
-    result = options_service.get_otm_options(
+    result = get_options_service().get_otm_options(
         ticker=ticker,
         otm_percentage=otm_percentage,
         option_type=option_type,
@@ -151,7 +161,7 @@ def get_stock_price():
         for ticker in tickers:
             if ticker:
                 # Use the options service to get the stock price without option data
-                price = options_service.get_stock_price(ticker)
+                price = get_options_service().get_stock_price(ticker)
                 prices[ticker] = price
         
         return jsonify({
@@ -181,7 +191,7 @@ def save_order():
                 return jsonify({"error": f"Missing required field: {field}"}), 400
         
         # Save order to database
-        order_id = options_service.db.save_order(order_data)
+        order_id = get_options_service().db.save_order(order_data)
         
         if order_id:
             return jsonify({"success": True, "order_id": order_id}), 201
@@ -212,7 +222,7 @@ def get_pending_orders():
             is_rollover = is_rollover_param.lower() == 'true'
         
         # Get pending orders from database
-        orders = options_service.db.get_pending_orders(executed=executed, isRollover=is_rollover)
+        orders = get_options_service().db.get_pending_orders(executed=executed, isRollover=is_rollover)
         
         return jsonify({"orders": orders})
     except Exception as e:
@@ -282,7 +292,7 @@ def execute_order(order_id):
             return jsonify({"error": "Database not initialized"}), 500
             
         # Use the options service to execute the order
-        response, status_code = options_service.execute_order(order_id, db)
+        response, status_code = get_options_service().execute_order(order_id, db)
         
         # Return the response from the service
         return jsonify(response), status_code
@@ -304,7 +314,7 @@ def check_orders():
     
     try:
         # Use the options service to check and update order statuses
-        response = options_service.check_pending_orders()
+        response = get_options_service().check_pending_orders()
         
         # Return the response from the service
         return jsonify(response), 200
@@ -372,8 +382,8 @@ def rollover_option():
         }
         
         # Save orders to database
-        buy_order_id = options_service.db.save_order(buy_order)
-        sell_order_id = options_service.db.save_order(sell_order)
+        buy_order_id = get_options_service().db.save_order(buy_order)
+        sell_order_id = get_options_service().db.save_order(sell_order)
         
         if buy_order_id and sell_order_id:
             return jsonify({
@@ -405,7 +415,7 @@ def cancel_order(order_id):
     
     try:
         # Use the options service to cancel the order
-        response, status_code = options_service.cancel_order(order_id)
+        response, status_code = get_options_service().cancel_order(order_id)
         
         # Return the response from the service
         return jsonify(response), status_code
@@ -514,7 +524,7 @@ def get_option_expirations():
                 return jsonify({"error": "option_type must be 'CALL' or 'PUT'"}), 400
             
         # Call the service method to get option expirations
-        result = options_service.get_option_expirations(ticker, option_type)
+        result = get_options_service().get_option_expirations(ticker, option_type)
         
         # Check if there was an error
         if "error" in result:
@@ -564,7 +574,7 @@ def get_top_recommendations():
         
         # Get portfolio context for cache key and hash calculation
         try:
-            portfolio_context = options_service._get_portfolio_context()
+            portfolio_context = get_options_service()._get_portfolio_context()
             current_portfolio_hash = RecommendationCache.calculate_portfolio_hash(portfolio_context)
         except Exception as e:
             logger.warning(f"Failed to get portfolio context for cache: {e}")
@@ -602,7 +612,7 @@ def get_top_recommendations():
         # Cache miss or manual refresh - get fresh data
         logger.info(f"Fetching fresh top recommendations (manual_refresh={manual_refresh})")
         try:
-            result = options_service.get_top_recommendations(limit=limit)
+            result = get_options_service().get_top_recommendations(limit=limit)
         except Exception as e:
             logger.error(f"Error getting top recommendations (exception): {str(e)}")
             logger.error(traceback.format_exc())
@@ -733,7 +743,7 @@ def get_cash_status():
                 })
         
         cash_available = max(0, cash_balance - cash_reserved)
-        reserve_enabled = options_service.config.get('cash_reserve_enabled', True)
+        reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
         return jsonify({
             'success': True,
@@ -763,7 +773,7 @@ def get_vix_regime():
     try:
         from api.services.options_service import OptionsService
         options_service = OptionsService()
-        regime = options_service._get_vix_regime()
+        regime = get_options_service()._get_vix_regime()
         
         return jsonify({
             'success': True,
@@ -795,9 +805,9 @@ def get_trade_lifecycle():
 
     try:
         from db.database import OptionsDatabase
-        from config import Config
+        from api.services.config import get_config
 
-        db = OptionsDatabase(Config().get('db_path'))
+        db = OptionsDatabase(get_config().get('db_path'))
 
         ticker = request.args.get('ticker')
         event_type = request.args.get('event_type')
@@ -833,9 +843,9 @@ def get_leakage_analytics():
 
     try:
         from db.database import OptionsDatabase
-        from config import Config
+        from api.services.config import get_config
 
-        db = OptionsDatabase(Config().get('db_path'))
+        db = OptionsDatabase(get_config().get('db_path'))
         analytics = db.get_trade_analytics()
 
         return jsonify({
@@ -916,7 +926,7 @@ def create_prefilled_close_order():
 
         # Get current option price for limit price
         options_service = OptionsService()
-        conn = options_service._ensure_connection()
+        conn = get_options_service()._ensure_connection()
         if not conn:
             return jsonify({'success': False, 'error': 'Failed to connect to moomoo'}), 503
 

@@ -17,6 +17,12 @@ DEFAULT_CONNECTION_CONFIG = {
     'openbb_enabled': False,
     'fred_enabled': True,
     'cash_reserve_enabled': True,
+    'watchlist_mode': 'hybrid',  # 'static', 'dynamic', 'hybrid'
+    'screening_criteria': {
+        'min_iv_rank': 30,
+        'min_volume': 1000000,
+        'max_stocks': 50
+    },
     'watchlist': [
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'AMD',
         'NFLX', 'UBER', 'SOFI', 'PLTR', 'BABA', 'DIS', 'BA', 'JPM',
