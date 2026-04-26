@@ -35,6 +35,7 @@ trades.db
 # Connection config (may contain secrets)
 connection.json
 connection_real.json
+# WARNING: connection.json has portfolio_env=REAL by default - change to SIMULATE for safety
 
 # But allow Docker config (no secrets)
 !connection_docker.json
@@ -51,7 +52,9 @@ connection_real.json
 *.bak
 *.tmp
 *.log
+*.txt
 response.txt
 nul
 test_otm.py
 test_score.py
+server_log.txt

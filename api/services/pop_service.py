@@ -45,8 +45,8 @@ def calculate_pop_monte_carlo(ticker, strike, expiration, option_type, iv, dte, 
     Returns:
         dict: {'pop': float, 'method': 'monte_carlo', 'simulations': int, 'details': str}
     """
-    if iv is None or iv <= 0 or dte <= 0:
-        return {'pop': 0.5, 'method': 'monte_carlo', 'simulations': 0, 'details': 'Invalid IV or DTE'}
+    if iv is None or iv <= 0 or dte is None or dte <= 0:
+        return {'pop': 0.5, 'method': 'monte_carlo_fallback', 'simulations': 0, 'details': 'Invalid IV or DTE'}
     
     # Placeholder: Monte Carlo requires current stock price
     # For now, return delta-based as fallback

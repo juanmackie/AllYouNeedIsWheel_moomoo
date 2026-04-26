@@ -1420,3 +1420,68 @@ Set via card-level toggle or global Context Filter selector.
 - : Maximum contracts allowed by available cash/shares
 - : atr_max / cash_max (0.0-1.0 utilization)
 - : "conservative" or "aggressive"
+
+---
+
+## Earnings Lock (Additional Endpoints)
+
+### Get Lock Status
+`GET /api/earnings/lock-status`
+
+Returns the current earnings lock configuration.
+
+**Response:**
+```json
+{
+  "success": true,
+  "lock_days": 5,
+  "enabled": true
+}
+```
+
+---
+
+## Risk Sizing (Additional Endpoints)
+
+### Batch Position Sizing
+`POST /api/risk/sizing/batch`
+
+Get ATR-based position sizing for multiple tickers.
+
+**Request Body:**
+```json
+{
+  "tickers": ["AAPL", "MSFT"],
+  "account_value": 45000,
+  "risk_pct": 0.01
+}
+```
+
+### Clear Sizing Cache
+`POST /api/risk/sizing/cache/clear`
+
+Clears the risk sizing cache.
+
+---
+
+## Technical Regime (Additional Endpoints)
+
+### Get Regime for Single Ticker
+`GET /api/technical/regime/<ticker>`
+
+Returns technical regime for a single ticker.
+
+### Get Regime Summary
+`GET /api/technical/regime/summary?tickers=AAPL,MSFT,TSLA`
+
+Returns aggregated regime summary for watchlist.
+
+### Clear Regime Cache
+`POST /api/technical/regime/cache/clear`
+
+Clears the technical regime cache.
+
+---
+
+**Last Updated:** 2026-04-26
+**API Version:** 2.2 (Added earnings, risk, technical, pop endpoints)

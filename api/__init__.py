@@ -117,6 +117,13 @@ def create_app(config=None):
     app.register_blueprint(macro.bp)
     app.register_blueprint(system.bp)
     app.register_blueprint(llm.bp)
+    
+    # Register new feature blueprints
+    from api.routes import earnings, pop, risk, technical
+    app.register_blueprint(earnings.bp)
+    app.register_blueprint(pop.bp)
+    app.register_blueprint(risk.bp)
+    app.register_blueprint(technical.bp)
     logger.info("Registered API blueprints")
 
     @app.route('/health')

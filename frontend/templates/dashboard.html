@@ -21,6 +21,7 @@
 {% include "partials/dashboard/top_recommendations.html" %}
 {% include "partials/dashboard/options_table.html" %}
 {% include "partials/dashboard/pending_orders.html" %}
+{% include "partials/components/sizing_modal.html" %}
 
 <!-- AI Advisor Panel -->
 {% set llm_enabled = config.get('LLM_ENABLED', 'false')|string in ('true', '1', 'yes', 'y', 'on') %}
@@ -57,5 +58,6 @@
 {% endblock %}
 
 {% block scripts %}
+<script type="module" src="{{ url_for('static', filename='js/utils/sparklines.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/dashboard/dashboard.js') }}"></script>
 {% endblock %}
