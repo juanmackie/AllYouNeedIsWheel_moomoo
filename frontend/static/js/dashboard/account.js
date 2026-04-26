@@ -125,13 +125,49 @@ function updateAccountSummary() {
 }
 
 /**
+ * Load positions that have reached 50%+ of max profit (ready to recycle capital).
+ * Fetches from the alerts endpoint which flags profit_target_progress >= 50%.
+ */
+async function loadRecycleReadyPositions() {
+    try {
+        const response = await fetch('/api/portfolio/alerts');
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!data || !data.alerts) return;
+
+        const recycleAlerts = data.alerts.filter(a => 
+            a.alert_type === 'profit_target_50'
+        );
+
+        const panel = document.getElementById('recycle-panel');
+        const list = document.getElementById('recycle-positions-list');
+        if (!panel || !list) return;
+
+        if (recycleAlerts.length === 0) {
+            panel.style.display = 'none';
+            return;
+        }
+
+        panel.style.display = 'block';
+        list.innerHTML = recycleAlerts.map(a =>
+            `<div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+                <span><strong>${a.ticker}</strong> ${a.option_type} $${a.strike}</span>
+                <span class="badge bg-success">${a.message}</span>
+            </div>`
+        ).join('');
+    } catch (e) {
+        console.debug('Recycle alerts unavailable:', e.message);
+    }
+}
+
+/**
  * Populate positions tables
  */
 function populatePositionsTable() {
     if (!positionsData) return;
     
     // Debug log to see what data we're working with
-    console.log('Position data received:', positionsData);
+    // console.log('Position data received:', positionsData);
     
     // Filter positions by security_type
     const stockPositions = positionsData.filter(position => 
@@ -140,8 +176,8 @@ function populatePositionsTable() {
     const optionPositions = positionsData.filter(position => 
         position.security_type === 'OPT' || position.securityType === 'OPT' || position.sec_type === 'OPT');
     
-    console.log('Stock positions identified:', stockPositions.length);
-    console.log('Option positions identified:', optionPositions.length);
+    // console.log('Stock positions identified:', stockPositions.length);
+    // console.log('Option positions identified:', optionPositions.length);
     
     // Populate stock positions table
     populateStockPositionsTable(stockPositions);
@@ -344,6 +380,7 @@ async function loadPortfolioData() {
         if (accountData) {
             updateAccountSummary();
             await loadPositionsTable();
+            loadRecycleReadyPositions();
         } else {
             updateUnavailableAccountState();
         }

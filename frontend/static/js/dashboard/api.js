@@ -212,7 +212,7 @@ async function fetchOptionData(ticker, otmPercentage = 10, optionType = null, ex
             .replace(/=NaN/g, '=null')
             .replace(/: NaN/g, ': null');
             
-        console.log(`Sanitized response for ${ticker} to fix NaN values`);
+        // console.log(`Sanitized response for ${ticker} to fix NaN values`);
         
         // Parse the sanitized JSON
         try {
@@ -299,7 +299,7 @@ async function fetchPendingOrders(executed = false, isRollover = false) {
         }
         
         const data = await response.json();
-        console.log('Pending orders API response:', data);
+        // console.log('Pending orders API response:', data);
         return data;
     } catch (error) {
         console.error('Error fetching pending orders:', error);
@@ -410,6 +410,36 @@ async function executeOrder(orderId) {
     } catch (error) {
         console.error('Error executing order:', error);
         return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Execute a buy-to-close order in one step.
+ * Creates the order and executes it immediately.
+ * @param {Object} position - { ticker, option_type, strike, expiration, quantity }
+ * @returns {Promise<Object>} { success, order_id, message }
+ */
+async function executeCloseOrder(position) {
+    try {
+        const response = await fetch('/api/options/close', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker: position.ticker,
+                option_type: position.option_type,
+                strike: position.strike,
+                expiration: position.expiration,
+                quantity: position.quantity || 1,
+            })
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Error closing position:', error);
+        throw error;
     }
 }
 
@@ -639,6 +669,7 @@ export {
     saveOptionOrder,
     cancelOrder,
     executeOrder,
+    executeCloseOrder,
     checkOrderStatus,
     fetchStockPrices,
     fetchOptionExpirations,

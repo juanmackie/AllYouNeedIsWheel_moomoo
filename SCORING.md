@@ -487,91 +487,6 @@ This transparency helps users understand why a play ranked where it did.
 
 ---
 
-## Phase 3: VIX Market Regime Adaptation
-
-**VIX Regime Detection:**
-System fetches VIX from OpenBB (primary) or yfinance (fallback with `^VIX` ticker) with caching.
-- **Primary:** OpenBB SDK (`obb.equity.price.historical("VIX")`)
-- **Fallback:** yfinance (`yf.Ticker("^VIX").info['previousClose']`)
-- **Cache:** 5-minute TTL to avoid rate limits
-
-**Regime Classifications:**
-| VIX Level | Regime | Delta Adjustment | Exposure Limit | Rationale |
-|-----------|--------|-----------------|----------------|----------|
-| < 15 | Complacency | +0.10 | 70% | Premiums compressed, move closer to ATM for better yields |
-| 15-30 | Normal | 0.00 | 100% | Standard delta targets |
-| > 30 | Fear | -0.05 | 50% | Premiums rich, stay further OTM for safety margin |
-
-**Application in Screening Profile:**
-```
-adjusted_delta = base_target_delta + delta_adjustment
-adjusted_premium_threshold = base_threshold * (1.2 if fear else 0.8 if complacency else 1.0)
-```
-
-**Example Delta Targets with VIX Adjustment:**
-| Profile | Base PUT Delta | Complacency | Normal | Fear |
-|---------|---------------|------------|--------|------|
-| Weekly | 0.16 | 0.26 | 0.16 | 0.11 |
-| Monthly | 0.22 | 0.32 | 0.22 | 0.17 |
-| Quarterly | 0.26 | 0.36 | 0.26 | 0.21 |
-
-**Frontend Display:**
-The dashboard shows a VIX regime panel with:
-- Current VIX level and regime classification
-- Delta adjustment applied to screening
-- Exposure multiplier for position sizing
-- Color-coded badges: green (complacency), blue (normal), red (fear)
-
-**API Endpoint:**
-```
-GET /api/options/vix-regime
-```
-
-Returns:
-```json
-{
-  "success": true,
-  "vix_regime": {
-    "vix": 18.5,
-    "regime": "normal",
-    "delta_adjustment": 0.0,
-    "exposure_multiplier": 1.0,
-    "description": "Normal volatility (VIX 15-30) - standard delta targets"
-  }
-}
-```
-
----
-
-## Phase 4: Earnings Pipeline Restoration & UX Enhancement
-
-### Earnings Pipeline Robustness
-- **Multi-Source Fetching** — Refactored `IVEarningsService` with a four-layer fallback strategy for Yahoo Finance (get_earnings_dates -> stock.info -> Calendars -> earnings_dates property).
-- **Underlyer Extraction** — Logic to automatically resolve underlying stock symbols from standardized option contract names (e.g., `AAPL260508C195` -> `AAPL`).
-- **Shared DB Instance** — All services and background workers use the shared database instance from `app.config`, eliminating connection leaks.
-
-### Manual Refresh UI & UX
-- **Global Refresh Button** — "Refresh All" button in the dashboard header triggers a background update for all active symbols.
-- **Ticker-Level Refresh** — Tiny refresh icons next to earnings badges in the positions table for targeted manual updates.
-- **Earnings Status Indicator** — Real-time status badge in the header showing the background worker's state (RUNNING, STOPPED, or REFRESHING).
-- **Premium Summary Renaming** — Renamed `displayEarningsSummary` (income projections) to `displayPremiumSummary` to avoid confusion with stock earnings.
-
-### Stability & Reliability
-- **Return Type Standardization** — Fixed list vs dict return types crashing legacy routes (`/roll-pressure`, `/alerts`).
-- **Thread Optimization** — Replaced CPU-intensive sleep loops with `threading.Event.wait()`.
-- **Graceful Shutdown** — Implemented `atexit` handlers to stop background threads cleanly.
-- **Path Resolution** — Database path always resolves relative to the project root.
-
-### API Endpoints
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/earnings/status` | Background updater status & cache stats |
-| `POST` | `/api/earnings/refresh` | Trigger global update for all active symbols |
-| `GET` | `/api/earnings/update/<ticker>` | Manually update earnings for ticker |
-| `GET` | `/api/earnings/pending` | All tickers with earnings in next 7 days |
-
----
-
 ## Future Enhancements
 
 Potential scoring improvements:
@@ -588,5 +503,5 @@ Potential scoring improvements:
 
 ---
 
-**Last Updated:** 2026-04-19
-**Version:** Phase 1, 2, 3 & 4 (Pipeline Restoration)
+**Last Updated:** 2026-04-26
+**Version:** 2.0.0 (Phases 1-7 Complete)

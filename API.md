@@ -25,6 +25,10 @@ Complete reference for all API endpoints in AllYouNeedIsWheel.
 
 ---
 
+- [Technical Regime](#technical-regime)
+- [Risk Sizing](#risk-sizing)
+- [Probability of Profit](#probability-of-profit)
+- [Earnings Lock](#earnings-lock)
 ## System
 
 ### Health Check
@@ -1317,3 +1321,102 @@ The API does not use API keys or tokens. Access control is through:
 
 **Last Updated:** 2026-04-25
 **API Version:** 2.1
+
+
+## Technical Regime
+
+### Get Technical Regime
+`GET /api/technical/regime?tickers=AAPL,MSFT`
+
+Returns 200-day EMA regime and ADX trend strength for tickers.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "AAPL": {
+      "regime": "bullish",
+      "ema200": 175.25,
+      "price": 180.50,
+      "distance_pct": 2.99,
+      "adx": 28.5,
+      "trend_strength": "trending",
+      "summary": "🟢 Bullish | Price: $180.50 | EMA200: $175.25 (+2.99%)"
+    }
+  }
+}
+```
+
+### Get Regime Summary
+`GET /api/technical/regime/summary?tickers=AAPL,MSFT,TSLA`
+
+Returns aggregated regime summary for watchlist.
+
+---
+
+## Risk Sizing
+
+### Get Position Size
+`GET /api/risk/sizing?ticker=AAPL&account_value=45000&risk_pct=0.01`
+
+Returns ATR-based position size with 1% risk rule.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "ticker": "AAPL",
+    "atr": 4.20,
+    "account_value": 45000,
+    "risk_pct": 0.01,
+    "risk_amount": 450,
+    "risk_per_contract": 420,
+    "max_contracts": 1
+  }
+}
+```
+
+---
+
+## Probability of Profit
+
+### Get PoP Estimate
+`GET /api/pop/estimate?ticker=AAPL&strike=170&expiration=20260530&type=PUT&method=delta`
+
+Returns PoP percentage using delta or Monte Carlo.
+
+---
+
+## Earnings Lock
+
+### Get Locked Tickers
+`GET /api/earnings/locked-tickers?lock_days=5`
+
+Returns tickers with earnings within lock_days.
+
+**Response:**
+```json
+{
+  "success": true,
+  "locked": [
+    {"ticker": "AAPL", "earnings_date": "2026-05-03", "days_to_earnings": 3}
+  ],
+  "count": 1,
+  "lock_days": 5
+}
+```
+
+
+## Sizing Mode
+
+The system supports Conservative (ATR-safe) and Aggressive (cash-max) sizing modes.
+The default is Conservative. Aggressive mode uses all available cash or shares.
+Set via card-level toggle or global Context Filter selector.
+
+### Fields on Recommendation Objects
+- : Conservative max (ATR-safe, default)
+- : Maximum contracts allowed by available cash/shares
+- : atr_max / cash_max (0.0-1.0 utilization)
+- : "conservative" or "aggressive"

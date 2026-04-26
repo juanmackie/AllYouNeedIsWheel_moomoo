@@ -12,7 +12,17 @@ import threading
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import pytz
-from moomoo import *
+from moomoo import (
+    OpenQuoteContext,
+    OpenSecTradeContext,
+    OpenUSTradeContext,
+    RET_OK,
+    RET_ERROR,
+    SecurityFirm,
+    TrdEnv,
+    TrdMarket,
+    TrdSide,
+)
 
 # Import our logging configuration
 from core.logging_config import get_logger
@@ -126,10 +136,17 @@ def _parse_option_code_metadata(code):
     month = expiry[2:4]
     day = expiry[4:6]
 
+    # Moomoo option symbol convention: strike is encoded as strike_price * 1000,
+    # stored as a variable-length digit string. Dividing by 1000 recovers the
+    # per-share strike price. Example: SOFI260424P13000 -> strike digits "13000"
+    # -> 13000/1000 = 13.00 USD per share (100 shares per contract).
+    strike_digits = match.group('strike')
+    strike_price = int(strike_digits) / 1000
+
     return {
         'underlying': match.group('underlying'),
         'expiration': f"{year:04d}{month}{day}",
-        'strike': int(match.group('strike')) / 1000,
+        'strike': strike_price,
         'option_type': 'CALL' if match.group('right') == 'C' else 'PUT'
     }
 
@@ -264,16 +281,16 @@ class MoomooConnection:
         # Rate limiting for API calls (moomoo allows max 10 requests per 30 seconds)
         # Using 8 to be conservative and account for burst scenarios
         self._rate_limiter = RateLimiter(
-            max_requests_per_window=8,
-            rate_limit_window=30,
-            burst_threshold=5,
-            burst_window=5
+            max_requests_per_window=10,
+            rate_limit_window=60,
+            burst_threshold=6,
+            burst_window=10
         )
         
         # Stock price cache (cache for 30 seconds)
         self._stock_price_cache = {}
         self._stock_price_cache_lock = threading.Lock()
-        self._stock_price_ttl = 30  # seconds
+        self._stock_price_ttl = 120  # seconds (increased from 30 to reduce rate limit pressure)
         
         # Failed quote-rights ticker cache (skip for 5 minutes)
         self._failed_tickers = {}
@@ -283,7 +300,7 @@ class MoomooConnection:
         # Option chain cache (cache for 60 seconds)
         self._option_chain_cache = {}
         self._cache_lock = threading.Lock()
-        self._cache_ttl = 60  # seconds
+        self._cache_ttl = 180  # seconds (increased from 60 to reduce rate limit pressure)
         
         # Pending request deduplication (prevents parallel identical requests)
         self._pending_requests = {}
@@ -646,7 +663,7 @@ class MoomooConnection:
                 self._pending_requests[f"{request_key}_result"] = result
                 event.set()
     
-    def _wait_for_pending_request(self, request_key, timeout=30):
+    def _wait_for_pending_request(self, request_key, timeout=90):
         """
         Wait for a pending request to complete and return its result.
         """
@@ -688,7 +705,7 @@ class MoomooConnection:
         if not is_new:
             # Wait for the existing request to complete
             logger.debug(f"Waiting for pending request: {request_key}")
-            event.wait(timeout=30)
+            event.wait(timeout=90)
             
             # Retry the API call since we need to return the result
             # (not using cache here for simplicity)
@@ -743,12 +760,14 @@ class MoomooConnection:
             
             if not self.is_connected():
                 if not self.connect():
+                    self._complete_pending_request(request_key, None)
                     return None
             
             # Get market snapshot to retrieve current price
             ret, data = self.quote_ctx.get_market_snapshot([symbol])
             if ret != RET_OK or data is None or data.empty:
                 logger.error(f"Failed to get stock price for {symbol}: {data}")
+                self._complete_pending_request(request_key, None)
                 return None
             
             # Extract the last price from snapshot
@@ -756,9 +775,11 @@ class MoomooConnection:
             
             # Cache the result
             self._cache_stock_price(symbol, price)
+            self._complete_pending_request(request_key, price)
             return price
         except Exception as e:
             logger.error(f"Error getting stock price for {symbol}: {str(e)}")
+            self._complete_pending_request(request_key, None)
             return None
 
     def get_option_chain(self, symbol, expiration=None, right='C', target_strike=None):
@@ -780,7 +801,7 @@ class MoomooConnection:
         if not is_new:
             # Wait for the existing request to complete
             logger.debug(f"Waiting for pending request: {request_key}")
-            event.wait(timeout=30)
+            event.wait(timeout=90)
             
             # Get the result from cache (should be populated by the other thread)
             cached_result = self._get_cached_option_chain(symbol, expiration, right)

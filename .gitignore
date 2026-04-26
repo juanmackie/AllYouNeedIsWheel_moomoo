@@ -39,6 +39,10 @@ connection_real.json
 # But allow Docker config (no secrets)
 !connection_docker.json
 
+# GitHub Actions - workflow files SHOULD be committed
+# Note: connection.json.example and connection_docker.json should be committed
+# connection.json and connection_real.json should NOT be committed
+
 # Environment variables
 .env
 .env.local

@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Download OpenD for Ubuntu
+# NOTE: Using Ubuntu 18.04 binary on 22.04 base image - verify compatibility
+# TODO: Check if Ubuntu 22.04 binary is available from moomoo
 ARG OPEND_VERSION=10.1.6108
 ARG OPEND_URL=https://softwaredownload.futunn.com/Futu_OpenD_${OPEND_VERSION}_Ubuntu18.04.tar.gz
 

@@ -70,7 +70,7 @@ async function handleExpirationChange(selectElement) {
     const optionType = selectElement.getAttribute('data-option-type');
     const selectedExpiration = selectElement.value;
 
-    console.log(`Expiration changed for ${ticker} ${optionType} to ${selectedExpiration}`);
+    // console.log(`Expiration changed for ${ticker} ${optionType} to ${selectedExpiration}`);
     setSelectedExpirationPreference(ticker, optionType, selectedExpiration);
 
     try {
@@ -135,7 +135,7 @@ async function getLoadPendingOrdersFunction() {
                 detail: { source: 'options-table' }
             });
             document.dispatchEvent(requestEvent);
-            console.log('Dispatched event requesting pending orders refresh');
+            // console.log('Dispatched event requesting pending orders refresh');
         } catch (error) {
             console.error('Error trying to request pending orders refresh:', error);
         }
@@ -153,25 +153,25 @@ async function refreshPendingOrders() {
         
         // Method 1: Use the global loadPendingOrders function if available
         if (typeof window.loadPendingOrders === 'function') {
-            console.log('Refreshing pending orders using window.loadPendingOrders');
+            // console.log('Refreshing pending orders using window.loadPendingOrders');
             await window.loadPendingOrders();
             return;
         }
         
         // Method 2: Dispatch a custom event that orders.js is listening for
-        console.log('Dispatching ordersUpdated event to trigger refresh');
+        // console.log('Dispatching ordersUpdated event to trigger refresh');
         const event = new CustomEvent('ordersUpdated');
         document.dispatchEvent(event);
         
         // Method 3: Try to find and click the refresh button in the DOM
         const refreshButton = document.getElementById('refresh-pending-orders');
         if (refreshButton) {
-            console.log('Clicking the refresh-pending-orders button');
+            // console.log('Clicking the refresh-pending-orders button');
             refreshButton.click();
             return;
         }
         
-        console.log('All pending orders refresh methods attempted');
+        // console.log('All pending orders refresh methods attempted');
     } catch (error) {
         console.error('Error refreshing pending orders:', error);
     }
@@ -190,35 +190,35 @@ function calculatePremium(bid, ask, last) {
     const askNum = parseFloat(ask || 0);
     const lastNum = parseFloat(last || 0);
     
-    console.log(`Calculating premium - bid: ${bidNum}, ask: ${askNum}, last: ${lastNum}`);
+    // console.log(`Calculating premium - bid: ${bidNum}, ask: ${askNum}, last: ${lastNum}`);
     
     // Both bid and ask are valid - use midpoint
     if (bidNum > 0 && askNum > 0) {
         const midPrice = (bidNum + askNum) / 2;
-        console.log(`Using mid price for premium: ${midPrice}`);
+        // console.log(`Using mid price for premium: ${midPrice}`);
         return midPrice;
     }
     
     // Only bid is valid
     if (bidNum > 0) {
-        console.log(`Only bid is valid, using: ${bidNum}`);
+        // console.log(`Only bid is valid, using: ${bidNum}`);
         return bidNum;
     }
     
     // Only ask is valid
     if (askNum > 0) {
-        console.log(`Only ask is valid, using: ${askNum}`);
+        // console.log(`Only ask is valid, using: ${askNum}`);
         return askNum;
     }
     
     // Fallback to last price
     if (lastNum > 0) {
-        console.log(`Using last price as fallback: ${lastNum}`);
+        // console.log(`Using last price as fallback: ${lastNum}`);
         return lastNum;
     }
     
     // No valid price data, return minimum
-    console.log('No valid price data, using minimum 0.05');
+    // console.log('No valid price data, using minimum 0.05');
     return 0.05;
 }
 
@@ -302,7 +302,7 @@ function calculateEarningsSummary() {
     // Process each ticker to get total premium earnings
     Object.values(tickersData).forEach(tickerData => {
         if (!tickerData || !tickerData.data || !tickerData.data.data) {
-            console.log("Skipping ticker with invalid data structure", tickerData);
+            // console.log("Skipping ticker with invalid data structure", tickerData);
             return;
         }
         
@@ -316,7 +316,7 @@ function calculateEarningsSummary() {
             // Skip positions with less than 100 shares for calls (minimum for 1 option contract)
             // But include all custom tickers for put calculations regardless of shares owned
             if (sharesOwned < 100 && !isCustomTicker) {
-                console.log(`Skipping position with ${sharesOwned} shares (less than 100) and not a custom ticker`);
+                // console.log(`Skipping position with ${sharesOwned} shares (less than 100) and not a custom ticker`);
                 return; // Skip this position in earnings calculation
             }
             
@@ -391,7 +391,7 @@ function calculateEarningsSummary() {
         totalPortfolioValue = summary.portfolioValue + summary.cashBalance;
     }
     
-    console.log("Portfolio values:", {
+    // console.log("Portfolio values:", {
         fromSummary: portfolioSummary ? portfolioSummary.account_value : 'N/A',
         calculatedTotal: totalPortfolioValue,
         stockValue: summary.portfolioValue,
@@ -409,7 +409,7 @@ function calculateEarningsSummary() {
         summary.projectedAnnualReturn = (summary.projectedAnnualEarnings / totalPortfolioValue) * 100;
         
         // Log values for debugging
-        console.log("Annual return calculation:", {
+        // console.log("Annual return calculation:", {
             annualEarnings: summary.projectedAnnualEarnings,
             portfolioValue: totalPortfolioValue,
             weeklyReturn: summary.weeklyReturn,
@@ -420,7 +420,7 @@ function calculateEarningsSummary() {
         summary.projectedAnnualEarnings = summary.totalWeeklyPremium * 52;
     }
     
-    console.log("Earnings summary:", summary);
+    // console.log("Earnings summary:", summary);
     
     return summary;
 }
@@ -429,7 +429,7 @@ function calculateEarningsSummary() {
  * Update options table with data from stock positions
  */
 function updateOptionsTable() {
-    console.log("Updating options table with data:", tickersData);
+    // console.log("Updating options table with data:", tickersData);
     
     const optionsTableContainer = document.getElementById('options-table-container');
     if (!optionsTableContainer) {
@@ -440,7 +440,7 @@ function updateOptionsTable() {
     // Remember which tab was active before rebuilding the UI
     const putTabWasActive = document.querySelector('#put-options-tab.active') !== null ||
                            document.querySelector('#put-options-section.active') !== null;
-    console.log("Put tab was active before update:", putTabWasActive);
+    // console.log("Put tab was active before update:", putTabWasActive);
     
     // Clear existing tables
     optionsTableContainer.innerHTML = '';
@@ -449,12 +449,12 @@ function updateOptionsTable() {
     const tickers = Object.keys(tickersData);
     
     if (tickers.length === 0) {
-        console.log("No tickers found");
+        // console.log("No tickers found");
         optionsTableContainer.innerHTML = `<div class="alert alert-info">${getUnavailableTickerMessage()}</div>`;
         return;
     }
     
-    console.log("Found ticker data for:", tickers.join(", "));
+    // console.log("Found ticker data for:", tickers.join(", "));
     
     // Keep track of tickers with sufficient shares
     let sufficientSharesCount = 0;
