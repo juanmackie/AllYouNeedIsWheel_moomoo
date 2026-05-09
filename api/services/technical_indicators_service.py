@@ -5,12 +5,38 @@ Used by the Theta-Three indicator stack.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, TypedDict
 from datetime import datetime
 
 from api.services.utils import clean_yfinance_ticker, validate_ticker
 
 logger = logging.getLogger('api.services.technical_indicators')
+
+
+class BollingerBandsResult(TypedDict):
+    upper: float
+    middle: float
+    lower: float
+    position: str
+    current_price: float
+
+
+class RsiResult(TypedDict):
+    rsi: float
+    signal: str
+
+
+class SupertrendResult(TypedDict):
+    trend: str
+    stop: float
+    atr: float
+
+
+class VolumeProfileResult(TypedDict):
+    poc: float
+    vah: float
+    val: float
+    gaps: list
 
 try:
     import yfinance as yf
@@ -114,7 +140,7 @@ class TechnicalIndicatorsService:
             logger.debug(f"Error fetching price data for {ticker}: {e}")
             return [], [], [], []
 
-    def compute_bollinger_bands(self, ticker: str, period: int = 20, std_dev: float = 2.0) -> Dict[str, Any]:
+    def compute_bollinger_bands(self, ticker: str, period: int = 20, std_dev: float = 2.0) -> BollingerBandsResult:
         """
         Compute Bollinger Bands for a ticker.
         
@@ -177,7 +203,7 @@ class TechnicalIndicatorsService:
             logger.error(f"Error computing Bollinger Bands for {ticker}: {e}")
             return result
 
-    def compute_rsi(self, ticker: str, period: int = 14) -> Dict[str, Any]:
+    def compute_rsi(self, ticker: str, period: int = 14) -> RsiResult:
         """
         Compute RSI (Relative Strength Index) for a ticker.
         
@@ -235,7 +261,7 @@ class TechnicalIndicatorsService:
             logger.error(f"Error computing RSI for {ticker}: {e}")
             return result
 
-    def compute_supertrend(self, ticker: str, period: int = 10, multiplier: float = 3.0) -> Dict[str, Any]:
+    def compute_supertrend(self, ticker: str, period: int = 10, multiplier: float = 3.0) -> SupertrendResult:
         """
         Compute Supertrend indicator.
         
@@ -314,7 +340,7 @@ class TechnicalIndicatorsService:
             logger.error(f"Error computing Supertrend for {ticker}: {e}")
             return result
 
-    def compute_volume_profile(self, ticker: str, bins: int = 50) -> Dict[str, Any]:
+    def compute_volume_profile(self, ticker: str, bins: int = 50) -> VolumeProfileResult:
         """
         Compute Volume Profile for a ticker.
         

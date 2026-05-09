@@ -1,47 +1,52 @@
 {% extends "base.html" %}
 
 {% block title %}Dashboard - All You Need Is Wheel{% endblock %}
-
 {% block body_class %}page-dashboard{% endblock %}
 
-{% block content %}
-{% with 
-  page_key="dashboard",
-  brand_mode=true,
-  brand_kicker="Wheel strategy command deck",
-  title="Trade the wheel with one live operating surface.",
-  subtitle="Monitor capital, evaluate contracts, and move from recommendation to order without leaving the desk.",
-  show_actions=true,
-  action_buttons='<a class="btn btn-primary" href="#top-recommendations-section">Review opportunities</a><a class="btn btn-outline-primary" href="/portfolio">View portfolio</a>'
-%}
-  {% include "partials/components/page_header.html" %}
-{% endwith %}
+{% block page_header %}
+<div class="page-header flex-grow-1">
+    <div class="page-header__inner">
+        <div>
+            <h1 class="page-header__title">Dashboard</h1>
+            <div class="page-header__meta">{{ config.get('APP_ENV', 'live') }} &middot; Wheel strategy</div>
+        </div>
+        <div class="page-header__actions">
+        </div>
+    </div>
+</div>
+{% endblock %}
 
+{% block content %}
 {% include "partials/dashboard/account_summary.html" %}
-{% include "partials/dashboard/top_recommendations.html" %}
-{% include "partials/dashboard/options_table.html" %}
 {% include "partials/dashboard/pending_orders.html" %}
+{% include "partials/dashboard/top_recommendations.html" %}
+{% include "partials/dashboard/earnings_vol_signals.html" %}
+{% include "partials/dashboard/options_table.html" %}
 {% include "partials/components/sizing_modal.html" %}
 
-<!-- AI Advisor Panel -->
+{% with 
+  modal_id="confirmCloseModal",
+  title="Close Position",
+  body="Are you sure you want to close this position? This will create an order to buy back the option.",
+  confirm_button_text="Close Position",
+  confirm_button_class="btn-warning"
+%}
+  {% include "partials/components/confirm_modal.html" %}
+{% endwith %}
+
 {% set llm_enabled = config.get('LLM_ENABLED', 'false')|string in ('true', '1', 'yes', 'y', 'on') %}
-<section id="llm-advisor-section" class="mt-4" data-llm-enabled="{{ 'true' if llm_enabled else 'false' }}">
+{% if llm_enabled %}
+<section id="llm-advisor-section" class="mt-3" data-llm-enabled="true">
   <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0">🤖 AI Trade Advisor</h5>
+      <h5 class="mb-0 fs-6 fw-semibold">AI Trade Advisor</h5>
       <button id="llm-generate-btn" class="btn btn-primary btn-sm" disabled>
         <span class="spinner-border spinner-border-sm d-none" id="llm-spinner" role="status"></span>
         Generate Suggestions
       </button>
     </div>
     <div class="card-body">
-      <div id="llm-status" class="text-muted small">
-        {% if llm_enabled %}
-          Ready. Click "Generate Suggestions" to get AI-powered trade advice.
-        {% else %}
-          LLM advisor is disabled. Set LLM_ENABLED=true and LLM_API_KEY in .env to enable.
-        {% endif %}
-      </div>
+      <div id="llm-status" class="text-muted small">Ready. Click "Generate Suggestions" to get AI-powered trade advice.</div>
       <div id="llm-result" class="d-none mt-3">
         <div class="alert alert-info" role="alert">
           <div id="llm-result-text" style="white-space: pre-wrap;"></div>
@@ -54,7 +59,7 @@
     </div>
   </div>
 </section>
-
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

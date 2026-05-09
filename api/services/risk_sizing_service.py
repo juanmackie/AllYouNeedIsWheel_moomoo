@@ -10,11 +10,24 @@ Formula:
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional, TypedDict
 
 from api.services.utils import clean_yfinance_ticker, validate_ticker
 
 logger = logging.getLogger('api.services.risk_sizing')
+
+
+class SizingResult(TypedDict):
+    ticker: str
+    atr: float
+    atr_period: int
+    account_value: float
+    risk_pct: float
+    risk_amount: float
+    risk_per_contract: float
+    max_contracts: int
+    current_price: float
+    warnings: List[str]
 
 try:
     import yfinance as yf
@@ -124,7 +137,7 @@ class RiskSizingService:
         account_value: float,
         risk_pct: float = 0.01,
         atr_period: int = 14
-    ) -> Dict[str, Any]:
+    ) -> SizingResult:
         """
         Calculate position size based on ATR risk.
         

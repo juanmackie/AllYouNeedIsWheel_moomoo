@@ -3,35 +3,35 @@
         <div>
             <span class="app-section__eyebrow">Execution queue</span>
             <h2>Pending option orders</h2>
-            <p>Review staged trades, refresh statuses, or cancel orders before they are sent through moomoo.</p>
+            <p>Review staged trades, refresh statuses, or cancel orders.</p>
         </div>
         <div class="app-section__actions">
-            <button class="btn btn-outline-danger" id="cancel-all-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel all pending orders">
+            <button class="btn btn-outline-danger btn-sm" id="cancel-all-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel all pending orders">
                 <i class="bi bi-x-circle"></i> Cancel all
             </button>
-            <button class="btn btn-outline-primary" id="refresh-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh pending orders list">
-                <i class="bi bi-arrow-repeat"></i> Refresh queue
+            <button class="btn btn-outline-primary btn-sm" id="refresh-pending-orders" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh pending orders list">
+                <i class="bi bi-arrow-repeat"></i> Refresh
             </button>
         </div>
     </div>
 
     <div class="table-responsive">
-        <table class="table table-striped">
+        <table class="table table-hover">
             <thead>
                 <tr>
                     <th>Symbol</th>
                     <th>Type</th>
                     <th>Strike</th>
                     <th>Expiration</th>
-                    <th>Limit Price</th>
-                    <th>Quantity</th>
+                    <th>Limit</th>
+                    <th>Qty</th>
                     <th>Status</th>
-                    <th>Actions</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody id="pending-orders-table">
                 <tr>
-                    <td colspan="8" class="text-center">Loading pending orders...</td>
+                    <td colspan="8" class="text-center text-muted py-4">Loading pending orders...</td>
                 </tr>
             </tbody>
         </table>
@@ -42,22 +42,32 @@
     </div>
 </section>
 
+{% with 
+  modal_id="cancelAllModal",
+  title="Cancel All Orders",
+  body="Are you sure you want to cancel all pending orders? This action cannot be undone.",
+  confirm_button_text="Cancel All",
+  confirm_button_class="btn-danger"
+%}
+  {% include "partials/components/confirm_modal.html" %}
+{% endwith %}
+
 <section class="app-section income-stage-section">
     <div class="app-section__header">
         <div>
             <span class="app-section__eyebrow">Friday book</span>
             <h2>Weekly option income</h2>
-            <p>Short option positions expiring this coming Friday with estimated premium totals and notional exposure.</p>
+            <p>Short options expiring this Friday.</p>
         </div>
         <div class="app-section__actions">
-            <button id="refresh-filled-orders" class="btn btn-outline-primary" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh filled orders and earnings data">
-                <i class="bi bi-arrow-clockwise"></i> Refresh Friday book
+            <button id="refresh-filled-orders" class="btn btn-outline-primary btn-sm" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh filled orders and earnings data">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
             </button>
         </div>
     </div>
 
     <div class="table-responsive">
-        <table class="table table-striped">
+        <table class="table table-hover">
             <thead>
                 <tr>
                     <th>Symbol</th>
@@ -65,14 +75,14 @@
                     <th>Strike</th>
                     <th>Expiration</th>
                     <th>Avg Price</th>
-                    <th>Quantity</th>
+                    <th>Qty</th>
                     <th>Total Income</th>
-                    <th>Notional Value</th>
+                    <th>Notional</th>
                 </tr>
             </thead>
             <tbody id="filled-orders-table">
                 <tr>
-                    <td colspan="8" class="text-center">Loading short options expiring this Friday...</td>
+                    <td colspan="8" class="text-center text-muted py-4">Loading short options expiring this Friday...</td>
                 </tr>
             </tbody>
             <tfoot class="income-stage-summary">
@@ -80,19 +90,19 @@
                     <td colspan="8">
                         <div class="income-stage-summary__grid">
                             <div>
-                                <span class="income-stage-summary__label">Weekly Income</span>
+                                <span class="income-stage-summary__label">Weekly income</span>
                                 <span class="income-stage-summary__value" id="weekly-earnings-total">$0.00</span>
                             </div>
                             <div>
-                                <span class="income-stage-summary__label">Position Count</span>
+                                <span class="income-stage-summary__label">Position count</span>
                                 <span class="income-stage-summary__value" id="weekly-order-count">0</span>
                             </div>
                             <div>
-                                <span class="income-stage-summary__label">Average Income</span>
+                                <span class="income-stage-summary__label">Avg premium</span>
                                 <span class="income-stage-summary__value" id="weekly-average-premium">$0.00</span>
                             </div>
                             <div>
-                                <span class="income-stage-summary__label">PUT Notional</span>
+                                <span class="income-stage-summary__label">PUT notional</span>
                                 <span class="income-stage-summary__value" id="weekly-notional-value">$0.00</span>
                             </div>
                         </div>
@@ -109,6 +119,16 @@
   body="Are you sure you want to execute this order?",
   confirm_button_text="Execute Order",
   confirm_button_class="btn-success"
+%}
+  {% include "partials/components/confirm_modal.html" %}
+{% endwith %}
+
+{% with 
+  modal_id="cancelOrderModal",
+  title="Cancel Order",
+  body="Are you sure you want to cancel this order?",
+  confirm_button_text="Cancel Order",
+  confirm_button_class="btn-danger"
 %}
   {% include "partials/components/confirm_modal.html" %}
 {% endwith %}

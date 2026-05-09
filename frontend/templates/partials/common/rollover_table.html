@@ -119,3 +119,13 @@
         This table only shows rollover-related option orders. Use the dashboard for the full pending order queue.
     </div>
 </section>
+
+{% with 
+  modal_id="confirmRollModal",
+  title="Confirm Roll Order",
+  body="Are you sure you want to roll this position? This will close the current position and open a new one.",
+  confirm_button_text="Roll Order",
+  confirm_button_class="btn-warning"
+%}
+  {% include "partials/components/confirm_modal.html" %}
+{% endwith %}

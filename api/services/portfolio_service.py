@@ -5,9 +5,10 @@ Manages portfolio data and calculations for moomoo
 
 import logging
 import time
-from core.connection import MoomooConnection
 import traceback
 from datetime import datetime, timedelta
+
+from core.connection_constants import _safe_float
 
 logger = logging.getLogger('api.services.portfolio')
 
@@ -59,6 +60,7 @@ class PortfolioService:
                 logger.warning("Failed to reconnect shared connection, will create new one")
 
             logger.info("Creating new moomoo connection for portfolio")
+            from core.connection import MoomooConnection
             self.connection = MoomooConnection(
                 host=str(self.config.get('host', '127.0.0.1')),
                 port=int(self.config.get('port', 11111)),
@@ -82,6 +84,58 @@ class PortfolioService:
         if not conn:
             return None
         return conn.get_portfolio()
+
+    def _build_short_option_income_summary(self, positions, this_friday_str=None):
+        """
+        Build weekly and open short premium summaries from option positions.
+
+        Weekly income is limited to short options expiring on or before the
+        provided Friday cutoff. Open short premium includes every short option
+        position regardless of expiration.
+        """
+        weekly_positions = []
+        weekly_total_income = 0.0
+        open_short_positions_count = 0
+        open_short_contracts_count = 0
+        open_short_total_income = 0.0
+
+        for pos in positions or []:
+            try:
+                quantity = int(float(pos.get('position', 0) or 0))
+            except (TypeError, ValueError):
+                quantity = 0
+
+            if quantity >= 0:
+                continue
+
+            contracts = abs(quantity)
+            avg_cost = _safe_float(pos.get('avg_cost', 0))
+            income = avg_cost * contracts * 100
+
+            open_short_positions_count += 1
+            open_short_contracts_count += contracts
+            open_short_total_income += income
+
+            expiration = str(pos.get('expiration', '') or '')
+            if this_friday_str and expiration and expiration <= this_friday_str:
+                weekly_positions.append({
+                    'symbol': pos.get('symbol', ''),
+                    'option_type': pos.get('option_type', ''),
+                    'strike': pos.get('strike', 0),
+                    'expiration': expiration,
+                    'position': quantity,
+                    'income': income,
+                })
+                weekly_total_income += income
+
+        return {
+            'positions': weekly_positions,
+            'total_income': weekly_total_income,
+            'positions_count': len(weekly_positions),
+            'open_short_positions_count': open_short_positions_count,
+            'open_short_contracts_count': open_short_contracts_count,
+            'open_short_total_income': open_short_total_income,
+        }
 
     def _get_cached_portfolio(self):
         """
@@ -224,36 +278,19 @@ class PortfolioService:
             days_until_friday = (4 - today.weekday()) % 7
             this_friday = today + timedelta(days=days_until_friday)
             this_friday_str = this_friday.strftime('%Y%m%d')
+
+            summary = self._build_short_option_income_summary(positions, this_friday_str)
             
-            weekly_positions = []
-            total_income = 0
-            
-            for pos in positions:
-                # Filter for short positions expiring this week
-                if pos.get('position', 0) >= 0: continue
-                
-                expiration = pos.get('expiration', '')
-                if expiration and expiration <= this_friday_str:
-                    contracts = abs(pos.get('position', 0))
-                    # Assuming standard US option (multiplier 100)
-                    income = pos.get('avg_cost', 0) * contracts * 100
-                    total_income += income
-                    
-                    weekly_positions.append({
-                        'symbol': pos.get('symbol', ''),
-                        'option_type': pos.get('option_type', ''),
-                        'strike': pos.get('strike', 0),
-                        'expiration': expiration,
-                        'position': pos.get('position', 0),
-                        'income': income,
-                    })
-            
-            return {
-                'positions': weekly_positions,
-                'total_income': total_income,
-                'positions_count': len(weekly_positions),
-                'this_friday': this_friday.strftime('%Y-%m-%d')
-            }
+            summary['this_friday'] = this_friday.strftime('%Y-%m-%d')
+            return summary
         except Exception as e:
             self._set_error(f"Error getting weekly option income: {e}")
-            return {'positions': [], 'total_income': 0, 'positions_count': 0, 'error': str(e)}
+            return {
+                'positions': [],
+                'total_income': 0,
+                'positions_count': 0,
+                'open_short_positions_count': 0,
+                'open_short_contracts_count': 0,
+                'open_short_total_income': 0,
+                'error': str(e)
+            }

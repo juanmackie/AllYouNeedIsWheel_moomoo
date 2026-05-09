@@ -1,23 +1,25 @@
 {% extends "base.html" %}
 
 {% block title %}Rollover - All You Need Is Wheel{% endblock %}
-
 {% block body_class %}page-rollover{% endblock %}
 
+{% block page_header %}
+<div class="page-header flex-grow-1">
+    <div class="page-header__inner">
+        <div>
+            <h1 class="page-header__title">Rollover</h1>
+            <div class="page-header__meta">Option rollover management</div>
+        </div>
+        <div class="page-header__actions">
+            <button class="btn btn-outline-primary btn-sm" id="refresh-rollover"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+            <a class="btn btn-outline-primary btn-sm" href="/"><i class="bi bi-grid-1x2-fill"></i> Dashboard</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
 {% block content %}
-{% with 
-  page_key="rollover",
-  brand_kicker="Rollover management",
-  title="Spot pressure early and roll contracts with less friction.",
-  subtitle="Focus on positions nearing the strike, compare replacements, and move rollover orders from review to execution.",
-  show_actions=true,
-  action_buttons='<button class="btn btn-primary" id="refresh-rollover" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Refresh rollover data"><i class="bi bi-arrow-repeat"></i> Refresh desk</button><a class="btn btn-outline-primary" href="/">Back to dashboard</a>'
-%}
-  {% include "partials/components/page_header.html" %}
-{% endwith %}
-
 {% include "partials/common/rollover_table.html" %}
-
 {% endblock %}
 
 {% block scripts %}

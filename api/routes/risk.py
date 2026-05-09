@@ -5,6 +5,7 @@ Exposes ATR-based position sizing via REST API.
 
 import logging
 from flask import Blueprint, request, jsonify
+from api.routes.utils import error_response, success_response
 from api.services.risk_sizing_service import get_risk_sizing_service
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,7 @@ def get_sizing():
     """
     ticker = request.args.get('ticker', '').strip().upper()
     if not ticker:
-        return jsonify({
-            'success': False,
-            'error': 'Missing required parameter: ticker'
-        }), 400
+        return error_response('Missing required parameter: ticker', status_code=400)
 
     try:
         account_value = float(request.args.get('account_value', 45000))
@@ -46,17 +44,13 @@ def get_sizing():
             atr_period=atr_period
         )
 
-        return jsonify({
-            'success': True,
+        return success_response({
             'data': result,
         })
 
     except Exception as e:
         logger.error(f"Error calculating position size for {ticker}: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 @bp.route('/sizing/batch', methods=['POST'])
@@ -77,10 +71,7 @@ def get_batch_sizing():
         risk_pct = float(data.get('risk_pct', 0.01))
 
         if not tickers:
-            return jsonify({
-                'success': False,
-                'error': 'No tickers provided'
-            }), 400
+            return error_response('No tickers provided', status_code=400)
 
         service = get_risk_sizing_service()
         results = {}
@@ -97,17 +88,13 @@ def get_batch_sizing():
                 logger.error(f"Error calculating size for {ticker}: {e}")
                 results[ticker] = {'error': str(e)}
 
-        return jsonify({
-            'success': True,
+        return success_response({
             'data': results,
         })
 
     except Exception as e:
         logger.error(f"Error in batch sizing: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 @bp.route('/sizing/cache/clear', methods=['POST'])
@@ -116,13 +103,9 @@ def clear_sizing_cache():
     try:
         service = get_risk_sizing_service()
         service.clear_cache()
-        return jsonify({
-            'success': True,
+        return success_response({
             'message': 'Risk sizing cache cleared'
         })
     except Exception as e:
         logger.error(f"Error clearing sizing cache: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))

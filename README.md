@@ -205,7 +205,7 @@ Live trading config. Not committed to version control.
 | `SCREENING_MIN_IV_RANK` | No | Min IV rank for dynamic screening (default: `30`) |
 | `SCREENING_MIN_VOLUME` | No | Min volume for dynamic screening (default: `1000000`) |
 | `SCREENING_MAX_STOCKS` | No | Max stocks for dynamic screening (default: `50`) |
-| `LLM_ENABLED` | No | Enable AI trade advisor (default: `false`) |
+| `LLM_ENABLED` | No | Enable AI trade advisor (**opt-in, defaults to `false`**) |
 | `LLM_PROVIDER` | No | LLM provider: `openai`, `anthropic`, `openrouter`, `ollama`, `custom` |
 | `LLM_API_KEY` | For LLM | API key for the LLM provider |
 | `LLM_MODEL` | No | Model name (default: `gpt-4o`) |

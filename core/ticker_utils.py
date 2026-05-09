@@ -1,0 +1,72 @@
+"""
+Ticker formatting and normalization utilities for moomoo.
+Extracted from core/connection.py for maintainability.
+"""
+
+import time
+import threading
+import logging
+
+from core.logging_config import get_logger
+
+logger = get_logger('autotrader.connection', 'moomoo')
+
+
+class TickerCache:
+    """
+    Stock price cache with TTL and failure tracking.
+    Thread-safe for concurrent access.
+    """
+
+    def __init__(self, price_ttl=120, failed_ttl=300):
+        self._stock_price_cache = {}
+        self._stock_price_cache_lock = threading.Lock()
+        self._stock_price_ttl = price_ttl
+
+        self._failed_tickers = {}
+        self._failed_tickers_lock = threading.Lock()
+        self._failed_ticker_ttl = failed_ttl
+
+    def get_cached_price(self, symbol):
+        with self._stock_price_cache_lock:
+            if symbol in self._stock_price_cache:
+                price, timestamp = self._stock_price_cache[symbol]
+                if time.time() - timestamp < self._stock_price_ttl:
+                    logger.debug(f"Using cached stock price for {symbol}: {price}")
+                    return price
+                del self._stock_price_cache[symbol]
+        return None
+
+    def cache_price(self, symbol, price):
+        with self._stock_price_cache_lock:
+            self._stock_price_cache[symbol] = (price, time.time())
+            logger.debug(f"Cached stock price for {symbol}: {price}")
+
+    def is_ticker_failed(self, symbol):
+        with self._failed_tickers_lock:
+            if symbol in self._failed_tickers:
+                failure_time = self._failed_tickers[symbol]
+                if time.time() - failure_time < self._failed_ticker_ttl:
+                    logger.debug(f"Skipping {symbol} - failed quote rights (cached)")
+                    return True
+                del self._failed_tickers[symbol]
+        return False
+
+    def mark_ticker_failed(self, symbol):
+        with self._failed_tickers_lock:
+            self._failed_tickers[symbol] = time.time()
+            logger.info(f"Cached quote-rights failure for {symbol} (will skip for {self._failed_ticker_ttl}s)")
+
+    def get_cache_stats(self):
+        with self._stock_price_cache_lock:
+            price_size = len(self._stock_price_cache)
+        with self._failed_tickers_lock:
+            failed_size = len(self._failed_tickers)
+        return price_size, failed_size
+
+
+def format_symbol(symbol):
+    """Format symbol to moomoo format (e.g., US.AAPL)."""
+    if '.' not in symbol:
+        return f"US.{symbol}"
+    return symbol

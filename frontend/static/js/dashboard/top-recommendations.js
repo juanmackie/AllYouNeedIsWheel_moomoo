@@ -6,6 +6,7 @@ import { fetchTopRecommendations, saveOptionOrder, executeOrder } from './api.js
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 import { getMacroData } from './macro.js';
+import StateModel from '../utils/state-model.js';
 
 // Module state
 let recommendationsData = null;
@@ -14,17 +15,14 @@ let isVisible = true;
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // DOM Elements (initialized lazily)
-let container, loadingEl, contentEl, emptyEl, errorEl, cardsContainer, lastUpdatedEl;
+let container, contentEl, cardsContainer, lastUpdatedEl;
 
 /**
  * Initialize DOM element references
  */
 function initElements() {
     container = document.getElementById('top-recommendations-container');
-    loadingEl = document.getElementById('top-recommendations-loading');
     contentEl = document.getElementById('top-recommendations-content');
-    emptyEl = document.getElementById('top-recommendations-empty');
-    errorEl = document.getElementById('top-recommendations-error');
     cardsContainer = document.getElementById('top-recommendations-cards');
     lastUpdatedEl = document.getElementById('top-recs-last-updated');
 }
@@ -79,8 +77,15 @@ function formatExpiration(expiration) {
  */
 function createRecommendationCard(rec) {
     const template = document.getElementById('recommendation-card-template');
+    if (!template) {
+        throw new Error('Recommendation card template is missing');
+    }
+
     const clone = template.content.cloneNode(true);
-    const card = clone.querySelector('.card');
+    const card = clone.querySelector('.recommendation-card');
+    if (!card) {
+        throw new Error('Recommendation card root is missing');
+    }
     
     // Rank badge
     const rankInfo = getRankBadge(rec.rank);
@@ -280,40 +285,32 @@ async function handleExecuteNow(rec) {
  * Show loading state
  */
 function showLoading() {
-    loadingEl.classList.remove('d-none');
-    contentEl.classList.add('d-none');
-    emptyEl.classList.add('d-none');
-    errorEl.classList.add('d-none');
+    StateModel.showLoading('top-recommendations-state', 'Analyzing live opportunities...');
+    document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
 /**
  * Show content with recommendations
  */
 function showContent() {
-    loadingEl.classList.add('d-none');
-    contentEl.classList.remove('d-none');
-    emptyEl.classList.add('d-none');
-    errorEl.classList.add('d-none');
+    document.getElementById('top-recommendations-state').innerHTML = '';
+    document.getElementById('top-recommendations-content').classList.remove('d-none');
 }
 
 /**
  * Show empty state
  */
 function showEmpty() {
-    loadingEl.classList.add('d-none');
-    contentEl.classList.add('d-none');
-    emptyEl.classList.remove('d-none');
-    errorEl.classList.add('d-none');
+    StateModel.showEmpty('top-recommendations-state', 'No recommendations available right now. Check back after market open or add positions to your portfolio.');
+    document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
 /**
  * Show error state
  */
 function showError() {
-    loadingEl.classList.add('d-none');
-    contentEl.classList.add('d-none');
-    emptyEl.classList.add('d-none');
-    errorEl.classList.remove('d-none');
+    StateModel.showError('top-recommendations-state', 'Unable to load recommendations.', () => loadTopRecommendations());
+    document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
 /**
@@ -494,8 +491,6 @@ export function initializeTopRecommendations() {
     
     // Start auto-refresh
     startAutoRefresh();
-    
-    console.log('Top recommendations module initialized');
 }
 
 /**

@@ -25,10 +25,10 @@ class TestPoPService(unittest.TestCase):
         result = calculate_pop_delta('AAPL', 170, '20260530', 'CALL', None, 0.25, 21)
         self.assertEqual(result['pop'], 0.5)
     
-    def test_pop_monte_carlo_fallback(self):
-        """Monte Carlo falls back to delta if invalid params"""
+    def test_pop_monte_carlo_unavailable(self):
+        """Monte Carlo returns unavailable — stock price not wired in"""
         result = calculate_pop_monte_carlo('AAPL', 170, '20260530', 'PUT', None, None)
-        self.assertEqual(result['method'], 'monte_carlo_fallback')
+        self.assertEqual(result['method'], 'monte_carlo_unavailable')
 
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@ Options API routes
 from flask import Blueprint, request, jsonify, current_app
 from core.connection import probe_opend_status
 from core.cache_manager import recommendation_cache, RecommendationCache
+from api.routes.utils import error_response, success_response
 import traceback
 import logging
 import time
@@ -67,11 +68,7 @@ def _ensure_opend_available():
         return None
 
     error_code = 'opend_login_required' if status.get('status') == 'login_required' else 'opend_unavailable'
-    return jsonify({
-        'error': status.get('message', 'OpenD is unavailable.'),
-        'error_code': error_code,
-        'opend_status': status
-    }), 503
+    return error_response(status.get('message', 'OpenD is unavailable.'), status_code=503)
 
 
 @bp.route('/connection-status', methods=['GET'])
@@ -90,18 +87,14 @@ def connection_status():
         if get_options_service().connection:
             conn_info = get_options_service().connection.get_connection_info()
         
-        return jsonify({
-            'success': True,
+        return success_response({
             'connection_pool': pool_stats,
             'service_connection': conn_info,
             'service_initialized': get_options_service().connection is not None
         })
     except Exception as e:
         logger.error(f"Error getting connection status: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 # Market status is now checked directly in the route functions
@@ -124,7 +117,7 @@ def otm_options():
     
     # Validate option_type if provided
     if option_type and option_type not in ['CALL', 'PUT']:
-        return jsonify({"error": f"Invalid option_type: {option_type}. Must be 'CALL' or 'PUT'"}), 400
+        return error_response(f"Invalid option_type: {option_type}. Must be 'CALL' or 'PUT'", status_code=400)
     
     # Use the existing module-level instance instead of creating a new one
     # Call the service with appropriate parameters including the new option_type and expiration
@@ -150,7 +143,7 @@ def get_stock_price():
     # Get ticker(s) from request
     tickers_param = request.args.get('tickers', '')
     if not tickers_param:
-        return jsonify({"error": "No tickers provided"}), 400
+        return error_response("No tickers provided", status_code=400)
     
     # Split tickers on commas if multiple are provided
     tickers = [t.strip() for t in tickers_param.split(',')]
@@ -171,36 +164,26 @@ def get_stock_price():
     except Exception as e:
         logger.error(f"Error getting stock price for {tickers_param}: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e), "status": "error"}), 500
+        return error_response(str(e))
 
 @bp.route('/order', methods=['POST'])
 def save_order():
-    """
-    Save an option order to the database
-    """
     try:
-        # Get order data from request
         order_data = request.json
         if not order_data:
-            return jsonify({"error": "No order data provided"}), 400
-            
-        # Validate required fields
+            return error_response("No order data provided", status_code=400)
         required_fields = ['ticker', 'option_type', 'strike', 'expiration']
         for field in required_fields:
             if field not in order_data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
-        
-        # Save order to database
+                return error_response(f"Missing required field: {field}", status_code=400)
         order_id = get_options_service().db.save_order(order_data)
-        
         if order_id:
-            return jsonify({"success": True, "order_id": order_id}), 201
-        else:
-            return jsonify({"error": "Failed to save order"}), 500
+            return success_response({"order_id": order_id}, status_code=201)
+        return error_response("Failed to save order")
     except Exception as e:
         logger.error(f"Error saving order: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/pending-orders', methods=['GET'])
 def get_pending_orders():
@@ -212,298 +195,176 @@ def get_pending_orders():
         isRollover (bool): Whether to fetch only rollover orders (default: None = all orders)
     """
     try:
-        # Get executed parameter (optional)
         executed = request.args.get('executed', 'false').lower() == 'true'
-        
-        # Get isRollover parameter (optional)
         is_rollover_param = request.args.get('isRollover')
         is_rollover = None
         if is_rollover_param is not None:
             is_rollover = is_rollover_param.lower() == 'true'
-        
-        # Get pending orders from database
         orders = get_options_service().db.get_pending_orders(executed=executed, isRollover=is_rollover)
-        
         return jsonify({"orders": orders})
     except Exception as e:
         logger.error(f"Error getting pending orders: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/order/<int:order_id>', methods=['DELETE'])
 def delete_order(order_id):
-    """
-    Delete/cancel an order from the database.
-    
-    Args:
-        order_id (int): ID of the order to delete
-        
-    Returns:
-        JSON response with success status
-    """
     logger.info(f"DELETE /order/{order_id} request received")
     
     try:
-        # Get the database instance
         db = current_app.config.get('database')
         if not db:
-            logger.error("Database not initialized")
-            return jsonify({"error": "Database not initialized"}), 500
-            
-        # Try to get the order first to ensure it exists
+            return error_response("Database not initialized")
         order = db.get_order(order_id)
         if not order:
-            logger.error(f"Order with ID {order_id} not found")
-            return jsonify({"error": f"Order with ID {order_id} not found"}), 404
-            
-        # Delete the order
+            return error_response(f"Order with ID {order_id} not found", status_code=404)
         success = db.delete_order(order_id)
-        
         if success:
-            logger.info(f"Order with ID {order_id} successfully deleted")
-            return jsonify({"success": True, "message": f"Order with ID {order_id} deleted"}), 200
-        else:
-            logger.error(f"Failed to delete order with ID {order_id}")
-            return jsonify({"error": "Failed to delete order"}), 500
-            
+            return success_response({"message": f"Order with ID {order_id} deleted"})
+        return error_response("Failed to delete order")
     except Exception as e:
         logger.error(f"Error deleting order: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/execute/<int:order_id>', methods=['POST'])
 def execute_order(order_id):
-    """
-    Execute an order by sending it to moomoo OpenD.
-    
-    Args:
-        order_id (int): ID of the order to execute
-        
-    Returns:
-        JSON response with execution details
-    """
     logger.info(f"POST /execute/{order_id} request received")
     
     try:
-        # Get the database instance
         db = current_app.config.get('database')
         if not db:
-            logger.error("Database not initialized")
-            return jsonify({"error": "Database not initialized"}), 500
-            
-        # Use the options service to execute the order
+            return error_response("Database not initialized")
         response, status_code = get_options_service().execute_order(order_id, db)
-        
-        # Return the response from the service
         return jsonify(response), status_code
-            
     except Exception as e:
         logger.error(f"Error executing order: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/check-orders', methods=['POST'])
 def check_orders():
-    """
-    Check status of pending/processing orders with moomoo API and update them in the database.
-    
-    Returns:
-        JSON response with updated orders
-    """
     logger.info("POST /check-orders request received")
     
     try:
-        # Use the options service to check and update order statuses
         response = get_options_service().check_pending_orders()
-        
-        # Return the response from the service
         return jsonify(response), 200
-            
     except Exception as e:
         logger.error(f"Error checking orders: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/rollover', methods=['POST'])
 def rollover_option():
-    """
-    Create orders to roll over an option position.
-    
-    This creates two orders:
-    1. Buy order to close the current option position
-    2. Sell order to open a new option position
-    
-    Returns:
-        JSON response with created orders
-    """
     logger.info("POST /rollover request received")
     
     try:
-        # Get order data from request
         rollover_data = request.json
         if not rollover_data:
-            return jsonify({"error": "No rollover data provided"}), 400
+            return error_response("No rollover data provided", status_code=400)
             
-        # Validate required fields for current option
         required_fields = ['ticker', 'current_option_type', 'current_strike', 'current_expiration', 
                            'new_strike', 'new_expiration', 'quantity']
         for field in required_fields:
             if field not in rollover_data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
+                return error_response(f"Missing required field: {field}", status_code=400)
         
-        # Create buy order to close current position
         buy_order = {
             'ticker': rollover_data['ticker'],
             'option_type': rollover_data['current_option_type'],
             'strike': rollover_data['current_strike'],
             'expiration': rollover_data['current_expiration'],
-            'action': 'BUY',  # Buy to close
+            'action': 'BUY',
             'quantity': rollover_data['quantity'],
             'order_type': rollover_data.get('current_order_type', 'MARKET'),
-            'limit_price': rollover_data.get('current_limit_price'),  # Already per-contract from frontend
+            'limit_price': rollover_data.get('current_limit_price'),
             'bid': rollover_data.get('current_bid', 0),
             'ask': rollover_data.get('current_ask', 0),
             'isRollover': True
         }
         
-        # Create sell order for new position
         sell_order = {
             'ticker': rollover_data['ticker'],
-            'option_type': rollover_data['current_option_type'],  # Same option type
+            'option_type': rollover_data['current_option_type'],
             'strike': rollover_data['new_strike'],
             'expiration': rollover_data['new_expiration'],
-            'action': 'SELL',  # Sell to open
+            'action': 'SELL',
             'quantity': rollover_data['quantity'],
             'order_type': rollover_data.get('new_order_type', 'LIMIT'),
-            'limit_price': rollover_data.get('new_limit_price', 0) * 100,  # Convert from per-share to per-contract
+            'limit_price': rollover_data.get('new_limit_price', 0) * 100,
             'bid': rollover_data.get('new_bid', 0),
             'ask': rollover_data.get('new_ask', 0),
             'isRollover': True
         }
         
-        # Save orders to database
         buy_order_id = get_options_service().db.save_order(buy_order)
         sell_order_id = get_options_service().db.save_order(sell_order)
         
         if buy_order_id and sell_order_id:
-            return jsonify({
-                "success": True, 
+            return success_response({
                 "buy_order_id": buy_order_id,
                 "sell_order_id": sell_order_id,
                 "message": "Rollover orders created successfully"
-            }), 201
-        else:
-            return jsonify({"error": "Failed to create one or more rollover orders"}), 500
+            }, status_code=201)
+        return error_response("Failed to create one or more rollover orders")
             
     except Exception as e:
         logger.error(f"Error creating rollover orders: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/cancel/<int:order_id>', methods=['POST'])
 def cancel_order(order_id):
-    """
-    Cancel an order, including those being processed by IBKR.
-    
-    Args:
-        order_id (int): ID of the order to cancel
-        
-    Returns:
-        JSON response with cancellation details
-    """
     logger.info(f"POST /cancel/{order_id} request received")
     
     try:
-        # Use the options service to cancel the order
         response, status_code = get_options_service().cancel_order(order_id)
-        
-        # Return the response from the service
         return jsonify(response), status_code
-            
     except Exception as e:
         logger.error(f"Error canceling order: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/order/<int:order_id>/quantity', methods=['PUT'])
 def update_order_quantity(order_id):
-    """
-    Update the quantity of a specific order
-    
-    Args:
-        order_id (int): ID of the order to update
-        
-    Returns:
-        JSON response with success status
-    """
     logger.info(f"PUT /order/{order_id}/quantity request received")
     
     try:
-        # Get request data
         request_data = request.json
         if not request_data or 'quantity' not in request_data:
-            logger.error("Missing quantity in request")
-            return jsonify({"error": "Missing quantity in request"}), 400
+            return error_response("Missing quantity in request", status_code=400)
             
         quantity = int(request_data['quantity'])
         if quantity <= 0:
-            logger.error(f"Invalid quantity: {quantity}")
-            return jsonify({"error": "Quantity must be greater than 0"}), 400
+            return error_response("Quantity must be greater than 0", status_code=400)
             
-        # Get the database instance
         db = current_app.config.get('database')
         if not db:
-            logger.error("Database not initialized")
-            return jsonify({"error": "Database not initialized"}), 500
-            
-        # Try to get the order first to ensure it exists
+            return error_response("Database not initialized")
         order = db.get_order(order_id)
         if not order:
-            logger.error(f"Order with ID {order_id} not found")
-            return jsonify({"error": f"Order with ID {order_id} not found"}), 404
-            
-        # Check if order is in editable state
+            return error_response(f"Order with ID {order_id} not found", status_code=404)
         if order['status'] != 'pending':
-            logger.error(f"Cannot update quantity for order with status '{order['status']}'")
-            return jsonify({"error": f"Cannot update quantity for non-pending orders"}), 400
+            return error_response("Cannot update quantity for non-pending orders", status_code=400)
             
-        # Update the order quantity
         success = db.update_order_quantity(order_id, quantity)
-        
         if success:
-            logger.info(f"Order with ID {order_id} quantity updated to {quantity}")
-            return jsonify({
-                "success": True, 
+            return success_response({
                 "message": f"Order quantity updated to {quantity}",
                 "order_id": order_id,
                 "quantity": quantity
-            }), 200
-        else:
-            logger.error(f"Failed to update quantity for order with ID {order_id}")
-            return jsonify({"error": "Failed to update order quantity"}), 500
+            })
+        return error_response("Failed to update order quantity")
             
-    except ValueError as ve:
-        logger.error(f"Invalid quantity value: {str(ve)}")
-        return jsonify({"error": "Invalid quantity value"}), 400
+    except ValueError:
+        return error_response("Invalid quantity value", status_code=400)
     except Exception as e:
         logger.error(f"Error updating order quantity: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/expirations', methods=['GET'])
 def get_option_expirations():
-    """
-    Get available expiration dates for options of a given ticker.
-    
-    Query parameters:
-        ticker (str): The ticker symbol (e.g., 'NVDA')
-        option_type (str, optional): 'CALL' or 'PUT' to filter by preferred DTE ranges
-                                    CALL: 5-35 days, PUT: 7-45 days
-                                    If not provided, returns all future expirations
-        
-    Returns:
-        JSON response with a list of available expiration dates
-    """
     logger.info("GET /expirations request received")
     
     try:
@@ -511,34 +372,28 @@ def get_option_expirations():
         if unavailable_response:
             return unavailable_response
 
-        # Get ticker from request
         ticker = request.args.get('ticker')
         if not ticker:
-            return jsonify({"error": "No ticker provided"}), 400
+            return error_response("No ticker provided", status_code=400)
         
-        # Get optional option_type parameter
         option_type = request.args.get('option_type')
         if option_type:
             option_type = option_type.upper()
             if option_type not in ['CALL', 'PUT']:
-                return jsonify({"error": "option_type must be 'CALL' or 'PUT'"}), 400
+                return error_response("option_type must be 'CALL' or 'PUT'", status_code=400)
             
-        # Call the service method to get option expirations
         result = get_options_service().get_option_expirations(ticker, option_type)
         
-        # Check if there was an error
         if "error" in result:
-            error_message = result["error"]
-            logger.error(f"Error getting expirations for {ticker}: {error_message}")
-            return jsonify({"error": error_message}), 404
+            logger.error(f"Error getting expirations for {ticker}: {result['error']}")
+            return error_response(result["error"], status_code=404)
             
-        # Return successful response
         return jsonify(result)
             
     except Exception as e:
         logger.error(f"Error getting option expirations for {request.args.get('ticker', 'unknown')}: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/top-recommendations', methods=['GET'])
 def get_top_recommendations():
@@ -690,42 +545,24 @@ def get_top_recommendations():
 
 @bp.route('/cash-status', methods=['GET'])
 def get_cash_status():
-    """
-    Get cash balance, reserved cash for open short puts, and available cash.
-    
-    Returns:
-        JSON with cash status including:
-        - cash_balance: Total cash balance
-        - cash_reserved: Cash reserved for existing short puts
-        - cash_available: Cash available for new CSPs (balance - reserved)
-        - reserve_enabled: Whether cash reserve is enabled
-        - open_puts: List of open short put positions with cash requirements
-    """
     try:
-        # Ensure OpenD is available
         opend_error = _ensure_opend_available()
         if opend_error:
             return opend_error
         
-        # Get portfolio service
         from api.services.portfolio_service import PortfolioService
         portfolio_service = PortfolioService()
         
-        # Get portfolio summary and positions
         summary = portfolio_service.get_portfolio_summary() or {}
         option_positions = portfolio_service.get_positions('OPT') or []
         
         cash_balance = float(summary.get('cash_balance', 0) or 0)
-        
-        # Calculate cash reserved for open short puts
         cash_reserved = 0.0
         open_puts = []
         
         for position in option_positions:
             pos_qty = int(position.get('position', 0) or 0)
             option_type = str(position.get('option_type', '') or '').upper()
-            
-            # Only count short puts (negative quantity)
             if pos_qty < 0 and option_type == 'PUT':
                 ticker = str(position.get('symbol', '') or '').replace('US.', '')
                 strike = float(position.get('strike', 0) or 0)
@@ -733,20 +570,15 @@ def get_cash_status():
                 expiration = position.get('expiration', '')
                 cash_required = strike * 100 * contracts
                 cash_reserved += cash_required
-                
                 open_puts.append({
-                    'ticker': ticker,
-                    'strike': strike,
-                    'contracts': contracts,
-                    'expiration': expiration,
-                    'cash_required': round(cash_required, 2)
+                    'ticker': ticker, 'strike': strike, 'contracts': contracts,
+                    'expiration': expiration, 'cash_required': round(cash_required, 2)
                 })
         
         cash_available = max(0, cash_balance - cash_reserved)
         reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
-        return jsonify({
-            'success': True,
+        return success_response({
             'cash_balance': round(cash_balance, 2),
             'cash_reserved': round(cash_reserved, 2),
             'cash_available': round(cash_available, 2),
@@ -758,49 +590,33 @@ def get_cash_status():
     except Exception as e:
         logger.error(f"Error getting cash status: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e))
 
 @bp.route('/vix-regime', methods=['GET'])
 def get_vix_regime():
-    """
-    Get current VIX market regime and adaptive adjustments.
-    
-    Returns:
-        JSON with VIX level, regime classification, and delta adjustments
-    """
     logger.info("GET /vix-regime request received")
     
     try:
-        from api.services.options_service import OptionsService
-        options_service = OptionsService()
         regime = get_options_service()._get_vix_regime()
         
-        return jsonify({
-            'success': True,
+        return success_response({
             'vix_regime': regime
         })
     except Exception as e:
         logger.error(f"Error fetching VIX regime: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
+
+
+@bp.route('/watchlist-tickers', methods=['GET'])
+def get_watchlist_tickers():
+    config = current_app.config.get('connection_config', {})
+    tickers = config.get('watchlist', [])
+    return success_response({'tickers': tickers})
 
 
 @bp.route('/analytics/lifecycle', methods=['GET'])
 def get_trade_lifecycle():
-    """
-    Get trade lifecycle events and analytics.
-
-    Query Parameters:
-        ticker: Filter by ticker (optional)
-        event_type: Filter by event type (entry|roll|exit|target_hit|stopped)
-        limit: Max results (default: 100)
-
-    Returns:
-        JSON with trade events and summary analytics
-    """
     logger.info("GET /analytics/lifecycle request received")
 
     try:
@@ -816,8 +632,7 @@ def get_trade_lifecycle():
         events = db.get_trade_events(ticker=ticker, event_type=event_type, limit=limit)
         analytics = db.get_trade_analytics()
 
-        return jsonify({
-            'success': True,
+        return success_response({
             'events': events,
             'analytics': analytics,
             'count': len(events),
@@ -825,20 +640,11 @@ def get_trade_lifecycle():
     except Exception as e:
         logger.error(f"Error fetching trade lifecycle: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 @bp.route('/analytics/leakage', methods=['GET'])
 def get_leakage_analytics():
-    """
-    Get leakage analysis from trade events.
-
-    Returns:
-        JSON with leakage metrics, win rate, and per-symbol stats
-    """
     logger.info("GET /analytics/leakage request received")
 
     try:
@@ -848,8 +654,7 @@ def get_leakage_analytics():
         db = OptionsDatabase(get_config().get('db_path'))
         analytics = db.get_trade_analytics()
 
-        return jsonify({
-            'success': True,
+        return success_response({
             'analytics': {
                 'win_rate': analytics.get('win_rate', 0),
                 'avg_leakage': analytics.get('avg_leakage', 0),
@@ -862,61 +667,22 @@ def get_leakage_analytics():
     except Exception as e:
         logger.error(f"Error fetching leakage analytics: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 @bp.route('/prefilled-close', methods=['POST'])
 def create_prefilled_close_order():
-    """
-    Dry quote preview for a buy-to-close order on an existing short option position.
-
-    Returns the calculated limit price (mid-price) and order details WITHOUT
-    creating any database record or sending anything to the broker.
-
-    Request body:
-    {
-        "ticker": "AAPL",
-        "option_type": "PUT",
-        "strike": 180.0,
-        "expiration": "20240510",
-        "quantity": 1,
-        "limit_price": 0.50  // Optional: overrides calculated mid-price
-    }
-
-    Returns:
-    {
-        "success": true,
-        "quote": {
-            "ticker": "AAPL",
-            "option_type": "PUT",
-            "strike": 180.0,
-            "expiration": "20240510",
-            "action": "BUY",
-            "quantity": 1,
-            "order_type": "LIMIT",
-            "limit_price": 0.50,
-            "bid": 0.45,
-            "ask": 0.55,
-            "mid_price": 0.50
-        }
-    }
-    """
     logger.info("POST /prefilled-close request received")
 
     try:
-        from api.services.options_service import OptionsService
-
         data = request.get_json()
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            return error_response('No data provided', status_code=400)
 
         required = ['ticker', 'option_type', 'strike', 'expiration', 'quantity']
         missing = [f for f in required if not data.get(f)]
         if missing:
-            return jsonify({'success': False, 'error': f'Missing fields: {", ".join(missing)}'}), 400
+            return error_response(f'Missing fields: {", ".join(missing)}', status_code=400)
 
         ticker = data['ticker']
         option_type = data['option_type'].upper()
@@ -924,26 +690,18 @@ def create_prefilled_close_order():
         expiration = str(data['expiration'])
         quantity = int(data['quantity'])
 
-        # Get current option price for limit price
-        options_service = OptionsService()
         conn = get_options_service()._ensure_connection()
         if not conn:
-            return jsonify({'success': False, 'error': 'Failed to connect to moomoo'}), 503
+            return error_response('Failed to connect to moomoo', status_code=503)
 
-        # Get option chain to find current bid/ask
         try:
             chain = conn.get_option_chain(
-                ticker,
-                expiration,
+                ticker, expiration,
                 'P' if option_type == 'PUT' else 'C',
                 target_strike=strike
             )
             if chain and chain.get('options'):
-                # Find matching contract
-                matching = [
-                    opt for opt in chain['options']
-                    if float(opt.get('strike', 0)) == strike
-                ]
+                matching = [opt for opt in chain['options'] if float(opt.get('strike', 0)) == strike]
                 if matching:
                     contract = matching[0]
                     bid = float(contract.get('bid', 0) or 0)
@@ -954,40 +712,26 @@ def create_prefilled_close_order():
             else:
                 bid = ask = mid_price = 0
         except Exception as chain_err:
-            logger.warning(f"Could not fetch option chain for prefilled close: {chain_err}")
+            logger.warning(f"Could not fetch option chain: {chain_err}")
             bid = ask = mid_price = 0
 
-        # Use provided limit price or calculate mid-price
         limit_price = float(data.get('limit_price', 0) or 0)
         if limit_price <= 0 and mid_price > 0:
             limit_price = round(mid_price, 2)
         elif limit_price <= 0:
-            limit_price = 0.05  # Fallback
+            limit_price = 0.05
 
         order = {
-            'ticker': ticker,
-            'option_type': option_type,
-            'strike': strike,
-            'expiration': expiration,
-            'action': 'BUY',  # Buy to close
-            'quantity': quantity,
-            'order_type': 'LIMIT',
-            'limit_price': limit_price,
-            'bid': bid,
-            'ask': ask,
-            'mid_price': round(mid_price, 4),
+            'ticker': ticker, 'option_type': option_type, 'strike': strike,
+            'expiration': expiration, 'action': 'BUY', 'quantity': quantity,
+            'order_type': 'LIMIT', 'limit_price': limit_price,
+            'bid': bid, 'ask': ask, 'mid_price': round(mid_price, 4),
         }
 
-        return jsonify({
-            'success': True,
-            'quote': order,
-        })
+        return success_response({'quote': order})
 
     except Exception as e:
         logger.error(f"Error creating prefilled close order: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
         

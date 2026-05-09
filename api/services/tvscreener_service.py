@@ -78,7 +78,10 @@ class TvscreenerService:
             # Note: IV_PERCENTILE is not available in tvscreener, using volatility instead
             screener.where(StockField.VOLATILITY >= min_iv_rank / 100)  # Convert percentage to decimal
             screener.where(StockField.AVERAGE_VOLUME >= min_volume)
-            screener.limit(limit)
+            try:
+                screener.limit(limit)
+            except AttributeError:
+                pass  # Some versions don't have .limit() method
 
             df = screener.get()
             if df is None or df.empty:

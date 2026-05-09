@@ -1,165 +1,132 @@
 <section class="app-section dashboard-summary-section">
     <div class="dashboard-summary-grid">
-        <div class="summary-panel summary-panel--primary">
+        <div class="summary-panel">
             <div class="summary-panel__header">
                 <div>
-                    <span class="app-section__eyebrow">Capital overview</span>
-                    <h2>Portfolio capital at a glance</h2>
-                    <p class="text-muted mb-0">Live account value, buying power, and leverage on one continuous surface.</p>
+                    <span class="app-section__eyebrow">Portfolio</span>
+                    <h2>Capital & risk</h2>
                 </div>
-                <div id="data-status-container" class="d-flex align-items-center ms-auto gap-3">
-                    <div id="opend-status" class="d-flex align-items-center">
-                        <span id="data-status-icon" class="me-1">
+                <div id="data-status-container" class="d-flex align-items-center gap-2">
+                    <div id="opend-status" class="d-flex align-items-center gap-1">
+                        <span id="data-status-icon">
                             <i class="bi bi-lightning-fill"></i>
                         </span>
                         <span id="data-status-indicator" class="badge bg-secondary">OPEND: LOADING</span>
                     </div>
-                    
-                    <div id="earnings-status" class="d-flex align-items-center border-start ps-3">
-                        <span class="me-1 text-muted"><i class="bi bi-calendar-event"></i></span>
+                    <div id="earnings-status" class="d-flex align-items-center gap-1 border-start ps-2">
+                        <span class="text-muted small"><i class="bi bi-calendar-event"></i></span>
                         <span id="earnings-status-indicator" class="badge bg-secondary">EARNINGS: ...</span>
-                        <button id="refresh-earnings-btn" class="btn btn-link btn-sm p-0 ms-2 text-primary" title="Refresh all earnings manually">
+                        <button id="refresh-earnings-btn" class="btn btn-link btn-sm p-0 ms-1 text-primary" title="Refresh all earnings manually">
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                     </div>
-                    
-                    <small id="data-update-time" class="text-muted ms-2"></small>
+                    <small id="data-update-time" class="text-muted flex-shrink-0"></small>
                 </div>
             </div>
 
             <div class="summary-metrics-grid">
                 <div class="summary-metric-cell">
-                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Total value of all positions plus cash balance">Total Value</p>
+                    <p class="summary-metric-label">Total Value</p>
                     <h3 class="summary-metric-value" id="account-value">$0.00</h3>
                 </div>
                 <div class="summary-metric-cell">
-                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Available cash in your account">Cash Balance</p>
+                    <p class="summary-metric-label">Cash Balance</p>
                     <h3 class="summary-metric-value" id="cash-balance">$0.00</h3>
                 </div>
                 <div class="summary-metric-cell">
-                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Available buying power after margin requirements">Excess Liquidity</p>
+                    <p class="summary-metric-label">Buying Power</p>
                     <h3 class="summary-metric-value" id="excess-liquidity">$0.00</h3>
                 </div>
                 <div class="summary-metric-cell">
-                    <p class="summary-metric-label" data-bs-toggle="tooltip" data-bs-placement="top" title="Margin required to maintain current positions">Initial Margin</p>
+                    <p class="summary-metric-label">Initial Margin</p>
                     <h3 class="summary-metric-value" id="initial-margin">$0.00</h3>
                 </div>
-            </div>
-
-            <!-- Cash Reserve Status Bar -->
-            <div class="cash-reserve-panel mt-3 p-3 bg-light rounded border">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <small class="text-muted d-block">Cash Reserve Status</small>
-                        <div class="d-flex align-items-center gap-3 mt-1">
-                            <span class="badge bg-secondary" id="cash-reserve-badge">Loading...</span>
-                            <span class="text-muted">|</span>
-                            <span>Reserved: <strong id="cash-reserved">$0.00</strong></span>
-                            <span class="text-muted">|</span>
-                            <span>Available: <strong id="cash-available" class="text-success">$0.00</strong></span>
-                        </div>
-                    </div>
-                    <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" id="cash-reserve-toggle" checked>
-                        <label class="form-check-label small" for="cash-reserve-toggle">Reserve CSP Cash</label>
-                    </div>
-                </div>
-                <div id="cash-reserve-details" class="mt-2 small text-muted" style="display: none;">
-                    <div id="open-puts-list"></div>
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label">Leverage</p>
+                    <h3 class="summary-metric-value" id="leverage-percentage">0.00%</h3>
                 </div>
             </div>
 
             <div class="summary-leverage-panel">
-                <label class="summary-leverage-label mb-2">
-                    <small>
-                        <span data-bs-toggle="tooltip" data-bs-placement="top" title="Leverage % = (Initial Margin / Portfolio Value) × 100">
-                            Leverage <i class="bi bi-info-circle-fill"></i>
-                        </span>
-                    </small>
-                    <small class="fw-bold" id="leverage-percentage">0.00%</small>
-                </label>
-                <div class="progress" style="height: 10px;">
+                <div class="progress" style="height: 4px;">
                     <div id="leverage-bar" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
                 </div>
             </div>
         </div>
 
         <div class="summary-panel summary-panel--accent">
-            <span class="app-section__eyebrow">Income focus</span>
-            <h2>Weekly option premium</h2>
-            <p class="text-muted mb-0">Expected premium from short positions expiring this Friday.</p>
-
-            <div class="summary-income-stack">
-                <h3 class="summary-income-value mb-1" id="weekly-income-summary">$0.00</h3>
-                <p class="summary-income-caption mb-0">
-                    <span id="weekly-positions-count">0</span> positions expiring
-                    <span id="friday-date">this Friday</span>
-                </p>
-            </div>
-        </div>
-
-        <div class="summary-panel summary-panel--vix" data-bs-theme="dark">
-            <div class="summary-panel__header-stack">
-                <span class="app-section__eyebrow">Market regime</span>
-                <h2>VIX volatility level</h2>
-                <p class="text-muted mb-0">Adaptive delta targeting based on market conditions.</p>
-            </div>
-
-            <div id="vix-regime-container" class="mt-2">
-                <div class="d-flex align-items-center gap-3">
-                    <div>
-                        <h3 class="summary-vix-value mb-1" id="vix-level">--</h3>
-                        <span id="vix-date" class="small text-muted"></span>
-                    </div>
-                    <span id="vix-badge" class="badge fs-6">LOADING</span>
+            <span class="app-section__eyebrow">Weekly income</span>
+            <h2>Option premium</h2>
+            <div class="summary-income-grid">
+                <div class="summary-income-metric">
+                    <p class="summary-income-label">Weekly premium</p>
+                    <h3 class="summary-income-value mb-0" id="weekly-income-summary">$0.00</h3>
+                    <p class="summary-income-caption mb-0">
+                        <span id="weekly-positions-count">0</span> positions expiring
+                        <span id="friday-date">this Friday</span>
+                    </p>
                 </div>
-                <p id="vix-description" class="small text-muted mt-2 mb-0"></p>
-                <div class="mt-2 small">
-                    <span class="text-muted">Delta Adj:</span>
-                    <span id="vix-delta-adj" class="fw-bold">--</span>
-                    <span class="text-muted ms-2">Exposure:</span>
-                    <span id="vix-exposure" class="fw-bold">--</span>
+                <div class="summary-income-metric">
+                    <p class="summary-income-label">Open short premium</p>
+                    <h3 class="summary-income-value mb-0" id="open-short-income-summary">$0.00</h3>
+                    <p class="summary-income-caption mb-0">
+                        <span id="open-short-contracts-count">0</span> contracts open
+                    </p>
                 </div>
-            </div>
-        </div>
-
-        <div class="summary-panel summary-panel--macro" data-bs-theme="dark">
-            <div class="summary-panel__header-stack">
-                <span class="app-section__eyebrow">Macro environment</span>
-                <h2>Economic regime</h2>
-                <p class="text-muted mb-0">Macro regime detection for strategy context.</p>
-            </div>
-
-            <div class="macro-metrics-grid">
-                <div class="macro-metric">
-                    <small class="text-muted">Rates</small>
-                    <h4 id="macro-rates">--</h4>
-                    <span class="badge" id="macro-rates-badge">--</span>
-                </div>
-                <div class="macro-metric">
-                    <small class="text-muted">Credit</small>
-                    <h4 id="macro-credit">--</h4>
-                    <span class="badge" id="macro-credit-badge">--</span>
-                </div>
-                <div class="macro-metric">
-                    <small class="text-muted">Growth</small>
-                    <h4 id="macro-growth">--</h4>
-                    <span class="badge" id="macro-growth-badge">--</span>
-                </div>
-                <div class="macro-metric">
-                    <small class="text-muted">Inflation</small>
-                    <h4 id="macro-inflation">--</h4>
-                    <span class="badge" id="macro-inflation-badge">--</span>
-                </div>
-            </div>
-
-            <div id="macro-advice-banner" class="mt-2">
-                <small id="macro-advice-text">Loading macro environment...</small>
-            </div>
-
-            <div class="mt-2 small text-muted">
-                Yield curve (10y-2y): <span id="macro-yield-curve">--</span>
             </div>
         </div>
     </div>
 </section>
+
+<div class="row g-2 mb-3">
+    <div class="col-md-6">
+        <div class="summary-panel summary-panel--vix p-3 h-100">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="small text-muted">VIX</span>
+                <span id="vix-badge" class="badge">LOADING</span>
+            </div>
+            <div class="d-flex align-items-end gap-2">
+                <h3 class="mb-0 fs-4 fw-bold" id="vix-level">--</h3>
+                <small class="text-muted" id="vix-date"></small>
+            </div>
+            <p id="vix-description" class="small text-muted mt-1 mb-1"></p>
+            <div class="small text-muted">
+                <span>Delta Adj: <span id="vix-delta-adj" class="fw-semibold">--</span></span>
+                <span class="ms-2">Exposure: <span id="vix-exposure" class="fw-semibold">--</span></span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="summary-panel summary-panel--macro p-3 h-100">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="small text-muted">Macro</span>
+                <small id="macro-advice-text">Loading...</small>
+            </div>
+            <div class="macro-metrics-grid">
+                <div class="macro-metric">
+                    <span class="text-muted small">Rates</span>
+                    <h4 id="macro-rates">--</h4>
+                    <span class="badge" id="macro-rates-badge">--</span>
+                </div>
+                <div class="macro-metric">
+                    <span class="text-muted small">Credit</span>
+                    <h4 id="macro-credit">--</h4>
+                    <span class="badge" id="macro-credit-badge">--</span>
+                </div>
+                <div class="macro-metric">
+                    <span class="text-muted small">Growth</span>
+                    <h4 id="macro-growth">--</h4>
+                    <span class="badge" id="macro-growth-badge">--</span>
+                </div>
+                <div class="macro-metric">
+                    <span class="text-muted small">Inflation</span>
+                    <h4 id="macro-inflation">--</h4>
+                    <span class="badge" id="macro-inflation-badge">--</span>
+                </div>
+            </div>
+            <div class="small text-muted mt-1">
+                Yield curve: <span id="macro-yield-curve">--</span>
+            </div>
+        </div>
+    </div>
+</div>

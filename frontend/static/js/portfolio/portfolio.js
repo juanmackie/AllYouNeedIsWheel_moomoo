@@ -10,8 +10,6 @@ import { showAlert } from '../utils/alerts.js';
  */
 async function initializePortfolio() {
     try {
-        console.log('Initializing portfolio page...');
-        
         // Create a container for alerts if it doesn't exist
         if (!document.querySelector('.content-container')) {
             const mainContainer = document.querySelector('main .container') || document.querySelector('main');
@@ -33,8 +31,6 @@ async function initializePortfolio() {
         
         // Load positions table
         await loadPositionsTable();
-        
-        console.log('Portfolio initialization complete');
     } catch (error) {
         console.error('Error initializing portfolio:', error);
         showAlert(`Error initializing portfolio: ${error.message}`, 'danger');

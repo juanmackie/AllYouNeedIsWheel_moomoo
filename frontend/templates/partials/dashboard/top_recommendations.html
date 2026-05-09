@@ -3,67 +3,47 @@
         <div>
             <span class="app-section__eyebrow">Opportunity desk</span>
             <h2>Top recommendations</h2>
-            <p>Highest-conviction wheel candidates ranked by risk-adjusted return, liquidity, and current volatility conditions.</p>
+            <p>Highest-conviction wheel candidates ranked by risk-adjusted return, liquidity, and volatility.</p>
         </div>
         <div class="app-section__actions">
             <small id="top-recs-last-updated" class="text-muted d-none"></small>
-            <button id="refresh-top-recommendations" class="btn btn-outline-primary" type="button">
-                <i class="bi bi-arrow-clockwise"></i> Refresh ideas
+            <button id="refresh-top-recommendations" class="btn btn-outline-primary btn-sm" type="button">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
             </button>
         </div>
     </div>
 
     <div id="top-recommendations-container" class="recommendation-stage__body">
-        <div id="top-recommendations-loading" class="recommendation-stage__state text-center py-4">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-3 text-muted mb-0">Analyzing live opportunities...</p>
-        </div>
-
+        <div id="top-recommendations-state"></div>
         <div id="top-recommendations-content" class="d-none">
-            <div class="row g-3" id="top-recommendations-cards"></div>
-        </div>
-
-        <div id="top-recommendations-empty" class="recommendation-stage__state d-none text-center py-4">
-            <i class="bi bi-inbox display-4 text-muted"></i>
-            <p class="mt-3 text-muted mb-0">No recommendations available right now.</p>
-            <small class="text-muted">Check back after market open or add positions to your portfolio.</small>
-        </div>
-
-        <div id="top-recommendations-error" class="recommendation-stage__state d-none text-center py-4">
-            <i class="bi bi-exclamation-triangle display-4 text-warning"></i>
-            <p class="mt-3 text-muted mb-0">Unable to load recommendations.</p>
-            <button id="retry-top-recommendations" class="btn btn-outline-primary mt-3">
-                <i class="bi bi-arrow-clockwise"></i> Try again
-            </button>
+            <div class="row g-2" id="top-recommendations-cards"></div>
         </div>
     </div>
 
     <div class="app-section__footer">
-        Recommendations account for your existing option positions and only show contracts you can realistically sell with available shares or cash.
+        Recommendations account for your existing positions and only show contracts you can realistically sell.
     </div>
 </section>
 
 <template id="recommendation-card-template">
     <div class="col-lg-4">
-        <article class="card recommendation-card h-100 border-2">
+        <article class="recommendation-card h-100">
             <div class="card-body">
                 <div class="recommendation-card__header-row">
                     <div class="d-flex align-items-center gap-2">
                         <span class="rank-badge fs-6 fw-bold"></span>
-                        <span class="ticker-badge badge fs-6"></span>
+                        <span class="ticker-badge fw-bold"></span>
                     </div>
                     <span class="option-type-badge badge"></span>
                 </div>
 
-                <div class="recommendation-card__hero text-center">
+                <div class="recommendation-card__hero">
                     <h3 class="strike-price mb-1"></h3>
                     <small class="expiration-date text-muted"></small>
-                    <div class="dte-badge badge mt-2"></div>
+                    <div class="dte-badge badge mt-1"></div>
                 </div>
 
-                <div class="recommendation-card__metrics row g-2 mb-3">
+                <div class="row g-1 mb-2">
                     <div class="col-6 text-center">
                         <small class="text-muted d-block">Premium</small>
                         <span class="premium-amount fw-bold fs-5"></span>
@@ -75,38 +55,38 @@
                     </div>
                 </div>
 
-                <div class="d-flex justify-content-center mb-3">
-                    <span class="score-badge badge fs-6"></span>
+                <div class="d-flex justify-content-center mb-2">
+                    <span class="score-badge fs-6"></span>
                 </div>
 
                 <div class="recommendation-warnings small mb-2"></div>
 
-                <div class="recommendation-details small text-muted">
+                <div class="recommendation-details">
                     <div class="d-flex justify-content-between">
                         <span>OTM</span>
-                        <span class="otm-pct"></span>
+                        <span class="otm-pct fw-semibold"></span>
                     </div>
                     <div class="d-flex justify-content-between">
                         <span>Delta</span>
-                        <span class="delta-value"></span>
+                        <span class="delta-value fw-semibold"></span>
                     </div>
                     <div class="d-flex justify-content-between">
                         <span>IV Rank</span>
-                        <span class="iv-rank"></span>
+                        <span class="iv-rank fw-semibold"></span>
                     </div>
-                    <div class="d-flex justify-content-between mt-1">
+                    <div class="d-flex justify-content-between">
                         <span>Macro</span>
-                        <span class="macro-impact"></span>
+                        <span class="macro-impact fw-semibold"></span>
                     </div>
                 </div>
             </div>
             <div class="card-footer bg-transparent border-0 pt-0">
-                <div class="d-grid gap-2">
+                <div class="d-grid gap-1">
                     <button class="btn btn-outline-primary btn-sm add-order-btn" type="button">
-                        <i class="bi bi-plus-circle"></i> Stage order
+                        <i class="bi bi-plus-lg"></i> Stage
                     </button>
-                    <button class="btn btn-primary btn-sm execute-now-btn" type="button">
-                        <i class="bi bi-lightning-charge"></i> Execute now
+                    <button class="btn btn-success btn-sm execute-now-btn" type="button">
+                        <i class="bi bi-lightning-charge-fill"></i> Execute
                     </button>
                 </div>
             </div>

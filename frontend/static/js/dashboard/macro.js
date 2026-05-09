@@ -133,7 +133,6 @@ function updateMacroDisplay(data) {
 
     // Log if macro is disabled
     if (!data.enabled) {
-        console.warn('Macro regime detection is disabled. Add FRED_API_KEY to .env to enable.');
     }
 }
 

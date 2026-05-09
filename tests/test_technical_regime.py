@@ -14,19 +14,20 @@ class TestTechnicalRegimeService(unittest.TestCase):
     
     def test_ema_regime_bullish(self):
         """Price > EMA*1.02 = bullish"""
-        # Mock yfinance data
-        mock_hist = MagicMock()
-        mock_hist.empty = False
-        mock_hist.__getitem__ = lambda key: {
-            'Close': MagicMock(
-                iloc=[180.0, 175.0, 170.0],
-                ewm=lambda **kw: MagicMock(
-                    mean=lambda: MagicMock(
-                        iloc=[None, None, 170.0]
-                    )
-                )
-            )
-        }[key]
+        import pandas as pd
+        import numpy as np
+        
+        # Create data where recent prices are well above the EMA
+        # Use 200 days at 100, then jump to 200 for the last 100 days
+        # EMA200 will be weighted toward recent values (~150-170), final price=200
+        dates = pd.date_range('2025-01-01', periods=300, freq='D')
+        prices = [100.0] * 200 + [200.0] * 100
+        mock_hist = pd.DataFrame({
+            'Close': prices,
+            'High': [p + 1 for p in prices],
+            'Low': [p - 1 for p in prices],
+            'Volume': [1000000] * 300
+        }, index=dates)
         
         with patch('api.services.technical_regime_service.yf') as mock_yf:
             mock_ticker = MagicMock()

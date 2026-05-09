@@ -3,7 +3,7 @@ Tests for TvscreenerService - Simplified
 """
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from api.services.tvscreener_service import TvscreenerService
 
 
@@ -69,11 +69,10 @@ class TestTvscreenerServiceGetWheelCandidates:
     def test_get_wheel_candidates_not_initialized(self):
         """Test returns None when not initialized."""
         service = TvscreenerService()
-        # Don't initialize
-
-        result = service.get_wheel_candidates()
-
-        assert result is None
+        # Mock _ensure_initialized to return False (simulate tvscreener not available)
+        with patch.object(service, '_ensure_initialized', return_value=False):
+            result = service.get_wheel_candidates()
+            assert result is None
 
     @pytest.mark.skip(reason="Requires mocking tvscreener.StockScreener")
     def test_get_wheel_candidates_empty_result(self):
@@ -85,11 +84,10 @@ class TestTvscreenerServiceGetWheelCandidates:
         service = TvscreenerService()
         service._initialized = True
         service._tvscreener = MagicMock()
-        service._tvscreener.StockScreener.side_effect = Exception("API Error")
 
-        result = service.get_wheel_candidates()
-
-        assert result is None
+        with patch('tvscreener.StockScreener', side_effect=Exception("API Error")):
+            result = service.get_wheel_candidates()
+            assert result is None
 
 
 class TestCreateTvscreenerService:

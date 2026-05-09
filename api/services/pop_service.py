@@ -39,33 +39,38 @@ def calculate_pop_delta(ticker, strike, expiration, option_type, delta, iv, dte)
 
 def calculate_pop_monte_carlo(ticker, strike, expiration, option_type, iv, dte, simulations=10000):
     """
-    Calculate PoP using Monte Carlo simulation.
-    Uses Geometric Brownian Motion (GBM) to estimate probability of finishing OTM.
-    
+    Monte Carlo PoP estimation — NOT PRODUCTION READY.
+
+    Requires current stock price data which is not yet wired in.
+    Returns a fallback (50% default) with clear warning.
+    Use calculate_pop_delta() for all production PoP needs.
+
     Returns:
-        dict: {'pop': float, 'method': 'monte_carlo', 'simulations': int, 'details': str}
+        dict: {'pop': float, 'method': 'monte_carlo_unavailable', 'simulations': int, 'details': str}
     """
     if iv is None or iv <= 0 or dte is None or dte <= 0:
-        return {'pop': 0.5, 'method': 'monte_carlo_fallback', 'simulations': 0, 'details': 'Invalid IV or DTE'}
+        return {'pop': 0.5, 'method': 'monte_carlo_unavailable', 'simulations': 0, 'details': 'Invalid IV or DTE'}
     
-    # Placeholder: Monte Carlo requires current stock price
-    # For now, return delta-based as fallback
-    # TODO: Fetch current price and implement full Monte Carlo
-    # NOTE: This is a known limitation - full Monte Carlo requires stock price data
-    logger.debug(f"Monte Carlo not fully implemented for {ticker} — using delta fallback")
+    logger.warning(f"Monte Carlo not implemented for {ticker} — stock price data not wired in")
     return {
         'pop': 0.5,
         'pop_pct': 50.0,
-        'method': 'monte_carlo_fallback',
+        'method': 'monte_carlo_unavailable',
         'simulations': 0,
-        'details': 'Monte Carlo not yet implemented — using 50% default',
+        'details': 'Monte Carlo method requires current stock price; use delta method for production PoP',
     }
 
 
 def get_pop(ticker, strike, expiration, option_type, delta=None, iv=None, dte=None, method='delta'):
     """
-    Get PoP using specified method.
-    
+    Get Probability of Profit (PoP) for an option contract.
+
+    Two methods available:
+    - 'delta' (DEFAULT, RECOMMENDED): Uses option delta: PoP = 1 - |delta|. 
+      Production-ready. Requires only the delta value.
+    - 'monte_carlo': Returns a fallback (50% default). Not production-ready.
+      Requires current stock price which is not yet wired in.
+
     Args:
         ticker: Stock symbol
         strike: Option strike price
@@ -77,7 +82,7 @@ def get_pop(ticker, strike, expiration, option_type, delta=None, iv=None, dte=No
         method: 'delta' or 'monte_carlo'
         
     Returns:
-        dict: PoP result
+        dict: PoP result with 'pop', 'pop_pct', 'method', 'details' keys
     """
     if method == 'monte_carlo':
         return calculate_pop_monte_carlo(ticker, strike, expiration, option_type, iv, dte)

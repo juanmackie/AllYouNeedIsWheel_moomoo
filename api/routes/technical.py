@@ -5,6 +5,7 @@ Exposes technical market regime detection (200 EMA + ADX) via REST API.
 
 import logging
 from flask import Blueprint, request, jsonify
+from api.routes.utils import error_response, success_response
 from api.services.technical_regime_service import get_technical_regime_service
 from api.services.utils import validate_ticker
 
@@ -33,10 +34,7 @@ def get_regime():
     elif ticker:
         tickers = [ticker.strip().upper()]
     else:
-        return jsonify({
-            'success': False,
-            'error': 'Missing required parameter: tickers or ticker'
-        }), 400
+        return error_response('Missing required parameter: tickers or ticker', status_code=400)
     
     # ── Entry gate: filter out invalid tickers ──
     valid_tickers = [t for t in tickers if validate_ticker(t)]
@@ -44,26 +42,19 @@ def get_regime():
     if skipped:
         logger.warning(f"Technical regime: Skipping {len(skipped)} invalid ticker(s): {skipped}")
     if not valid_tickers:
-        return jsonify({
-            'success': False,
-            'error': 'No valid tickers provided'
-        }), 400
+        return error_response('No valid tickers provided', status_code=400)
 
     try:
         service = get_technical_regime_service()
         results = service.get_batch_regimes(valid_tickers)
 
-        return jsonify({
-            'success': True,
+        return success_response({
             'data': results,
             'timestamp': results.get(valid_tickers[0], {}).get('updated_at') if len(valid_tickers) == 1 else None,
         })
     except Exception as e:
         logger.error(f"Error getting technical regime: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 @bp.route('/regime/<ticker>')
@@ -81,25 +72,18 @@ def get_regime_single(ticker):
     
     # ── Entry gate: validate ticker ──
     if not validate_ticker(ticker):
-        return jsonify({
-            'success': False,
-            'error': f'Invalid ticker: {ticker}'
-        }), 400
+        return error_response(f'Invalid ticker: {ticker}', status_code=400)
 
     try:
         service = get_technical_regime_service()
         regime = service.get_combined_regime(ticker)
 
-        return jsonify({
-            'success': True,
+        return success_response({
             'data': regime,
         })
     except Exception as e:
         logger.error(f"Error getting technical regime for {ticker}: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 @bp.route('/regime/summary')
@@ -115,10 +99,7 @@ def get_regime_summary():
     """
     tickers_param = request.args.get('tickers', '').strip()
     if not tickers_param:
-        return jsonify({
-            'success': False,
-            'error': 'Missing required parameter: tickers'
-        }), 400
+        return error_response('Missing required parameter: tickers', status_code=400)
 
     tickers = [t.strip().upper() for t in tickers_param.split(',') if t.strip()]
     
@@ -128,10 +109,7 @@ def get_regime_summary():
     if skipped:
         logger.warning(f"Technical regime summary: Skipping {len(skipped)} invalid ticker(s): {skipped}")
     if not valid_tickers:
-        return jsonify({
-            'success': False,
-            'error': 'No valid tickers provided'
-        }), 400
+        return error_response('No valid tickers provided', status_code=400)
 
     try:
         service = get_technical_regime_service()
@@ -166,17 +144,13 @@ def get_regime_summary():
             'summary_text': _generate_summary_text(regimes, dominant),
         }
 
-        return jsonify({
-            'success': True,
+        return success_response({
             'summary': summary,
             'details': results,
         })
     except Exception as e:
         logger.error(f"Error getting regime summary: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 def _generate_summary_text(regimes, dominant):
@@ -207,13 +181,9 @@ def clear_regime_cache():
     try:
         service = get_technical_regime_service()
         service.clear_cache()
-        return jsonify({
-            'success': True,
+        return success_response({
             'message': 'Technical regime cache cleared'
         })
     except Exception as e:
         logger.error(f"Error clearing regime cache: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))

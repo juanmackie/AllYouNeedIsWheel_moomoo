@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 import traceback
+from api.services.utils import clean_yfinance_ticker
 
 logger = logging.getLogger('api.services.iv_tracking')
 
@@ -157,14 +158,7 @@ class IVEarningsService:
             return (20, iv_rank, 'extreme_high')  # Excellent - very high IV
     
     def _strip_moomoo_prefix(self, ticker: str) -> str:
-        """
-        Strip moomoo prefix (e.g., 'US.UBER' -> 'UBER') for external APIs.
-        """
-        if '.' in ticker:
-            parts = ticker.split('.', 1)
-            if len(parts) == 2 and parts[0] in ['US', 'HK', 'SZ', 'SH']:
-                return parts[1]
-        return ticker
+        return clean_yfinance_ticker(ticker)
 
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
@@ -243,7 +237,7 @@ class IVEarningsService:
             except Exception as e:
                 logger.debug(f"stock.info earnings check failed for {clean_ticker}: {e}")
         except Exception as e:
-            logger.debug(f"yfinance fallback failed for {clean_ticker}: {e}")
+            logger.warning(f"yfinance fallback failed for {clean_ticker}: {e}")
 
         return {
             'success': False,

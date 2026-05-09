@@ -22,13 +22,13 @@ Complete reference for all API endpoints in AllYouNeedIsWheel.
 - [LLM](#llm)
 - [Error Handling](#error-handling)
 - [Data Models](#data-models)
-
----
-
 - [Technical Regime](#technical-regime)
 - [Risk Sizing](#risk-sizing)
 - [Probability of Profit](#probability-of-profit)
 - [Earnings Lock](#earnings-lock)
+
+---
+
 ## System
 
 ### Health Check
@@ -151,7 +151,7 @@ Retrieve current positions (stocks and/or options).
 
 ### Get Weekly Option Income
 
-Get expected income from short options expiring this week.
+Get expected income from short options expiring this week, plus the total premium from all open short option positions.
 
 **Endpoint:** `GET /api/portfolio/weekly-income`
 
@@ -170,6 +170,9 @@ Get expected income from short options expiring this week.
   ],
   "total_income": 350.00,
   "positions_count": 1,
+  "open_short_positions_count": 3,
+  "open_short_contracts_count": 13,
+  "open_short_total_income": 2450.00,
   "this_friday": "2026-04-04"
 }
 ```

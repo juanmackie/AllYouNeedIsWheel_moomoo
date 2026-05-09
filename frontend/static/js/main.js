@@ -197,6 +197,13 @@ async function pollOpenDStatus() {
     }
 }
 
+function toggleMobileSidebar() {
+    const sidebar = document.getElementById('app-sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (sidebar) sidebar.classList.toggle('open');
+    if (overlay) overlay.classList.toggle('open');
+}
+
 // Initialize tooltips and popovers when page loads
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize Bootstrap tooltips
@@ -225,6 +232,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const contentContainer = document.createElement('div');
         contentContainer.className = 'content-container';
         mainContainer.prepend(contentContainer);
+    }
+
+    const mobileToggle = document.getElementById('mobile-nav-toggle');
+    if (mobileToggle) {
+        mobileToggle.addEventListener('click', toggleMobileSidebar);
     }
 
     pollOpenDStatus();
@@ -300,8 +312,6 @@ if (!window.Promise) {
 
 // Add fetch polyfill (minimal implementation, for modern browsers that don't support fetch)
 if (!window.fetch) {
-    console.warn('Fetch API not available. Using XMLHttpRequest polyfill. Consider updating your browser.');
-    
     window.fetch = function(url, options) {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();

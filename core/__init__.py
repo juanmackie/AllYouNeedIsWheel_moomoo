@@ -13,9 +13,6 @@ from .utils import (
 # Import logging configuration
 from .logging_config import configure_logging, get_logger
 
-# Import connection classes
-from .connection import MoomooConnection
-
 __all__ = [
     # Connection
     'MoomooConnection',
@@ -30,3 +27,10 @@ __all__ = [
     'configure_logging',
     'get_logger'
 ]
+
+
+def __getattr__(name):
+    if name == 'MoomooConnection':
+        from .connection import MoomooConnection
+        return MoomooConnection
+    raise AttributeError(f"module 'core' has no attribute {name!r}")

@@ -75,13 +75,15 @@ function updateAccountSummary() {
     // Update cash balance
     const cashBalanceElement = document.getElementById('cash-balance');
     if (cashBalanceElement) {
-        cashBalanceElement.textContent = formatCurrency(accountData.cash_balance || 0);
+        cashBalanceElement.textContent = formatCurrency(accountData.available_cash || accountData.cash_balance || 0);
     }
     
     // Update positions count
     const positionsCountElement = document.getElementById('positions-count');
     if (positionsCountElement) {
-        positionsCountElement.textContent = accountData.positions_count || 0;
+        const posDict = accountData.positions || {};
+        const posCount = typeof posDict === 'object' ? Object.keys(posDict).length : (posDict || 0);
+        positionsCountElement.textContent = posCount;
     }
     
     // Update new margin metrics
@@ -156,7 +158,6 @@ async function loadRecycleReadyPositions() {
             </div>`
         ).join('');
     } catch (e) {
-        console.debug('Recycle alerts unavailable:', e.message);
     }
 }
 
@@ -167,18 +168,12 @@ function populatePositionsTable() {
     if (!positionsData) return;
     
     // Debug log to see what data we're working with
-    // console.log('Position data received:', positionsData);
-    
     // Filter positions by security_type
     const stockPositions = positionsData.filter(position => 
         position.security_type === 'STK' || position.securityType === 'STK' || position.sec_type === 'STK');
     
     const optionPositions = positionsData.filter(position => 
         position.security_type === 'OPT' || position.securityType === 'OPT' || position.sec_type === 'OPT');
-    
-    // console.log('Stock positions identified:', stockPositions.length);
-    // console.log('Option positions identified:', optionPositions.length);
-    
     // Populate stock positions table
     populateStockPositionsTable(stockPositions);
     
@@ -466,7 +461,13 @@ function updateDataStatusIndicator(isFrozen) {
 
 document.addEventListener('opend-status-changed', () => {
     if (!accountData) {
-        updateDataStatusIndicator(true);
+        const indicator = document.getElementById('data-status-indicator');
+        const icon = document.querySelector('#data-status-icon i');
+        if (indicator) {
+            indicator.className = 'badge bg-info';
+            indicator.textContent = 'LOADING DATA';
+        }
+        if (icon) icon.className = 'bi bi-arrow-repeat';
     }
 });
 

@@ -3,11 +3,26 @@ Unified Wheel Decision Engine
 
 One canonical decision model for both candidate contracts and open positions.
 All surfaces (recommendations, rollover, dashboard) read from this single source.
+Orchestrates scoring by composing pure factor functions from scoring_factors.py.
 """
 
 import logging
+import traceback
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from typing import Optional
+
+from core.scoring_factors import (
+    _clamp,
+    _score_proximity,
+    _score_positive_metric,
+    _calculate_mid_price,
+    _compute_shared_subscores,
+    _compute_roll_pressure,
+    _compute_profit_target_progress,
+    _compute_size_fit,
+    _compute_expected_move_buffer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +130,16 @@ class WheelDecision:
     warnings: list[str] = field(default_factory=list)
     rationale: list[str] = field(default_factory=list)
 
+    # -- Data provenance (TODO 2.1) --------------------------------------
+    price_source: str = ''           # Moomoo, portfolio fallback, yfinance
+    chain_source: str = ''           # Moomoo, yfinance
+    greeks_source: str = ''          # broker, Black-Scholes computed, missing
+    iv_source: str = ''             # broker, yfinance, historical cache
+    earnings_source: str = ''         # provider/cache/manual
+    macro_source: str = ''           # FRED/cache/disabled
+    quote_timestamp: Optional[str] = None
+    generated_at: Optional[str] = None
+
     # -- Score breakdown (for display) --------------------------------------
     score_details: dict = field(default_factory=dict)
 
@@ -125,6 +150,10 @@ class WheelDecision:
     # -- Capital efficiency -------------------------------------------------
     capital_efficiency: float = 0.0
 
+    # -- Return breakdown (TODO 1.2) ------------------------------------
+    return_on_underlying: Optional[float] = None  # CALL: premium / (stock_price * 100)
+    return_on_secured_cash: Optional[float] = None  # PUT: premium / (strike * 100)
+
     # -- Internal tracking --------------------------------------------------
     _theta_delta_ratio: float = 0.0    # Raw theta/delta ratio
 
@@ -133,7 +162,6 @@ class WheelDecision:
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict:
-        """Serialise to a plain dict for API responses."""
         return asdict(self)
 
     def has_blocker(self) -> bool:
@@ -143,225 +171,38 @@ class WheelDecision:
         return bool(self.warnings)
 
 
-# ---------------------------------------------------------------------------
-# Pure scoring helpers (no service dependencies)
-# ---------------------------------------------------------------------------
-
-def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
-    return max(minimum, min(maximum, value))
-
-
-def _score_proximity(value: float, target: float, tolerance: float) -> float:
-    if tolerance <= 0:
-        return 0.0
-    return _clamp(1 - (abs(value - target) / tolerance))
-
-
-def _score_positive_metric(value: float, ideal_value: float) -> float:
-    if ideal_value <= 0:
-        return 0.0
-    return _clamp(value / ideal_value)
-
-
-def _calculate_mid_price(bid: float, ask: float, last: float = 0.0) -> float:
-    bid = float(bid or 0)
-    ask = float(ask or 0)
-    last = float(last or 0)
-    if bid > 0 and ask > 0:
-        return (bid + ask) / 2
-    if bid > 0:
-        return bid
-    if ask > 0:
-        return ask
-    if last > 0:
-        return last
-    return 0.0
-
-
-# ---------------------------------------------------------------------------
-# Shared sub-score computation
-# ---------------------------------------------------------------------------
-
-def _compute_shared_subscores(decision: WheelDecision, profile: dict) -> None:
+def _create_failed_decision(ticker: str, option_type: str, strike: float, expiration: str, reason: str) -> WheelDecision:
     """
-    Compute all sub-scores that are shared between CALL and PUT.
-    Operates in-place on the WheelDecision.
+    Create a WheelDecision that failed hard filters.
+    Populates hard_blockers with the reason.
     """
-    # Liquidity sub-scores
-    decision.oi_score = _score_positive_metric(decision.open_interest, profile['ideal_open_interest']) * 100
-    decision.volume_score = _score_positive_metric(decision.volume, profile['ideal_volume']) * 100
-    decision.spread_score = _clamp(1 - (decision.spread_pct / max(profile['ideal_spread_pct'], 1)), 0, 1) * 100
-
-    liquidity_raw = (
-        decision.oi_score * 0.45 +
-        decision.volume_score * 0.2 +
-        decision.spread_score * 0.35
-    ) / 100  # Normalise back to 0-1
-    liq_mult = profile.get('liquidity_weight_multiplier', 1.0)
-    decision.liquidity_score = _clamp(liquidity_raw * liq_mult) * 100
-
-    # IV-adjusted return score (already computed by caller, but provide fallback)
-    if decision.iv_adjusted_return > 0:
-        decision.iv_adjusted_score = _score_positive_metric(
-            decision.iv_adjusted_return, profile.get('target_iv_adjusted', 50)
-        ) * 100
-
-    # Theta/delta ratio score
-    if decision.stock_price > 0 and abs(decision.delta) > 0:
-        decision._theta_delta_ratio = abs(decision.theta) / (abs(decision.delta) * decision.stock_price)
-    decision.tdr_score = _score_positive_metric(
-        decision._theta_delta_ratio, profile.get('target_theta_delta_ratio', 0.005)
-    ) * 100
-
-    # Expected value score (already computed by caller, but provide fallback)
-    if decision.premium_per_contract > 0:
-        decision.ev_score = _clamp(decision.expected_value / max(decision.premium_per_contract, 0.01)) * 100
-
-    # Delta and DTE proximity scores
-    decision.delta_score = _score_proximity(
-        abs(decision.delta), profile['target_delta'], profile['delta_tolerance']
-    ) * 100
-    decision.dte_score = _score_proximity(
-        decision.dte, profile['preferred_dte'], max(profile['preferred_dte'], 10)
-    ) * 100
-
-    # OTM score
-    desired_otm = 10  # default; caller should override from profile context
-    decision.otm_score = _score_proximity(
-        decision.otm_pct, desired_otm, max(desired_otm * 0.75, 6)
-    ) * 100
-
-
-def _compute_roll_pressure(decision: WheelDecision) -> float:
-    """
-    Compute roll_pressure (0-100) for an open position.
-
-    Combines:
-    - DTE remaining (higher urgency as DTE shrinks)
-    - % distance to strike (higher urgency as price approaches strike)
-    - Extrinsic value remaining (higher urgency when extrinsic is low)
-    - P&L trajectory (higher urgency when approaching loss)
-
-    Returns 0-100.
-    """
-    # DTE component: 0 DTE = max pressure, 45+ DTE = no pressure
-    dte_component = _clamp(1 - (decision.dte / 45)) * 100 if decision.dte >= 0 else 100
-
-    # Strike distance component
-    # For CALLs: pressure increases as stock_price approaches strike from below
-    # For PUTs: pressure increases as stock_price approaches strike from above
-    if decision.option_type == 'CALL':
-        if decision.strike > 0 and decision.stock_price > 0:
-            distance_pct = ((decision.strike - decision.stock_price) / decision.strike) * 100
-        else:
-            distance_pct = 50
-    else:  # PUT
-        if decision.strike > 0 and decision.stock_price > 0:
-            distance_pct = ((decision.stock_price - decision.strike) / decision.strike) * 100
-        else:
-            distance_pct = 50
-
-    # distance_pct > 10 means safe; <= 0 means crossed/ITM
-    if distance_pct <= 0:
-        distance_component = 100  # Already crossed — maximum pressure
-    elif distance_pct < 10:
-        distance_component = _clamp(1 - (distance_pct / 10)) * 100
-    else:
-        distance_component = 0
-
-    # Extrinsic component: less extrinsic = more urgency (premium decay risk)
-    extrinsic = decision.extrinsic_remaining
-    if extrinsic <= 0:
-        extrinsic_component = 100
-    elif extrinsic < 0.10:
-        extrinsic_component = _clamp(1 - (extrinsic / 0.10)) * 100
-    else:
-        extrinsic_component = 0
-
-    # Weighted combination
-    pressure = (
-        dte_component * 0.35 +
-        distance_component * 0.40 +
-        extrinsic_component * 0.25
+    return WheelDecision(
+        ticker=ticker,
+        option_type=option_type,
+        strike=strike,
+        expiration=expiration,
+        hard_blockers=[reason],
     )
-    return round(_clamp(pressure / 100) * 100, 1)
 
 
-def _compute_profit_target_progress(decision: WheelDecision, target_pct: float = 50.0) -> float:
-    """
-    Compute how close the position is to a profit target (0-100).
+# ---------------------------------------------------------------------------
+# Re-exports for backward compatibility
+# ---------------------------------------------------------------------------
 
-    target_pct: the percentage of max profit to take (default 50%).
-    """
-    if decision.premium_per_contract <= 0:
-        return 0.0
-
-    # For a short option, max profit = premium received.
-    # Current progress = (premium_received - current_cost_to_close) / premium_received
-    # Approximate current cost as mid_price * 100.
-    current_cost = decision.mid_price * 100
-    # For an open position, we don't know entry premium directly.
-    # Approximate: if current mid_price is 50% of entry, we've captured ~50%.
-    # Without entry data, use a simple proxy: how much extrinsic has decayed.
-    # A rough estimate: profit_progress = (1 - current_extrinsic / initial_extrinsic) * 100
-    # Since we don't have initial, use DTE decay as proxy.
-    if decision.dte <= 0:
-        return 100.0  # Expired — full profit/loss realized
-
-    # Simple proxy: percentage of time decay captured
-    # Assumes 45 DTE entry; adjust if known.
-    entry_dte_estimate = 30  # average entry DTE assumption
-    progress = _clamp(1 - (decision.dte / entry_dte_estimate)) * 100
-
-    return round(progress, 1)
-
-
-def _compute_size_fit(decision: WheelDecision, portfolio_context: dict) -> float:
-    """
-    Compute size_fit (0-100): how well the contract fits the portfolio.
-
-    For CALLs: based on shares owned vs contracts needed.
-    For PUTs: based on cash available vs cash required.
-    """
-    if decision.option_type == 'CALL':
-        shares_owned = float(portfolio_context.get('positions', {}).get(decision.ticker, {}).get('position', 0) or 0)
-        if shares_owned <= 0:
-            return 0.0
-        needed = decision.max_contracts * 100
-        if needed <= 0:
-            return 0.0
-        fit = _clamp(shares_owned / needed) * 100
-    else:  # PUT
-        cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
-        if decision.cash_required <= 0:
-            return 50.0  # Neutral if unknown
-        if cash_balance <= 0:
-            return 0.0
-        fit = _clamp(cash_balance / decision.cash_required) * 100
-
-    return round(fit, 1)
-
-
-def _compute_expected_move_buffer(decision: WheelDecision) -> float:
-    """
-    Compute expected move buffer (%).
-
-    Uses IV and DTE to estimate the 1-standard-deviation expected move,
-    then compares it to the current OTM distance.
-
-    Positive = stock can move within expected range without hitting strike.
-    Negative = strike is within expected move range (danger zone).
-    """
-    if decision.stock_price <= 0 or decision.implied_volatility <= 0 or decision.dte <= 0:
-        return 0.0
-
-    # 1-SD expected move = stock_price * IV * sqrt(DTE/365)
-    expected_move = decision.stock_price * decision.implied_volatility * ((decision.dte / 365) ** 0.5)
-    expected_move_pct = (expected_move / decision.stock_price) * 100
-
-    # Buffer = OTM% - expected_move%
-    buffer = decision.otm_pct - expected_move_pct
-    return round(buffer, 1)
+__all__ = [
+    'WheelDecision',
+    '_clamp',
+    '_score_proximity',
+    '_score_positive_metric',
+    '_calculate_mid_price',
+    '_compute_shared_subscores',
+    '_compute_roll_pressure',
+    '_compute_profit_target_progress',
+    '_compute_size_fit',
+    '_compute_expected_move_buffer',
+    'score_contract',
+    'score_existing_position',
+]
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +228,7 @@ def score_contract(
     This is the unified scorer used for both portfolio candidates and
     watchlist candidates. Missing data is handled gracefully.
 
-    Returns None if the contract fails hard filters.
+    Returns a WheelDecision with hard_blockers populated if the contract fails hard filters.
     """
     earnings_info = earnings_info or {}
     macro_regime = macro_regime or {}
@@ -395,25 +236,67 @@ def score_contract(
     # -- Parse inputs -------------------------------------------------------
     strike = float(option.get('strike', 0) or 0)
     expiration = str(option.get('expiration', '') or '')
+    option_type = str(option.get('option_type', '') or '').upper()
+    
     if strike <= 0 or not expiration:
-        return None
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Invalid strike or expiration")
+    
+    from datetime import datetime
+    try:
+        expiry_date = datetime.strptime(expiration, '%Y%m%d').date()
+    except ValueError:
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Invalid expiration format")
+    
+    dte = (expiry_date - datetime.now().date()).days
+    if dte <= 0:
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Expired or no time value")
+    
+    bid = float(option.get('bid', 0) or 0)
+    ask = float(option.get('ask', 0) or 0)
+    last = float(option.get('last', 0) or 0)
+    mid_price = _calculate_mid_price(bid, ask, last)
+    if mid_price < profile.get('min_mid_price', 0.05):
+        return _create_failed_decision(ticker, option_type, strike, expiration, f"Mid price too low: {mid_price}")
+    
+    spread_pct = 100.0
+    if bid > 0 and ask > 0 and mid_price > 0:
+        spread_pct = ((ask - bid) / mid_price) * 100
+    elif bid == 0 and ask == 0:
+        spread_pct = 100.0
+    else:
+        spread_pct = 100.0  # Large penalty için)
+    
+    if spread_pct > profile.get('max_spread_pct', 60):
+        return _create_failed_decision(ticker, option_type, strike, expiration, f"Spread too wide: {spread_pct:.1f}%")
+    
+    delta = float(option.get('delta', 0) or 0)
+    implied_volatility = float(option.get('implied_volatility', 0) or 0)
+    open_interest = int(option.get('open_interest', 0) or 0)
+    volume = int(option.get('volume', 0) or 0)
+    premium_per_contract = mid_price * 100
+
+    if premium_per_contract < profile.get('min_premium_per_contract', 10):
+        return _create_failed_decision(ticker, option_type, strike, expiration, f"Premium too low: {premium_per_contract}")
+    
+    if open_interest < profile.get('min_open_interest', 10) and volume < profile.get('min_volume', 1):
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Open interest and volume too low")
 
     from datetime import datetime
     try:
         expiry_date = datetime.strptime(expiration, '%Y%m%d').date()
     except ValueError:
-        return None
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Invalid expiration format")
 
     dte = (expiry_date - datetime.now().date()).days
     if dte <= 0:
-        return None
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Expired or no time value")
 
     bid = float(option.get('bid', 0) or 0)
     ask = float(option.get('ask', 0) or 0)
     last = float(option.get('last', 0) or 0)
     mid_price = _calculate_mid_price(bid, ask, last)
     if mid_price < profile.get('min_mid_price', 0.05):
-        return None
+        return _create_failed_decision(ticker, option_type, strike, expiration, f"Mid price too low: {mid_price}")
 
     spread_pct = 100.0
     if bid > 0 and ask > 0 and mid_price > 0:
@@ -422,7 +305,7 @@ def score_contract(
         spread_pct = 100.0
 
     if spread_pct > profile.get('max_spread_pct', 60):
-        return None
+        return _create_failed_decision(ticker, option_type, strike, expiration, f"Spread too wide: {spread_pct:.1f}%")
 
     option_type = str(option.get('option_type', '') or '').upper()
     delta = float(option.get('delta', 0) or 0)
@@ -432,9 +315,16 @@ def score_contract(
     premium_per_contract = mid_price * 100
 
     if premium_per_contract < profile.get('min_premium_per_contract', 10):
-        return None
+        return _create_failed_decision(ticker, option_type, strike, expiration, f"Premium too low: {premium_per_contract}")
     if open_interest < profile.get('min_open_interest', 10) and volume < profile.get('min_volume', 1):
-        return None
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Open interest and volume too low")
+
+    # -- Enrich Greeks if missing (TODO 0.3) -----------------------
+    if implied_volatility > 0 and abs(delta) < 0.001:
+        from core.greeks import enrich_option_with_greeks
+        enrich_option_with_greeks(option, stock_price)
+        # Re-read delta after enrichment
+        delta = float(option.get('delta', 0) or 0)
 
     # -- Portfolio context ---------------------------------------------------
     position = portfolio_context.get('positions', {}).get(ticker, {})
@@ -443,6 +333,9 @@ def score_contract(
     cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
     account_value = portfolio_context.get('account_value', cash_balance)
     vix_regime = portfolio_context.get('vix_regime')
+
+    # -- Check for yfinance fallback data (TODO 2.2) -----------------------
+    from_yfinance = option.get('from_yfinance', False)
 
     # -- Build decision -----------------------------------------------------
     decision = WheelDecision(
@@ -479,12 +372,40 @@ def score_contract(
         macro_summary=macro_regime.get('summary', ''),
         macro_advice=macro_regime.get('advice', ''),
         profile_type=profile.get('profile_type', 'monthly'),
+        # Data provenance (TODO 2.1)
+        price_source='yfinance' if from_yfinance else 'broker',
+        chain_source='yfinance' if from_yfinance else 'broker',
+        greeks_source=('broker' if abs(delta) > 0.001 else 'Black-Scholes computed'),
+        iv_source=('yfinance' if from_yfinance else 'broker'),
+        macro_source=macro_regime.get('source', 'FRED/cache/disabled'),
+        quote_timestamp=datetime.now().isoformat(),
+        generated_at=datetime.now().isoformat(),
     )
 
+    # Add yfinance warning if applicable (TODO 2.2)
+    if from_yfinance:
+        decision.warnings.append('Data from yfinance (not Moomoo) - verify before trading')
+
     # -- IV-adjusted return -------------------------------------------------
+    # TODO 1.2: Fix PUT return denominator to use strike * 100 (secured cash)
+    # For CALLs: return on underlying value (stock_price * 100)
+    # For PUTs: return on secured cash (strike * 100)
+    if option_type == 'CALL':
+        capital_at_risk = stock_price * 100
+        decision.return_on_underlying = round(
+            (premium_per_contract / capital_at_risk) * (365 / dte) * 100 if capital_at_risk > 0 and dte > 0 else 0, 2
+        )
+        decision.return_on_secured_cash = None
+    else:
+        capital_at_risk = strike * 100  # strike * 100 = cash required for PUT
+        decision.return_on_secured_cash = round(
+            (premium_per_contract / capital_at_risk) * (365 / dte) * 100 if capital_at_risk > 0 and dte > 0 else 0, 2
+        )
+        decision.return_on_underlying = None
+
     annualized_return_raw = (
-        (premium_per_contract / (stock_price * 100)) * (365 / dte) * 100
-        if stock_price > 0 and dte > 0 else 0
+        (premium_per_contract / capital_at_risk) * (365 / dte) * 100
+        if capital_at_risk > 0 and dte > 0 else 0
     )
     iv_adjusted_return = annualized_return_raw / max(implied_volatility, 0.05)
     decision.annualized_return = round(annualized_return_raw, 2)
@@ -513,10 +434,10 @@ def score_contract(
 
     if option_type == 'CALL':
         if stock_price <= 0 or strike <= stock_price:
-            return None
+            return _create_failed_decision(ticker, 'CALL', strike, expiration, f"Strike {strike} not above stock price {stock_price}")
         max_contracts = max(int(shares_owned // 100), 0)
         if max_contracts < 1:
-            return None
+            return _create_failed_decision(ticker, 'CALL', strike, expiration, "No covered shares available")
         decision.max_contracts = max_contracts
 
         otm_pct = ((strike - stock_price) / stock_price) * 100
@@ -603,7 +524,7 @@ def score_contract(
 
     elif option_type == 'PUT':
         if stock_price <= 0 or strike >= stock_price:
-            return None
+            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Strike {strike} not below stock price {stock_price}")
 
         otm_pct = ((stock_price - strike) / stock_price) * 100
         cash_required = strike * 100
@@ -619,7 +540,7 @@ def score_contract(
                     reserved += s * 100 * abs(count)
         available_for_new = max(0, cash_balance - reserved)
         if cash_required > available_for_new:
-            return None
+            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, available ${available_for_new:.0f}")
 
         breakeven = strike - mid_price
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
@@ -712,7 +633,7 @@ def score_contract(
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
 
     else:
-        return None  # Unknown option type
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Unknown option type")
 
     return decision
 

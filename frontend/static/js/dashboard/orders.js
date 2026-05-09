@@ -261,15 +261,11 @@ function updateFilledOrdersTable() {
         console.error('Could not find filled-orders-table element in the DOM');
         return;
     }
-    
-    console.log(`Updating weekly option income table with ${weeklyOptionIncomeData.positions ? weeklyOptionIncomeData.positions.length : 0} positions`);
-    
     // Clear the table
     filledOrdersTable.innerHTML = '';
     
     // Check if we have positions data
     if (!weeklyOptionIncomeData.positions || weeklyOptionIncomeData.positions.length === 0) {
-        console.log('No weekly option income data to display');
         filledOrdersTable.innerHTML = '<tr><td colspan="9" class="text-center">No positions expiring this coming Friday found</td></tr>';
         
         // Update summary with zeros
@@ -281,8 +277,6 @@ function updateFilledOrdersTable() {
     const positions = weeklyOptionIncomeData.positions;
     
     // Add debug logging to see what we received
-    console.log('Weekly options data received:', weeklyOptionIncomeData);
-    
     // Group positions by option type - supporting both formats (C/P and CALL/PUT)
     const callPositions = positions.filter(p => 
         p.option_type === 'C' || p.option_type === 'CALL' || p.option_type === 'Call');
@@ -290,10 +284,7 @@ function updateFilledOrdersTable() {
         p.option_type === 'P' || p.option_type === 'PUT' || p.option_type === 'Put');
     
     // Log what we filtered
-    console.log(`Filtered ${callPositions.length} call options and ${putPositions.length} put options`);
     if (callPositions.length + putPositions.length === 0) {
-        console.warn('No positions matched our filtering criteria. Original option types:', 
-            positions.map(p => p.option_type));
         filledOrdersTable.innerHTML = '<tr><td colspan="9" class="text-center">Data format issue: No positions matched CALL/PUT filters</td></tr>';
         return;
     }
@@ -356,16 +347,41 @@ function addOrdersTableEventListeners() {
     executeButtons.forEach(button => {
         button.addEventListener('click', event => {
             const orderId = event.target.dataset.orderId || event.target.closest('button').dataset.orderId;
-            executeOrderById(orderId);
+            // Show confirmation modal
+            const modalEl = document.getElementById('confirmOrderModal');
+            if (modalEl) {
+                modalEl.dataset.orderId = orderId;
+                // Calculate and show cash impact
+                const order = pendingOrdersData.find(o => o.id == orderId);
+                const cashImpactEl = document.getElementById('confirmOrderModal-cash-impact');
+                if (cashImpactEl && order) {
+                    const premium = (order.premium || 0) * (order.quantity || 1) * 100;
+                    cashImpactEl.textContent = `You will receive: ${formatCurrency(premium)} in premium.`;
+                }
+                const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                modal.show();
+            } else {
+                // Fallback if modal doesn't exist
+                executeOrderById(orderId);
+            }
         });
     });
-    
+
     // Add event listeners to Cancel buttons
     const cancelButtons = document.querySelectorAll('.cancel-order');
     cancelButtons.forEach(button => {
         button.addEventListener('click', event => {
             const orderId = event.target.dataset.orderId || event.target.closest('button').dataset.orderId;
-            cancelOrderById(orderId);
+            // Show confirmation modal
+            const modalEl = document.getElementById('cancelOrderModal');
+            if (modalEl) {
+                modalEl.dataset.orderId = orderId;
+                const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                modal.show();
+            } else {
+                // Fallback if modal doesn't exist
+                cancelOrderById(orderId);
+            }
         });
     });
     
@@ -513,7 +529,6 @@ async function loadPendingOrders() {
         const pendingData = await fetchPendingOrders(false);
         if (pendingData && pendingData.orders) {
             pendingOrdersData = pendingData.orders;
-            console.log(`Loaded ${pendingOrdersData.length} pending orders`);
             updatePendingOrdersTable();
         }
         
@@ -533,15 +548,12 @@ async function loadFilledOrders() {
         // Fetch weekly option income data instead of executed orders
         const incomeData = await fetchWeeklyOptionIncome();
         if (incomeData) {
-            console.log(`Received weekly option income data: ${incomeData.positions_count} positions`);
-            
             // Store the data
             weeklyOptionIncomeData = incomeData;
             
             // Update the table
             updateFilledOrdersTable();
         } else {
-            console.warn('No weekly option income data received from API');
         }
     } catch (error) {
         console.error('Error loading weekly option income:', error);
@@ -562,8 +574,6 @@ async function checkOrdersStatus() {
             const result = await checkOrderStatus();
             
             if (result && result.success && result.updated_orders && result.updated_orders.length > 0) {
-                console.log(`Received ${result.updated_orders.length} updated orders from status check`);
-                
                 // Track if any order's status changed to executed
                 let orderWasExecuted = false;
                 
@@ -590,7 +600,6 @@ async function checkOrdersStatus() {
                 
                 // If any order was executed, reload the filled orders
                 if (orderWasExecuted) {
-                    console.log('An order was executed, refreshing filled orders');
                     await loadFilledOrders();
                 }
                 
@@ -623,7 +632,6 @@ function startAutoRefresh() {
     
     // Create a new timer
     autoRefreshTimer = setInterval(checkOrdersStatus, AUTO_REFRESH_INTERVAL);
-    console.log('Auto-refresh started');
 }
 
 /**
@@ -633,7 +641,6 @@ function stopAutoRefresh() {
     if (autoRefreshTimer) {
         clearInterval(autoRefreshTimer);
         autoRefreshTimer = null;
-        console.log('Auto-refresh stopped');
     }
 }
 
@@ -674,8 +681,6 @@ async function updateOrderQuantity(orderId, quantity) {
         }
         
         const result = await response.json();
-        console.log(`Quantity updated for order ${orderId}:`, result);
-        
         // Show success message
         showAlert(`Quantity updated to ${quantity}`, 'success');
         
@@ -704,6 +709,41 @@ window.addEventListener('beforeunload', stopAutoRefresh);
 
 // Expose loadPendingOrders function globally
 window.loadPendingOrders = loadPendingOrders;
+
+// Modal confirm button event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    // Confirm order execution
+    const confirmOrderBtn = document.getElementById('confirmOrderModal-confirm');
+    if (confirmOrderBtn) {
+        confirmOrderBtn.addEventListener('click', () => {
+            const modalEl = document.getElementById('confirmOrderModal');
+            const orderId = modalEl?.dataset.orderId;
+            if (orderId) {
+                executeOrderById(orderId);
+            }
+        });
+    }
+
+    // Confirm individual cancel
+    const cancelOrderBtn = document.getElementById('cancelOrderModal-confirm');
+    if (cancelOrderBtn) {
+        cancelOrderBtn.addEventListener('click', () => {
+            const modalEl = document.getElementById('cancelOrderModal');
+            const orderId = modalEl?.dataset.orderId;
+            if (orderId) {
+                cancelOrderById(orderId);
+            }
+        });
+    }
+
+    // Confirm cancel all
+    const cancelAllBtn = document.getElementById('cancelAllModal-confirm');
+    if (cancelAllBtn) {
+        cancelAllBtn.addEventListener('click', () => {
+            cancelAllPendingOrdersExecute();
+        });
+    }
+});
 
 // Export functions
 export {
@@ -764,19 +804,33 @@ function addPositionsToTable(positions, table) {
  * Handle canceling all pending orders
  */
 async function cancelAllPendingOrders() {
+    const pendingOrders = pendingOrdersData.filter(order => order.status === 'pending');
+    
+    if (pendingOrders.length === 0) {
+        showAlert('No pending orders to cancel', 'info');
+        return;
+    }
+    
+    // Show confirmation modal
+    const modalEl = document.getElementById('cancelAllModal');
+    if (modalEl) {
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+    } else {
+        // Fallback if modal doesn't exist
+        if (!confirm(`Are you sure you want to cancel ${pendingOrders.length} pending orders?`)) {
+            return;
+        }
+        await cancelAllPendingOrdersExecute();
+    }
+}
+
+/**
+ * Execute the cancel all orders action (called from modal confirm)
+ */
+async function cancelAllPendingOrdersExecute() {
     try {
-        // Filter only pending orders
         const pendingOrders = pendingOrdersData.filter(order => order.status === 'pending');
-        
-        if (pendingOrders.length === 0) {
-            showAlert('No pending orders to cancel', 'info');
-            return;
-        }
-        
-        // Confirm with the user
-        if (!confirm(`Are you sure you want to cancel all ${pendingOrders.length} pending orders?`)) {
-            return;
-        }
         
         // Show a loading alert
         showAlert(`Canceling ${pendingOrders.length} orders...`, 'info');

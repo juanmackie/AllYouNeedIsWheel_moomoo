@@ -1,0 +1,15 @@
+[project]
+name = "allyouneediswheel-moomoo"
+version = "1.0.0"
+description = "The Wheel Strategy options trading system for Moomoo OpenD"
+requires-python = ">=3.10"
+dependencies = [
+    "moomoo-api>=10.1.6108",
+    "flask>=3.0.2",
+    "yfinance>=0.2.28",
+    "pandas>=2.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"

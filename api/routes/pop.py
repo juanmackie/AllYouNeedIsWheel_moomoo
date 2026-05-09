@@ -4,6 +4,7 @@ Probability of Profit API Routes
 
 import logging
 from flask import Blueprint, request, jsonify
+from api.routes.utils import error_response, success_response
 from api.services.pop_service import get_pop, calculate_pop_delta
 
 logger = logging.getLogger(__name__)
@@ -39,11 +40,11 @@ def estimate_pop():
     method = request.args.get('method', 'delta').strip().lower()
 
     if not ticker or not strike or not expiration or not option_type:
-        return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        return error_response('Missing required parameters', status_code=400)
 
     try:
         result = get_pop(ticker, strike, expiration, option_type, delta, iv, dte, method)
-        return jsonify({'success': True, 'data': result})
+        return success_response({'data': result})
     except Exception as e:
         logger.error(f"Error estimating PoP for {ticker}: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return error_response(str(e), status_code=500)

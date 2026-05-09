@@ -1,29 +1,15 @@
-{% set show_actions = show_actions|default(false) %}
 {% set page_key = page_key|default('workspace') %}
-{% set brand_mode = brand_mode|default(false) %}
-{% set brand_kicker = brand_kicker|default('Wheel strategy workspace') %}
-{% set brand_title = brand_title|default('All You Need Is Wheel') %}
+{% set heading = heading|default('') %}
 
-<section class="app-masthead app-masthead--{{ page_key }} {% if brand_mode %}app-masthead--brand{% endif %}">
-    <div class="app-masthead__content">
-        <div class="app-masthead__copy">
-            <div class="app-masthead__brand-block">
-                <span class="app-masthead__eyebrow">{{ brand_kicker }}</span>
-                <div class="app-masthead__brand-title">{{ brand_title }}</div>
-            </div>
-            <h1 class="app-masthead__headline">{{ title }}</h1>
-            {% if subtitle %}
-            <p class="app-masthead__summary">{{ subtitle }}</p>
-            {% endif %}
-            {% if show_actions %}
-            <div class="app-masthead__actions">
-                {{ action_buttons|safe }}
-            </div>
-            {% endif %}
+<section class="app-command-header app-command-header--{{ page_key }}">
+    <div class="app-command-header__content">
+        <div class="app-command-header__copy">
+            <h1 class="app-command-header__heading">{{ heading }}</h1>
         </div>
-        <div class="app-masthead__visual" aria-hidden="true">
-            <div class="app-masthead__visual-screen"></div>
-            <div class="app-masthead__visual-grid"></div>
+        {% if action_buttons %}
+        <div class="app-command-header__actions">
+            {{ action_buttons|safe }}
         </div>
+        {% endif %}
     </div>
 </section>

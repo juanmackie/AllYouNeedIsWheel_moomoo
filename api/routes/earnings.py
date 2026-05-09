@@ -5,8 +5,8 @@ Earnings lock and locked tickers endpoints.
 
 import logging
 from flask import Blueprint, request, jsonify
-from api.services.iv_earnings_service import IVEarningsService
-from db.database import OptionsDatabase
+from api.routes.utils import error_response, success_response
+from api import get_service
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +27,19 @@ def get_locked_tickers():
     lock_days = request.args.get('lock_days', 5, type=int)
     
     try:
-        db = OptionsDatabase()
-        service = IVEarningsService(db)
+        service = get_service('ivearnings')
+        db = service.db
         
         # Get all tickers with earnings within lock_days
         locked = db.get_pending_earnings(days_threshold=lock_days)
         
         if not locked:
-            return jsonify({
-                'success': True,
+            return success_response({
                 'locked': [],
                 'count': 0,
                 'lock_days': lock_days,
             })
         
-        # Format the response
         locked_list = []
         for item in locked:
             locked_list.append({
@@ -50,8 +48,7 @@ def get_locked_tickers():
                 'days_to_earnings': item.get('days_to_earnings'),
             })
         
-        return jsonify({
-            'success': True,
+        return success_response({
             'locked': locked_list,
             'count': len(locked_list),
             'lock_days': lock_days,
@@ -59,10 +56,7 @@ def get_locked_tickers():
         
     except Exception as e:
         logger.error(f"Error getting locked tickers: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
 
 
 @bp.route('/lock-status')
@@ -78,15 +72,36 @@ def get_lock_status():
         from config import DEFAULT_CONNECTION_CONFIG
         lock_days = DEFAULT_CONNECTION_CONFIG.get('earnings_lock_days', 5)
         
-        return jsonify({
-            'success': True,
+        return success_response({
             'lock_days': lock_days,
-            'enabled': True,  # Can be toggled via frontend
+            'enabled': True,
         })
         
     except Exception as e:
         logger.error(f"Error getting lock status: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return error_response(str(e))
+
+
+@bp.route('/vol-signals')
+def get_earnings_vol_signals():
+    """
+    Get read-only earnings volatility signals for the configured watchlist.
+
+    These signals are educational/research labels only. They do not stage or
+    execute trades.
+    """
+    limit = request.args.get('limit', 8, type=int)
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+    tickers_param = request.args.get('tickers', '')
+
+    try:
+        tickers = None
+        if tickers_param:
+            tickers = [ticker.strip().upper() for ticker in tickers_param.split(',') if ticker.strip()]
+
+        service = get_service('earnings_vol')
+        return success_response(service.get_signals(tickers=tickers, limit=limit, refresh=refresh))
+
+    except Exception as e:
+        logger.error(f"Error getting earnings vol signals: {e}")
+        return error_response(str(e))

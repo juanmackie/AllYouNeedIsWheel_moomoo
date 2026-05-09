@@ -10,9 +10,35 @@ import logging
 import os
 import threading
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TypedDict
 
 logger = logging.getLogger('api.services.macro_regime')
+
+
+class CacheEntry(TypedDict):
+    data: Dict[str, Any]
+    timestamp: datetime
+
+
+class RegimeData(TypedDict):
+    rate_regime: str
+    rate_description: str
+    credit_stress: str
+    credit_description: str
+    growth_regime: str
+    growth_description: str
+    inflation_trend: str
+    inflation_description: str
+    yield_curve_slope: float
+    yield_curve_status: str
+    yield_curve_warning: str
+    fed_funds_rate: float
+    hy_spread: float
+    macro_multiplier: float
+    summary: str
+    advice: str
+    fetched_at: str
+    enabled: bool
 
 
 class MacroRegimeService:
@@ -47,7 +73,7 @@ class MacroRegimeService:
         self._fred = None
         self._initialized = False
         self._init_lock = threading.Lock()
-        self._cache: Dict[str, Any] = {}
+        self._cache: Optional[CacheEntry] = None
         self._cache_lock = threading.Lock()
         self._cache_ttl_seconds = 86400  # 24 hours (FRED data updates monthly/quarterly)
 
@@ -81,18 +107,18 @@ class MacroRegimeService:
                 self._initialized = True
                 return False
 
-    def _get_cache(self) -> Optional[Dict]:
+    def _get_cache(self) -> Optional[RegimeData]:
         """Get cached macro regime if still valid."""
         with self._cache_lock:
-            if not self._cache:
+            if self._cache is None:
                 return None
             age = (datetime.now() - self._cache['timestamp']).total_seconds()
             if age > self._cache_ttl_seconds:
-                self._cache.clear()
+                self._cache = None
                 return None
             return self._cache['data']
 
-    def _set_cache(self, data: Dict):
+    def _set_cache(self, data: RegimeData) -> None:
         """Cache macro regime data."""
         with self._cache_lock:
             self._cache = {
@@ -100,7 +126,7 @@ class MacroRegimeService:
                 'timestamp': datetime.now()
             }
 
-    def get_macro_regime(self) -> Dict[str, Any]:
+    def get_macro_regime(self) -> RegimeData:
         """
         Get current macro economic regime.
 
@@ -178,7 +204,7 @@ class MacroRegimeService:
 
         return result
 
-    def _detect_regimes(self, data: Dict[str, float]) -> Dict[str, Any]:
+    def _detect_regimes(self, data: Dict[str, float]) -> RegimeData:
         """
         Detect macro regimeses from current FRED data.
         """
@@ -376,7 +402,7 @@ class MacroRegimeService:
                 "Standard wheel strategy parameters apply. No macro adjustments needed."
             )
 
-    def _get_neutral_regime(self) -> Dict[str, Any]:
+    def _get_neutral_regime(self) -> RegimeData:
         """Return neutral macro regime when FRED is unavailable."""
         return {
             'rate_regime': 'stable',
@@ -399,10 +425,10 @@ class MacroRegimeService:
             'enabled': False,
         }
 
-    def clear_cache(self):
+    def clear_cache(self) -> None:
         """Clear cached macro regime data."""
         with self._cache_lock:
-            self._cache.clear()
+            self._cache = None
             logger.info("Macro regime cache cleared")
 
     def get_cache_status(self) -> Dict[str, Any]:

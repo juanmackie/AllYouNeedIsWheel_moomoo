@@ -117,13 +117,18 @@ def create_app(config=None):
     app.register_blueprint(macro.bp)
     app.register_blueprint(system.bp)
     app.register_blueprint(llm.bp)
-    
+
     # Register new feature blueprints
     from api.routes import earnings, pop, risk, technical
     app.register_blueprint(earnings.bp)
     app.register_blueprint(pop.bp)
     app.register_blueprint(risk.bp)
     app.register_blueprint(technical.bp)
+
+    # Extracted route modules (F008)
+    from api.routes import roll_pressure, alerts
+    app.register_blueprint(roll_pressure.bp)
+    app.register_blueprint(alerts.bp)
     logger.info("Registered API blueprints")
 
     @app.route('/health')
@@ -139,7 +144,7 @@ def create_app(config=None):
                 tvscreener_status = 'available'
             else:
                 tvscreener_status = 'unavailable'
-        except:
+        except Exception:
             tvscreener_status = 'error'
 
         return {
@@ -175,3 +180,22 @@ def _register_services():
     register_service('options', OptionsService)
     register_service('portfolio', PortfolioService)
     register_service('tvscreener', create_tvscreener_service)
+
+    def _create_iv_earnings_service():
+        from api.services.config import get_config
+        from db.database import OptionsDatabase
+        from api.services.iv_earnings_service import IVEarningsService
+        db = OptionsDatabase(get_config().get('db_path'))
+        return IVEarningsService(db)
+
+    register_service('ivearnings', _create_iv_earnings_service)
+
+    def _create_earnings_vol_signal_service():
+        from flask import current_app
+        from api.services.earnings_vol_service import EarningsVolSignalService
+        return EarningsVolSignalService(
+            config=current_app.config.get('connection_config', {}),
+            iv_earnings_service=get_service('ivearnings'),
+        )
+
+    register_service('earnings_vol', _create_earnings_vol_signal_service)

@@ -74,6 +74,18 @@ def apply_env_overrides(config):
     if watchlist_env is not None and watchlist_env != '':
         config['watchlist'] = [t.strip().upper() for t in watchlist_env.split(',') if t.strip()]
 
+    # Safety validation: prevent accidental live trading without explicit confirmation
+    if config.get('portfolio_env') == 'REAL' and not config.get('readonly', True):
+        confirm = os.environ.get('CONFIRM_LIVE_TRADING', '').strip().lower()
+        if confirm not in {'1', 'true', 'yes', 'y', 'on'}:
+            logger.critical(
+                "BLOCKED: portfolio_env=REAL with readonly=false requires "
+                "CONFIRM_LIVE_TRADING=true environment variable. "
+                "Falling back to SIMULATE mode for safety."
+            )
+            config['portfolio_env'] = 'SIMULATE'
+            config['readonly'] = True
+
     return config
 
 class Config:

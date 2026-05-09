@@ -1,0 +1,168 @@
+/**
+ * Dashboard initialization and position command panel.
+ * Split from dashboard.js (F042)
+ */
+import { loadPortfolioData } from './account.js';
+import { loadTickers } from './options-table.js';
+import { loadPendingOrders } from './orders.js';
+import { initializeTopRecommendations } from './top-recommendations.js';
+import { initializeEarningsVolSignals } from './earnings-vol-signals.js';
+import { loadMacroRegime } from './macro.js';
+import { initializeLLMAdvisor } from './llm-advisor.js';
+import { formatCurrency } from '../utils/formatters.js';
+import { fetchWeeklyOptionIncome, executeCloseOrder } from './api.js';
+import { updateCashReserveStatus } from './dashboard-cash.js';
+import { loadTechnicalRegime, loadLockedTickers, loadVixRegime, updateWeeklyEarningsSummary } from './dashboard-regime.js';
+import { updateIdleCashPanel } from './dashboard-cash.js';
+
+/**
+ * Initialize the dashboard with progressive loading
+ * Wave 1: Account data (critical path)
+ * Wave 2: Positions & orders
+ * Wave 3: Below-fold content
+ */
+export async function initializeDashboard() {
+    try {
+        if (!document.querySelector('.content-container')) {
+            const mainContainer = document.querySelector('main .container') || document.querySelector('main');
+            if (mainContainer) {
+                const contentContainer = document.createElement('div');
+                contentContainer.className = 'content-container';
+                mainContainer.prepend(contentContainer);
+            }
+        }
+
+        showWaveLoading('wave1', 'Loading account data...');
+        try {
+            await loadPortfolioData();
+            await updateCashReserveStatus();
+        } catch (error) { console.error('Wave 1 error:', error); }
+        hideWaveLoading('wave1');
+
+        showWaveLoading('wave2', 'Loading positions & orders...');
+        try {
+            await Promise.all([loadPositionsCommandPanel(), loadPendingOrders()]);
+        } catch (error) { console.error('Wave 2 error:', error); }
+        hideWaveLoading('wave2');
+
+        showWaveLoading('wave3', 'Loading market data...');
+        try {
+            await Promise.all([
+                loadTickers(), updateWeeklyEarningsSummary(),
+                loadVixRegime(), loadMacroRegime(), loadTechnicalRegime(), updateIdleCashPanel()
+            ]);
+        } catch (error) { console.error('Wave 3 error:', error); }
+        hideWaveLoading('wave3');
+
+        initSizingModeSelector();
+
+        const cashReserveToggle = document.getElementById('cash-reserve-toggle');
+        if (cashReserveToggle) {
+            cashReserveToggle.addEventListener('change', (e) => toggleCashReserve(e.target.checked));
+        }
+
+        initializeTopRecommendations();
+        initializeEarningsVolSignals();
+        initializeLLMAdvisor();
+        await loadLockedTickers();
+
+        document.getElementById('refresh-all-btn')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            initializeDashboard();
+        });
+    } catch (error) {
+        console.error('Dashboard initialization error:', error);
+    }
+}
+
+function showWaveLoading(waveId, message) {
+    const el = document.getElementById(`${waveId}-loading`);
+    if (el) { el.textContent = message; el.classList.remove('d-none'); }
+}
+
+function hideWaveLoading(waveId) {
+    const el = document.getElementById(`${waveId}-loading`);
+    if (el) el.classList.add('d-none');
+}
+
+export function initSizingModeSelector() {
+    const radios = document.querySelectorAll('input[name="sizing-mode"]');
+    if (!radios.length) return;
+    const saved = localStorage.getItem('sizingMode');
+    if (saved === 'aggressive') {
+        const aggressive = document.getElementById('sizing-aggressive');
+        if (aggressive) aggressive.checked = true;
+    } else {
+        const conservative = document.getElementById('sizing-conservative');
+        if (conservative) conservative.checked = true;
+    }
+    radios.forEach(radio => {
+        radio.addEventListener('change', () => {
+            if (radio.checked) { localStorage.setItem('sizingMode', radio.value); updateIdleCashPanel(); }
+        });
+    });
+}
+
+export async function loadPositionsCommandPanel() {
+    const tbody = document.getElementById('positions-command-body');
+    if (!tbody) return;
+    try {
+        const resp = await fetch('/api/portfolio/roll-pressure');
+        if (!resp.ok) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Could not load positions</td></tr>'; return; }
+        const data = await resp.json();
+        const positions = data.positions || [];
+        if (positions.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No open short option positions</td></tr>'; return; }
+        tbody.innerHTML = positions.map(pos => {
+            const profit = pos.profit_target_progress || 0; const pressure = pos.roll_pressure || 0;
+            const isItm = (pos.otm_pct || 0) < 0; const deepItm = isItm && Math.abs(pos.otm_pct) > 15;
+            const daysToEarnings = (pos.wheel_decision && pos.wheel_decision.days_to_earnings) || null;
+            let statusBadge, statusClass, btnHtml;
+            if (profit >= 50) { statusBadge = 'Recycle'; statusClass = 'bg-success'; btnHtml = `<button class="btn btn-sm btn-success close-position-btn" data-ticker="${pos.ticker}" data-type="${pos.option_type}" data-strike="${pos.strike}" data-expiration="${pos.expiration}"><i class="bi bi-arrow-return-left"></i> CLOSE</button>`; }
+            else if (deepItm) { statusBadge = 'Watch'; statusClass = 'bg-danger'; btnHtml = '<span class="text-danger small">⚠ Deep ITM — monitor</span>'; }
+            else if (isItm) { statusBadge = 'Holding'; statusClass = 'bg-secondary'; btnHtml = '<span class="text-muted small">✓ Assign OK</span>'; }
+            else if (pressure >= 70) { statusBadge = 'Urgent'; statusClass = 'bg-warning text-dark'; btnHtml = '<span class="text-warning small">Roll pressure high</span>'; }
+            else { statusBadge = 'Active'; statusClass = 'bg-info'; btnHtml = '<span class="text-muted small">✓ On track</span>'; }
+            const barWidth = Math.min(profit, 100);
+            const barColor = profit >= 50 ? 'bg-success' : profit >= 30 ? 'bg-warning' : 'bg-secondary';
+            const expiry = pos.expiration || '';
+            const expiryDisplay = expiry.length === 8 ? expiry.slice(0,4) + '-' + expiry.slice(4,6) + '-' + expiry.slice(6,8) : expiry;
+            return `<tr><td><strong>${pos.ticker}</strong></td><td><span class="badge ${pos.option_type === 'PUT' ? 'bg-danger' : 'bg-success'}">${pos.option_type}</span></td><td>$${(pos.strike || 0).toFixed(2)}</td><td class="small">${expiryDisplay}</td><td class="small">${renderEarningsBadge(daysToEarnings)}</td><td style="min-width:100px"><div class="progress" style="height:6px"><div class="progress-bar ${barColor}" style="width:${barWidth}%"></div></div><small class="${profit >= 50 ? 'text-success fw-bold' : 'text-muted'}">${profit.toFixed(0)}%</small></td><td><span class="badge ${statusClass}">${statusBadge}</span></td><td>${btnHtml}</td></tr>`;
+        }).join('');
+        tbody.querySelectorAll('.close-position-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const modalEl = document.getElementById('confirmCloseModal');
+                if (modalEl) {
+                    modalEl.dataset.ticker = btn.dataset.ticker; modalEl.dataset.type = btn.dataset.type;
+                    modalEl.dataset.strike = btn.dataset.strike; modalEl.dataset.expiration = btn.dataset.expiration;
+                    const strike = parseFloat(btn.dataset.strike) || 0; const cost = strike * 100;
+                    const cashImpactEl = document.getElementById('confirmCloseModal-cash-impact');
+                    if (cashImpactEl) cashImpactEl.textContent = `Estimated cost: ${formatCurrency(cost)} (strike × 100).`;
+                    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+                } else { executeCloseDirectly(btn); }
+            });
+        });
+        const refreshBtn = document.getElementById('refresh-positions-command');
+        if (refreshBtn) refreshBtn.onclick = () => loadPositionsCommandPanel();
+    } catch (err) {
+        console.error('Error loading positions command panel:', err);
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">Error loading positions</td></tr>';
+    }
+}
+
+function executeCloseDirectly(btn) {
+    executeCloseOrder({ ticker: btn.dataset.ticker, option_type: btn.dataset.type, strike: btn.dataset.strike, expiration: btn.dataset.expiration })
+        .then(result => { if (result.success) loadPositionsCommandPanel(); })
+        .catch(err => console.error('Close failed:', err));
+}
+
+function renderEarningsBadge(days) {
+    if (days === null || days === undefined) return '<span class="text-muted">—</span>';
+    if (days <= 0) return '<span class="badge bg-danger">ER TODAY</span>';
+    if (days <= 3) return `<span class="badge bg-warning text-dark">ER ${days}d</span>`;
+    if (days <= 7) return `<span class="badge bg-info text-dark">ER ${days}d</span>`;
+    return `<span class="text-muted small">ER ${days}d</span>`;
+}
+
+function toggleCashReserve(enabled) {
+    updateCashReserveStatus();
+}

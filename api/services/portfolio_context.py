@@ -1,0 +1,142 @@
+"""
+Portfolio Context module - handles portfolio data and cash calculations
+Extracted from the monolithic options_service.py for maintainability.
+"""
+
+import logging
+from datetime import datetime
+
+logger = logging.getLogger('api.services.portfolio_context')
+
+
+class PortfolioContext:
+    """
+    Handles portfolio context building and cash reservation calculations.
+    """
+    
+    def __init__(self, portfolio_service_provider, vix_regime_provider=None, config_provider=None):
+        self._portfolio_service_provider = portfolio_service_provider
+        self._vix_regime_provider = vix_regime_provider
+        self._config_provider = config_provider
+        self.config = config_provider.config if config_provider and hasattr(config_provider, 'config') else {}
+        self._portfolio_service = None
+        
+    def _get_portfolio_service(self):
+        if self._portfolio_service is not None:
+            return self._portfolio_service
+        if self._portfolio_service_provider:
+            ps = self._portfolio_service_provider.portfolio_service
+            if ps is None:
+                from api.services.portfolio_service import PortfolioService
+                ps = PortfolioService()
+            self._portfolio_service = ps
+            return ps
+        from api.services.portfolio_service import PortfolioService
+        self._portfolio_service = PortfolioService()
+        return self._portfolio_service
+    
+    def get_portfolio_context(self):
+        context = {
+            'cash_balance': 0.0,
+            'account_value': 0.0,
+            'positions': {},
+            'short_calls': {},
+            'short_puts': {},
+            'vix_regime': self._vix_regime_provider.get_vix_regime() if self._vix_regime_provider else {'regime': 'normal', 'vix': 20.0}
+        }
+
+        try:
+            portfolio_service = self._get_portfolio_service()
+            if portfolio_service is None:
+                return context
+                
+            summary = portfolio_service.get_portfolio_summary() or {}
+            stock_positions = portfolio_service.get_positions('STK') or []
+            option_positions = portfolio_service.get_positions('OPT') or []
+
+            context['cash_balance'] = float(summary.get('available_cash', 0) or 0)
+            context['account_value'] = float(summary.get('account_value', 0) or 0)
+            context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
+
+            for position in stock_positions:
+                symbol = str(position.get('symbol', '') or '').replace('US.', '')
+                if not symbol:
+                    continue
+                context['positions'][symbol] = position
+
+            for position in option_positions:
+                symbol = str(position.get('symbol', '') or '').replace('US.', '')
+                if not symbol:
+                    continue
+                
+                pos_qty = int(position.get('position', 0) or 0)
+                option_type = str(position.get('option_type', '') or '').upper()
+                
+                if pos_qty < 0:
+                    contracts = abs(pos_qty)
+                    if option_type == 'CALL':
+                        context['short_calls'][symbol] = context['short_calls'].get(symbol, 0) + contracts
+                    elif option_type == 'PUT':
+                        context['short_puts'][symbol] = context['short_puts'].get(symbol, 0) + contracts
+                        
+        except Exception as exc:
+            logger.error(f"Error building portfolio context for options scoring: {exc}")
+
+        return context
+
+    def _get_position_snapshot(self, portfolio_context, ticker):
+        return portfolio_context.get('positions', {}).get(ticker, {})
+
+    def _get_fallback_stock_price(self, portfolio_context, ticker):
+        position = self._get_position_snapshot(portfolio_context, ticker)
+        for field in ('market_price', 'avg_cost'):
+            value = position.get(field)
+            try:
+                numeric_value = float(value or 0)
+            except (TypeError, ValueError):
+                numeric_value = 0
+            if numeric_value > 0:
+                return numeric_value
+        return 0.0
+
+    def _calculate_cash_reserved(self, portfolio_context):
+        """
+        Calculate cash reserved for existing short put positions.
+        Each short put requires cash equal to strike * 100 per contract.
+        
+        Args:
+            portfolio_context: Dict with 'short_puts' and 'cash_balance'
+            
+        Returns:
+            float: Total cash reserved for open short puts
+        """
+        reserved = 0.0
+        short_puts = portfolio_context.get('short_puts', {})
+        
+        if not short_puts:
+            return reserved
+            
+        try:
+            # Get option positions to find strike prices
+            portfolio_service = self._get_portfolio_service()
+            if portfolio_service is None:
+                return reserved
+                
+            option_positions = portfolio_service.get_positions('OPT') or []
+            
+            for position in option_positions:
+                symbol = str(position.get('symbol', '') or '').replace('US.', '')
+                pos_qty = int(position.get('position', 0) or 0)
+                option_type = str(position.get('option_type', '') or '').upper()
+                
+                # Only count short puts (negative quantity)
+                if pos_qty < 0 and option_type == 'PUT':
+                    strike = float(position.get('strike', 0) or 0)
+                    contracts = abs(pos_qty)
+                    cash_required = strike * 100 * contracts
+                    reserved += cash_required
+                    
+        except Exception as e:
+            logger.error(f"Error calculating cash reserved: {e}")
+            
+        return reserved

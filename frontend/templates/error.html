@@ -1,28 +1,28 @@
 {% extends "base.html" %}
 
 {% block title %}Error {{ error_code }} - All You Need Is Wheel{% endblock %}
-
 {% block body_class %}page-error{% endblock %}
 
-{% block content %}
-<section class="app-masthead app-masthead--error app-masthead--brand error-masthead">
-    <div class="app-masthead__content">
-        <div class="app-masthead__copy">
-            <div class="app-masthead__brand-block">
-                <span class="app-masthead__eyebrow">System status</span>
-                <div class="app-masthead__brand-title">All You Need Is Wheel</div>
-            </div>
-            <h1 class="app-masthead__headline">Error {{ error_code }}</h1>
-            <p class="app-masthead__summary">{{ message }}. The page could not be loaded in the current workspace state.</p>
-            <div class="app-masthead__actions">
-                <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg px-4">
-                    <i class="bi bi-house-door me-2"></i> Return to dashboard
-                </a>
-            </div>
-        </div>
-        <div class="app-masthead__visual error-masthead__visual" aria-hidden="true">
-            <div class="error-masthead__code">{{ error_code }}</div>
+{% block page_header %}
+<div class="page-header flex-grow-1">
+    <div class="page-header__inner">
+        <div>
+            <h1 class="page-header__title">{{ error_code }}</h1>
+            <div class="page-header__meta">System error</div>
         </div>
     </div>
-</section>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="app-section">
+    <div class="text-center py-5">
+        <div class="error-masthead__code mb-3">{{ error_code }}</div>
+        <h2 class="h4 mb-2">Something went wrong</h2>
+        <p class="text-muted mb-4">{{ message }}. The page could not be loaded in the current workspace state.</p>
+        <a href="{{ url_for('index') }}" class="btn btn-primary">
+            <i class="bi bi-house-door me-2"></i> Return to dashboard
+        </a>
+    </div>
+</div>
 {% endblock %}
