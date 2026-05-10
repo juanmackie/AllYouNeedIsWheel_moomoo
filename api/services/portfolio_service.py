@@ -246,7 +246,9 @@ class PortfolioService:
                             position_data['earnings'] = {
                                 'days': info.get('days_to_earnings'),
                                 'date': info.get('earnings_date'),
-                                'level': info.get('warning_level')
+                                'level': info.get('warning_level'),
+                                'time_of_day': info.get('time_of_day'),
+                                'earnings_source': info.get('earnings_source'),
                             }
                     except Exception as e:
                         # Log at debug but continue

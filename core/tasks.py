@@ -41,7 +41,16 @@ def create_earnings_worker(app):
                 except Exception as e:
                     logger.warning(f"Could not fetch portfolio positions: {e}")
 
-                all_tickers = list(set(order_tickers + position_tickers))
+                watchlist_tickers = []
+                try:
+                    from api.services.watchlist_manager import WatchlistManager
+                    connection_config = app.config.get('connection_config', {})
+                    wm = WatchlistManager(connection_config)
+                    watchlist_tickers = [t.strip().upper() for t in wm.get_effective_watchlist() if t.strip()]
+                except Exception as e:
+                    logger.debug(f"Could not fetch effective watchlist: {e}")
+
+                all_tickers = list(set(order_tickers + position_tickers + watchlist_tickers))
                 if all_tickers:
                     logger.info(f"Updating earnings for {len(all_tickers)} tickers")
                     result = service.batch_update_earnings(all_tickers)

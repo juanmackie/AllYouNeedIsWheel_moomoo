@@ -53,6 +53,14 @@ function renderCard(signal) {
         ? `${signal.earnings_date} · ${signal.days_to_earnings ?? '?'}d`
         : 'No earnings date';
 
+    const sourceEl = clone.querySelector('.earnings-vol-card__source');
+    if (signal.earnings_source || signal.time_of_day) {
+        const parts = [];
+        if (signal.time_of_day) parts.push(signal.time_of_day);
+        if (signal.earnings_source) parts.push(signal.earnings_source);
+        sourceEl.textContent = parts.join(' · ');
+    }
+
     const badge = clone.querySelector('.earnings-vol-card__signal');
     badge.textContent = signal.label || signal.signal || 'Avoid';
     badge.classList.add(...signalClass(signal.signal).split(' '));

@@ -588,6 +588,11 @@ function createEarningsBadgeHTML(earnings, ticker) {
 		: (earnings.days === 1 ? 'tomorrow' : `in ${earnings.days} days`);
 	const level = earnings.level || 'soon';
 	
+	const sourceParts = [];
+	if (earnings.time_of_day) sourceParts.push(earnings.time_of_day);
+	if (earnings.earnings_source) sourceParts.push(earnings.earnings_source);
+	const sourceInfo = sourceParts.length ? ` · ${sourceParts.join(' · ')}` : '';
+
 	// Three-tier badge: red (today), yellow (1-7 days), blue (8-30 days)
 	let badgeClass;
 	if (level === 'today') {
@@ -599,7 +604,7 @@ function createEarningsBadgeHTML(earnings, ticker) {
 	}
 	
 	return ` <span class="${badgeClass}" 
-		title="Earnings ${daysText} (${dateStr})"
+		title="Earnings ${daysText} (${dateStr})${sourceInfo}"
 		style="font-size: 0.65rem; font-weight: 600; cursor: help;">(e)</span><i class="bi bi-arrow-clockwise earnings-refresh-btn ms-1 text-muted" 
             data-ticker="${ticker}" 
             title="Refresh earnings data for ${ticker}"

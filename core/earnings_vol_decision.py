@@ -21,6 +21,8 @@ class EarningsVolSignal:
     score: float
     earnings_date: Optional[str] = None
     days_to_earnings: Optional[int] = None
+    time_of_day: Optional[str] = None
+    earnings_source: Optional[str] = None
     front_expiration: Optional[str] = None
     back_expiration: Optional[str] = None
     front_iv: Optional[float] = None
@@ -154,6 +156,8 @@ def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
         score=score,
         earnings_date=metrics.get("earnings_date"),
         days_to_earnings=days,
+        time_of_day=metrics.get("time_of_day"),
+        earnings_source=metrics.get("earnings_source"),
         front_expiration=metrics.get("front_expiration"),
         back_expiration=metrics.get("back_expiration"),
         front_iv=round(front_iv, 4) if front_iv is not None else None,

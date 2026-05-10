@@ -1,14 +1,17 @@
 """
 IV Tracking and Earnings Service
-Manages implied volatility history and earnings calendar data using yfinance
+Manages implied volatility history and earnings calendar data
+Uses Alpha Vantage -> OpenBB -> yfinance provider chain
 """
 
+import os
 import logging
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 import traceback
 from api.services.utils import clean_yfinance_ticker
+from api.services.alpha_vantage_provider import AlphaVantageEarningsProvider
 
 logger = logging.getLogger('api.services.iv_tracking')
 
@@ -25,10 +28,11 @@ class IVEarningsService:
             database: OptionsDatabase instance
         """
         self.db = database
-        self._iv_cache = {}  # In-memory cache: {ticker: {'iv': float, 'timestamp': datetime, 'iv_rank': float}}
-        self._earnings_cache = {}  # In-memory cache: {ticker: {'earnings_date': str, 'timestamp': datetime}}
+        self._iv_cache = {}
+        self._earnings_cache = {}
         self._cache_duration_hours = 4
         self._earnings_cache_duration_hours = 24
+        self._alpha_vantage = AlphaVantageEarningsProvider()
         
     def _is_cache_valid(self, cache_entry, duration_hours):
         """Check if a cache entry is still valid"""
@@ -162,11 +166,32 @@ class IVEarningsService:
 
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
-        Fetch earnings date using OpenBB with yfinance fallback.
+        Fetch earnings date using provider chain:
+        Alpha Vantage -> OpenBB -> yfinance.
         """
-        # Strip moomoo prefix for external APIs
         clean_ticker = self._strip_moomoo_prefix(ticker)
-        
+
+        # --- Provider 1: Alpha Vantage ---
+        if self._alpha_vantage.available:
+            try:
+                av_data = self._alpha_vantage.get_earnings(clean_ticker)
+                if av_data and av_data.get('reportDate'):
+                    report_date = av_data['reportDate'][:10]
+                    if '-' in report_date:
+                        return {
+                            'success': True,
+                            'earnings_date': report_date,
+                            'time_of_day': av_data.get('timeOfDay', ''),
+                            'fiscal_date_ending': av_data.get('fiscalDateEnding', ''),
+                            'estimate': av_data.get('estimate'),
+                            'currency': av_data.get('currency', ''),
+                            'earnings_source': 'Alpha Vantage',
+                            'error': None,
+                        }
+            except Exception as e:
+                logger.debug(f"Alpha Vantage earnings lookup failed for {clean_ticker}: {e}")
+
+        # --- Provider 2: OpenBB ---
         try:
             from openbb import obb
             result = obb.equity.earnings.calendar(symbol=clean_ticker)
@@ -183,20 +208,22 @@ class IVEarningsService:
                         return {
                             'success': True,
                             'earnings_date': earnings_date,
-                            'error': None
+                            'time_of_day': None,
+                            'fiscal_date_ending': None,
+                            'estimate': None,
+                            'currency': None,
+                            'earnings_source': 'OpenBB',
+                            'error': None,
                         }
         except Exception as e:
             logger.debug(f"OpenBB earnings fetch failed for {clean_ticker}, falling back to yfinance: {e}")
 
+        # --- Provider 3: yfinance ---
         try:
             import yfinance as yf
-            from datetime import datetime, timedelta
-            
-            import time
             time.sleep(1)
             stock = yf.Ticker(clean_ticker)
-            
-            # Try get_earnings_dates
+
             try:
                 earnings_df = stock.get_earnings_dates(limit=1)
                 if earnings_df is not None and not earnings_df.empty:
@@ -212,12 +239,16 @@ class IVEarningsService:
                                     return {
                                         'success': True,
                                         'earnings_date': earnings_date,
-                                        'error': None
+                                        'time_of_day': None,
+                                        'fiscal_date_ending': None,
+                                        'estimate': None,
+                                        'currency': None,
+                                        'earnings_source': 'yfinance',
+                                        'error': None,
                                     }
             except Exception as e:
                 logger.debug(f"get_earnings_dates failed for {clean_ticker}: {e}")
 
-            # Try stock.info
             try:
                 info = stock.info
                 for key in ['nextEarningsDate', 'earningsDate']:
@@ -227,12 +258,16 @@ class IVEarningsService:
                             earnings_date = datetime.fromtimestamp(ed).strftime('%Y-%m-%d')
                         else:
                             earnings_date = str(ed)[:10]
-                        
                         if earnings_date and '-' in earnings_date:
                             return {
                                 'success': True,
                                 'earnings_date': earnings_date,
-                                'error': None
+                                'time_of_day': None,
+                                'fiscal_date_ending': None,
+                                'estimate': None,
+                                'currency': None,
+                                'earnings_source': 'yfinance',
+                                'error': None,
                             }
             except Exception as e:
                 logger.debug(f"stock.info earnings check failed for {clean_ticker}: {e}")
@@ -242,7 +277,12 @@ class IVEarningsService:
         return {
             'success': False,
             'earnings_date': None,
-            'error': "No data from OpenBB or yfinance"
+            'time_of_day': None,
+            'fiscal_date_ending': None,
+            'estimate': None,
+            'currency': None,
+            'earnings_source': None,
+            'error': "No data from Alpha Vantage, OpenBB, or yfinance"
         }
 
     def update_earnings_data(self, ticker: str) -> bool:
@@ -264,25 +304,34 @@ class IVEarningsService:
             
             if result['success']:
                 self.db.save_earnings_date(
-                    ticker, 
-                    result['earnings_date'], 
-                    fetch_status='success'
+                    ticker,
+                    result['earnings_date'],
+                    fetch_status='success',
+                    time_of_day=result.get('time_of_day'),
+                    fiscal_date_ending=result.get('fiscal_date_ending'),
+                    estimate=result.get('estimate'),
+                    currency=result.get('currency'),
+                    earnings_source=result.get('earnings_source'),
                 )
                 
                 # Update cache
                 self._earnings_cache[ticker] = {
                     'earnings_date': result['earnings_date'],
-                    'timestamp': datetime.now()
+                    'time_of_day': result.get('time_of_day'),
+                    'fiscal_date_ending': result.get('fiscal_date_ending'),
+                    'estimate': result.get('estimate'),
+                    'currency': result.get('currency'),
+                    'earnings_source': result.get('earnings_source'),
+                    'timestamp': datetime.now(),
                 }
                 
-                logger.info(f"Updated earnings for {ticker}: {result['earnings_date']}")
+                logger.info(f"Updated earnings for {ticker}: {result['earnings_date']} ({result.get('earnings_source', '?')})")
                 return True
             else:
-                self.db.save_earnings_date(
+                self.db.mark_earnings_error(
                     ticker,
-                    None,
-                    fetch_status='error',
-                    error_message=result['error']
+                    error_message=result['error'],
+                    earnings_source=result.get('earnings_source'),
                 )
                 return False
                 
@@ -303,43 +352,66 @@ class IVEarningsService:
                 'days_to_earnings': int or None,
                 'warning_level': str ('none', 'soon', 'very_soon', 'today', 'error'),
                 'fetch_status': str,
-                'error_message': str or None
+                'error_message': str or None,
+                'time_of_day': str or None,
+                'fiscal_date_ending': str or None,
+                'estimate': float or None,
+                'currency': str or None,
+                'earnings_source': str or None,
             }
         """
-        # Check cache first
         cache_entry = self._earnings_cache.get(ticker)
         if self._is_cache_valid(cache_entry, self._earnings_cache_duration_hours):
             earnings_date = cache_entry.get('earnings_date')
+            time_of_day = cache_entry.get('time_of_day')
+            fiscal_date_ending = cache_entry.get('fiscal_date_ending')
+            estimate = cache_entry.get('estimate')
+            currency = cache_entry.get('currency')
+            earnings_source = cache_entry.get('earnings_source')
         elif self.db:
-            # Fetch from database
             record = self.db.get_earnings_date(ticker)
             if record:
                 earnings_date = record.get('earnings_date')
+                time_of_day = record.get('time_of_day')
+                fiscal_date_ending = record.get('fiscal_date_ending')
+                estimate = record.get('estimate')
+                currency = record.get('currency')
+                earnings_source = record.get('earnings_source')
                 self._earnings_cache[ticker] = {
                     'earnings_date': earnings_date,
-                    'timestamp': datetime.now()
+                    'time_of_day': time_of_day,
+                    'fiscal_date_ending': fiscal_date_ending,
+                    'estimate': estimate,
+                    'currency': currency,
+                    'earnings_source': earnings_source,
+                    'timestamp': datetime.now(),
                 }
             else:
                 earnings_date = None
+                time_of_day = fiscal_date_ending = estimate = currency = earnings_source = None
         else:
             earnings_date = None
-        
+            time_of_day = fiscal_date_ending = estimate = currency = earnings_source = None
+
         if not earnings_date:
             return {
                 'earnings_date': None,
                 'days_to_earnings': None,
                 'warning_level': 'none',
                 'fetch_status': 'pending' if not self.db else 'unknown',
-                'error_message': None
+                'error_message': None,
+                'time_of_day': None,
+                'fiscal_date_ending': None,
+                'estimate': None,
+                'currency': None,
+                'earnings_source': None,
             }
-        
-        # Calculate days to earnings
+
         try:
             earnings_dt = datetime.strptime(earnings_date, '%Y-%m-%d')
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             days_to_earnings = (earnings_dt - today).days
-            
-            # Determine warning level (expanded to 30 days)
+
             if days_to_earnings < 0:
                 warning_level = 'past'
             elif days_to_earnings == 0:
@@ -352,22 +424,32 @@ class IVEarningsService:
                 warning_level = 'upcoming'
             else:
                 warning_level = 'none'
-            
+
             return {
                 'earnings_date': earnings_date,
                 'days_to_earnings': days_to_earnings,
                 'warning_level': warning_level,
                 'fetch_status': 'success',
-                'error_message': None
+                'error_message': None,
+                'time_of_day': time_of_day,
+                'fiscal_date_ending': fiscal_date_ending,
+                'estimate': estimate,
+                'currency': currency,
+                'earnings_source': earnings_source,
             }
-            
+
         except Exception as e:
             return {
                 'earnings_date': earnings_date,
                 'days_to_earnings': None,
                 'warning_level': 'error',
                 'fetch_status': 'error',
-                'error_message': str(e)
+                'error_message': str(e),
+                'time_of_day': time_of_day,
+                'fiscal_date_ending': fiscal_date_ending,
+                'estimate': estimate,
+                'currency': currency,
+                'earnings_source': earnings_source,
             }
     
     def get_earnings_score_impact(self, ticker: str) -> tuple:
@@ -384,12 +466,17 @@ class IVEarningsService:
         """
         info = self.get_earnings_info(ticker)
         
+        source_tag = ''
+        if info.get('earnings_source') or info.get('time_of_day'):
+            parts = [p for p in [info.get('time_of_day'), info.get('earnings_source')] if p]
+            source_tag = f" [{' · '.join(parts)}]"
+
         if info['warning_level'] == 'today':
-            return (-30, "Earnings today - extreme risk")
+            return (-30, f"Earnings today - extreme risk{source_tag}")
         elif info['warning_level'] == 'very_soon':
-            return (-15, f"Earnings in {info['days_to_earnings']} days - high risk")
+            return (-15, f"Earnings in {info['days_to_earnings']} days - high risk{source_tag}")
         elif info['warning_level'] == 'soon':
-            return (-5, f"Earnings in {info['days_to_earnings']} days - caution")
+            return (-5, f"Earnings in {info['days_to_earnings']} days - caution{source_tag}")
         elif info['warning_level'] == 'error':
             return (0, "Failed to fetch earnings data")
         else:

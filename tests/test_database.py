@@ -586,6 +586,86 @@ class TestDatabaseEdgeCases(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  Earnings Repository Tests
+# ═══════════════════════════════════════════════════════════════════
+
+class TestEarningsRepository(unittest.TestCase):
+    """Earnings calendar repository — save, error, and data preservation."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_earnings.db')
+        self.db = OptionsDatabase(self.db_path)
+
+    def tearDown(self):
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def test_save_and_get_richer_fields(self):
+        self.db.save_earnings_date(
+            'AAPL', '2026-05-15',
+            time_of_day='post-market',
+            fiscal_date_ending='2026-04-30',
+            estimate=2.35,
+            currency='USD',
+            earnings_source='Alpha Vantage',
+        )
+        record = self.db.get_earnings_date('AAPL')
+        self.assertEqual(record['earnings_date'], '2026-05-15')
+        self.assertEqual(record['time_of_day'], 'post-market')
+        self.assertEqual(record['fiscal_date_ending'], '2026-04-30')
+        self.assertEqual(record['estimate'], 2.35)
+        self.assertEqual(record['currency'], 'USD')
+        self.assertEqual(record['earnings_source'], 'Alpha Vantage')
+
+    def test_mark_earnings_error_preserves_prior_date(self):
+        self.db.save_earnings_date('AAPL', '2026-05-15', fetch_status='success')
+        self.db.mark_earnings_error('AAPL', 'Temporary network error')
+        record = self.db.get_earnings_date('AAPL')
+        self.assertEqual(record['earnings_date'], '2026-05-15')
+        self.assertEqual(record['fetch_status'], 'error')
+        self.assertEqual(record['error_message'], 'Temporary network error')
+
+    def test_mark_earnings_error_preserves_richer_fields(self):
+        self.db.save_earnings_date(
+            'AAPL', '2026-05-15',
+            time_of_day='post-market',
+            estimate=2.35,
+            currency='USD',
+            earnings_source='Alpha Vantage',
+        )
+        self.db.mark_earnings_error('AAPL', 'Rate limited')
+        record = self.db.get_earnings_date('AAPL')
+        self.assertEqual(record['time_of_day'], 'post-market')
+        self.assertEqual(record['estimate'], 2.35)
+        self.assertEqual(record['currency'], 'USD')
+        self.assertEqual(record['earnings_source'], 'Alpha Vantage')
+        self.assertEqual(record['fetch_status'], 'error')
+
+    def test_mark_earnings_error_on_nonexistent_ticker(self):
+        result = self.db.mark_earnings_error('NONEXIST', 'No data')
+        self.assertFalse(result)
+
+    def test_get_pending_earnings_returns_richer_fields(self):
+        self.db.save_earnings_date(
+            'AAPL', '2026-05-15',
+            time_of_day='post-market',
+            fiscal_date_ending='2026-04-30',
+            estimate=2.35,
+            currency='USD',
+            earnings_source='Alpha Vantage',
+        )
+        pending = self.db.get_pending_earnings(days_threshold=30)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]['time_of_day'], 'post-market')
+        self.assertEqual(pending[0]['estimate'], 2.35)
+        self.assertEqual(pending[0]['currency'], 'USD')
+        self.assertEqual(pending[0]['earnings_source'], 'Alpha Vantage')
+        self.assertEqual(pending[0]['fiscal_date_ending'], '2026-04-30')
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Migration Tests
 # ═══════════════════════════════════════════════════════════════════
 

@@ -40,12 +40,27 @@ def get_locked_tickers():
                 'lock_days': lock_days,
             })
         
+        from datetime import datetime
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         locked_list = []
         for item in locked:
+            earnings_date = item.get('earnings_date')
+            days_to = None
+            if earnings_date:
+                try:
+                    ed = datetime.strptime(earnings_date[:10], '%Y-%m-%d')
+                    days_to = (ed - today).days
+                except Exception:
+                    pass
             locked_list.append({
                 'ticker': item.get('ticker'),
-                'earnings_date': item.get('earnings_date'),
-                'days_to_earnings': item.get('days_to_earnings'),
+                'earnings_date': earnings_date,
+                'days_to_earnings': days_to,
+                'time_of_day': item.get('time_of_day'),
+                'fiscal_date_ending': item.get('fiscal_date_ending'),
+                'estimate': item.get('estimate'),
+                'currency': item.get('currency'),
+                'earnings_source': item.get('earnings_source'),
             })
         
         return success_response({

@@ -85,7 +85,12 @@ def create_tables(conn):
             earnings_date TEXT,
             last_updated TEXT NOT NULL,
             fetch_status TEXT DEFAULT 'pending',
-            error_message TEXT
+            error_message TEXT,
+            time_of_day TEXT,
+            fiscal_date_ending TEXT,
+            estimate REAL,
+            currency TEXT,
+            earnings_source TEXT
         )
     ''')
 
@@ -170,6 +175,24 @@ def migrate_database(db_path):
                     cursor.execute("UPDATE orders SET isRollover = 1 WHERE id = ?", (sell_id,))
 
                 logger.info(f"Migration: Marked {len(potential_rollover_pairs) * 2} orders as potential rollovers")
+
+        # --- Migration: Add richer earnings columns to earnings_calendar ---
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='earnings_calendar'")
+        if cursor.fetchone():
+            cursor.execute("PRAGMA table_info(earnings_calendar)")
+            earnings_cols = {row[1] for row in cursor.fetchall()}
+
+            for col, col_type in [
+                ('time_of_day', 'TEXT'),
+                ('fiscal_date_ending', 'TEXT'),
+                ('estimate', 'REAL'),
+                ('currency', 'TEXT'),
+                ('earnings_source', 'TEXT'),
+            ]:
+                if col not in earnings_cols:
+                    logger.info("Running migration: Adding %s to earnings_calendar", col)
+                    cursor.execute("ALTER TABLE earnings_calendar ADD COLUMN %s %s" % (col, col_type))
+                    logger.info("Migration completed: %s column added", col)
 
         conn.commit()
         conn.close()

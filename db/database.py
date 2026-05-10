@@ -71,14 +71,23 @@ class OptionsDatabase:
 
     # --- Earnings Calendar ---
 
-    def save_earnings_date(self, ticker, earnings_date, fetch_status='success', error_message=None):
-        return self._earnings.save_earnings_date(ticker, earnings_date, fetch_status=fetch_status, error_message=error_message)
+    def save_earnings_date(self, ticker, earnings_date, fetch_status='success', error_message=None,
+                           time_of_day=None, fiscal_date_ending=None, estimate=None,
+                           currency=None, earnings_source=None):
+        return self._earnings.save_earnings_date(
+            ticker, earnings_date, fetch_status=fetch_status, error_message=error_message,
+            time_of_day=time_of_day, fiscal_date_ending=fiscal_date_ending,
+            estimate=estimate, currency=currency, earnings_source=earnings_source,
+        )
 
     def get_earnings_date(self, ticker):
         return self._earnings.get_earnings_date(ticker)
 
     def get_pending_earnings(self, days_threshold=7):
         return self._earnings.get_pending_earnings(days_threshold=days_threshold)
+
+    def mark_earnings_error(self, ticker, error_message, earnings_source=None):
+        return self._earnings.mark_earnings_error(ticker, error_message=error_message, earnings_source=earnings_source)
 
     def get_tickers_needing_earnings_update(self, hours_threshold=24):
         return self._earnings.get_tickers_needing_earnings_update(hours_threshold=hours_threshold)

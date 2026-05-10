@@ -83,6 +83,8 @@ class EarningsVolSignalService:
         earnings_info = self._get_earnings_info(ticker)
         earnings_date = earnings_info.get("earnings_date")
         days_to_earnings = earnings_info.get("days_to_earnings")
+        time_of_day = earnings_info.get("time_of_day")
+        earnings_source = earnings_info.get("earnings_source")
 
         hist = yf_ticker.history(period="45d")
         avg_volume_30d = None
@@ -103,6 +105,8 @@ class EarningsVolSignalService:
             "ticker": ticker,
             "earnings_date": earnings_date,
             "days_to_earnings": days_to_earnings,
+            "time_of_day": time_of_day,
+            "earnings_source": earnings_source,
             "front_expiration": front_expiration,
             "back_expiration": back_expiration,
             "rv30": rv30,
