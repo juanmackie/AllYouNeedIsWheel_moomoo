@@ -3,7 +3,7 @@
         <div>
             <span class="app-section__eyebrow">Read-only signal lab</span>
             <h2>Earnings vol signals</h2>
-            <p>Simple labels for earnings volatility setups. These are research signals only, not trade orders.</p>
+            <p>Research plans for ATM calendar spreads around earnings. These are research signals only, not trade orders.</p>
         </div>
         <div class="app-section__actions">
             <small id="earnings-vol-last-updated" class="text-muted d-none"></small>
@@ -17,7 +17,7 @@
     <div id="earnings-vol-content" class="earnings-vol-grid d-none"></div>
 
     <div class="app-section__footer">
-        Green means the setup deserves research. Avoid means the app sees a missing edge, bad liquidity, or incomplete data.
+        <span class="text-success">Qualified</span> is researchable now (0-10d to earnings, positive edge). <span class="text-info">Watch</span> is early or incomplete. <span class="text-secondary">Avoid</span> means no current edge or missing data.
     </div>
 </section>
 
@@ -37,6 +37,48 @@
             <span class="earnings-vol-card__score-label">signal score</span>
         </div>
 
+        <div class="earnings-vol-card__setup">
+            <div class="earnings-vol-card__setup-row">
+                <span class="earnings-vol-card__setup-label">Setup</span>
+                <strong class="earnings-vol-card__setup-value earnings-vol-card__structure"></strong>
+            </div>
+            <div class="earnings-vol-card__setup-row">
+                <span class="earnings-vol-card__setup-label">Strike</span>
+                <strong class="earnings-vol-card__setup-value earnings-vol-card__strike"></strong>
+            </div>
+            <div class="earnings-vol-card__setup-row">
+                <span class="earnings-vol-card__setup-label">Sell</span>
+                <strong class="earnings-vol-card__setup-value earnings-vol-card__sell"></strong>
+            </div>
+            <div class="earnings-vol-card__setup-row">
+                <span class="earnings-vol-card__setup-label">Buy</span>
+                <strong class="earnings-vol-card__setup-value earnings-vol-card__buy"></strong>
+            </div>
+            <div class="earnings-vol-card__setup-row">
+                <span class="earnings-vol-card__setup-label">Debit</span>
+                <strong class="earnings-vol-card__setup-value earnings-vol-card__debit"></strong>
+            </div>
+        </div>
+
+        <div class="earnings-vol-card__plan">
+            <div class="earnings-vol-card__plan-row">
+                <span class="earnings-vol-card__plan-label">Entry</span>
+                <span class="earnings-vol-card__plan-value earnings-vol-card__entry"></span>
+            </div>
+            <div class="earnings-vol-card__plan-row">
+                <span class="earnings-vol-card__plan-label">Exit</span>
+                <span class="earnings-vol-card__plan-value earnings-vol-card__exit"></span>
+            </div>
+            <div class="earnings-vol-card__plan-row">
+                <span class="earnings-vol-card__plan-label">Target</span>
+                <span class="earnings-vol-card__plan-value earnings-vol-card__target"></span>
+            </div>
+            <div class="earnings-vol-card__plan-row">
+                <span class="earnings-vol-card__plan-label">Cut if</span>
+                <span class="earnings-vol-card__plan-value earnings-vol-card__cut"></span>
+            </div>
+        </div>
+
         <div class="earnings-vol-card__metrics">
             <div>
                 <span>Front/back IV</span>
@@ -51,7 +93,7 @@
                 <strong class="earnings-vol-card__spread"></strong>
             </div>
             <div>
-                <span>Max debit risk</span>
+                <span>Max risk</span>
                 <strong class="earnings-vol-card__risk"></strong>
             </div>
         </div>

@@ -487,6 +487,70 @@
   color: var(--saas-ink);
 }
 
+.earnings-vol-card__setup {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  padding: 10px;
+  border: 1px solid var(--saas-border-soft);
+  border-radius: var(--saas-radius-sm);
+  background: var(--saas-bg);
+  font-size: 0.78rem;
+}
+
+.earnings-vol-card__setup-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.earnings-vol-card__setup-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--saas-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  min-width: 38px;
+}
+
+.earnings-vol-card__setup-value {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--saas-ink);
+}
+
+.earnings-vol-card__plan {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--saas-border-soft);
+  border-radius: var(--saas-radius-sm);
+  background: var(--saas-bg);
+}
+
+.earnings-vol-card__plan-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.earnings-vol-card__plan-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--saas-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  min-width: 38px;
+  flex-shrink: 0;
+}
+
+.earnings-vol-card__plan-value {
+  color: var(--saas-ink);
+  line-height: 1.3;
+}
+
 .earnings-vol-card__notes {
   margin-top: auto;
   min-height: 2.4rem;

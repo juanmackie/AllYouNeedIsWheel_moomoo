@@ -38,11 +38,52 @@ class EarningsVolSignal:
     spread_pct: Optional[float] = None
     open_interest: Optional[int] = None
     option_volume: Optional[int] = None
+    structure: str = "ATM calendar"
+    entry_plan: str = ""
+    exit_plan: str = ""
+    profit_target: str = ""
+    invalidation: str = ""
     notes: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _has_complete_trade_plan(metrics: dict) -> bool:
+    return all([
+        metrics.get("atm_strike") is not None,
+        bool(metrics.get("front_expiration")),
+        bool(metrics.get("back_expiration")),
+        metrics.get("estimated_calendar_debit") is not None,
+    ])
+
+
+def _build_plan_text(signal: str, days, blockers, incomplete_plan_fields: bool = False):
+    too_early = days is not None and days > 10
+
+    if signal == "AVOID" and blockers:
+        entry_plan = "Not actionable - resolve blockers first"
+        exit_plan = "N/A"
+        profit_target = "N/A"
+        invalidation = "; ".join(blockers[:2])
+    elif incomplete_plan_fields:
+        entry_plan = "Waiting on strike, expirations, or debit"
+        exit_plan = "Close after earnings IV crush"
+        profit_target = "Target 20-40% where liquidity allows"
+        invalidation = "Missing strike, expirations, or debit"
+    elif too_early:
+        entry_plan = "Revisit within 10d of earnings"
+        exit_plan = "Close after earnings IV crush"
+        profit_target = "Target 20-40% where liquidity allows"
+        invalidation = "Spread widens, IV edge reverses, stock gaps beyond ATM strike"
+    else:
+        entry_plan = "Enter while front IV premium is positive"
+        exit_plan = "Close after earnings IV crush"
+        profit_target = "Target 20-40% where liquidity allows"
+        invalidation = "Spread widens, IV edge reverses, stock gaps beyond ATM strike"
+
+    return "ATM calendar", entry_plan, exit_plan, profit_target, invalidation
 
 
 def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
@@ -71,7 +112,7 @@ def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
     elif days < 0:
         blockers.append("Earnings already passed")
     elif days > 10:
-        notes.append("Earnings are not close enough yet")
+        notes.append(f"Too early - earnings {days}d away")
 
     if not front_iv or not back_iv:
         blockers.append("Missing front/back IV")
@@ -129,13 +170,28 @@ def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
     if open_interest or option_volume:
         score += _clamp(max(open_interest / 1000, option_volume / 250) * 5)
 
-    if blockers:
+    incomplete_plan_fields = not _has_complete_trade_plan(metrics)
+    if incomplete_plan_fields:
+        blockers.append("Incomplete trade plan fields")
+
+    hard_blockers = [blocker for blocker in blockers if blocker != "Incomplete trade plan fields"]
+    too_early = days is not None and days > 10
+
+    if hard_blockers:
         score = min(score, 39)
+    elif incomplete_plan_fields or too_early:
+        score = min(score, 59)
 
     score = round(_clamp(score), 1)
-    if blockers:
+    if hard_blockers:
         signal = "AVOID"
         label = "Avoid"
+    elif incomplete_plan_fields:
+        signal = "WATCH"
+        label = "Watch"
+    elif too_early:
+        signal = "WATCH"
+        label = "Watch"
     elif score >= 75:
         signal = "GREEN"
         label = "Qualified"
@@ -148,6 +204,10 @@ def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
     else:
         signal = "AVOID"
         label = "Avoid"
+
+    structure, entry_plan, exit_plan, profit_target, invalidation = _build_plan_text(
+        signal, days, blockers, incomplete_plan_fields=incomplete_plan_fields,
+    )
 
     return EarningsVolSignal(
         ticker=ticker,
@@ -173,6 +233,11 @@ def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
         spread_pct=round(spread_pct, 1) if spread_pct is not None else None,
         open_interest=int(open_interest) if open_interest else None,
         option_volume=int(option_volume) if option_volume else None,
+        structure=structure,
+        entry_plan=entry_plan,
+        exit_plan=exit_plan,
+        profit_target=profit_target,
+        invalidation=invalidation,
         notes=notes[:4],
         blockers=blockers,
     )

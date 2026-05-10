@@ -50,7 +50,7 @@ function renderCard(signal) {
 
     clone.querySelector('.earnings-vol-card__ticker').textContent = signal.ticker || 'N/A';
     clone.querySelector('.earnings-vol-card__date').textContent = signal.earnings_date
-        ? `${signal.earnings_date} · ${signal.days_to_earnings ?? '?'}d`
+        ? `${signal.earnings_date} | ${signal.days_to_earnings ?? '?'}d`
         : 'No earnings date';
 
     const sourceEl = clone.querySelector('.earnings-vol-card__source');
@@ -58,7 +58,7 @@ function renderCard(signal) {
         const parts = [];
         if (signal.time_of_day) parts.push(signal.time_of_day);
         if (signal.earnings_source) parts.push(signal.earnings_source);
-        sourceEl.textContent = parts.join(' · ');
+        sourceEl.textContent = parts.join(' | ');
     }
 
     const badge = clone.querySelector('.earnings-vol-card__signal');
@@ -73,9 +73,33 @@ function renderCard(signal) {
         ? 'N/A'
         : formatCurrency(signal.max_risk_per_contract);
 
+    const setupEls = {
+        structure: clone.querySelector('.earnings-vol-card__structure'),
+        strike: clone.querySelector('.earnings-vol-card__strike'),
+        sell: clone.querySelector('.earnings-vol-card__sell'),
+        buy: clone.querySelector('.earnings-vol-card__buy'),
+        debit: clone.querySelector('.earnings-vol-card__debit'),
+        entry: clone.querySelector('.earnings-vol-card__entry'),
+        exit: clone.querySelector('.earnings-vol-card__exit'),
+        target: clone.querySelector('.earnings-vol-card__target'),
+        cut: clone.querySelector('.earnings-vol-card__cut'),
+    };
+
+    setupEls.structure.textContent = signal.structure || 'ATM calendar';
+    setupEls.strike.textContent = signal.atm_strike != null ? formatCurrency(signal.atm_strike) : 'N/A';
+    setupEls.sell.textContent = signal.front_expiration || 'N/A';
+    setupEls.buy.textContent = signal.back_expiration || 'N/A';
+    setupEls.debit.textContent = signal.estimated_calendar_debit != null
+        ? formatCurrency(signal.estimated_calendar_debit)
+        : 'N/A';
+    setupEls.entry.textContent = signal.entry_plan || 'N/A';
+    setupEls.exit.textContent = signal.exit_plan || 'N/A';
+    setupEls.target.textContent = signal.profit_target || 'N/A';
+    setupEls.cut.textContent = signal.invalidation || 'N/A';
+
     const notesEl = clone.querySelector('.earnings-vol-card__notes');
     const lines = signal.blockers?.length ? signal.blockers : signal.notes;
-    notesEl.textContent = lines?.length ? lines.slice(0, 2).join(' · ') : 'Clean enough to research.';
+    notesEl.textContent = lines?.length ? lines.slice(0, 2).join(' | ') : 'Clean enough to research.';
 
     return clone;
 }
