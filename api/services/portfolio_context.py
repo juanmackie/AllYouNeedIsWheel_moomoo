@@ -39,9 +39,12 @@ class PortfolioContext:
         context = {
             'cash_balance': 0.0,
             'account_value': 0.0,
+            'excess_liquidity': 0.0,
             'positions': {},
             'short_calls': {},
             'short_puts': {},
+            'cash_reserved_for_csp': 0.0,
+            'cash_available_for_csp': 0.0,
             'vix_regime': self._vix_regime_provider.get_vix_regime() if self._vix_regime_provider else {'regime': 'normal', 'vix': 20.0}
         }
 
@@ -57,6 +60,12 @@ class PortfolioContext:
             context['cash_balance'] = float(summary.get('available_cash', 0) or 0)
             context['account_value'] = float(summary.get('account_value', 0) or 0)
             context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
+
+            # Use excess_liquidity as the primary cash measure (more accurate for CSP buying power)
+            context['available_cash'] = max(
+                context['excess_liquidity'],
+                context['cash_balance']
+            )
 
             for position in stock_positions:
                 symbol = str(position.get('symbol', '') or '').replace('US.', '')
@@ -78,6 +87,11 @@ class PortfolioContext:
                         context['short_calls'][symbol] = context['short_calls'].get(symbol, 0) + contracts
                     elif option_type == 'PUT':
                         context['short_puts'][symbol] = context['short_puts'].get(symbol, 0) + contracts
+
+            # Calculate cash reserved for existing short puts
+            cash_reserved = self._calculate_cash_reserved(context)
+            context['cash_reserved_for_csp'] = cash_reserved
+            context['cash_available_for_csp'] = max(0, context['available_cash'] - cash_reserved)
                         
         except Exception as exc:
             logger.error(f"Error building portfolio context for options scoring: {exc}")

@@ -350,24 +350,75 @@ function updateTimestamp(timestamp, cacheInfo = null) {
 }
 
 /**
- * Render recommendations
- * @param {Array} recommendations - Array of recommendation objects
- * @param {string} timestamp - Generation timestamp
+ * Render a lane's cards into its container
+ * @param {string} containerId - DOM id of the lane's card row
+ * @param {Array} recs - Array of recommendation objects for this lane
  */
-function renderRecommendations(recommendations, timestamp, cacheInfo = null) {
+function renderLaneCards(containerId, recs) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    if (!recs || recs.length === 0) return;
+
+    recs.forEach(rec => {
+        const card = createRecommendationCard(rec);
+        container.appendChild(card);
+    });
+}
+
+/**
+ * Show or hide a lane section
+ * @param {string} sectionId - DOM id of the lane section wrapper
+ * @param {boolean} visible - whether to show
+ */
+function setLaneVisible(sectionId, visible) {
+    const el = document.getElementById(sectionId);
+    if (el) {
+        if (visible) el.classList.remove('d-none');
+        else el.classList.add('d-none');
+    }
+}
+
+/**
+ * Render recommendations from lanes structure (v2) or legacy list
+ * @param {Object} result - Full API response with lanes + recommendations
+ * @param {string} timestamp - Generation timestamp
+ * @param {Object|null} cacheInfo - Cache metadata
+ */
+function renderRecommendations(result, timestamp, cacheInfo = null) {
     if (!cardsContainer) return;
     
-    // Clear existing cards
+    // Clear all lane containers and the legacy fallback
     cardsContainer.innerHTML = '';
+
+    const ccRecs = result?.lanes?.covered_calls?.recommendations || [];
+    const wcRecs = result?.lanes?.watchlist_csp?.recommendations || [];
+    const hasLanes = ccRecs.length > 0 || wcRecs.length > 0;
     
-    if (!recommendations || recommendations.length === 0) {
+    if (hasLanes) {
+        renderLaneCards('lanes-covered-calls-cards', ccRecs);
+        renderLaneCards('lanes-watchlist-csp-cards', wcRecs);
+        setLaneVisible('lanes-covered-calls-section', ccRecs.length > 0);
+        setLaneVisible('lanes-watchlist-csp-section', wcRecs.length > 0);
+
+        showContent();
+        updateTimestamp(timestamp, cacheInfo);
+        return;
+    }
+    
+    // Legacy fallback: render recommendations list directly
+    setLaneVisible('lanes-covered-calls-section', false);
+    setLaneVisible('lanes-watchlist-csp-section', false);
+    
+    const recs = (result && result.recommendations) || [];
+    
+    if (!recs || recs.length === 0) {
         showEmpty();
         updateTimestamp(null);
         return;
     }
     
-    // Create and append cards
-    recommendations.forEach(rec => {
+    recs.forEach(rec => {
         const card = createRecommendationCard(rec);
         cardsContainer.appendChild(card);
     });
@@ -398,7 +449,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
         const cacheInfo = result._cache || null;
         
         if (cacheInfo && cacheInfo.cache_status === 'STALE_FALLBACK') {
-            renderRecommendations(result.recommendations, result.generated_at, cacheInfo);
+            renderRecommendations(result, result.generated_at, cacheInfo);
             if (lastUpdatedEl) {
                 const errorMsg = cacheInfo.error ? ` (refresh failed: ${cacheInfo.error})` : '';
                 lastUpdatedEl.textContent = `Showing cached data${errorMsg}`;
@@ -408,7 +459,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
             return;
         }
         
-        renderRecommendations(result.recommendations, result.generated_at, cacheInfo);
+        renderRecommendations(result, result.generated_at, cacheInfo);
         
     } catch (error) {
         console.error('Error loading top recommendations:', error);

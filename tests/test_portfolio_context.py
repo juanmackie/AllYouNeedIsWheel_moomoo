@@ -145,5 +145,76 @@ class TestPortfolioContextHelpers(unittest.TestCase):
         self.assertEqual(result, 0.0)
 
 
+class TestPortfolioContextCSPFields(unittest.TestCase):
+    """Test CSP-specific fields in portfolio context."""
+
+    def setUp(self):
+        from api.services.portfolio_context import PortfolioContext
+        self.provider = MagicMock()
+        self.portfolio_service = MagicMock()
+        self.provider.portfolio_service = self.portfolio_service
+        self.ctx = PortfolioContext(portfolio_service_provider=self.provider)
+
+    def test_cash_available_for_csp_present(self):
+        """Context should include cash_available_for_csp and cash_reserved_for_csp."""
+        self.portfolio_service.get_portfolio_summary.return_value = {
+            'available_cash': 50000.0,
+            'account_value': 100000.0,
+            'excess_liquidity': 55000.0,
+        }
+        self.portfolio_service.get_positions.return_value = []
+
+        context = self.ctx.get_portfolio_context()
+        self.assertIn('cash_available_for_csp', context)
+        self.assertIn('cash_reserved_for_csp', context)
+        self.assertIn('available_cash', context)
+
+    def test_csp_buying_power_reduced_by_short_puts(self):
+        """cash_available_for_csp should be reduced for existing short puts."""
+        self.portfolio_service.get_portfolio_summary.return_value = {
+            'available_cash': 50000.0,
+            'account_value': 100000.0,
+            'excess_liquidity': 50000.0,
+        }
+        self.portfolio_service.get_positions.side_effect = lambda t=None: {
+            'STK': [],
+            'OPT': [
+                {'symbol': 'US.AAPL240315P00150000', 'position': -2,
+                 'option_type': 'PUT', 'strike': 150.0},
+            ]
+        }.get(t, [])
+
+        context = self.ctx.get_portfolio_context()
+        # 2 short puts * 150 strike * 100 = 30000 reserved
+        self.assertEqual(context['cash_reserved_for_csp'], 30000.0)
+        # 50000 - 30000 = 20000 available
+        self.assertEqual(context['cash_available_for_csp'], 20000.0)
+
+    def test_csp_buying_power_with_no_short_puts(self):
+        """cash_available_for_csp should equal available_cash when no short puts."""
+        self.portfolio_service.get_portfolio_summary.return_value = {
+            'available_cash': 50000.0,
+            'account_value': 100000.0,
+            'excess_liquidity': 60000.0,
+        }
+        self.portfolio_service.get_positions.return_value = []
+
+        context = self.ctx.get_portfolio_context()
+        self.assertEqual(context['cash_available_for_csp'], 60000.0)
+        self.assertEqual(context['cash_reserved_for_csp'], 0.0)
+
+    def test_available_cash_uses_excess_liquidity(self):
+        """available_cash should prefer excess_liquidity over cash_balance."""
+        self.portfolio_service.get_portfolio_summary.return_value = {
+            'available_cash': 30000.0,
+            'account_value': 100000.0,
+            'excess_liquidity': 60000.0,
+        }
+        self.portfolio_service.get_positions.return_value = []
+
+        context = self.ctx.get_portfolio_context()
+        self.assertEqual(context['available_cash'], 60000.0)
+
+
 if __name__ == '__main__':
     unittest.main()

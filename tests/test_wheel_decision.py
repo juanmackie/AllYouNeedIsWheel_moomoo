@@ -860,5 +860,90 @@ class TestScoreExistingPosition(unittest.TestCase):
         self.assertEqual(result.option_type, "PUT")
 
 
+
+class TestScoreContractCSPBuyingPower(unittest.TestCase):
+    """Test that CSP buying power is correctly used in score_contract."""
+
+    def setUp(self):
+        future_date = (datetime.now() + timedelta(days=21)).strftime('%Y%m%d')
+        self.base_option = {
+            'strike': 95.0,
+            'expiration': future_date,
+            'option_type': 'PUT',
+            'bid': 2.0,
+            'ask': 2.50,
+            'last': 2.25,
+            'delta': -0.20,
+            'gamma': 0.05,
+            'theta': -0.05,
+            'vega': 0.15,
+            'implied_volatility': 0.30,
+            'open_interest': 500,
+            'volume': 100,
+        }
+        self.base_profile = {
+            'min_mid_price': 0.05,
+            'max_spread_pct': 60,
+            'min_premium_per_contract': 10,
+            'min_open_interest': 10,
+            'min_volume': 1,
+            'target_iv_adjusted': 50,
+            'target_theta_delta_ratio': 0.005,
+            'preferred_dte': 21,
+            'target_delta': 0.20,
+            'delta_tolerance': 0.15,
+            'ideal_open_interest': 500,
+            'ideal_volume': 100,
+            'ideal_spread_pct': 12,
+            'liquidity_weight_multiplier': 1.0,
+            'profile_type': 'monthly',
+        }
+
+    def test_short_puts_reduce_csp_buying_power(self):
+        """Existing short puts should reduce cash_available_for_csp, blocking new CSPs."""
+        portfolio = {
+            'positions': {},
+            'cash_balance': 10000.0,
+            'available_cash': 10000.0,
+            'cash_available_for_csp': 5000.0,  # 5000 reserved for existing short puts
+            'cash_reserved_for_csp': 5000.0,
+            'account_value': 50000.0,
+            'short_puts': {'AAPL': 1},
+        }
+        # Strike 95 -> cash_required = 9500 > 5000 available
+        result = score_contract(
+            ticker="AAPL",
+            option=self.base_option,
+            stock_price=100.0,
+            profile=self.base_profile,
+            portfolio_context=portfolio,
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result.hard_blockers)
+        self.assertTrue(any('Insufficient cash' in b for b in result.hard_blockers))
+
+    def test_sufficient_csp_buying_power_passes(self):
+        """When cash_available_for_csp is sufficient, the PUT should score normally."""
+        portfolio = {
+            'positions': {},
+            'cash_balance': 10000.0,
+            'available_cash': 10000.0,
+            'cash_available_for_csp': 10000.0,  # Enough to cover 95 * 100 = 9500
+            'cash_reserved_for_csp': 0.0,
+            'account_value': 50000.0,
+            'short_puts': {},
+        }
+        result = score_contract(
+            ticker="AAPL",
+            option=self.base_option,
+            stock_price=100.0,
+            profile=self.base_profile,
+            portfolio_context=portfolio,
+        )
+        self.assertIsNotNone(result)
+        self.assertFalse(result.hard_blockers)
+        self.assertGreater(result.contract_score, 0)
+
+
 if __name__ == '__main__':
     unittest.main()

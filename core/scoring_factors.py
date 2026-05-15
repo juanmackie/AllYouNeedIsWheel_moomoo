@@ -159,11 +159,12 @@ def _compute_size_fit(decision, portfolio_context: dict) -> float:
         fit = _clamp(shares_owned / needed) * 100
     else:
         cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
+        available_cash = float(portfolio_context.get('available_cash', cash_balance) or 0)
         if decision.cash_required <= 0:
             return 50.0
-        if cash_balance <= 0:
+        if available_cash <= 0:
             return 0.0
-        fit = _clamp(cash_balance / decision.cash_required) * 100
+        fit = _clamp(available_cash / decision.cash_required) * 100
 
     return round(fit, 1)
 

@@ -281,44 +281,6 @@ def score_contract(
     if open_interest < profile.get('min_open_interest', 10) and volume < profile.get('min_volume', 1):
         return _create_failed_decision(ticker, option_type, strike, expiration, "Open interest and volume too low")
 
-    from datetime import datetime
-    try:
-        expiry_date = datetime.strptime(expiration, '%Y%m%d').date()
-    except ValueError:
-        return _create_failed_decision(ticker, option_type, strike, expiration, "Invalid expiration format")
-
-    dte = (expiry_date - datetime.now().date()).days
-    if dte <= 0:
-        return _create_failed_decision(ticker, option_type, strike, expiration, "Expired or no time value")
-
-    bid = float(option.get('bid', 0) or 0)
-    ask = float(option.get('ask', 0) or 0)
-    last = float(option.get('last', 0) or 0)
-    mid_price = _calculate_mid_price(bid, ask, last)
-    if mid_price < profile.get('min_mid_price', 0.05):
-        return _create_failed_decision(ticker, option_type, strike, expiration, f"Mid price too low: {mid_price}")
-
-    spread_pct = 100.0
-    if bid > 0 and ask > 0 and mid_price > 0:
-        spread_pct = ((ask - bid) / mid_price) * 100
-    elif bid == 0 and ask == 0:
-        spread_pct = 100.0
-
-    if spread_pct > profile.get('max_spread_pct', 60):
-        return _create_failed_decision(ticker, option_type, strike, expiration, f"Spread too wide: {spread_pct:.1f}%")
-
-    option_type = str(option.get('option_type', '') or '').upper()
-    delta = float(option.get('delta', 0) or 0)
-    implied_volatility = float(option.get('implied_volatility', 0) or 0)
-    open_interest = int(option.get('open_interest', 0) or 0)
-    volume = int(option.get('volume', 0) or 0)
-    premium_per_contract = mid_price * 100
-
-    if premium_per_contract < profile.get('min_premium_per_contract', 10):
-        return _create_failed_decision(ticker, option_type, strike, expiration, f"Premium too low: {premium_per_contract}")
-    if open_interest < profile.get('min_open_interest', 10) and volume < profile.get('min_volume', 1):
-        return _create_failed_decision(ticker, option_type, strike, expiration, "Open interest and volume too low")
-
     # -- Enrich Greeks if missing (TODO 0.3) -----------------------
     if implied_volatility > 0 and abs(delta) < 0.001:
         from core.greeks import enrich_option_with_greeks
@@ -331,6 +293,9 @@ def score_contract(
     shares_owned = float(position.get('position', 0) or 0)
     avg_cost = float(position.get('avg_cost', 0) or 0)
     cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
+    available_cash = float(portfolio_context.get('available_cash', cash_balance) or 0)
+    cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', available_cash) or 0)
+    cash_reserved_for_csp = float(portfolio_context.get('cash_reserved_for_csp', 0) or 0)
     account_value = portfolio_context.get('account_value', cash_balance)
     vix_regime = portfolio_context.get('vix_regime')
 
@@ -529,22 +494,13 @@ def score_contract(
         otm_pct = ((stock_price - strike) / stock_price) * 100
         cash_required = strike * 100
 
-        # Cash reserve check
-        reserved = 0.0
-        short_puts = portfolio_context.get('short_puts', {})
-        if short_puts:
-            for t, count in short_puts.items():
-                pos = portfolio_context.get('positions', {}).get(t, {})
-                s = float(pos.get('avg_cost', 0) or 0)
-                if s > 0:
-                    reserved += s * 100 * abs(count)
-        available_for_new = max(0, cash_balance - reserved)
-        if cash_required > available_for_new:
-            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, available ${available_for_new:.0f}")
+        # Cash reserve check using centralized CSP buying power
+        if cash_required > cash_available_for_csp:
+            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, available ${cash_available_for_csp:.0f} (reserved ${cash_reserved_for_csp:.0f})")
 
         breakeven = strike - mid_price
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
-        capital_fit = 1.0 if cash_balance <= 0 else _clamp(cash_balance / cash_required)
+        capital_fit = 1.0 if available_cash <= 0 else _clamp(available_cash / cash_required)
 
         capital_efficiency = 0.0
         ce_score = 0.0
@@ -592,8 +548,8 @@ def score_contract(
             decision.warnings.append('Wide bid/ask spread')
         if open_interest < profile.get('ideal_open_interest', 500):
             decision.warnings.append('Below ideal open interest')
-        if cash_balance > 0 and cash_required > cash_balance:
-            decision.warnings.append('Cash required exceeds current cash balance')
+        if available_cash > 0 and cash_required > cash_available_for_csp:
+            decision.warnings.append(f'Cash required (${cash_required:.0f}) exceeds CSP buying power (${cash_available_for_csp:.0f})')
         if iv_status_str == 'extreme_low':
             decision.warnings.append(f'IV extremely low ({decision.iv_rank:.0f}%) - poor risk/reward')
         elif iv_status_str == 'low':

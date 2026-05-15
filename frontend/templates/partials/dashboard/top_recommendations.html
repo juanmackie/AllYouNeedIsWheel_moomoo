@@ -16,7 +16,19 @@
     <div id="top-recommendations-container" class="recommendation-stage__body">
         <div id="top-recommendations-state"></div>
         <div id="top-recommendations-content" class="d-none">
-            <div class="row g-2" id="top-recommendations-cards"></div>
+            <div id="lanes-covered-calls-section" class="mb-3 d-none">
+                <h6 class="text-muted text-uppercase small fw-semibold mb-2">
+                    <i class="bi bi-graph-up-arrow text-success"></i> Covered Calls
+                </h6>
+                <div class="row g-2" id="lanes-covered-calls-cards"></div>
+            </div>
+            <div id="lanes-watchlist-csp-section" class="mb-3 d-none">
+                <h6 class="text-muted text-uppercase small fw-semibold mb-2">
+                    <i class="bi bi-shield-check text-danger"></i> Watchlist Cash-Secured Puts
+                </h6>
+                <div class="row g-2" id="lanes-watchlist-csp-cards"></div>
+            </div>
+            <div id="top-recommendations-cards" class="row g-2"></div>
         </div>
     </div>
 

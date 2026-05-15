@@ -556,7 +556,9 @@ def get_cash_status():
         summary = portfolio_service.get_portfolio_summary() or {}
         option_positions = portfolio_service.get_positions('OPT') or []
         
-        cash_balance = float(summary.get('cash_balance', 0) or 0)
+        cash_balance = float(summary.get('cash_balance', summary.get('available_cash', 0)) or 0)
+        excess_liquidity = float(summary.get('excess_liquidity', 0) or 0)
+        available_cash = max(cash_balance, excess_liquidity)
         cash_reserved = 0.0
         open_puts = []
         
@@ -576,12 +578,17 @@ def get_cash_status():
                 })
         
         cash_available = max(0, cash_balance - cash_reserved)
+        cash_available_for_csp = max(0, available_cash - cash_reserved)
         reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
         return success_response({
             'cash_balance': round(cash_balance, 2),
             'cash_reserved': round(cash_reserved, 2),
             'cash_available': round(cash_available, 2),
+            'cash_available_for_csp': round(cash_available_for_csp, 2),
+            'cash_reserved_for_csp': round(cash_reserved, 2),
+            'available_cash': round(available_cash, 2),
+            'excess_liquidity': round(excess_liquidity, 2),
             'reserve_enabled': reserve_enabled,
             'open_puts': open_puts,
             'open_puts_count': len(open_puts)
@@ -610,9 +617,30 @@ def get_vix_regime():
 
 @bp.route('/watchlist-tickers', methods=['GET'])
 def get_watchlist_tickers():
-    config = current_app.config.get('connection_config', {})
-    tickers = config.get('watchlist', [])
-    return success_response({'tickers': tickers})
+    """
+    Get the effective watchlist (includes dynamic/hybrid screening if configured).
+    Returns the watchlist used for CSP recommendations and scanning.
+    """
+    try:
+        from api.services.watchlist_manager import WatchlistManager
+        from api.services.config import get_config
+        config = get_config()
+        manager = WatchlistManager(config_provider=config)
+        effective_tickers = manager.get_effective_watchlist()
+        return success_response({
+            'tickers': effective_tickers,
+            'count': len(effective_tickers),
+            'mode': config.get('watchlist_mode', 'static'),
+        })
+    except Exception as e:
+        logger.warning(f"Failed to get effective watchlist, falling back to static: {e}")
+        config = current_app.config.get('connection_config', {})
+        tickers = config.get('watchlist', [])
+        return success_response({
+            'tickers': tickers,
+            'count': len(tickers),
+            'mode': 'static_fallback',
+        })
 
 
 @bp.route('/analytics/lifecycle', methods=['GET'])

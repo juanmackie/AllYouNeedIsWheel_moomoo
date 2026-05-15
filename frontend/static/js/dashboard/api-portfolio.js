@@ -111,6 +111,25 @@ export async function fetchTickers() {
     }
 }
 
+export async function fetchWatchlistTickers() {
+    try {
+        const response = await fetch('/api/options/watchlist-tickers');
+        const payload = await readJsonSafely(response);
+        if (!response.ok) {
+            if (isOpenDUnavailable(payload)) {
+                setConnectionStatusFromPayload(payload);
+                return { tickers: [], mode: 'static_fallback' };
+            }
+            throw new Error(payload?.error || `HTTP error ${response.status}`);
+        }
+        clearUnavailableStatus();
+        return payload;
+    } catch (error) {
+        console.error('Error fetching watchlist tickers:', error);
+        return { tickers: [], mode: 'static_fallback' };
+    }
+}
+
 export async function fetchRollPressure() {
     try {
         const timestamp = new Date().getTime();

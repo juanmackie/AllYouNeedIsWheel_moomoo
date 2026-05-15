@@ -1270,6 +1270,138 @@ class TestLeakageAnalytics(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Watchlist tickers
+# ---------------------------------------------------------------------------
+
+class TestWatchlistTickers(unittest.TestCase):
+    """GET /api/options/watchlist-tickers"""
+
+    @patch('api.services.watchlist_manager.WatchlistManager')
+    @patch('api.services.config.get_config')
+    def test_returns_effective_watchlist(self, mock_get_config, mock_wl_cls):
+        """Should return effective watchlist with mode."""
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda k, d=None: {
+            'watchlist': ['AAPL', 'MSFT'],
+            'watchlist_mode': 'static',
+        }.get(k, d)
+        mock_get_config.return_value = mock_config
+
+        mock_wl = MagicMock()
+        mock_wl.get_effective_watchlist.return_value = ['AAPL', 'MSFT', 'GOOGL']
+        mock_wl_cls.return_value = mock_wl
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/watchlist-tickers')
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data['success'])
+        self.assertEqual(data['count'], 3)
+        self.assertIn('mode', data)
+
+    @patch('api.services.watchlist_manager.WatchlistManager')
+    @patch('api.services.config.get_config')
+    def test_fallback_on_exception(self, mock_get_config, mock_wl_cls):
+        """Should fall back to static config on exception."""
+        mock_wl = MagicMock()
+        mock_wl.get_effective_watchlist.side_effect = Exception("Boom")
+        mock_wl_cls.return_value = mock_wl
+
+        app = _make_app(connection_config={
+            'host': '127.0.0.1', 'port': 11111, 'watchlist': ['AAPL']
+        })
+        with app.test_client() as client:
+            resp = client.get('/api/options/watchlist-tickers')
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data['success'])
+        self.assertEqual(data['count'], 1)
+        self.assertEqual(data['tickers'], ['AAPL'])
+
+
+# ---------------------------------------------------------------------------
+# Cash status CSP fields
+# ---------------------------------------------------------------------------
+
+class TestCashStatusCSPFields(unittest.TestCase):
+    """GET /api/options/cash-status — CSP-specific fields"""
+
+    def setUp(self):
+        _reset_service_global()
+        self.mock_service = _patch_service()
+        self.mock_service.config = {'cash_reserve_enabled': True}
+
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
+    @patch('api.services.portfolio_service.PortfolioService')
+    def test_returns_csp_fields(self, mock_portfolio_cls, mock_probe,
+                                mock_get_svc):
+        """Should include cash_available_for_csp and cash_reserved_for_csp."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_get_svc.return_value = self.mock_service
+
+        mock_portfolio = MagicMock()
+        mock_portfolio.get_portfolio_summary.return_value = {
+            'cash_balance': 50000,
+            'excess_liquidity': 55000,
+        }
+        mock_portfolio.get_positions.return_value = [
+            {
+                'symbol': 'US.AAPL',
+                'position': -1,
+                'option_type': 'PUT',
+                'strike': 150.0,
+                'expiration': '20240510',
+            }
+        ]
+        mock_portfolio_cls.return_value = mock_portfolio
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/cash-status')
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('cash_available_for_csp', data)
+        self.assertIn('cash_reserved_for_csp', data)
+        self.assertIn('available_cash', data)
+        # available_cash = max(50000, 55000) = 55000
+        self.assertEqual(data['available_cash'], 55000.0)
+        # cash_reserved = 1 * 150 * 100 = 15000
+        self.assertEqual(data['cash_reserved_for_csp'], 15000.0)
+        # cash_available_for_csp = 55000 - 15000 = 40000
+        self.assertEqual(data['cash_available_for_csp'], 40000.0)
+
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
+    @patch('api.services.portfolio_service.PortfolioService')
+    def test_preserves_existing_aliases(self, mock_portfolio_cls, mock_probe,
+                                         mock_get_svc):
+        """Should preserve existing cash_balance, cash_reserved, cash_available aliases."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_get_svc.return_value = self.mock_service
+
+        mock_portfolio = MagicMock()
+        mock_portfolio.get_portfolio_summary.return_value = {
+            'cash_balance': 50000,
+        }
+        mock_portfolio.get_positions.return_value = []
+        mock_portfolio_cls.return_value = mock_portfolio
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/cash-status')
+            data = resp.get_json()
+
+        self.assertIn('cash_balance', data)
+        self.assertIn('cash_reserved', data)
+        self.assertIn('cash_available', data)
+
+
+# ---------------------------------------------------------------------------
 # Prefilled close order
 # ---------------------------------------------------------------------------
 

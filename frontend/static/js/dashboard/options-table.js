@@ -3,6 +3,7 @@
  * Orchestrator that composes functionality from focused sub-modules.
  */
 import { fetchTickers, fetchAccountData, fetchOptionExpirations, fetchStockPrices } from './api.js';
+import { fetchWatchlistTickers } from './api-portfolio.js';
 import { state, loadOtmSettings, loadCustomTickers } from './options-table-state.js';
 import { calculateEarningsSummary } from './options-table-calc.js';
 import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, addPutQtyInputEventListeners, initializeOptionsTableTooltips } from './options-table-rendering.js';
@@ -148,21 +149,30 @@ async function loadTickers() {
         console.error('Error fetching portfolio data:', error);
     }
 
-    const data = await fetchTickers();
-    let portfolioTickers = [];
+    const [data, watchlistResp] = await Promise.all([
+        fetchTickers(),
+        fetchWatchlistTickers()
+    ]);
 
+    let portfolioTickers = [];
     if (data && data.tickers) {
         portfolioTickers = data.tickers;
     }
 
-    const allTickers = [...new Set([...portfolioTickers, ...state.customTickers])];
+    let watchlistTickers = [];
+    if (watchlistResp && watchlistResp.tickers) {
+        watchlistTickers = watchlistResp.tickers;
+    }
+
+    const putTickers = [...new Set([...portfolioTickers, ...watchlistTickers, ...state.customTickers])];
 
     document.querySelector('#call-options-table tbody').innerHTML = '';
     document.querySelector('#put-options-table tbody').innerHTML = '';
 
-    const totalTickers = allTickers.length;
+    const totalTickers = putTickers.length;
     for (let i = 0; i < totalTickers; i++) {
-        const ticker = allTickers[i];
+        const ticker = putTickers[i];
+        const isPortfolioTicker = portfolioTickers.includes(ticker);
 
         if (!state.tickersData[ticker]) {
             state.tickersData[ticker] = {
@@ -184,17 +194,20 @@ async function loadTickers() {
         }
 
         const progressMessage = `Loading data for ${ticker} (${i+1}/${totalTickers})...`;
-        const callStatusRow = document.createElement('tr');
-        callStatusRow.id = `call-status-${ticker}`;
-        callStatusRow.innerHTML = `
-            <td colspan="13" class="text-center">
-                <div class="d-flex align-items-center justify-content-center">
-                    <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
-                    <span>${progressMessage}</span>
-                </div>
-            </td>
-        `;
-        document.querySelector('#call-options-table tbody').appendChild(callStatusRow);
+
+        if (isPortfolioTicker) {
+            const callStatusRow = document.createElement('tr');
+            callStatusRow.id = `call-status-${ticker}`;
+            callStatusRow.innerHTML = `
+                <td colspan="13" class="text-center">
+                    <div class="d-flex align-items-center justify-content-center">
+                        <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                        <span>${progressMessage}</span>
+                    </div>
+                </td>
+            `;
+            document.querySelector('#call-options-table tbody').appendChild(callStatusRow);
+        }
 
         const putStatusRow = document.createElement('tr');
         putStatusRow.id = `put-status-${ticker}`;
@@ -209,12 +222,18 @@ async function loadTickers() {
         document.querySelector('#put-options-table tbody').appendChild(putStatusRow);
 
         try {
-            await refreshOptionsForTicker(ticker, false);
+            if (isPortfolioTicker) {
+                await refreshOptionsForTicker(ticker, false);
+            } else {
+                await refreshOptionsForTickerByType(ticker, 'PUT', false);
+            }
 
             document.getElementById(`call-status-${ticker}`)?.remove();
             document.getElementById(`put-status-${ticker}`)?.remove();
 
-            addTickerRowToTable('call-options-table', 'CALL', ticker);
+            if (isPortfolioTicker) {
+                addTickerRowToTable('call-options-table', 'CALL', ticker);
+            }
             addTickerRowToTable('put-options-table', 'PUT', ticker);
 
             addPutQtyInputEventListeners();
@@ -222,7 +241,7 @@ async function loadTickers() {
             console.error(`Error loading data for ticker ${ticker}:`, error);
 
             const errorMessage = `Error loading data for ${ticker}: ${error.message}`;
-            if (document.getElementById(`call-status-${ticker}`)) {
+            if (isPortfolioTicker && document.getElementById(`call-status-${ticker}`)) {
                 document.getElementById(`call-status-${ticker}`).innerHTML = `
                     <td colspan="13" class="text-center text-danger">
                         <i class="bi bi-exclamation-triangle"></i> ${errorMessage}
@@ -267,7 +286,7 @@ async function loadTickers() {
             <td colspan="13" class="text-center p-3">
                 <div class="alert alert-info m-0">
                     No cash secured put opportunities found.
-                    Add a ticker to see put option opportunities.
+                    Add a ticker or configure your watchlist to see put opportunities.
                 </div>
             </td>
         `;
