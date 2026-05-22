@@ -18,11 +18,12 @@
 
 {% block content %}
 {% include "partials/dashboard/account_summary.html" %}
-{% include "partials/dashboard/pending_orders.html" %}
+{% include "partials/dashboard/weekly_income.html" %}
 {% include "partials/dashboard/top_recommendations.html" %}
 {% include "partials/dashboard/earnings_vol_signals.html" %}
 {% include "partials/dashboard/options_table.html" %}
 {% include "partials/components/sizing_modal.html" %}
+{% include "partials/dashboard/evaluator_widget.html" %}
 
 {% with 
   modal_id="confirmCloseModal",
@@ -49,7 +50,7 @@
       <div id="llm-status" class="text-muted small">Ready. Click "Generate Suggestions" to get AI-powered trade advice.</div>
       <div id="llm-result" class="d-none mt-3">
         <div class="alert alert-info" role="alert">
-          <div id="llm-result-text" style="white-space: pre-wrap;"></div>
+          <div id="llm-result-text" class="llm-markdown"></div>
         </div>
         <small class="text-muted" id="llm-result-meta"></small>
       </div>
@@ -65,4 +66,5 @@
 {% block scripts %}
 <script type="module" src="{{ url_for('static', filename='js/utils/sparklines.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/dashboard/dashboard.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/dashboard/evaluator-widget.js') }}"></script>
 {% endblock %}

@@ -4,13 +4,12 @@
  */
 import { loadPortfolioData } from './account.js';
 import { loadTickers } from './options-table.js';
-import { loadPendingOrders } from './orders.js';
 import { initializeTopRecommendations } from './top-recommendations.js';
 import { initializeEarningsVolSignals } from './earnings-vol-signals.js';
 import { loadMacroRegime } from './macro.js';
 import { initializeLLMAdvisor } from './llm-advisor.js';
 import { formatCurrency } from '../utils/formatters.js';
-import { fetchWeeklyOptionIncome, executeCloseOrder } from './api.js';
+import { fetchWeeklyOptionIncome } from './api.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
 import { loadTechnicalRegime, loadLockedTickers, loadVixRegime, updateWeeklyEarningsSummary } from './dashboard-regime.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
@@ -39,18 +38,25 @@ export async function initializeDashboard() {
         } catch (error) { console.error('Wave 1 error:', error); }
         hideWaveLoading('wave1');
 
-        showWaveLoading('wave2', 'Loading positions & orders...');
+        showWaveLoading('wave2', 'Loading positions...');
         try {
-            await Promise.all([loadPositionsCommandPanel(), loadPendingOrders()]);
+            await loadPositionsCommandPanel();
         } catch (error) { console.error('Wave 2 error:', error); }
         hideWaveLoading('wave2');
 
         showWaveLoading('wave3', 'Loading market data...');
         try {
+            // Kick off the options table independently so a slow ticker
+            // cannot delay the rest of wave 3.
+            const tickersPromise = loadTickers().catch(err => console.error('Options table error:', err));
+
             await Promise.all([
-                loadTickers(), updateWeeklyEarningsSummary(),
+                updateWeeklyEarningsSummary(),
                 loadVixRegime(), loadMacroRegime(), loadTechnicalRegime(), updateIdleCashPanel()
             ]);
+
+            // Do NOT await tickersPromise here – Phase 2 (inactive tab)
+            // continues loading in the background after this point.
         } catch (error) { console.error('Wave 3 error:', error); }
         hideWaveLoading('wave3');
 
@@ -117,7 +123,7 @@ export async function loadPositionsCommandPanel() {
             const isItm = (pos.otm_pct || 0) < 0; const deepItm = isItm && Math.abs(pos.otm_pct) > 15;
             const daysToEarnings = (pos.wheel_decision && pos.wheel_decision.days_to_earnings) || null;
             let statusBadge, statusClass, btnHtml;
-            if (profit >= 50) { statusBadge = 'Recycle'; statusClass = 'bg-success'; btnHtml = `<button class="btn btn-sm btn-success close-position-btn" data-ticker="${pos.ticker}" data-type="${pos.option_type}" data-strike="${pos.strike}" data-expiration="${pos.expiration}"><i class="bi bi-arrow-return-left"></i> CLOSE</button>`; }
+            if (profit >= 50) { statusBadge = 'Recycle'; statusClass = 'bg-success'; btnHtml = '<span class="text-muted small">Close externally</span>'; }
             else if (deepItm) { statusBadge = 'Watch'; statusClass = 'bg-danger'; btnHtml = '<span class="text-danger small">⚠ Deep ITM — monitor</span>'; }
             else if (isItm) { statusBadge = 'Holding'; statusClass = 'bg-secondary'; btnHtml = '<span class="text-muted small">✓ Assign OK</span>'; }
             else if (pressure >= 70) { statusBadge = 'Urgent'; statusClass = 'bg-warning text-dark'; btnHtml = '<span class="text-warning small">Roll pressure high</span>'; }
@@ -128,31 +134,12 @@ export async function loadPositionsCommandPanel() {
             const expiryDisplay = expiry.length === 8 ? expiry.slice(0,4) + '-' + expiry.slice(4,6) + '-' + expiry.slice(6,8) : expiry;
             return `<tr><td><strong>${pos.ticker}</strong></td><td><span class="badge ${pos.option_type === 'PUT' ? 'bg-danger' : 'bg-success'}">${pos.option_type}</span></td><td>$${(pos.strike || 0).toFixed(2)}</td><td class="small">${expiryDisplay}</td><td class="small">${renderEarningsBadge(daysToEarnings)}</td><td style="min-width:100px"><div class="progress" style="height:6px"><div class="progress-bar ${barColor}" style="width:${barWidth}%"></div></div><small class="${profit >= 50 ? 'text-success fw-bold' : 'text-muted'}">${profit.toFixed(0)}%</small></td><td><span class="badge ${statusClass}">${statusBadge}</span></td><td>${btnHtml}</td></tr>`;
         }).join('');
-        tbody.querySelectorAll('.close-position-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const modalEl = document.getElementById('confirmCloseModal');
-                if (modalEl) {
-                    modalEl.dataset.ticker = btn.dataset.ticker; modalEl.dataset.type = btn.dataset.type;
-                    modalEl.dataset.strike = btn.dataset.strike; modalEl.dataset.expiration = btn.dataset.expiration;
-                    const strike = parseFloat(btn.dataset.strike) || 0; const cost = strike * 100;
-                    const cashImpactEl = document.getElementById('confirmCloseModal-cash-impact');
-                    if (cashImpactEl) cashImpactEl.textContent = `Estimated cost: ${formatCurrency(cost)} (strike × 100).`;
-                    bootstrap.Modal.getOrCreateInstance(modalEl).show();
-                } else { executeCloseDirectly(btn); }
-            });
-        });
         const refreshBtn = document.getElementById('refresh-positions-command');
         if (refreshBtn) refreshBtn.onclick = () => loadPositionsCommandPanel();
     } catch (err) {
         console.error('Error loading positions command panel:', err);
         tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">Error loading positions</td></tr>';
     }
-}
-
-function executeCloseDirectly(btn) {
-    executeCloseOrder({ ticker: btn.dataset.ticker, option_type: btn.dataset.type, strike: btn.dataset.strike, expiration: btn.dataset.expiration })
-        .then(result => { if (result.success) loadPositionsCommandPanel(); })
-        .catch(err => console.error('Close failed:', err));
 }
 
 function renderEarningsBadge(days) {

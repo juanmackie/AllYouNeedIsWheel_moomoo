@@ -89,9 +89,8 @@ def main():
         if args.realmoney:
             if 'CONNECTION_CONFIG' not in os.environ:
                 os.environ['CONNECTION_CONFIG'] = 'connection_real.json'
-            logger.warning("Using REAL MONEY trading configuration! Be careful with your orders!")
-            if not os.environ.get('MOOMOO_TRADING_PASSWORD'):
-                logger.warning("MOOMOO_TRADING_PASSWORD not set - live trading may fail to unlock trades")
+            logger.warning("Using REAL MONEY connection configuration — signals only, no execution")
+            # MOOMOO_TRADING_PASSWORD no longer used — execution subsystem removed
         elif 'CONNECTION_CONFIG' not in os.environ:
             os.environ['CONNECTION_CONFIG'] = 'connection.json'
             logger.info("Using paper trading configuration (moomoo SIMULATE)")

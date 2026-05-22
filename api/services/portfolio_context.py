@@ -45,6 +45,9 @@ class PortfolioContext:
             'short_puts': {},
             'cash_reserved_for_csp': 0.0,
             'cash_available_for_csp': 0.0,
+            'broker_buying_power': 0.0,
+            'broker_buying_power_source': 'none',
+            'open_short_put_collateral': 0.0,
             'vix_regime': self._vix_regime_provider.get_vix_regime() if self._vix_regime_provider else {'regime': 'normal', 'vix': 20.0}
         }
 
@@ -57,21 +60,40 @@ class PortfolioContext:
             stock_positions = portfolio_service.get_positions('STK') or []
             option_positions = portfolio_service.get_positions('OPT') or []
 
-            context['cash_balance'] = float(summary.get('available_cash', 0) or 0)
+            # Parse cash from first valid field: available_cash, cash_balance, cash_available, buying_power, excess_liquidity
+            cash_fields = ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']
+            raw_cash = 0.0
+            source_field = 'none'
+            for f in cash_fields:
+                v = summary.get(f)
+                if v is not None:
+                    try:
+                        raw_cash = float(v)
+                        if raw_cash > 0:
+                            source_field = f
+                            break
+                    except (TypeError, ValueError):
+                        continue
+
+            context['cash_balance'] = float(summary.get('available_cash', summary.get('cash_balance', 0)) or 0)
             context['account_value'] = float(summary.get('account_value', 0) or 0)
             context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
 
-            # Use excess_liquidity as the primary cash measure (more accurate for CSP buying power)
-            context['available_cash'] = max(
-                context['excess_liquidity'],
-                context['cash_balance']
-            )
+            # Use max of available cash and excess liquidity (more accurate for CSP buying power)
+            context['available_cash'] = max(raw_cash, context['excess_liquidity'])
+
+            # Moomoo buying power is authoritative — broker already accounts for open positions
+            context['broker_buying_power'] = context['available_cash']
+            context['broker_buying_power_source'] = source_field
 
             for position in stock_positions:
-                symbol = str(position.get('symbol', '') or '').replace('US.', '')
+                raw_symbol = str(position.get('symbol', '') or '')
+                symbol = raw_symbol.replace('US.', '')
                 if not symbol:
                     continue
                 context['positions'][symbol] = position
+                if raw_symbol and raw_symbol != symbol:
+                    context['positions'][raw_symbol] = position
 
             for position in option_positions:
                 symbol = str(position.get('symbol', '') or '').replace('US.', '')
@@ -88,10 +110,27 @@ class PortfolioContext:
                     elif option_type == 'PUT':
                         context['short_puts'][symbol] = context['short_puts'].get(symbol, 0) + contracts
 
-            # Calculate cash reserved for existing short puts
+            # Calculate cash reserved for existing short puts (diagnostics only)
             cash_reserved = self._calculate_cash_reserved(context)
             context['cash_reserved_for_csp'] = cash_reserved
-            context['cash_available_for_csp'] = max(0, context['available_cash'] - cash_reserved)
+            context['open_short_put_collateral'] = cash_reserved
+
+            # cash_available_for_csp = broker_buying_power (NOT reduced by open short puts)
+            # Broker buying power already accounts for open positions.
+            # Only pending staged CSP orders reduce staging capacity (handled at order-executor level).
+            context['cash_available_for_csp'] = max(0, context['broker_buying_power'])
+
+            # Diagnostics: expose raw summary fields for debugging
+            context['_cash_diagnostics'] = {
+                'raw_summary_fields': {f: summary.get(f) for f in ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']},
+                'available_cash': context['available_cash'],
+                'broker_buying_power': context['broker_buying_power'],
+                'broker_buying_power_source': source_field,
+                'excess_liquidity': context['excess_liquidity'],
+                'open_short_put_collateral': cash_reserved,
+                'cash_reserved_for_csp': cash_reserved,
+                'cash_available_for_csp': context['cash_available_for_csp'],
+            }
                         
         except Exception as exc:
             logger.error(f"Error building portfolio context for options scoring: {exc}")

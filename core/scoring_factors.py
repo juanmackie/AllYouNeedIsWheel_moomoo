@@ -41,26 +41,41 @@ def _calculate_mid_price(bid: float, ask: float, last: float = 0.0) -> float:
     return 0.0
 
 
-def _compute_shared_subscores(decision, profile: dict) -> None:
+def _compute_shared_subscores(decision, profile: dict, growth_mode_weights: dict | None = None) -> None:
     """
     Compute all sub-scores that are shared between CALL and PUT.
     Operates in-place on the WheelDecision.
+    When growth_mode_weights is provided, sub-score computations tilt toward
+    growth-oriented priorities (premium, capital efficiency, theta decay).
     """
+    _growth_w = growth_mode_weights or {}
+    _growth_active = bool(_growth_w.get('enabled', True))
     decision.oi_score = _score_positive_metric(decision.open_interest, profile['ideal_open_interest']) * 100
     decision.volume_score = _score_positive_metric(decision.volume, profile['ideal_volume']) * 100
     decision.spread_score = _clamp(1 - (decision.spread_pct / max(profile['ideal_spread_pct'], 1)), 0, 1) * 100
 
-    liquidity_raw = (
-        decision.oi_score * 0.45 +
-        decision.volume_score * 0.2 +
-        decision.spread_score * 0.35
-    ) / 100
+    if _growth_active:
+        # Growth-tuned liquidity: volume matters more (ease of entry/exit)
+        liquidity_raw = (
+            decision.oi_score * 0.35 +
+            decision.volume_score * 0.35 +
+            decision.spread_score * 0.30
+        ) / 100
+    else:
+        liquidity_raw = (
+            decision.oi_score * 0.45 +
+            decision.volume_score * 0.2 +
+            decision.spread_score * 0.35
+        ) / 100
     liq_mult = profile.get('liquidity_weight_multiplier', 1.0)
     decision.liquidity_score = _clamp(liquidity_raw * liq_mult) * 100
 
     if decision.iv_adjusted_return > 0:
+        target_iv_adj = profile.get('target_iv_adjusted', 50)
+        if _growth_active:
+            target_iv_adj = max(target_iv_adj, 60)  # higher bar for IV-adjusted return in growth mode
         decision.iv_adjusted_score = _score_positive_metric(
-            decision.iv_adjusted_return, profile.get('target_iv_adjusted', 50)
+            decision.iv_adjusted_return, target_iv_adj
         ) * 100
 
     if decision.stock_price > 0 and abs(decision.delta) > 0:
@@ -79,7 +94,7 @@ def _compute_shared_subscores(decision, profile: dict) -> None:
         decision.dte, profile['preferred_dte'], max(profile['preferred_dte'], 10)
     ) * 100
 
-    desired_otm = 10
+    desired_otm = profile.get('default_otm_pct', 10)
     decision.otm_score = _score_proximity(
         decision.otm_pct, desired_otm, max(desired_otm * 0.75, 6)
     ) * 100

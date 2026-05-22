@@ -73,58 +73,15 @@
     </div>
 
     <div class="app-section__footer">
-        Suggestions are shown as paired order rows: one to close the current position and one to open the next contract.
-    </div>
-</section>
-
-<section class="app-section rollover-section">
-    <div class="app-section__header">
-        <div>
-            <span class="app-section__eyebrow">Open tasks</span>
-            <h2>Rollover pending orders</h2>
-            <p>Track rollover-related orders separately from the main dashboard queue.</p>
-        </div>
-        <div class="app-section__actions">
-            <button id="refresh-pending-orders" class="btn btn-outline-primary" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh rollover pending orders">
-                <i class="bi bi-arrow-repeat"></i> Refresh pending
-            </button>
-        </div>
-    </div>
-
-    <div class="table-responsive">
-        <table class="table table-striped" id="pending-orders-table">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Action</th>
-                    <th>Symbol</th>
-                    <th>Type</th>
-                    <th>Strike</th>
-                    <th>Expiration</th>
-                    <th>Contracts</th>
-                    <th>Limit Price</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="pending-orders-table-body">
-                <tr>
-                    <td colspan="10" class="text-center">Loading rollover pending orders...</td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-
-    <div class="app-section__footer">
-        This table only shows rollover-related option orders. Use the dashboard for the full pending order queue.
+        Suggestions show the close and open legs together so you can review the rollover without treating it as an in-app order flow.
     </div>
 </section>
 
 {% with 
   modal_id="confirmRollModal",
-  title="Confirm Roll Order",
-  body="Are you sure you want to roll this position? This will close the current position and open a new one.",
-  confirm_button_text="Roll Order",
+  title="Rollover Suggestion",
+  body="Signal only — review this rollover in your broker app.",
+  confirm_button_text="Signal Only",
   confirm_button_class="btn-warning"
 %}
   {% include "partials/components/confirm_modal.html" %}

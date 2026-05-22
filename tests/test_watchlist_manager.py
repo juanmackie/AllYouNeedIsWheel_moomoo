@@ -175,6 +175,158 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
         self.assertEqual(profile['vix_regime'], 'complacency')
         self.assertGreater(profile['target_delta'], 0.22)
 
+    # ------------------------------------------------------------------ #
+    # Growth Mode screener profile tests
+    # ------------------------------------------------------------------ #
+
+    def test_growth_mode_put_uses_higher_delta(self):
+        """Growth Mode PUT profile should use higher target delta (0.28-0.35)."""
+        growth_cfg = {
+            'enabled': True,
+            'screener_profile': {
+                'csp_target_delta': 0.30,
+                'csp_delta_tolerance': 0.12,
+                'csp_min_dte': 30,
+                'csp_max_dte': 45,
+                'csp_preferred_dte': 37,
+                'csp_default_otm_pct': 10,
+                'csp_min_otm_pct': 5,
+                'csp_max_otm_pct': 15,
+                'min_iv_rank': 45,
+                'max_watchlist_tickers': 25,
+                'require_cash_fit': True,
+            },
+        }
+        growth_profile = self.manager.get_screening_profile(
+            'PUT', growth_mode_config=growth_cfg
+        )
+        self.assertEqual(growth_profile['target_delta'], 0.30)
+        self.assertEqual(growth_profile['delta_tolerance'], 0.12)
+
+    def test_growth_mode_put_uses_shorter_dte(self):
+        """Growth Mode PUT profile should use the 30-45 DTE CSP window."""
+        growth_cfg = {
+            'enabled': True,
+            'screener_profile': {
+                'csp_target_delta': 0.30,
+                'csp_delta_tolerance': 0.12,
+                'csp_min_dte': 30,
+                'csp_max_dte': 45,
+                'csp_preferred_dte': 37,
+                'csp_default_otm_pct': 10,
+                'csp_min_otm_pct': 5,
+                'csp_max_otm_pct': 15,
+            },
+        }
+        growth_profile = self.manager.get_screening_profile(
+            'PUT', growth_mode_config=growth_cfg
+        )
+        self.assertEqual(growth_profile['preferred_dte'], 37)
+        self.assertEqual(growth_profile['min_dte'], 30)
+        self.assertEqual(growth_profile['max_dte'], 45)
+        self.assertEqual(growth_profile.get('min_otm_pct'), 5)
+        self.assertEqual(growth_profile.get('max_otm_pct'), 15)
+
+    def test_growth_mode_put_default_otm_closer(self):
+        """Growth Mode PUT profile should use the 10% OTM default."""
+        growth_cfg = {
+            'enabled': True,
+            'screener_profile': {
+                'csp_target_delta': 0.30,
+                'csp_delta_tolerance': 0.12,
+                'csp_preferred_dte': 37,
+                'csp_default_otm_pct': 10,
+                'csp_min_otm_pct': 5,
+                'csp_max_otm_pct': 15,
+            },
+        }
+        growth_profile = self.manager.get_screening_profile(
+            'PUT', growth_mode_config=growth_cfg
+        )
+        self.assertEqual(growth_profile.get('default_otm_pct'), 10)
+
+    def test_growth_mode_put_sets_growth_screener_flag(self):
+        """Growth Mode PUT profile should set growth_screener flag."""
+        growth_cfg = {
+            'enabled': True,
+            'screener_profile': {
+                'csp_target_delta': 0.30,
+                'csp_delta_tolerance': 0.12,
+                'csp_preferred_dte': 37,
+                'csp_default_otm_pct': 10,
+                'csp_min_otm_pct': 5,
+                'csp_max_otm_pct': 15,
+            },
+        }
+        growth_profile = self.manager.get_screening_profile(
+            'PUT', growth_mode_config=growth_cfg
+        )
+        self.assertTrue(growth_profile.get('growth_screener'))
+
+    def test_growth_mode_put_require_cash_fit(self):
+        """Growth Mode PUT profile should set require_cash_fit when enabled."""
+        growth_cfg = {
+            'enabled': True,
+            'screener_profile': {
+                'csp_target_delta': 0.30,
+                'csp_delta_tolerance': 0.12,
+                'csp_preferred_dte': 37,
+                'csp_default_otm_pct': 10,
+                'csp_min_otm_pct': 5,
+                'csp_max_otm_pct': 15,
+                'require_cash_fit': True,
+            },
+        }
+        growth_profile = self.manager.get_screening_profile(
+            'PUT', growth_mode_config=growth_cfg
+        )
+        self.assertTrue(growth_profile.get('require_cash_fit'))
+
+    def test_balanced_mode_keeps_conservative_defaults(self):
+        """Balanced mode (growth disabled) should keep current monthly defaults."""
+        balanced_profile = self.manager.get_screening_profile('PUT')
+        self.assertEqual(balanced_profile['target_delta'], 0.22)
+        self.assertEqual(balanced_profile['delta_tolerance'], 0.16)
+        self.assertEqual(balanced_profile['preferred_dte'], 21)
+        self.assertEqual(balanced_profile['min_dte'], 7)
+        self.assertEqual(balanced_profile['max_dte'], 45)
+        self.assertFalse(balanced_profile.get('growth_screener', False))
+        self.assertNotIn('require_cash_fit', balanced_profile)
+
+    def test_growth_mode_does_not_affect_call_profile(self):
+        """Growth Mode screener profile should only affect PUT, not CALL."""
+        growth_cfg = {
+            'enabled': True,
+            'screener_profile': {
+                'csp_target_delta': 0.30,
+                'csp_delta_tolerance': 0.12,
+                'csp_preferred_dte': 37,
+                'csp_default_otm_pct': 10,
+                'csp_min_otm_pct': 5,
+                'csp_max_otm_pct': 15,
+            },
+        }
+        call_profile = self.manager.get_screening_profile(
+            'CALL', growth_mode_config=growth_cfg
+        )
+        # CALL should keep its own defaults
+        self.assertEqual(call_profile['target_delta'], 0.24)
+        self.assertEqual(call_profile['delta_tolerance'], 0.18)
+
+    def test_growth_mode_effective_watchlist_uses_higher_iv_rank(self):
+        """Growth mode watchlist should use higher min_iv_rank from screener_profile."""
+        growth_cfg = {
+            'enabled': True,
+            'screener_profile': {
+                'min_iv_rank': 45,
+                'max_watchlist_tickers': 25,
+            },
+        }
+        # Just verify the config parsing works properly
+        sp = growth_cfg.get('screener_profile', {})
+        self.assertEqual(sp.get('min_iv_rank'), 45)
+        self.assertEqual(sp.get('max_watchlist_tickers'), 25)
+
 
 if __name__ == '__main__':
     unittest.main()

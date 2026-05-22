@@ -1,9 +1,16 @@
-<section class="app-section market-table-section">
+<section class="app-section market-table-section"
+         data-growth-mode="{{ screening_config.growth_mode_enabled|lower }}"
+         data-csp-otm="{{ screening_config.csp_default_otm_pct }}"
+         data-csp-min-dte="{{ screening_config.csp_min_dte }}"
+         data-csp-max-dte="{{ screening_config.csp_max_dte }}"
+         data-csp-preferred-dte="{{ screening_config.csp_preferred_dte }}"
+         data-csp-min-otm="{{ screening_config.csp_min_otm_pct }}"
+         data-csp-max-otm="{{ screening_config.csp_max_otm_pct }}">
     <div class="app-section__header">
         <div>
             <span class="app-section__eyebrow">Screening engine</span>
-            <h2>Option opportunities</h2>
-            <p>Compare covered calls and cash-secured puts with filtering, scoring, and order staging.</p>
+            <h2>Wheel signal scanner</h2>
+            <p>Compare covered calls and cash-secured puts with filtering, scoring, and signal analysis.</p>
         </div>
         <div class="app-section__actions">
             <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#optionsHelp" aria-expanded="false" aria-controls="optionsHelp">
@@ -18,7 +25,7 @@
                 <div class="col-lg-6">
                     <h3>Strategy context</h3>
                     <p class="text-muted mb-2"><strong>Covered Calls:</strong> Generate income from shares you already own by selling the right for someone else to buy them at a set price.</p>
-                    <p class="text-muted mb-0"><strong>Cash-Secured Puts:</strong> Collect premium while setting aside enough cash to buy shares if assigned at your chosen strike.</p>
+                    <p class="text-muted mb-0"><strong>Cash-Secured Puts:</strong> Focus on 30-45 DTE and 5-15% OTM setups with enough cash set aside to buy shares if assigned.</p>
                 </div>
                 <div class="col-lg-6">
                     <h3>Reading the score</h3>
@@ -33,7 +40,7 @@
             </div>
             <div class="row g-3 mt-2">
                 <div class="col-md-4 text-muted small">
-                    <strong>OTM %</strong> controls distance from current price. Higher reduces assignment risk but also reduces premium.
+                    <strong>CSP lane</strong> targets 30-45 DTE and 5-15% OTM so the wheel stays on the growth path.
                 </div>
                 <div class="col-md-4 text-muted small">
                     <strong>Delta</strong> approximates ITM probability. Lower generally means more buffer.
@@ -52,7 +59,7 @@
         </div>
     </div>
 
-    <div class="app-section__footer">
-        Balanced wheel scoring favors risk-adjusted annualized return, tighter spreads, healthier liquidity, and cleaner assignment profiles.
+    <div class="app-section__footer" id="options-table-footer">
+        Growth Mode favors 30-45 DTE CSPs, 5-15% OTM strikes, covered calls on held stock, cash-fit discipline, and drawdown-budget awareness.
     </div>
 </section>

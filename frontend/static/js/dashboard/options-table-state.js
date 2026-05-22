@@ -4,7 +4,10 @@ const state = {
     eventListenersInitialized: false,
     containerEventListenersInitialized: false,
     customTickers: new Set(),
+    watchlistTickers: new Set(),
+    portfolioTickers: [],
     customTickerListenersInitialized: false,
+    screeningConfig: null,
 };
 
 function getUnavailableTickerMessage() {
@@ -44,13 +47,72 @@ function getRenderExpirationValue(ticker, optionType, fallbackValue = '') {
     return getSelectedExpirationPreference(ticker, optionType) || fallbackValue;
 }
 
+function getOtmBounds(optionType) {
+    if (optionType === 'PUT') {
+        return {
+            min: state.screeningConfig?.cspMinOtmPct ?? 5,
+            max: state.screeningConfig?.cspMaxOtmPct ?? 15,
+            defaultValue: state.screeningConfig?.cspDefaultOtmPct ?? 10,
+        };
+    }
+
+    return {
+        min: 1,
+        max: 50,
+        defaultValue: state.screeningConfig?.callDefaultOtmPct ?? 10,
+    };
+}
+
+function normalizeOtmValue(optionType, value) {
+    const bounds = getOtmBounds(optionType);
+    const numericValue = parseInt(value, 10);
+    if (Number.isNaN(numericValue)) {
+        return bounds.defaultValue;
+    }
+    return Math.max(bounds.min, Math.min(bounds.max, numericValue));
+}
+
+function getDefaultOtm(optionType) {
+    return getOtmBounds(optionType).defaultValue;
+}
+
+function ensureTickerDataState(ticker, defaults = {}) {
+    if (!state.tickersData[ticker]) {
+        state.tickersData[ticker] = {};
+    }
+
+    const tickerState = state.tickersData[ticker];
+    tickerState.data = tickerState.data || { data: {} };
+    tickerState.data.data = tickerState.data.data || {};
+    tickerState.data.data[ticker] = tickerState.data.data[ticker] || {};
+
+    const optionData = tickerState.data.data[ticker];
+    if (typeof optionData.stock_price === 'undefined') optionData.stock_price = 0;
+    if (typeof optionData.position === 'undefined') optionData.position = 0;
+    optionData.calls = optionData.calls || [];
+    optionData.puts = optionData.puts || [];
+
+    if (typeof tickerState.callOtmPercentage === 'undefined') {
+        tickerState.callOtmPercentage = normalizeOtmValue('CALL', defaults.callOtmPercentage ?? getDefaultOtm('CALL'));
+    }
+    if (typeof tickerState.putOtmPercentage === 'undefined') {
+        tickerState.putOtmPercentage = normalizeOtmValue('PUT', defaults.putOtmPercentage ?? getDefaultOtm('PUT'));
+    }
+    if (typeof tickerState.putQuantity === 'undefined') {
+        tickerState.putQuantity = defaults.putQuantity || 1;
+    }
+    tickerState.errors = tickerState.errors || {};
+
+    return tickerState;
+}
+
 function saveOtmSettings() {
     try {
         const otmSettings = {};
         Object.keys(state.tickersData).forEach(ticker => {
             otmSettings[ticker] = {
-                callOtmPercentage: state.tickersData[ticker].callOtmPercentage || 10,
-                putOtmPercentage: state.tickersData[ticker].putOtmPercentage || 10,
+                callOtmPercentage: normalizeOtmValue('CALL', state.tickersData[ticker].callOtmPercentage ?? getDefaultOtm('CALL')),
+                putOtmPercentage: normalizeOtmValue('PUT', state.tickersData[ticker].putOtmPercentage ?? getDefaultOtm('PUT')),
                 putQuantity: state.tickersData[ticker].putQuantity || 1
             };
         });
@@ -65,18 +127,42 @@ function loadOtmSettings() {
         const savedSettings = localStorage.getItem('otmSettings');
         if (savedSettings) {
             const settings = JSON.parse(savedSettings);
+            const growthEnabled = state.screeningConfig?.growthModeEnabled;
+            const migrated = localStorage.getItem('_otmMigratedToGrowth');
+            const needsMigration = growthEnabled && migrated !== 'true';
+
             Object.keys(settings).forEach(ticker => {
                 if (!state.tickersData[ticker]) {
                     state.tickersData[ticker] = {};
                 }
-                state.tickersData[ticker].callOtmPercentage = settings[ticker].callOtmPercentage || 10;
-                state.tickersData[ticker].putOtmPercentage = settings[ticker].putOtmPercentage || 10;
+                const putOtm = settings[ticker].putOtmPercentage;
+                state.tickersData[ticker].callOtmPercentage = normalizeOtmValue('CALL', settings[ticker].callOtmPercentage ?? getDefaultOtm('CALL'));
+                state.tickersData[ticker].putOtmPercentage = normalizeOtmValue('PUT', putOtm ?? getDefaultOtm('PUT'));
                 state.tickersData[ticker].putQuantity = settings[ticker].putQuantity || 1;
             });
+
+            if (needsMigration) {
+                localStorage.setItem('_otmMigratedToGrowth', 'true');
+                localStorage.setItem('otmSettings', JSON.stringify(settings));
+            }
         }
     } catch (error) {
         console.error('Error loading OTM settings:', error);
     }
+}
+
+function getSavedTabPreference() {
+    try {
+        return localStorage.getItem('optionsTableTab');
+    } catch (e) {
+        return null;
+    }
+}
+
+function setSavedTabPreference(tab) {
+    try {
+        localStorage.setItem('optionsTableTab', tab);
+    } catch (e) {}
 }
 
 function loadCustomTickers() {
@@ -146,6 +232,7 @@ export {
     setSelectedExpirationPreference,
     formatExpirationLabel,
     getRenderExpirationValue,
+    ensureTickerDataState,
     saveOtmSettings,
     loadOtmSettings,
     loadCustomTickers,
@@ -154,4 +241,10 @@ export {
     excludePositionTicker,
     removeTicker,
     initialize,
+    getSavedTabPreference,
+    setSavedTabPreference,
+    getDefaultOtm,
+    getOtmBounds,
+    normalizeOtmValue,
+    getDefaultOtm as getDefaultOtmValue,
 };

@@ -20,6 +20,7 @@ Configuration via environment variables:
 import os
 import logging
 import traceback
+from datetime import datetime
 
 logger = logging.getLogger('autotrader.llm')
 
@@ -56,6 +57,7 @@ def build_advisor_context():
         'macro': {},
         'vix': {},
         'scored_positions': [],
+        'current_datetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z'),
     }
 
     # --- Portfolio summary ---
@@ -122,7 +124,6 @@ def build_advisor_context():
             pass
 
         scored = []
-        from datetime import datetime
         for pos in opt_positions:
             ticker = _bare_ticker(pos.get('symbol', ''))
             qty = int(pos.get('position', 0) or 0)
@@ -200,12 +201,12 @@ def build_advisor_context():
     except Exception as exc:
         logger.warning(f"Could not score option positions: {exc}")
 
-    # --- Top recommendations ---
+    # --- Top signals ---
     try:
         from api import get_service
         options_svc = get_service('options')
         recs = options_svc.get_top_recommendations(limit=5)
-        for r in recs.get('recommendations', [])[:5]:
+        for r in recs.get('signals', [])[:5]:
             context['opportunities'].append({
                 'ticker': r.get('ticker', ''),
                 'option_type': r.get('option_type', ''),
@@ -219,7 +220,7 @@ def build_advisor_context():
                 'warnings': r.get('warnings', []),
             })
     except Exception as exc:
-        logger.warning(f"Could not load recommendations: {exc}")
+        logger.warning(f"Could not load signals: {exc}")
 
     # --- Macro / VIX ---
     try:
@@ -250,6 +251,7 @@ def format_prompt(context):
 
     # Portfolio snapshot
     lines.append("=== PORTFOLIO ===")
+    lines.append(f"USERS Current date/time: {context.get('current_datetime', 'N/A')}")
     lines.append(f"Account value: ${pf.get('account_value', 0):,.2f}")
     lines.append(f"Available cash: ${pf.get('available_cash', 0):,.2f}")
 

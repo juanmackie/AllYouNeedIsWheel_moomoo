@@ -13,7 +13,7 @@ Complete reference for all API endpoints in AllYouNeedIsWheel.
 - [System](#system)
 - [Portfolio](#portfolio)
 - [Options Analysis](#options-analysis)
-- [Orders](#orders)
+- [Orders (Retired)](#orders-retired)
 - [Earnings & IV Tracking](#earnings--iv-tracking)
 - [VIX Regime](#vix-regime)
 - [Macro Regime Detection](#macro-regime-detection)
@@ -450,229 +450,10 @@ Check available cash for trading after margin requirements.
 
 ---
 
-## Orders
+## Orders (Retired)
 
-### Get Pending Orders
-
-Retrieve pending and processing orders.
-
-**Endpoint:** `GET /api/options/pending-orders`
-
-**Query Parameters:**
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `executed` | boolean | No | false | Include executed orders if true |
-| `isRollover` | boolean | No | - | Filter by rollover status |
-
-**Response:**
-```json
-{
-  "orders": [
-    {
-      "id": 1,
-      "timestamp": "2026-03-29 10:30:00",
-      "ticker": "AAPL",
-      "option_type": "CALL",
-      "action": "SELL",
-      "strike": 195.00,
-      "expiration": "20260417",
-      "premium": 150.00,
-      "quantity": 1,
-      "status": "pending",
-      "executed": false,
-      "bid": 1.45,
-      "ask": 1.55,
-      "last": 1.50,
-      "delta": 0.22,
-      "gamma": 0.03,
-      "theta": -0.08,
-      "vega": 0.15,
-      "implied_volatility": 0.28,
-      "open_interest": 450,
-      "volume": 120,
-      "earnings_max_contracts": 1,
-      "earnings_premium_per_contract": 150.00,
-      "earnings_total_premium": 150.00,
-      "earnings_return_on_capital": 16.4,
-      "isRollover": false
-    }
-  ]
-}
-```
-
-### Create Order
-
-Create a new option order (saved to database, not yet executed).
-
-**Endpoint:** `POST /api/options/order`
-
-**Request Body:**
-```json
-{
-  "ticker": "AAPL",
-  "option_type": "CALL",
-  "action": "SELL",
-  "strike": 195.00,
-  "expiration": "20260417",
-  "premium": 150.00,
-  "quantity": 1,
-  "bid": 1.45,
-  "ask": 1.55,
-  "last": 1.50,
-  "delta": 0.22,
-  "gamma": 0.03,
-  "theta": -0.08,
-  "vega": 0.15,
-  "implied_volatility": 0.28,
-  "open_interest": 450,
-  "volume": 120,
-  "isRollover": false
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "order_id": 1,
-  "message": "Order created successfully"
-}
-```
-
-### Delete Order
-
-Delete a pending order.
-
-**Endpoint:** `DELETE /api/options/order/<id>`
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Order 1 deleted"
-}
-```
-
-### Update Order Quantity
-
-Update the quantity of a pending order.
-
-**Endpoint:** `PUT /api/options/order/<id>/quantity`
-
-**Request Body:**
-```json
-{
-  "quantity": 2
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "order_id": 1,
-  "quantity": 2,
-  "message": "Quantity updated to 2"
-}
-```
-
-### Execute Order
-
-Send an order to Moomoo for execution.
-
-**Endpoint:** `POST /api/options/execute/<id>`
-
-**Response:**
-```json
-{
-  "success": true,
-  "order_id": 1,
-  "moomoo_order_id": "123456789",
-  "status": "processing",
-  "message": "Order sent to moomoo",
-  "execution_details": {
-    "moomoo_order_id": "123456789",
-    "moomoo_status": "Submitted",
-    "filled": 0,
-    "remaining": 1,
-    "avg_fill_price": 0,
-    "limit_price": 1.50
-  }
-}
-```
-
-**Note:** Only `pending` orders can be executed. Check OpenD status first.
-
-### Cancel Order
-
-Cancel a processing order in Moomoo.
-
-**Endpoint:** `POST /api/options/cancel/<id>`
-
-**Response:**
-```json
-{
-  "success": true,
-  "order_id": 1,
-  "message": "Order canceled"
-}
-```
-
-**Note:** Only `processing` orders (submitted to Moomoo) can be canceled.
-
-### Check Orders Status
-
-Sync order statuses with Moomoo and update database.
-
-**Endpoint:** `POST /api/options/check-orders`
-
-**Response:**
-```json
-{
-  "success": true,
-  "updated_orders": [
-    {
-      "id": 1,
-      "status": "executed",
-      "moomoo_status": "Filled",
-      "filled": 1,
-      "remaining": 0,
-      "avg_fill_price": 1.48
-    }
-  ]
-}
-```
-
-**Recommended:** Call this endpoint periodically or after executing orders.
-
-### Create Rollover Orders
-
-Create buy-to-close and sell-to-open orders for rolling a position.
-
-**Endpoint:** `POST /api/options/rollover`
-
-**Request Body:**
-```json
-{
-  "original_order_id": 1,
-  "close_premium": 0.75,
-  "open_strike": 200.00,
-  "open_expiration": "20260515",
-  "open_premium": 2.50,
-  "quantity": 1
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "close_order_id": 2,
-  "open_order_id": 3,
-  "message": "Rollover orders created",
-  "net_credit": 175.00
-}
-```
+Order-management endpoints were removed when the app shifted to a signal-only workflow.
+Review opportunities in the dashboard and place trades manually in Moomoo.
 
 ---
 
@@ -703,7 +484,7 @@ Check the background earnings updater status and cache statistics.
 
 ### Refresh All Earnings
 
-Trigger a global update for all active symbols (positions and pending orders) in the database.
+Trigger a global update for all active symbols (positions and signals) in the database.
 
 **Endpoint:** `POST /api/earnings/refresh`
 
@@ -1287,7 +1068,7 @@ The application has no explicit rate limiting, but:
 **Best Practices:**
 - Cache results client-side when possible
 - Don't poll `/api/options/otm` more than once per minute
-- Use `/api/options/check-orders` after order execution, not continuously
+- Use the dashboard refresh flow instead of polling for broker-side order state
 
 ---
 
@@ -1298,7 +1079,7 @@ Currently not implemented. All endpoints are REST-based.
 For real-time updates, poll these endpoints:
 - `/api/system/opend-status` — Every 5-10 seconds
 - `/api/portfolio/` — Every 30-60 seconds  
-- `/api/options/check-orders` — After executing orders
+- Dashboard signal refresh — After major market moves or manual review
 
 ---
 

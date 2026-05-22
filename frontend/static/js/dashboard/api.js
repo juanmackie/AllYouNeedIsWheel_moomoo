@@ -9,6 +9,37 @@ import { showAlert } from '../utils/alerts.js';
 
 // ── Shared helpers ──────────────────────────────────────────────
 
+/**
+ * Wrap a promise with a timeout so it does not hang indefinitely.
+ * The underlying request continues in the background, but the caller
+ * is unblocked after `ms` milliseconds.
+ */
+export function withTimeout(promise, ms = 15000) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Request timed out (${ms}ms)`)), ms)
+        ),
+    ]);
+}
+
+export async function fetchWithTimeout(url, options = {}, ms = 15000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), ms);
+
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        return response;
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            throw new Error(`Request timed out (${ms}ms)`);
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 export async function readJsonSafely(response) {
     try { return await response.json(); }
     catch { return null; }
@@ -50,11 +81,6 @@ export {
     fetchTickers, fetchRollPressure, fetchEarningsStatus,
     refreshAllEarnings, updateSingleEarnings
 } from './api-portfolio.js';
-
-export {
-    fetchPendingOrders, saveOptionOrder, cancelOrder,
-    checkOrderStatus, executeOrder, executeCloseOrder
-} from './api-orders.js';
 
 export {
     fetchOptionData, fetchStockPrices, fetchOptionExpirations,

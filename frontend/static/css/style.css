@@ -634,6 +634,10 @@ h1, h2, h3, h4, h5, h6 {
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 
+/* ── LLM markdown ── */
+.llm-markdown { line-height: 1.6; }
+.llm-markdown li { list-style: disc; }
+
 .hidden { display: none !important; }
 
 /* ── Responsive ── */

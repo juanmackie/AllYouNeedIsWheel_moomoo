@@ -501,7 +501,70 @@ Potential scoring improvements:
 - CBOE BuyWrite Index (BXM) — Benchmark for systematic covered calls
 - CBOE PutWrite Index (PUT) — Benchmark for systematic CSPs
 
+## Feedback Loop & Bias Correction
+
+When a recommendation resolves (expired worthless, assigned, or closed early),
+the feedback loop compares each scoring factor's contribution against the actual
+outcome. Factors that consistently over-predict get their weight reduced; factors
+that under-predict get their weight increased.
+
+### How it works
+
+1. `core/evaluator.py` stores `score_details` (JSON) with each recommendation.
+2. When the outcome is resolved, `resolve_outcome()` reads the stored details
+   and calls `record_outcome_feedback()` in `core/feedback_loop.py`.
+3. The feedback loop runs an online (single-pass) mean update per factor,
+   then derives a bias multiplier (`<1.0` = over-predicts, `>1.0` = under-predicts).
+4. `get_adjusted_weights()` returns these multipliers, clamped to `[0.5, 2.0]`.
+5. `score_contract()` in `wheel_decision.py` fetches adjusted weights at the
+   start of each scoring pass and applies them before computing CALL/PUT base scores.
+
+### Bias multipliers
+
+| Factor | Effect |
+|--------|--------|
+| `bias_multiplier < 1.0` | Over-predicts → weight reduced
+| `bias_multiplier > 1.0` | Under-predicts → weight increased
+| `bias_multiplier = 1.0` | Neutral (no bias history)
+
+Biases are persisted in `~/.wheel/evaluator/feedback.db`.
+
+### Visualising bias
+
+The dashboard evaluator widget shows current over-predicting and under-predicting
+factors with their multiplier values.
+
+## Scheduler
+
+An in-process APScheduler runs two jobs, gated by a host-level lock so only one
+process schedules under multi-worker launches:
+
+| Job | Schedule | Timezone |
+|-----|----------|----------|
+| Evaluator cycle | Daily at 8:00 AM | Australia/Brisbane |
+| Calibration cycle | Weekly Sunday at 8:15 AM | Australia/Brisbane |
+
+State (last run, last status, last message) is persisted in
+`~/.wheel/evaluator/scheduler_state.db`.
+
+### Manual triggers
+
+- `POST /api/options/evaluator/cron` — Trigger evaluator cycle
+- `POST /api/options/calibrator/run` — Trigger calibration cycle
+- `GET /api/options/evaluator/stats` — Full status (stats + scheduler + calibration)
+- `GET /api/options/feedback/biases` — Current bias multipliers
+- `GET /api/options/calibrator/history` — Calibration history
+
+## Evaluator Dashboard Widget
+
+A compact card near the top of the dashboard shows:
+- Tracked / resolved recommendation counts
+- Assignment rate vs expiry rate
+- Top over-predicting and under-predicting factors
+- Latest calibration cycle info (loss, samples, weights)
+- Last evaluator and calibrator run times
+
 ---
 
-**Last Updated:** 2026-04-26
-**Version:** 2.0.0 (Phases 1-7 Complete)
+**Last Updated:** 2026-05-17
+**Version:** 2.1.0 (Phases 8-10: Evaluator, Feedback, Scheduler)

@@ -12,7 +12,6 @@ This directory contains reusable Jinja2 template components organized by functio
 - `dashboard/` — Components specific to the dashboard page
   - `account_summary.html` — Account value, cash balance, and summary cards
   - `options_table.html` — Option opportunities table (calls/puts with OTM analysis)
-  - `pending_orders.html` — Pending and filled orders tables
 
 - `portfolio/` — Components specific to the portfolio page (currently empty, uses routes directly)
 

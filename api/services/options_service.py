@@ -6,7 +6,6 @@ Refactored from monolithic 1627-line file into focused modules.
 import logging
 import traceback
 from api.services.options_data import OptionsDataService
-from api.services.order_executor import OrderExecutor
 from api.services.watchlist_manager import WatchlistManager
 from api.services.recommendations import RecommendationEngine
 from api.services.portfolio_context import PortfolioContext
@@ -51,11 +50,6 @@ class OptionsService:
             iv_earnings_service=self.iv_earnings_service,
             screening_profile_provider=self.watchlist_manager,
             portfolio_context_provider=self.portfolio_context_helper,
-        )
-        self.order_executor = OrderExecutor(
-            connection_provider=self,
-            db=self.db,
-            portfolio_service_provider=self,
         )
         self.recommendation_engine = RecommendationEngine(
             connection_provider=self,
@@ -152,11 +146,19 @@ class OptionsService:
     
     def get_effective_watchlist(self):
         """Get effective watchlist (delegates to watchlist_manager)"""
-        return self.watchlist_manager.get_effective_watchlist()
+        return self.watchlist_manager.get_effective_watchlist(
+            growth_mode_config=self.config.get('growth_mode', {})
+        )
     
     def _get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None):
         """Get screening profile (delegates to watchlist_manager)"""
-        return self.watchlist_manager.get_screening_profile(option_type, dte, profile_type, vix_regime)
+        return self.watchlist_manager.get_screening_profile(
+            option_type,
+            dte,
+            profile_type,
+            vix_regime,
+            growth_mode_config=self.config.get('growth_mode', {}),
+        )
     
     def _get_candidate_expirations(self, conn, ticker, profile, expiration=None):
         """Get candidate expirations (delegates to options_data)"""
@@ -186,20 +188,8 @@ class OptionsService:
         """Get stock price (delegates to options_data)"""
         return self.options_data.get_stock_price(ticker)
 
-    def execute_order(self, order_id, db):
-        """Execute order (delegates to order_executor)"""
-        return self.order_executor.execute_order(order_id, db)
-
-    def check_pending_orders(self):
-        """Check pending orders (delegates to order_executor)"""
-        return self.order_executor.check_pending_orders()
-
-    def cancel_order(self, order_id):
-        """Cancel order (delegates to order_executor)"""
-        return self.order_executor.cancel_order(order_id)
-
     def get_top_recommendations(self, limit=5):
-        """Get top recommendations (delegates to recommendation_engine)"""
+        """Get top signals (delegates to recommendation_engine)."""
         return self.recommendation_engine.get_top_recommendations(limit)
 
     def _get_portfolio_context(self):

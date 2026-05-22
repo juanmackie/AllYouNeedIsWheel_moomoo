@@ -23,11 +23,6 @@ def create_earnings_worker(app):
             logger.info("Earnings updater worker executing")
 
             try:
-                recent_orders = db.get_orders(limit=100)
-                order_tickers = list(set(
-                    order['ticker'] for order in recent_orders if order.get('ticker')
-                ))
-
                 position_tickers = []
                 try:
                     import api
@@ -46,11 +41,16 @@ def create_earnings_worker(app):
                     from api.services.watchlist_manager import WatchlistManager
                     connection_config = app.config.get('connection_config', {})
                     wm = WatchlistManager(connection_config)
-                    watchlist_tickers = [t.strip().upper() for t in wm.get_effective_watchlist() if t.strip()]
+                    growth_mode = connection_config.get('growth_mode', {})
+                    watchlist_tickers = [
+                        t.strip().upper()
+                        for t in wm.get_effective_watchlist(growth_mode_config=growth_mode)
+                        if t.strip()
+                    ]
                 except Exception as e:
                     logger.debug(f"Could not fetch effective watchlist: {e}")
 
-                all_tickers = list(set(order_tickers + position_tickers + watchlist_tickers))
+                all_tickers = list(set(position_tickers + watchlist_tickers))
                 if all_tickers:
                     logger.info(f"Updating earnings for {len(all_tickers)} tickers")
                     result = service.batch_update_earnings(all_tickers)
@@ -79,6 +79,20 @@ def start_earnings_updater(app, task_manager):
     ))
     task_manager.start('earnings_updater')
     logger.info("Earnings updater background task started")
+
+
+def create_evaluator_worker(app):
+    """Return a callable that runs the recommendation-evaluator cycle."""
+    def _evaluator_worker():
+        from core.evaluator import run_evaluation_cycle
+        with app.app_context():
+            result = run_evaluation_cycle()
+            if result.get('resolved', 0) > 0:
+                logger.info("Evaluator: resolved %d expired recommendations", result['resolved'])
+            elif result.get('errors', 0) > 0:
+                logger.warning("Evaluator: %d errors during cycle", result['errors'])
+    _evaluator_worker.__name__ = 'evaluator_worker'
+    return _evaluator_worker
 
 
 def stop_all_tasks(task_manager):

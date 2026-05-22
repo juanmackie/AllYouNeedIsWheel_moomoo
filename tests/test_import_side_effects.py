@@ -77,7 +77,6 @@ class TestAPIImport(unittest.TestCase):
             # Import inside patch context to avoid side effects
             from api.services import portfolio_service
             from api.services import options_data
-            from api.services import order_executor
         
         # If we got here without errors, imports succeeded
         self.assertTrue(True)

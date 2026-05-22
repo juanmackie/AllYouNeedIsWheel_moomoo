@@ -45,7 +45,8 @@ class ScreeningProfileProvider(Protocol):
     """Provides screening profile configuration."""
     def _get_screening_profile(self, option_type: str, dte: Optional[int] = None,
                                profile_type: Optional[str] = None,
-                               vix_regime: Optional[dict] = None) -> dict:
+                               vix_regime: Optional[dict] = None,
+                               growth_mode_config: Optional[dict] = None) -> dict:
         ...
 
 
@@ -83,9 +84,10 @@ class OptionsDataProvider(Protocol):
 
 class WatchlistProvider(Protocol):
     """Provides watchlist management."""
-    def get_effective_watchlist(self) -> List[str]:
+    def get_effective_watchlist(self, growth_mode_config: Optional[dict] = None) -> List[str]:
         ...
     def get_screening_profile(self, option_type: str, dte: Optional[int] = None,
                                profile_type: Optional[str] = None,
-                               vix_regime: Optional[dict] = None) -> dict:
+                               vix_regime: Optional[dict] = None,
+                               growth_mode_config: Optional[dict] = None) -> dict:
         ...

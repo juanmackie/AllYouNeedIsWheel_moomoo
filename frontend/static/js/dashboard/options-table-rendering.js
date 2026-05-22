@@ -1,4 +1,4 @@
-import { state, getUnavailableTickerMessage, getRenderExpirationValue, formatExpirationLabel, loadExcludedTickers, saveOtmSettings } from './options-table-state.js';
+import { state, getUnavailableTickerMessage, getRenderExpirationValue, formatExpirationLabel, loadExcludedTickers, saveOtmSettings, getOtmBounds, normalizeOtmValue } from './options-table-state.js';
 import { calculatePremium, calculateEarningsSummary, updateEarningsSummary } from './options-table-calc.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 
@@ -89,17 +89,18 @@ export function addOtmInputEventListeners() {
             const ticker = this.dataset.ticker;
             const otmPercentage = parseInt(this.value, 10);
             const optionType = this.dataset.optionType || 'CALL';
-
-            if (isNaN(otmPercentage) || otmPercentage < 1 || otmPercentage > 50) {
-                showToast('warning', 'Invalid Value', 'OTM% must be between 1 and 50');
-                return;
+            const bounds = getOtmBounds(optionType);
+            const normalizedOtm = normalizeOtmValue(optionType, otmPercentage);
+            this.value = normalizedOtm;
+            if (isNaN(otmPercentage) || otmPercentage < bounds.min || otmPercentage > bounds.max) {
+                showToast('warning', 'Invalid Value', `${optionType === 'PUT' ? 'CSP' : 'Call'} OTM% must be between ${bounds.min} and ${bounds.max}`);
             }
 
             if (state.tickersData[ticker]) {
                 if (optionType === 'CALL') {
-                    state.tickersData[ticker].callOtmPercentage = otmPercentage;
+                    state.tickersData[ticker].callOtmPercentage = normalizedOtm;
                 } else {
-                    state.tickersData[ticker].putOtmPercentage = otmPercentage;
+                    state.tickersData[ticker].putOtmPercentage = normalizedOtm;
                 }
 
                 saveOtmSettings();
@@ -111,7 +112,7 @@ export function addOtmInputEventListeners() {
                     refreshBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> <strong>Apply</strong>';
                 }
 
-                showToast('info', 'OTM Updated', `Click the Apply button to refresh ${ticker} options with ${otmPercentage}% OTM`);
+                showToast('info', 'OTM Updated', `Click the Apply button to refresh ${ticker} options with ${normalizedOtm}% OTM`);
             }
         });
     });
@@ -121,7 +122,17 @@ export function addPutQtyInputEventListeners() {
     document.querySelectorAll('.put-qty-input').forEach(input => {
         input.addEventListener('change', function() {
             const ticker = this.dataset.ticker;
-            const newQty = parseInt(this.value, 10);
+            const maxQty = parseInt(this.max || '100', 10);
+            let newQty = parseInt(this.value, 10);
+
+            if (Number.isNaN(newQty) || newQty < 1) {
+                newQty = 1;
+            }
+            if (!Number.isNaN(maxQty) && maxQty > 0 && newQty > maxQty) {
+                newQty = maxQty;
+                showToast('warning', 'Quantity capped', `CSP quantity capped at ${maxQty} by available buying power.`);
+            }
+            this.value = newQty;
 
             if (state.tickersData[ticker]) {
                 state.tickersData[ticker].putQuantity = newQty;
@@ -140,8 +151,12 @@ export function addPutQtyInputEventListeners() {
                 const totalPremiumCell = row.querySelector('.total-premium');
                 const cashRequiredCell = row.querySelector('.cash-required');
 
-                if (totalPremiumCell) totalPremiumCell.textContent = formatCurrency(totalPremium);
-                if (cashRequiredCell) cashRequiredCell.textContent = formatCurrency(cashRequired);
+                if (totalPremiumCell) {
+                    totalPremiumCell.innerHTML = `<div class="fw-bold">${formatCurrency(totalPremium)}</div>`;
+                }
+                if (cashRequiredCell) {
+                    cashRequiredCell.innerHTML = `<div>${formatCurrency(cashRequired)}</div>`;
+                }
 
                 updateEarningsSummary();
             }
@@ -186,13 +201,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             return false;
         }
     } else if (optionType === 'PUT') {
-        const sharesOwned = tickerData.data?.data?.[ticker]?.position || 0;
+        const isCustom = state.customTickers.has(ticker);
+        const isWatchlist = state.watchlistTickers?.has(ticker);
 
-        if (excludedTickers.includes(ticker) && !state.customTickers.has(ticker)) {
-            return false;
-        }
-
-        if (!state.customTickers.has(ticker) && sharesOwned < 100) {
+        if (excludedTickers.includes(ticker) && !isCustom && !isWatchlist) {
             return false;
         }
     }
@@ -213,6 +225,8 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
     const stockPrice = optionData?.stock_price || 0;
     const sharesOwned = optionData?.position || 0;
     const optionError = tickerData.errors?.[optionType] || '';
+    const callOtmBounds = getOtmBounds('CALL');
+    const putOtmBounds = getOtmBounds('PUT');
 
     if (!options || options.length === 0) {
         if (optionError) {
@@ -226,6 +240,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             `;
             tbody.appendChild(row);
             return true;
+        }
+
+        if (optionType === 'PUT') {
+            return false;
         }
 
         if (optionType === 'CALL') {
@@ -252,8 +270,8 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                         <input type="number" class="form-control form-control-sm otm-input" 
                             data-ticker="${ticker}" 
                             data-option-type="CALL"
-                            min="1" max="50" step="1" 
-                            value="${tickerData.callOtmPercentage || 10}">
+                            min="${callOtmBounds.min}" max="${callOtmBounds.max}" step="1" 
+                            value="${normalizeOtmValue('CALL', tickerData.callOtmPercentage ?? callOtmBounds.defaultValue)}">
                         <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}">
                             <i class="bi bi-arrow-repeat"></i>
                         </button>
@@ -309,8 +327,8 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                         <input type="number" class="form-control form-control-sm otm-input" 
                             data-ticker="${ticker}" 
                             data-option-type="PUT"
-                            min="1" max="50" step="1" 
-                            value="${tickerData.putOtmPercentage || 10}">
+                            min="${putOtmBounds.min}" max="${putOtmBounds.max}" step="1" 
+                            value="${normalizeOtmValue('PUT', tickerData.putOtmPercentage ?? putOtmBounds.defaultValue)}">
                         <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}"
                             data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh with new OTM %">
                             <i class="bi bi-arrow-repeat"></i>
@@ -480,25 +498,11 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 <div class="small text-muted" data-bs-toggle="tooltip" title="Return if your shares get called away at the strike price">Max if-called: ${formatPercent(option.if_called_return || 0)}</div>
             </td>
             <td class="align-middle d-flex">
-                <button class="btn btn-sm btn-outline-success sell-option me-2" 
-                    data-ticker="${ticker}" 
-                    data-option-type="CALL" 
-                    data-strike="${option.strike || 0}" 
-                    data-expiration="${option.expiration || ''}"
-                    data-bid="${option.bid || 0}"
-                    data-ask="${option.ask || 0}"
-                    data-last="${option.last || 0}"
-                    data-delta="${option.delta || 0}"
-                    data-gamma="${option.gamma || 0}"
-                    data-theta="${option.theta || 0}"
-                    data-vega="${option.vega || 0}"
-                    data-implied-volatility="${option.implied_volatility || 0}"
-                    data-volume="${option.volume || 0}"
-                    data-open-interest="${option.open_interest || 0}"
+                <span class="badge bg-light text-muted border small me-2"
                     data-bs-toggle="tooltip" 
-                    title="Add this covered call order to pending orders">
-                    <i class="bi bi-check-circle"></i> Add
-                </button>
+                    title="Signal only — review trades in your broker app">
+                    <i class="bi bi-eye"></i> Signal
+                </span>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
                     data-ticker="${ticker}" 
                     data-bs-toggle="tooltip" 
@@ -510,16 +514,39 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
     } else {
         const putQuantity = tickerData.putQuantity || 1;
         const selectedExpirationValue = getRenderExpirationValue(ticker, 'PUT', option.expiration);
+        const cspBuyingPower = state.portfolioSummary?.cash_available_for_csp ||
+            state.portfolioSummary?.available_cash ||
+            state.portfolioSummary?.cash_balance ||
+            0;
+        const maxAffordableContracts = option.strike > 0 && cspBuyingPower > 0
+            ? Math.max(1, Math.floor(cspBuyingPower / (option.strike * 100)))
+            : 100;
 
         let expirationOptionsHtml = '';
         const expirations = state.tickersData[ticker].expirations || [];
         if (expirations.length > 0) {
-            expirations.forEach(exp => {
-                const selected = exp.value === selectedExpirationValue ? 'selected' : '';
+            expirations.forEach((exp, index) => {
+                const selected = exp.value === selectedExpirationValue || (!selectedExpirationValue && index === 0) ? 'selected' : '';
                 expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
             });
         } else {
             expirationOptionsHtml = `<option value="${selectedExpirationValue}" selected>${formatExpirationLabel(selectedExpirationValue)}</option>`;
+        }
+
+        // ── Concentration risk warning for held tickers ──────────────
+        // When the user already holds shares and adds a CSP on the same
+        // ticker, the combined cash outlay can create concentration risk.
+        let concWarningHtml = '';
+        const cashBalance = state.portfolioSummary?.cash_balance || 0;
+        const sharesOwned = optionData?.position || 0;
+        const isHeld = state.portfolioTickers?.includes(ticker) && sharesOwned > 0;
+        if (isHeld && cashBalance > 0 && option.strike > 0) {
+            const cspCost = option.strike * 100 * putQuantity;
+            const concRatio = cspCost / cashBalance;
+            if (concRatio > 0.30) {
+                const concPct = Math.round(concRatio * 100);
+                concWarningHtml = `<div class="small mt-1 text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Held + CSP: ${concPct}% of cash</div>`;
+            }
         }
 
         row.innerHTML = `
@@ -537,6 +564,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                     </span>
                 </div>
                 ${warningHtml}
+                ${concWarningHtml}
             </td>
             <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
@@ -571,7 +599,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 <input type="number" class="form-control form-control-sm put-qty-input" 
                     data-ticker="${ticker}" 
                     value="${putQuantity}" 
-                    min="1" max="100" step="1" style="width: 70px;">
+                    min="1" max="${maxAffordableContracts}" step="1" style="width: 70px;">
             </td>
             <td class="align-middle total-premium">
                 <div class="fw-bold" data-bs-toggle="tooltip" title="Total premium you'll receive immediately when selling">$ ${(midPrice * 100 * putQuantity).toFixed(2)}</div>
@@ -582,25 +610,11 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 <div class="small text-muted" data-bs-toggle="tooltip" title="How far stock can fall before you lose money">Buffer: ${formatPercent(option.breakeven_buffer_pct || 0)}</div>
             </td>
             <td class="align-middle d-flex">
-                <button class="btn btn-sm btn-outline-success sell-option me-2" 
-                    data-ticker="${ticker}" 
-                    data-option-type="PUT" 
-                    data-strike="${option.strike || 0}" 
-                    data-expiration="${option.expiration || ''}"
-                    data-bid="${option.bid || 0}"
-                    data-ask="${option.ask || 0}"
-                    data-last="${option.last || 0}"
-                    data-delta="${option.delta || 0}"
-                    data-gamma="${option.gamma || 0}"
-                    data-theta="${option.theta || 0}"
-                    data-vega="${option.vega || 0}"
-                    data-implied-volatility="${option.implied_volatility || 0}"
-                    data-volume="${option.volume || 0}"
-                    data-open-interest="${option.open_interest || 0}"
+                <span class="badge bg-light text-muted border small me-2"
                     data-bs-toggle="tooltip" 
-                    title="Add this cash-secured put order to pending orders">
-                    <i class="bi bi-check-circle"></i> Add
-                </button>
+                    title="Signal only — review trades in your broker app">
+                    <i class="bi bi-eye"></i> Signal
+                </span>
                 <button class="btn btn-sm btn-outline-danger delete-ticker" 
                     data-ticker="${ticker}" 
                     data-bs-toggle="tooltip" 
@@ -613,6 +627,192 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
     tbody.appendChild(row);
     return true;
+}
+
+/**
+ * Insert a compact inline progress banner above the options tab content.
+ * Shows overall percent, ticker count, current ticker, and step text.
+ */
+export function insertProgressBanner(totalTickers) {
+    const container = document.getElementById('options-table-container');
+    if (!container) return;
+
+    const existing = container.querySelector('.options-table-progress');
+    if (existing) existing.remove();
+
+    const banner = document.createElement('div');
+    banner.className = 'options-table-progress alert alert-info py-2 px-3 mb-3';
+    banner.id = 'options-load-progress';
+    banner.innerHTML = `
+        <div class="d-flex align-items-center w-100" style="gap: 12px;">
+            <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
+            <div class="flex-grow-1" style="min-width: 0;">
+                <div class="d-flex align-items-center" style="gap: 8px;">
+                    <span class="fw-semibold small" id="progress-percent">0%</span>
+                    <div class="progress flex-grow-1" style="height: 6px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" id="progress-bar" role="progressbar" style="width: 0%"></div>
+                    </div>
+                    <span class="small text-muted" id="progress-count">0/${totalTickers}</span>
+                </div>
+                <div class="small text-muted mt-1" id="progress-detail">Initializing...</div>
+            </div>
+        </div>
+    `;
+
+    const tabContent = container.querySelector('.tab-content');
+    if (tabContent) {
+        container.insertBefore(banner, tabContent);
+    } else {
+        container.appendChild(banner);
+    }
+}
+
+/**
+ * Update the progress banner with current loading state.
+ * @param {number} current - Current ticker index (1-based)
+ * @param {number} total - Total number of tickers
+ * @param {string} ticker - Current ticker symbol
+ * @param {string} step - Current step description (e.g. 'loading expirations', 'loading calls')
+ * @param {string|null} error - Optional error message to display for the current ticker
+ */
+export function updateProgressBanner(current, total, ticker, step, error) {
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+    const bar = document.getElementById('progress-bar');
+    const percentEl = document.getElementById('progress-percent');
+    const countEl = document.getElementById('progress-count');
+    const detailEl = document.getElementById('progress-detail');
+
+    if (bar) bar.style.width = `${percent}%`;
+    if (percentEl) percentEl.textContent = `${percent}%`;
+    if (countEl) countEl.textContent = `${current}/${total}`;
+    if (detailEl) {
+        if (error) {
+            detailEl.innerHTML = `<span class="text-danger">${ticker}: ${error}</span>`;
+        } else {
+            detailEl.textContent = `${ticker}: ${step}`;
+        }
+    }
+}
+
+/**
+ * Mark progress banner as finished and auto-dismiss after a short delay.
+ */
+export function finishProgressBanner() {
+    const banner = document.getElementById('options-load-progress');
+    if (!banner) return;
+
+    banner.className = 'options-table-progress alert alert-success py-2 px-3 mb-3';
+    banner.innerHTML = `
+        <div class="d-flex align-items-center w-100" style="gap: 12px;">
+            <i class="bi bi-check-circle-fill text-success flex-shrink-0"></i>
+            <div class="flex-grow-1">
+                <span class="fw-semibold small">Loading complete</span>
+            </div>
+        </div>
+    `;
+    setTimeout(() => {
+        banner.remove();
+    }, 2500);
+}
+
+/**
+ * Mark progress banner as failed with a message.
+ */
+export function failProgressBanner(message) {
+    const banner = document.getElementById('options-load-progress');
+    if (!banner) return;
+
+    banner.className = 'options-table-progress alert alert-danger py-2 px-3 mb-3';
+    banner.innerHTML = `
+        <div class="d-flex align-items-center w-100" style="gap: 12px;">
+            <i class="bi bi-exclamation-triangle-fill text-danger flex-shrink-0"></i>
+            <div class="flex-grow-1">
+                <span class="fw-semibold small">${message}</span>
+            </div>
+        </div>
+    `;
+}
+
+// ── Shared panel-level progress helpers ──────────────────────────────────
+// These are lightweight wrappers for single-request panels (Top Recommendations,
+// Earnings Vol Signals) that need visible loading feedback without the full
+// multi-step progress bar machinery of the options table.
+
+/**
+ * Insert a compact loading banner inside a panel's container.
+ * The banner sits at the top of the section and does not block other panels.
+ * @param {string} containerId - ID of the container element to insert into
+ * @param {string} message - Loading message text
+ * @returns {string} The banner element id (for later updates)
+ */
+export function showPanelLoading(containerId, message) {
+    const container = document.getElementById(containerId);
+    if (!container) return null;
+
+    // Remove any existing panel progress banner
+    const existing = container.querySelector('.panel-progress-banner');
+    if (existing) existing.remove();
+
+    const bannerId = `${containerId}-progress`;
+    const banner = document.createElement('div');
+    banner.id = bannerId;
+    banner.className = 'panel-progress-banner alert alert-info py-2 px-3 mb-0 d-flex align-items-center';
+    banner.style.cssText = 'gap: 10px;';
+    banner.innerHTML = `
+        <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
+        <span class="small fw-semibold flex-grow-1" id="${bannerId}-text">${message}</span>
+    `;
+
+    // Insert at the top of the container (before any content/state elements)
+    container.insertBefore(banner, container.firstChild);
+    return bannerId;
+}
+
+/**
+ * Update the message text of an active panel loading banner.
+ * @param {string} bannerId - The banner element id returned by showPanelLoading
+ * @param {string} message - New message text
+ */
+export function updatePanelLoading(bannerId, message) {
+    const textEl = document.getElementById(`${bannerId}-text`);
+    if (textEl) textEl.textContent = message;
+}
+
+/**
+ * Finish a panel loading banner: show a brief "done" state then remove.
+ * @param {string} bannerId - The banner element id returned by showPanelLoading
+ * @param {string} [doneMessage] - Optional completion message (default: 'Complete')
+ */
+export function finishPanelLoading(bannerId, doneMessage = 'Complete') {
+    const banner = document.getElementById(bannerId);
+    if (!banner) return;
+
+    banner.className = 'panel-progress-banner alert alert-success py-2 px-3 mb-0 d-flex align-items-center';
+    banner.style.cssText = 'gap: 10px;';
+    banner.innerHTML = `
+        <i class="bi bi-check-circle-fill text-success flex-shrink-0"></i>
+        <span class="small fw-semibold flex-grow-1">${doneMessage}</span>
+    `;
+    setTimeout(() => {
+        banner.remove();
+    }, 2000);
+}
+
+/**
+ * Fail a panel loading banner with an error message. Keeps the banner visible.
+ * @param {string} bannerId - The banner element id returned by showPanelLoading
+ * @param {string} errorMessage - Error message to display
+ */
+export function failPanelLoading(bannerId, errorMessage) {
+    const banner = document.getElementById(bannerId);
+    if (!banner) return;
+
+    banner.className = 'panel-progress-banner alert alert-danger py-2 px-3 mb-0 d-flex align-items-center';
+    banner.style.cssText = 'gap: 10px;';
+    banner.innerHTML = `
+        <i class="bi bi-exclamation-triangle-fill text-danger flex-shrink-0"></i>
+        <span class="small fw-semibold flex-grow-1">${errorMessage}</span>
+    `;
 }
 
 export function buildOptionsTable(tableId, optionType) {
@@ -654,11 +854,13 @@ export function buildOptionsTable(tableId, optionType) {
 
     if (!atLeastOneRowAdded) {
         const row = document.createElement('tr');
+        const emptyMsg = optionType === 'CALL'
+            ? 'No eligible covered calls. You need 100+ shares of a ticker and a ranked call contract.'
+            : 'No cash-secured put opportunities found. Check that tickers have available put data or adjust cash-fit filters.';
         row.innerHTML = `
             <td colspan="13" class="text-center p-3">
                 <div class="alert alert-info m-0">
-                    No ${optionType === 'CALL' ? 'covered call' : 'cash secured put'} opportunities found.
-                    ${optionType === 'PUT' ? 'Add a ticker to see put option opportunities.' : ''}
+                    ${emptyMsg}
                 </div>
             </td>
         `;
@@ -687,11 +889,6 @@ export function updateOptionsTable() {
         return;
     }
 
-    let sufficientSharesCount = 0;
-    let insufficientSharesCount = 0;
-    let filteredTickers = [];
-    let visibleTickers = [];
-
     const eligibleTickers = tickers.filter(ticker => {
         const tickerData = state.tickersData[ticker];
 
@@ -700,15 +897,13 @@ export function updateOptionsTable() {
         }
 
         const optionData = tickerData.data.data[ticker];
-        const sharesOwned = optionData.position || 0;
 
-        if (!state.customTickers.has(ticker) && sharesOwned < 100) {
-            insufficientSharesCount++;
-            return state.customTickers.has(ticker);
+        if (state.customTickers.has(ticker) || state.watchlistTickers?.has(ticker)) {
+            return true;
         }
 
-        sufficientSharesCount++;
-        return true;
+        const sharesOwned = optionData.position || 0;
+        return sharesOwned > 0;
     });
 
     const tabsHTML = `
@@ -728,9 +923,10 @@ export function updateOptionsTable() {
         <div class="tab-content" id="options-tabs-content">
             <div class="tab-pane fade ${putTabWasActive ? '' : 'show active'}" id="call-options-section" role="tabpanel" aria-labelledby="call-options-tab">
                 <div class="d-flex justify-content-end mb-2">
-                    <button class="btn btn-sm btn-outline-success me-2" id="sell-all-calls">
-                        <i class="bi bi-check2-all"></i> Add All
-                    </button>
+                    <span class="badge bg-light text-muted border small me-2" id="sell-all-calls"
+                        data-bs-toggle="tooltip" title="Signal only — review trades in your broker app">
+                        <i class="bi bi-eye"></i> Signal Only
+                    </span>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-calls">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Calls
                     </button>
@@ -760,9 +956,10 @@ export function updateOptionsTable() {
 
             <div class="tab-pane fade ${putTabWasActive ? 'show active' : ''}" id="put-options-section" role="tabpanel" aria-labelledby="put-options-tab">
                 <div class="d-flex justify-content-end mb-2">
-                    <button class="btn btn-sm btn-outline-success me-2" id="sell-all-puts">
-                        <i class="bi bi-check2-all"></i> Add All
-                    </button>
+                    <span class="badge bg-light text-muted border small me-2" id="sell-all-puts"
+                        data-bs-toggle="tooltip" title="Signal only — review trades in your broker app">
+                        <i class="bi bi-eye"></i> Signal Only
+                    </span>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Puts
                     </button>

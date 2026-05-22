@@ -33,7 +33,7 @@ def get_options_service():
 
 def _trigger_background_refresh(cache_key, limit, portfolio_hash):
     """
-    Trigger a background refresh of recommendations after returning stale cache.
+    Trigger a background refresh of signals after returning stale cache.
     """
     def refresh_task():
         try:
@@ -43,6 +43,7 @@ def _trigger_background_refresh(cache_key, limit, portfolio_hash):
             
             if "error" not in result:
                 # Cache the fresh data
+                result = _normalize_top_recommendations_payload(result)
                 recommendation_cache.set(cache_key, result, portfolio_hash)
                 logger.info(f"Background refresh completed for {cache_key}")
             else:
@@ -57,6 +58,32 @@ def _trigger_background_refresh(cache_key, limit, portfolio_hash):
     thread = threading.Thread(target=refresh_task, daemon=True)
     thread.start()
     logger.info(f"Background refresh thread started for {cache_key}")
+
+
+def _normalize_top_recommendations_payload(payload):
+    """Normalize legacy cached recommendation payloads to the signals contract."""
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized = dict(payload)
+    if 'signals' not in normalized:
+        legacy_signals = list(normalized.get('recommendations') or normalized.get('best_plays') or [])
+        if not legacy_signals and isinstance(normalized.get('lanes'), dict):
+            lanes = normalized.get('lanes', {})
+            for lane_key in ('covered_calls', 'watchlist_csp'):
+                lane = lanes.get(lane_key, {}) or {}
+                legacy_signals.extend(lane.get('signals') or lane.get('recommendations') or [])
+        normalized['signals'] = legacy_signals
+
+    if 'blocked_signals' not in normalized and normalized.get('blocked_candidates') is not None:
+        normalized['blocked_signals'] = normalized.get('blocked_candidates', [])
+
+    normalized.pop('recommendations', None)
+    normalized.pop('best_plays', None)
+    normalized.pop('lanes', None)
+    normalized.pop('blocked_candidates', None)
+    normalized['count'] = len(normalized.get('signals', []))
+    return normalized
 
 def _ensure_opend_available():
     connection_config = current_app.config.get('connection_config', {})
@@ -111,13 +138,30 @@ def otm_options():
 
     # Get parameters from request
     ticker = request.args.get('tickers')
-    otm_percentage = float(request.args.get('otm', 10))
+    try:
+        otm_percentage = float(request.args.get('otm', 10))
+    except (TypeError, ValueError):
+        return error_response("Invalid otm percentage", status_code=400)
     option_type = request.args.get('optionType')  # Parameter for filtering by option type
+    if option_type:
+        option_type = option_type.upper()
     expiration = request.args.get('expiration')   # New parameter for filtering by expiration date
     
     # Validate option_type if provided
     if option_type and option_type not in ['CALL', 'PUT']:
         return error_response(f"Invalid option_type: {option_type}. Must be 'CALL' or 'PUT'", status_code=400)
+
+    if option_type == 'PUT':
+        connection_config = current_app.config.get('connection_config', {})
+        growth_mode = connection_config.get('growth_mode', {})
+        screener_profile = growth_mode.get('screener_profile', {})
+        min_otm_pct = float(screener_profile.get('csp_min_otm_pct', 5))
+        max_otm_pct = float(screener_profile.get('csp_max_otm_pct', 15))
+        if otm_percentage < min_otm_pct or otm_percentage > max_otm_pct:
+            return error_response(
+                f"PUT OTM must be between {min_otm_pct:.0f}% and {max_otm_pct:.0f}% for Growth Mode CSPs",
+                status_code=400,
+            )
     
     # Use the existing module-level instance instead of creating a new one
     # Call the service with appropriate parameters including the new option_type and expiration
@@ -166,203 +210,6 @@ def get_stock_price():
         logger.error(traceback.format_exc())
         return error_response(str(e))
 
-@bp.route('/order', methods=['POST'])
-def save_order():
-    try:
-        order_data = request.json
-        if not order_data:
-            return error_response("No order data provided", status_code=400)
-        required_fields = ['ticker', 'option_type', 'strike', 'expiration']
-        for field in required_fields:
-            if field not in order_data:
-                return error_response(f"Missing required field: {field}", status_code=400)
-        order_id = get_options_service().db.save_order(order_data)
-        if order_id:
-            return success_response({"order_id": order_id}, status_code=201)
-        return error_response("Failed to save order")
-    except Exception as e:
-        logger.error(f"Error saving order: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
-@bp.route('/pending-orders', methods=['GET'])
-def get_pending_orders():
-    """
-    Get pending option orders from the database
-    
-    Query parameters:
-        executed (bool): Whether to fetch executed orders (default: false)
-        isRollover (bool): Whether to fetch only rollover orders (default: None = all orders)
-    """
-    try:
-        executed = request.args.get('executed', 'false').lower() == 'true'
-        is_rollover_param = request.args.get('isRollover')
-        is_rollover = None
-        if is_rollover_param is not None:
-            is_rollover = is_rollover_param.lower() == 'true'
-        orders = get_options_service().db.get_pending_orders(executed=executed, isRollover=is_rollover)
-        return jsonify({"orders": orders})
-    except Exception as e:
-        logger.error(f"Error getting pending orders: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
-@bp.route('/order/<int:order_id>', methods=['DELETE'])
-def delete_order(order_id):
-    logger.info(f"DELETE /order/{order_id} request received")
-    
-    try:
-        db = current_app.config.get('database')
-        if not db:
-            return error_response("Database not initialized")
-        order = db.get_order(order_id)
-        if not order:
-            return error_response(f"Order with ID {order_id} not found", status_code=404)
-        success = db.delete_order(order_id)
-        if success:
-            return success_response({"message": f"Order with ID {order_id} deleted"})
-        return error_response("Failed to delete order")
-    except Exception as e:
-        logger.error(f"Error deleting order: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
-@bp.route('/execute/<int:order_id>', methods=['POST'])
-def execute_order(order_id):
-    logger.info(f"POST /execute/{order_id} request received")
-    
-    try:
-        db = current_app.config.get('database')
-        if not db:
-            return error_response("Database not initialized")
-        response, status_code = get_options_service().execute_order(order_id, db)
-        return jsonify(response), status_code
-    except Exception as e:
-        logger.error(f"Error executing order: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
-@bp.route('/check-orders', methods=['POST'])
-def check_orders():
-    logger.info("POST /check-orders request received")
-    
-    try:
-        response = get_options_service().check_pending_orders()
-        return jsonify(response), 200
-    except Exception as e:
-        logger.error(f"Error checking orders: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
-@bp.route('/rollover', methods=['POST'])
-def rollover_option():
-    logger.info("POST /rollover request received")
-    
-    try:
-        rollover_data = request.json
-        if not rollover_data:
-            return error_response("No rollover data provided", status_code=400)
-            
-        required_fields = ['ticker', 'current_option_type', 'current_strike', 'current_expiration', 
-                           'new_strike', 'new_expiration', 'quantity']
-        for field in required_fields:
-            if field not in rollover_data:
-                return error_response(f"Missing required field: {field}", status_code=400)
-        
-        buy_order = {
-            'ticker': rollover_data['ticker'],
-            'option_type': rollover_data['current_option_type'],
-            'strike': rollover_data['current_strike'],
-            'expiration': rollover_data['current_expiration'],
-            'action': 'BUY',
-            'quantity': rollover_data['quantity'],
-            'order_type': rollover_data.get('current_order_type', 'MARKET'),
-            'limit_price': rollover_data.get('current_limit_price'),
-            'bid': rollover_data.get('current_bid', 0),
-            'ask': rollover_data.get('current_ask', 0),
-            'isRollover': True
-        }
-        
-        sell_order = {
-            'ticker': rollover_data['ticker'],
-            'option_type': rollover_data['current_option_type'],
-            'strike': rollover_data['new_strike'],
-            'expiration': rollover_data['new_expiration'],
-            'action': 'SELL',
-            'quantity': rollover_data['quantity'],
-            'order_type': rollover_data.get('new_order_type', 'LIMIT'),
-            'limit_price': rollover_data.get('new_limit_price', 0) * 100,
-            'bid': rollover_data.get('new_bid', 0),
-            'ask': rollover_data.get('new_ask', 0),
-            'isRollover': True
-        }
-        
-        buy_order_id = get_options_service().db.save_order(buy_order)
-        sell_order_id = get_options_service().db.save_order(sell_order)
-        
-        if buy_order_id and sell_order_id:
-            return success_response({
-                "buy_order_id": buy_order_id,
-                "sell_order_id": sell_order_id,
-                "message": "Rollover orders created successfully"
-            }, status_code=201)
-        return error_response("Failed to create one or more rollover orders")
-            
-    except Exception as e:
-        logger.error(f"Error creating rollover orders: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
-@bp.route('/cancel/<int:order_id>', methods=['POST'])
-def cancel_order(order_id):
-    logger.info(f"POST /cancel/{order_id} request received")
-    
-    try:
-        response, status_code = get_options_service().cancel_order(order_id)
-        return jsonify(response), status_code
-    except Exception as e:
-        logger.error(f"Error canceling order: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
-@bp.route('/order/<int:order_id>/quantity', methods=['PUT'])
-def update_order_quantity(order_id):
-    logger.info(f"PUT /order/{order_id}/quantity request received")
-    
-    try:
-        request_data = request.json
-        if not request_data or 'quantity' not in request_data:
-            return error_response("Missing quantity in request", status_code=400)
-            
-        quantity = int(request_data['quantity'])
-        if quantity <= 0:
-            return error_response("Quantity must be greater than 0", status_code=400)
-            
-        db = current_app.config.get('database')
-        if not db:
-            return error_response("Database not initialized")
-        order = db.get_order(order_id)
-        if not order:
-            return error_response(f"Order with ID {order_id} not found", status_code=404)
-        if order['status'] != 'pending':
-            return error_response("Cannot update quantity for non-pending orders", status_code=400)
-            
-        success = db.update_order_quantity(order_id, quantity)
-        if success:
-            return success_response({
-                "message": f"Order quantity updated to {quantity}",
-                "order_id": order_id,
-                "quantity": quantity
-            })
-        return error_response("Failed to update order quantity")
-            
-    except ValueError:
-        return error_response("Invalid quantity value", status_code=400)
-    except Exception as e:
-        logger.error(f"Error updating order quantity: {str(e)}")
-        logger.error(traceback.format_exc())
-        return error_response(str(e))
-
 @bp.route('/expirations', methods=['GET'])
 def get_option_expirations():
     logger.info("GET /expirations request received")
@@ -398,16 +245,16 @@ def get_option_expirations():
 @bp.route('/top-recommendations', methods=['GET'])
 def get_top_recommendations():
     """
-    Get top N option recommendations across all portfolio positions.
+    Get top N option signals across all portfolio positions.
     
     Returns the highest-scoring option opportunities (both calls and puts)
     filtered by capital availability and ranked by composite score.
     
     Query parameters:
-        limit (int): Number of recommendations to return (default: 3, max: 10)
+        limit (int): Number of signals to return (default: 3, max: 10)
         
     Returns:
-        JSON response with ranked recommendations
+        JSON response with ranked signals
     """
     logger.info("GET /top-recommendations request received")
     
@@ -447,6 +294,7 @@ def get_top_recommendations():
             cached_result, cache_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
             
             if cached_result is not None:
+                cached_result = _normalize_top_recommendations_payload(cached_result)
                 # Cache hit - add metadata to response
                 cached_result['_cache'] = cache_metadata
                 
@@ -480,7 +328,8 @@ def get_top_recommendations():
             try:
                 stale_result, _ = recommendation_cache.get(cache_key, current_portfolio_hash)
                 if stale_result is not None:
-                    logger.warning("Returning stale cached recommendations as fallback")
+                    stale_result = _normalize_top_recommendations_payload(stale_result)
+                    logger.warning("Returning stale cached signals as fallback")
                     stale_result['_cache'] = {
                         'cache_status': 'STALE_FALLBACK',
                         'cache_age_seconds': stale_result.get('_cache', {}).get('cache_age_seconds', 0),
@@ -498,6 +347,7 @@ def get_top_recommendations():
             return jsonify({"error": error_message}), 500
 
         # Add cache metadata
+        result = _normalize_top_recommendations_payload(result)
         result['_cache'] = {
             'cache_status': 'MISS',
             'cache_age_seconds': 0,
@@ -525,7 +375,8 @@ def get_top_recommendations():
         try:
             stale_result, _ = recommendation_cache.get(cache_key, current_portfolio_hash)
             if stale_result is not None:
-                logger.warning("Returning stale cached recommendations as last-resort fallback")
+                stale_result = _normalize_top_recommendations_payload(stale_result)
+                logger.warning("Returning stale cached signals as last-resort fallback")
                 stale_result['_cache'] = {
                     'cache_status': 'STALE_FALLBACK',
                     'cache_age_seconds': stale_result.get('_cache', {}).get('cache_age_seconds', 0),
@@ -542,6 +393,57 @@ def get_top_recommendations():
             pass
         return jsonify({"error": str(e)}), 500
 
+
+@bp.route('/screening-config', methods=['GET'])
+def get_screening_config():
+    """
+    Get screening engine configuration: growth mode state, OTM defaults, CSP profile.
+    Used by the frontend to set default tabs, OTM values, and help text.
+    """
+    try:
+        from api.services.config import get_config
+        config = get_config()
+        growth_mode = config.get('growth_mode', {})
+        screener_profile = growth_mode.get('screener_profile', {})
+        min_dte = screener_profile.get('csp_min_dte', 30)
+        max_dte = screener_profile.get('csp_max_dte', 45)
+        preferred_dte = screener_profile.get('csp_preferred_dte', 37)
+        min_otm_pct = screener_profile.get('csp_min_otm_pct', 5)
+        max_otm_pct = screener_profile.get('csp_max_otm_pct', 15)
+        return success_response({
+            'growth_mode_enabled': bool(growth_mode.get('enabled', True)),
+            'csp_default_otm_pct': screener_profile.get('csp_default_otm_pct', 10),
+            'call_default_otm_pct': screener_profile.get('call_default_otm_pct', 10),
+            'default_tab': 'PUT',
+            'csp_min_dte': min_dte,
+            'csp_max_dte': max_dte,
+            'csp_preferred_dte': preferred_dte,
+            'csp_min_otm_pct': min_otm_pct,
+            'csp_max_otm_pct': max_otm_pct,
+            'csp_profile_summary': {
+                'delta': f"{screener_profile.get('csp_target_delta', 0.30):.2f}",
+                'delta_tolerance': f"{screener_profile.get('csp_delta_tolerance', 0.12):.2f}",
+                'dte_range': f"{min_dte}-{max_dte}",
+                'preferred_dte': preferred_dte,
+                'otm_range': f"{min_otm_pct}-{max_otm_pct}",
+                'otm_pct': screener_profile.get('csp_default_otm_pct', 10),
+                'min_iv_rank': screener_profile.get('min_iv_rank', 45),
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting screening config: {e}")
+        return success_response({
+            'growth_mode_enabled': True,
+            'csp_default_otm_pct': 10,
+            'call_default_otm_pct': 10,
+            'default_tab': 'PUT',
+            'csp_min_dte': 30,
+            'csp_max_dte': 45,
+            'csp_preferred_dte': 37,
+            'csp_min_otm_pct': 5,
+            'csp_max_otm_pct': 15,
+            'csp_profile_summary': None,
+        })
 
 @bp.route('/cash-status', methods=['GET'])
 def get_cash_status():
@@ -578,7 +480,8 @@ def get_cash_status():
                 })
         
         cash_available = max(0, cash_balance - cash_reserved)
-        cash_available_for_csp = max(0, available_cash - cash_reserved)
+        cash_available_for_csp = max(0, available_cash)  # No subtraction — broker buying power is authoritative
+        broker_buying_power = available_cash
         reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
         return success_response({
@@ -587,6 +490,8 @@ def get_cash_status():
             'cash_available': round(cash_available, 2),
             'cash_available_for_csp': round(cash_available_for_csp, 2),
             'cash_reserved_for_csp': round(cash_reserved, 2),
+            'broker_buying_power': round(broker_buying_power, 2),
+            'broker_buying_power_source': 'available_cash',
             'available_cash': round(available_cash, 2),
             'excess_liquidity': round(excess_liquidity, 2),
             'reserve_enabled': reserve_enabled,
@@ -626,11 +531,15 @@ def get_watchlist_tickers():
         from api.services.config import get_config
         config = get_config()
         manager = WatchlistManager(config_provider=config)
-        effective_tickers = manager.get_effective_watchlist()
+        growth_mode = config.get('growth_mode', {})
+        effective_tickers = manager.get_effective_watchlist(
+            growth_mode_config=growth_mode
+        )
         return success_response({
             'tickers': effective_tickers,
             'count': len(effective_tickers),
             'mode': config.get('watchlist_mode', 'static'),
+            'growth_mode_enabled': True,
         })
     except Exception as e:
         logger.warning(f"Failed to get effective watchlist, falling back to static: {e}")
@@ -698,68 +607,127 @@ def get_leakage_analytics():
         return error_response(str(e))
 
 
-@bp.route('/prefilled-close', methods=['POST'])
-def create_prefilled_close_order():
-    logger.info("POST /prefilled-close request received")
+@bp.route('/evaluator/stats', methods=['GET'])
+def evaluator_stats():
+    """Return evaluator summary statistics for the dashboard.
 
+    Includes scheduler metadata, calibration summary, and feedback
+    bias information so the dashboard can show one coherent status payload.
+    """
     try:
-        data = request.get_json()
-        if not data:
-            return error_response('No data provided', status_code=400)
+        from core.evaluator import get_summary_stats, get_recent_outcomes
+        from core.scheduler import get_scheduler_info
+        from core.calibrator import get_latest_calibration
+        from core.feedback_loop import get_feedback_summary
 
-        required = ['ticker', 'option_type', 'strike', 'expiration', 'quantity']
-        missing = [f for f in required if not data.get(f)]
-        if missing:
-            return error_response(f'Missing fields: {", ".join(missing)}', status_code=400)
+        stats = get_summary_stats()
+        recent = get_recent_outcomes(days=30)
+        scheduler_info = get_scheduler_info()
+        latest_calibration = get_latest_calibration()
+        feedback_summary = get_feedback_summary()
 
-        ticker = data['ticker']
-        option_type = data['option_type'].upper()
-        strike = float(data['strike'])
-        expiration = str(data['expiration'])
-        quantity = int(data['quantity'])
+        calibration_data = None
+        if latest_calibration:
+            calibration_data = {
+                'cycle': latest_calibration.get('cycle'),
+                'loss': round(latest_calibration.get('loss', 0), 4) if latest_calibration.get('loss') else None,
+                'samples': latest_calibration.get('samples'),
+                'weights': {
+                    'iv_adjusted': latest_calibration.get('w_iv_adjusted'),
+                    'theta_delta': latest_calibration.get('w_theta_delta'),
+                    'liquidity': latest_calibration.get('w_liquidity'),
+                    'expected_value': latest_calibration.get('w_expected_value'),
+                    'upside_or_buffer': latest_calibration.get('w_upside_buffer'),
+                    'otm_fit': latest_calibration.get('w_otm_fit'),
+                },
+                'created_at': latest_calibration.get('created_at'),
+            }
 
-        conn = get_options_service()._ensure_connection()
-        if not conn:
-            return error_response('Failed to connect to moomoo', status_code=503)
-
-        try:
-            chain = conn.get_option_chain(
-                ticker, expiration,
-                'P' if option_type == 'PUT' else 'C',
-                target_strike=strike
-            )
-            if chain and chain.get('options'):
-                matching = [opt for opt in chain['options'] if float(opt.get('strike', 0)) == strike]
-                if matching:
-                    contract = matching[0]
-                    bid = float(contract.get('bid', 0) or 0)
-                    ask = float(contract.get('ask', 0) or 0)
-                    mid_price = (bid + ask) / 2 if bid > 0 and ask > 0 else 0
-                else:
-                    bid = ask = mid_price = 0
-            else:
-                bid = ask = mid_price = 0
-        except Exception as chain_err:
-            logger.warning(f"Could not fetch option chain: {chain_err}")
-            bid = ask = mid_price = 0
-
-        limit_price = float(data.get('limit_price', 0) or 0)
-        if limit_price <= 0 and mid_price > 0:
-            limit_price = round(mid_price, 2)
-        elif limit_price <= 0:
-            limit_price = 0.05
-
-        order = {
-            'ticker': ticker, 'option_type': option_type, 'strike': strike,
-            'expiration': expiration, 'action': 'BUY', 'quantity': quantity,
-            'order_type': 'LIMIT', 'limit_price': limit_price,
-            'bid': bid, 'ask': ask, 'mid_price': round(mid_price, 4),
-        }
-
-        return success_response({'quote': order})
-
+        return success_response({
+            'stats': stats,
+            'recent_outcomes': recent,
+            'recent_count': len(recent),
+            'scheduler': scheduler_info,
+            'calibration': calibration_data,
+            'feedback_summary': feedback_summary,
+        })
     except Exception as e:
-        logger.error(f"Error creating prefilled close order: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Error fetching evaluator stats: {e}")
+        return success_response({
+            'stats': {'total_recommendations': 0, 'resolved': 0},
+            'recent_outcomes': [],
+            'recent_count': 0,
+            'scheduler': {'running': False, 'state': {}},
+            'calibration': None,
+            'feedback_summary': {},
+        })
+
+
+@bp.route('/evaluator/cron', methods=['POST'])
+def evaluator_cron():
+    """
+    Trigger an evaluator cycle: check expired-but-unresolved recommendations
+    and log outcomes.  Intended to be called by an external cron/scheduler.
+    """
+    try:
+        from core.evaluator import run_evaluation_cycle
+        result = run_evaluation_cycle()
+        return success_response(result)
+    except Exception as e:
+        logger.error(f"Evaluator cron cycle failed: {e}")
         return error_response(str(e))
-        
+
+
+@bp.route('/feedback/biases', methods=['GET'])
+def feedback_biases():
+    """Return current factor bias multipliers from the feedback loop."""
+    try:
+        from core.feedback_loop import get_all_biases, get_feedback_summary
+        biases = get_all_biases()
+        summary = get_feedback_summary()
+        return success_response({
+            'biases': biases,
+            'summary': summary,
+        })
+    except Exception as e:
+        logger.error(f"Error fetching feedback biases: {e}")
+        return success_response({'biases': [], 'summary': {}})
+
+
+@bp.route('/feedback/events', methods=['GET'])
+def feedback_events():
+    """Return recent feedback events."""
+    try:
+        from core.feedback_loop import get_recent_events
+        events = get_recent_events(limit=50)
+        return success_response({'events': events})
+    except Exception as e:
+        logger.error(f"Error fetching feedback events: {e}")
+        return success_response({'events': []})
+
+
+@bp.route('/calibrator/run', methods=['POST'])
+def calibrator_run():
+    """Trigger a calibration cycle."""
+    try:
+        from core.calibrator import run_calibration_cycle
+        result = run_calibration_cycle()
+        return success_response(result)
+    except Exception as e:
+        logger.error(f"Calibration cycle failed: {e}")
+        return error_response(str(e))
+
+
+@bp.route('/calibrator/history', methods=['GET'])
+def calibrator_history():
+    """Return calibration history."""
+    try:
+        from core.calibrator import get_calibration_history
+        history = get_calibration_history(limit=20)
+        return success_response({'history': history})
+    except Exception as e:
+        logger.error(f"Error fetching calibration history: {e}")
+        return success_response({'history': []})
+
+
+

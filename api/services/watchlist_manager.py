@@ -39,10 +39,17 @@ class WatchlistManager:
                 self._tvscreener_service = False
         return self._tvscreener_service if self._tvscreener_service else None
 
-    def get_effective_watchlist(self):
+    def get_effective_watchlist(self, growth_mode_config=None):
         """
         Get effective watchlist based on configuration.
         Supports static, dynamic, and hybrid modes.
+
+        When growth_mode is enabled, uses growth-tuned screener parameters
+        (higher min_iv_rank, smaller max_stocks) to reduce wasted scanning.
+
+        Args:
+            growth_mode_config: Optional growth mode config dict. When provided
+                                and enabled, overrides screening_criteria values.
 
         Returns:
             List of ticker symbols
@@ -63,6 +70,12 @@ class WatchlistManager:
                 min_iv_rank = criteria.get('min_iv_rank', 30)
                 min_volume = criteria.get('min_volume', 1000000)
                 max_stocks = criteria.get('max_stocks', 50)
+
+                # Apply growth mode overlay on screening criteria
+                if growth_mode_config:
+                    screener_profile = growth_mode_config.get('screener_profile', {})
+                    min_iv_rank = screener_profile.get('min_iv_rank', min_iv_rank)
+                    max_stocks = screener_profile.get('max_watchlist_tickers', max_stocks)
 
                 dynamic = tvscreener.get_wheel_candidates(
                     min_iv_rank=min_iv_rank,
@@ -85,16 +98,21 @@ class WatchlistManager:
         # Fallback to static watchlist
         return static_watchlist
 
-    def get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None):
+    def get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None, growth_mode_config=None):
         """
         Get screening profile based on option type, DTE, and VIX regime.
-        
+
+        When growth_mode is enabled with a screener_profile block, PUT profiles
+        are tuned for shorter DTE, higher delta, and closer OTM targets.
+
         Args:
             option_type: 'CALL' or 'PUT'
             dte: Days to expiration (auto-detects profile if None)
             profile_type: 'weekly', 'monthly', 'quarterly', or None (auto-detect)
             vix_regime: dict from _get_vix_regime() with delta_adjustment, exposure_multiplier
-            
+            growth_mode_config: Optional growth_mode dict. When enabled with
+                                screener_profile, overrides PUT profile defaults.
+
         Returns:
             dict: Screening profile parameters with VIX regime adjustments
         """
@@ -222,5 +240,30 @@ class WatchlistManager:
                 base_profile['min_premium_per_contract'] *= 0.8
             
             base_profile['vix_regime'] = regime_name
-        
+
+        # -- Growth Mode screener overlay ------------------------------------
+        if growth_mode_config and option_type == 'PUT':
+            sp = growth_mode_config.get('screener_profile', {})
+            if sp:
+                overrides = {
+                    'target_delta': sp.get('csp_target_delta'),
+                    'delta_tolerance': sp.get('csp_delta_tolerance'),
+                    'min_dte': sp.get('csp_min_dte'),
+                    'max_dte': sp.get('csp_max_dte'),
+                    'preferred_dte': sp.get('csp_preferred_dte'),
+                    'default_otm_pct': sp.get('csp_default_otm_pct'),
+                    'min_otm_pct': sp.get('csp_min_otm_pct'),
+                    'max_otm_pct': sp.get('csp_max_otm_pct'),
+                }
+                for key, value in overrides.items():
+                    if value is not None:
+                        base_profile[key] = value
+
+                # Tag the profile so consumers know it came from growth mode
+                base_profile['growth_screener'] = True
+
+                # When require_cash_fit is set, flag it in the profile
+                if sp.get('require_cash_fit', True):
+                    base_profile['require_cash_fit'] = True
+
         return base_profile

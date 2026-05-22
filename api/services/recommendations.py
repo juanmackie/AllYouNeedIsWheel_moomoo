@@ -1,5 +1,5 @@
 """
-Recommendations module - handles top options recommendations
+Signals module - handles top options signals.
 Extracted from the monolithic options_service.py for maintainability.
 """
 
@@ -9,6 +9,8 @@ import pandas as pd
 from datetime import datetime
 from core.utils import get_closest_friday
 from core.wheel_decision import score_contract
+from core.evaluator import record_recommendation
+from core.ticker_utils import canonical_underlying
 from api.services.iv_earnings_service import IVEarningsService
 from api.services.utils import clean_yfinance_ticker
 from api.services.macro_regime_service import get_macro_service
@@ -16,9 +18,67 @@ from api.services.macro_regime_service import get_macro_service
 logger = logging.getLogger('api.services.recommendations')
 
 
+def _format_decision_to_candidate(
+    ticker: str,
+    stock_price: float,
+    decision,
+    extra_warnings: list[str] | None = None,
+    cash_reserve_enabled: bool = True,
+) -> dict:
+    """
+    Standardised result dict from a WheelDecision for CSP candidates.
+
+    Shared by both Moomoo and yfinance CSP paths so that fields
+    never diverge between data sources.
+    """
+    warnings = list(decision.warnings)
+    if extra_warnings:
+        warnings.extend(extra_warnings)
+    return {
+        'ticker': ticker,
+        'stock_price': stock_price,
+        'option_type': 'PUT',
+        'max_contracts': 1,
+        'existing_position': 0,
+        'from_watchlist': True,
+        'strike': decision.strike,
+        'expiration': decision.expiration,
+        'dte': decision.dte,
+        'mid_price': round(decision.mid_price, 4),
+        'premium_per_contract': round(decision.premium_per_contract, 2),
+        'bid': decision.bid,
+        'ask': decision.ask,
+        'annualized_return': decision.annualized_return,
+        'iv_adjusted_return': decision.iv_adjusted_return,
+        'otm_pct': decision.otm_pct,
+        'delta': decision.delta,
+        'implied_volatility': decision.implied_volatility,
+        'open_interest': decision.open_interest,
+        'volume': decision.volume,
+        'score': round(decision.contract_score, 2),
+        'iv_rank': decision.iv_rank,
+        'iv_status': decision.iv_status,
+        'iv_env_adjustment': decision.iv_env_adjustment,
+        'profile_type': decision.profile_type,
+        'earnings_date': None,
+        'days_to_earnings': None,
+        'earnings_adjustment': 0,
+        'size_fit': decision.size_fit,
+        'expected_move_buffer': decision.expected_move_buffer,
+        'wheel_decision': decision.to_dict(),
+        'score_details': decision.score_details,
+        'rationale': decision.rationale,
+        'warnings': warnings,
+        'cash_reserve_enabled': cash_reserve_enabled,
+        'breakeven': decision.breakeven,
+        'breakeven_buffer_pct': decision.breakeven_buffer_pct,
+        'cash_required': decision.cash_required,
+    }
+
+
 class RecommendationEngine:
     """
-    Handles generating top options recommendations across portfolio positions and watchlist.
+    Handles generating top options signals across portfolio positions and watchlist.
     """
 
     def __init__(self, connection_provider, config_provider, db, iv_earnings_service,
@@ -66,13 +126,196 @@ class RecommendationEngine:
         self._yfinance_cache[ticker] = {'data': data, 'timestamp': datetime.now()}
 
     def _fetch_watchlist_ticker_csp(self, ticker, portfolio_context):
+        """
+        Fetch CSP candidates for a watchlist ticker.
+        Tries Moomoo first, falls back to yfinance.
+        Returns list of candidate dicts, a list with a skip diagnostic, or None on error.
+        """
+        candidates = self._fetch_watchlist_csp_moomoo(ticker, portfolio_context)
+        if candidates is not None:
+            return candidates
+        return self._fetch_yfinance_csp_candidates(ticker, portfolio_context)
+
+    def _fetch_watchlist_csp_moomoo(self, ticker, portfolio_context):
+        """
+        Fetch CSP candidates from Moomoo for a watchlist ticker.
+        Returns list of candidate dicts, or None on failure.
+        """
+        try:
+            conn = self._get_connection()
+            if not conn:
+                return None
+
+            stock_price = conn.get_stock_price(ticker)
+            if stock_price is None or stock_price <= 0:
+                return None
+
+            cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', 0) or 0)
+            if cash_available_for_csp <= 0:
+                return None
+
+            growth_cfg = getattr(self, '_growth_screener_config', None)
+            sp = (growth_cfg.get('screener_profile', {}) or {}) if growth_cfg else {}
+            min_dte = sp.get('csp_min_dte', 30)
+            max_dte = sp.get('csp_max_dte', 45)
+            pref_dte = sp.get('csp_preferred_dte', 37)
+
+            from moomoo import RET_OK
+            today = datetime.now()
+            ret, data = conn.get_option_expiration_dates(ticker)
+            if ret != RET_OK or data is None:
+                return None
+
+            expiration_column = 'expiration_date'
+            if expiration_column not in data.columns:
+                if 'strike_time' in data.columns:
+                    expiration_column = 'strike_time'
+                elif 'option_expiry_date' in data.columns:
+                    expiration_column = 'option_expiry_date'
+                else:
+                    return None
+
+            valid_expirations = []
+            for raw_date in data[expiration_column].tolist():
+                exp_str = str(raw_date).replace('-', '')
+                try:
+                    exp_date = datetime.strptime(exp_str, '%Y%m%d').date()
+                    dte = (exp_date - today.date()).days
+                    if min_dte <= dte <= max_dte:
+                        valid_expirations.append((exp_str, dte))
+                except ValueError:
+                    continue
+
+            if not valid_expirations:
+                return None
+
+            valid_expirations.sort(key=lambda x: abs(pref_dte - x[1]))
+            expirations_to_check = valid_expirations[:5]
+
+            from api.services.macro_regime_service import get_macro_service
+            macro_regime = get_macro_service().get_macro_regime()
+
+            candidates = []
+            seen = set()
+
+            for exp_str, dte in expirations_to_check:
+                try:
+                    chain = conn.get_option_chain(
+                        ticker, exp_str, 'P',
+                        target_strike=stock_price * (1 - (sp.get('csp_default_otm_pct', 10) / 100))
+                    )
+                    if not chain:
+                        continue
+                    options = chain.get('options', [])
+                    if not options:
+                        continue
+
+                    for opt in options:
+                        strike = float(opt.get('strike', 0) or 0)
+                        if strike >= stock_price or strike <= 0:
+                            continue
+                        cash_required = strike * 100
+                        if cash_required > cash_available_for_csp:
+                            continue
+
+                        key = (strike, exp_str)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+
+                        bid = float(opt.get('bid', 0) or 0)
+                        ask = float(opt.get('ask', 0) or 0)
+                        last = float(opt.get('last', 0) or 0)
+                        if bid <= 0 and ask <= 0 and last <= 0:
+                            continue
+
+                        mid_price = (bid + ask) / 2 if bid > 0 and ask > 0 else max(bid, ask, last)
+
+                        contract = {
+                            'strike': strike,
+                            'expiration': exp_str,
+                            'option_type': 'PUT',
+                            'bid': bid,
+                            'ask': ask,
+                            'last': last,
+                            'dte': dte,
+                            'implied_volatility': float(opt.get('implied_volatility', 0) or 0),
+                            'open_interest': int(opt.get('open_interest', 0) or opt.get('openInterest', 0) or 0),
+                            'volume': int(opt.get('volume', 0) or 0),
+                        }
+
+                        from core.greeks import enrich_option_with_greeks
+                        enrich_option_with_greeks(contract, stock_price)
+
+                        wl_profile = self._watchlist_provider.get_screening_profile(
+                            'PUT', dte=dte,
+                            growth_mode_config=getattr(self, '_growth_screener_config', None)
+                        )
+                        decision = score_contract(
+                            ticker=ticker,
+                            option=contract,
+                            stock_price=stock_price,
+                            profile=wl_profile,
+                            portfolio_context=portfolio_context,
+                            iv_env_adjustment=0,
+                            iv_rank=0.5,
+                            iv_status_str='normal',
+                            earnings_adjustment=0,
+                            earnings_info={},
+                            macro_regime=macro_regime,
+                            growth_profile=getattr(self, '_growth_profile', None),
+                        )
+
+                        if decision is None or decision.hard_blockers:
+                            continue
+
+                        pick_score = decision.contract_score
+
+                        # Record for evaluator (non-blocking)
+                        try:
+                            record_recommendation(
+                                ticker=ticker, strike=decision.strike,
+                                expiration=decision.expiration,
+                                option_type=decision.option_type,
+                                dte=decision.dte,
+                                decision=decision,
+                                source='moomoo', strategy='csp',
+                            )
+                        except Exception:
+                            pass
+
+                        result = _format_decision_to_candidate(
+                            ticker, stock_price, decision,
+                            extra_warnings=[],
+                            cash_reserve_enabled=self.config.get('cash_reserve_enabled', True),
+                        )
+                        candidates.append((pick_score, result))
+
+                except Exception:
+                    continue
+
+            if not candidates:
+                return None
+
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            return [c for _, c in candidates[:3]]
+
+        except Exception as e:
+            logger.debug(f"Watchlist {ticker}: Moomoo CSP path failed ({e}), will try yfinance")
+            return None
+
+    def _fetch_yfinance_csp_candidates(self, ticker, portfolio_context):
+        """
+        Fallback CSP fetch using yfinance.
+        Returns list of candidate dicts, a list with a skip diagnostic, or None on error.
+        """
         try:
             import yfinance as yf
             yf_ticker = yf.Ticker(ticker)
             hist = yf_ticker.history(period="1d")
             if hist.empty:
                 logger.warning(f"Watchlist {ticker}: yfinance history empty")
-                return None
+                return [self._make_skip_diagnostic(ticker, 'no_yfinance_data', 'yfinance history empty')]
             stock_price = float(hist['Close'].iloc[-1])
 
             cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', 0) or 0)
@@ -81,7 +324,13 @@ class RecommendationEngine:
             opts = yf_ticker.options
             if not opts:
                 logger.warning(f"Watchlist {ticker}: no option expirations available from yfinance")
-                return self._make_skip_diagnostic(ticker, 'no_option_chain', 'No option expirations from yfinance')
+                return [self._make_skip_diagnostic(ticker, 'no_option_chain', 'No option expirations from yfinance')]
+
+            growth_cfg = getattr(self, '_growth_screener_config', None)
+            sp = (growth_cfg.get('screener_profile', {}) or {}) if growth_cfg else {}
+            min_dte = sp.get('csp_min_dte', 30)
+            max_dte = sp.get('csp_max_dte', 45)
+            pref_dte = sp.get('csp_preferred_dte', 37)
 
             today = datetime.now()
             valid_expirations = []
@@ -89,24 +338,27 @@ class RecommendationEngine:
                 try:
                     exp_date = datetime.strptime(exp, '%Y-%m-%d')
                     dte = (exp_date - today).days
-                    if 7 <= dte <= 50:
+                    if min_dte <= dte <= max_dte:
                         valid_expirations.append(exp)
                 except ValueError:
                     continue
 
             if not valid_expirations:
-                logger.warning(f"Watchlist {ticker}: no expiration with DTE 7-45 found")
-                return self._make_skip_diagnostic(ticker, 'no_valid_dte', 'No expiration with DTE 7-50 found')
+                logger.warning(f"Watchlist {ticker}: no expiration with DTE {min_dte}-{max_dte} found")
+                return [self._make_skip_diagnostic(ticker, 'no_valid_dte', f'No expiration with DTE {min_dte}-{max_dte} found')]
 
             if cash_available_for_csp <= 0:
                 logger.warning(f"Watchlist {ticker}: no cash available for CSPs")
-                return self._make_skip_diagnostic(ticker, 'no_cash', 'No CSP buying power available')
+                return [self._make_skip_diagnostic(ticker, 'no_cash', 'No CSP buying power available')]
 
-            valid_expirations = sorted(valid_expirations, key=lambda e: abs(21 - (datetime.strptime(e, '%Y-%m-%d') - today).days))
-            expirations_to_check = valid_expirations[:3]
+            valid_expirations = sorted(valid_expirations, key=lambda e: abs(pref_dte - (datetime.strptime(e, '%Y-%m-%d') - today).days))
+            expirations_to_check = valid_expirations[:5]
 
-            best_result = None
-            best_score = -1
+            candidates = []
+            any_strike_fit_cash = False
+
+            from api.services.macro_regime_service import get_macro_service
+            macro_regime = get_macro_service().get_macro_regime()
 
             for target_exp in expirations_to_check:
                 try:
@@ -114,10 +366,12 @@ class RecommendationEngine:
                     if chain.puts.empty:
                         continue
                     puts = chain.puts.copy()
-                    puts = puts[puts['strike'] * 100 <= cash_available_for_csp]
-                    if puts.empty:
-                        logger.debug(f"Watchlist {ticker}: all strikes exceed CSP buying power for {target_exp}")
+                    cash_filtered = puts[puts['strike'] * 100 <= cash_available_for_csp]
+                    if cash_filtered.empty:
+                        logger.debug(f"Watchlist {ticker}: all strikes exceed CSP buying power ({cash_available_for_csp}) for {target_exp}")
                         continue
+                    puts = cash_filtered
+                    any_strike_fit_cash = True
 
                     for _, put_row in puts.iterrows():
                         strike = float(put_row['strike'])
@@ -131,11 +385,9 @@ class RecommendationEngine:
                         if bid <= 0 and ask <= 0 and last_price <= 0:
                             continue
 
-                        # Check spread
                         mid_price = (bid + ask) / 2 if bid > 0 and ask > 0 else max(bid, ask, last_price)
                         spread_pct = ((ask - bid) / mid_price) * 100 if bid > 0 and ask > 0 and mid_price > 0 else 100
                         if spread_pct > 100:
-                            logger.debug(f"Watchlist {ticker}: spread too wide ({spread_pct:.1f}%) for strike {strike}")
                             continue
 
                         dte = (datetime.strptime(target_exp, '%Y-%m-%d') - today).days
@@ -156,12 +408,10 @@ class RecommendationEngine:
                         from core.greeks import enrich_option_with_greeks
                         enrich_option_with_greeks(contract, stock_price)
 
-                        wl_profile = self._watchlist_provider.get_screening_profile('PUT', dte=dte)
-                        wl_profile['min_open_interest'] = 0
-                        wl_profile['min_volume'] = 0
-                        wl_profile['min_premium_per_contract'] = 0
-                        wl_profile['max_spread_pct'] = 100
-
+                        wl_profile = self._watchlist_provider.get_screening_profile(
+                            'PUT', dte=dte,
+                            growth_mode_config=getattr(self, '_growth_screener_config', None)
+                        )
                         decision = score_contract(
                             ticker=ticker,
                             option=contract,
@@ -173,63 +423,52 @@ class RecommendationEngine:
                             iv_status_str='normal',
                             earnings_adjustment=0,
                             earnings_info={},
-                            macro_regime=get_macro_service().get_macro_regime(),
+                            macro_regime=macro_regime,
+                            growth_profile=getattr(self, '_growth_profile', None),
                         )
 
-                        if decision is not None and decision.contract_score > best_score:
-                            best_score = decision.contract_score
-                            best_result = (strike, target_exp, dte, decision, stock_price)
+                        if decision is None or decision.hard_blockers:
+                            continue
+
+                        pick_score = decision.contract_score
+
+                        # Record for evaluator (non-blocking)
+                        try:
+                            record_recommendation(
+                                ticker=ticker, strike=decision.strike,
+                                expiration=decision.expiration,
+                                option_type=decision.option_type,
+                                dte=decision.dte,
+                                decision=decision,
+                                source='yfinance', strategy='csp',
+                            )
+                        except Exception:
+                            pass
+
+                        result = _format_decision_to_candidate(
+                            ticker, stock_price, decision,
+                            extra_warnings=['Data from yfinance (not Moomoo) - verify before trading'],
+                            cash_reserve_enabled=self.config.get('cash_reserve_enabled', True),
+                        )
+                        candidates.append((pick_score, result))
 
                 except Exception:
                     continue
 
-            if best_result is None:
-                logger.warning(f"Watchlist {ticker}: all candidates filtered by score_contract")
-                return self._make_skip_diagnostic(ticker, 'blocked_by_scoring', 'All candidates filtered by scoring')
+            if not candidates:
+                if not any_strike_fit_cash:
+                    return [self._make_skip_diagnostic(
+                        ticker, 'no_cash_fit',
+                        f'No CSP strike fits buying power (${cash_available_for_csp:.0f})'
+                    )]
+                logger.warning(f"Watchlist {ticker}: all yfinance candidates filtered by score_contract")
+                return [self._make_skip_diagnostic(ticker, 'blocked_by_scoring', 'All candidates filtered by scoring')]
 
-            _, _, _, wl_decision, stock_price = best_result
-            return {
-                'ticker': ticker,
-                'stock_price': stock_price,
-                'option_type': 'PUT',
-                'max_contracts': 1,
-                'existing_position': 0,
-                'from_watchlist': True,
-                'strike': wl_decision.strike,
-                'expiration': wl_decision.expiration,
-                'dte': wl_decision.dte,
-                'mid_price': round(wl_decision.mid_price, 4),
-                'premium_per_contract': round(wl_decision.premium_per_contract, 2),
-                'bid': wl_decision.bid,
-                'ask': wl_decision.ask,
-                'annualized_return': wl_decision.annualized_return,
-                'iv_adjusted_return': wl_decision.iv_adjusted_return,
-                'otm_pct': wl_decision.otm_pct,
-                'delta': wl_decision.delta,
-                'implied_volatility': wl_decision.implied_volatility,
-                'open_interest': wl_decision.open_interest,
-                'volume': wl_decision.volume,
-                'score': round(wl_decision.contract_score, 2),
-                'iv_rank': wl_decision.iv_rank,
-                'iv_status': wl_decision.iv_status,
-                'iv_env_adjustment': wl_decision.iv_env_adjustment,
-                'profile_type': wl_decision.profile_type,
-                'earnings_date': None,
-                'days_to_earnings': None,
-                'earnings_adjustment': 0,
-                'size_fit': wl_decision.size_fit,
-                'expected_move_buffer': wl_decision.expected_move_buffer,
-                'wheel_decision': wl_decision.to_dict(),
-                'score_details': wl_decision.score_details,
-                'rationale': wl_decision.rationale,
-                'warnings': wl_decision.warnings + ['Data from yfinance (not Moomoo) - verify before trading'],
-                'cash_reserve_enabled': self.config.get('cash_reserve_enabled', True),
-                'breakeven': wl_decision.breakeven,
-                'breakeven_buffer_pct': wl_decision.breakeven_buffer_pct,
-                'cash_required': wl_decision.cash_required,
-            }
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            return [c for _, c in candidates[:3]]
+
         except Exception as e:
-            logger.warning(f"Watchlist {ticker}: yfinance fetch failed: {e}")
+            logger.warning(f"Watchlist {ticker}: yfinance CSP fetch failed: {e}")
             return None
 
     def _make_skip_diagnostic(self, ticker, reason_code, reason_text):
@@ -242,11 +481,20 @@ class RecommendationEngine:
         }
 
     def _format_recommendation(self, option, rank=0):
-        """Format a raw option dict into a standardized recommendation dict."""
+        """Format a raw option dict into a standardized recommendation dict (signal-only)."""
+        wd = option.get('wheel_decision', {})
+        opt_type = option.get('option_type', '')
+        is_long = option.get('profile_type', '') in ('long_call', 'long_put')
+        is_csp = opt_type == 'PUT' and not option.get('held_position', False)
+        is_cc = opt_type == 'CALL' and option.get('max_contracts', 0) > 0
+        is_covered_call = is_cc
+        is_csp_signal = is_csp
+        # Research-only: long calls, long puts, earnings-vol calendars
+        research_only = is_long or option.get('profile_type', '') == 'earnings_calendar'
         return {
             'rank': rank,
             'ticker': option['ticker'],
-            'option_type': option['option_type'],
+            'option_type': opt_type,
             'strike': option.get('strike'),
             'expiration': option.get('expiration'),
             'dte': option.get('dte'),
@@ -282,21 +530,43 @@ class RecommendationEngine:
             'cash_required': option.get('cash_required'),
             'breakeven': option.get('breakeven'),
             'breakeven_buffer_pct': option.get('breakeven_buffer_pct'),
+            'macro_multiplier': wd.get('macro_multiplier', 1.0),
+            # Growth-aware fields (always-on)
+            'score_rationale': wd.get('score_rationale', ''),
+            'remaining_gap_to_target': wd.get('remaining_gap_to_target', 0),
+            'risk_budget_used_pct': wd.get('risk_budget_used_pct', 0),
+            'stress_loss': wd.get('stress_loss', 0),
+            'confidence_score': wd.get('confidence_score', 100),
+            'covered_call_intent': wd.get('covered_call_intent', ''),
+            # Signal-only fields
+            'signal_type': 'covered_call' if is_covered_call else ('csp' if is_csp_signal else opt_type.lower()),
+            'strategy': 'wheel',
+            'broker_feasible': True,
+            'capital_required': option.get('cash_required', 0),
+            'risk_budget_used': wd.get('risk_budget_used_pct', 0),
+            'data_source': wd.get('price_source', 'moomoo'),
+            'confidence': wd.get('confidence_score', 100),
+            'quote_quality': wd.get('quote_quality', ''),
+            'blocked_reason_codes': wd.get('blocked_reason_codes', []) or wd.get('hard_blockers', []),
+            'research_only': research_only,
         }
 
     def get_top_recommendations(self, limit=5):
         """
-        Get top N option recommendations across all portfolio positions and watchlist.
+        Get top N option signals across all portfolio positions and watchlist.
 
-        Returns separate lanes for covered calls and watchlist CSPs,
-        plus the legacy mixed recommendations list for backwards compatibility.
+        Returns a unified signal payload ranked by contract score.
 
         Filters options by capital availability:
         - CALLs: Only if user has 100+ shares
         - PUTs: Only if user has sufficient cash (strike * 100)
 
+        Uses broker buying power as authoritative constraint:
+        - Broker buying power is NOT reduced by open short puts (broker already accounts for them)
+        - Local staging capacity = broker buying power - pending staged CSP collateral
+
         Args:
-            limit (int): Number of top recommendations to return (default: 5, max: 10)
+            limit (int): Number of top signals to return (default: 5, max: 10)
 
         Returns:
             dict: {
@@ -304,27 +574,35 @@ class RecommendationEngine:
                 'count': int,
                 'total_scored': int,
                 'generated_at': str (ISO timestamp),
-                'recommendations': [list of recommendation dicts],
-                'lanes': {
-                    'covered_calls': {
-                        'count': int,
-                        'recommendations': [...],
-                    },
-                    'watchlist_csp': {
-                        'count': int,
-                        'recommendations': [...],
-                    },
-                },
+                'signals': [list of signal dicts, unified ranked],
+                'broker_buying_power': float,
                 'cash_available_for_csp': float,
                 'cash_reserved_for_csp': float,
+                'blocked_signals': [list of diagnostic dicts],
             }
         """
         from datetime import datetime
 
-        logger.info(f"Getting top {limit} recommendations")
+        logger.info(f"Getting top {limit} signals")
         start_time = time.time()
 
         try:
+            # Growth mode is always-on — set growth profile from config
+            growth_cfg = self.config.get('growth_mode', {}) if self.config else {}
+            self._growth_profile = {
+                'objective': growth_cfg.get('objective', 'time_to_2x'),
+                'target_account_multiple': float(growth_cfg.get('target_account_multiple', 2.0)),
+                'max_drawdown_pct': float(growth_cfg.get('max_drawdown_pct', 0.40)),
+                'execution_scope': growth_cfg.get('execution_scope', 'short_premium_wheel'),
+                'long_options_mode': growth_cfg.get('long_options_mode', 'research_only'),
+            }
+            # Propagate to options_data service for unified scoring
+            if hasattr(self._options_data_provider, '_growth_profile'):
+                self._options_data_provider._growth_profile = self._growth_profile
+
+            # Build growth mode config for screener overlay
+            self._growth_screener_config = growth_cfg
+
             # Ensure connection
             conn = self._get_connection()
             if not conn:
@@ -334,13 +612,25 @@ class RecommendationEngine:
             portfolio_context = self._get_portfolio_context()
             positions = portfolio_context.get('positions', {})
             available_cash = float(portfolio_context.get('available_cash', 0) or 0)
+            broker_buying_power = float(portfolio_context.get('broker_buying_power', 0) or 0)
             cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', 0) or 0)
             cash_reserved_for_csp = float(portfolio_context.get('cash_reserved_for_csp', 0) or 0)
             short_calls = portfolio_context.get('short_calls', {})
             short_puts = portfolio_context.get('short_puts', {})
 
-            effective_watchlist = self._watchlist_provider.get_effective_watchlist()
-            logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers")
+            effective_watchlist = self._watchlist_provider.get_effective_watchlist(
+                growth_mode_config=self._growth_screener_config
+            )
+            # Deduplicate watchlist by canonical underlying (UBER vs US.UBER)
+            seen_canonical = set()
+            deduped_watchlist = []
+            for wt in effective_watchlist:
+                cu = canonical_underlying(wt)
+                if cu not in seen_canonical:
+                    seen_canonical.add(cu)
+                    deduped_watchlist.append(wt)
+            effective_watchlist = deduped_watchlist
+            logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers (after dedup)")
 
             if not positions and not effective_watchlist:
                 return {
@@ -348,13 +638,12 @@ class RecommendationEngine:
                     'count': 0,
                     'total_scored': 0,
                     'generated_at': datetime.now().isoformat(),
-                    'recommendations': [],
-                    'lanes': {
-                        'covered_calls': {'count': 0, 'recommendations': []},
-                        'watchlist_csp': {'count': 0, 'recommendations': []},
-                    },
+                    'signals': [],
+                    'broker_buying_power': broker_buying_power,
                     'cash_available_for_csp': cash_available_for_csp,
                     'cash_reserved_for_csp': cash_reserved_for_csp,
+                    'blocked_signals': [],
+                    'blocked_reason_counts': {},
                     'message': 'No positions or watchlist configured'
                 }
 
@@ -372,34 +661,38 @@ class RecommendationEngine:
             # ════════════════════════════════════════════════════════════
             # LANE 1: Watchlist CSPs — process ALL watchlist tickers
             # (including those already held as positions)
+            # Uses Moomoo as primary data source, falls back to yfinance
             # ════════════════════════════════════════════════════════════
             for ticker in effective_watchlist:
                 is_held = ticker in positions
 
                 cached = self._get_cached_watchlist_data(ticker)
-                if cached:
+                if cached is not None:
                     watchlist_cached += 1
-                    if cached.get('_skip_diagnostic'):
-                        skipped_csp_diagnostics.append(cached)
-                        continue
-                    cached['held_position'] = is_held
-                    watchlist_csp_candidates.append(cached)
+                    for cached_item in cached:
+                        if cached_item.get('_skip_diagnostic'):
+                            skipped_csp_diagnostics.append(cached_item)
+                            continue
+                        cached_item['held_position'] = is_held
+                        cached_item['existing_position'] = short_puts.get(ticker, 0)
+                        watchlist_csp_candidates.append(cached_item)
                     continue
 
-                result = self._fetch_watchlist_ticker_csp(ticker, portfolio_context)
-                if result is None:
+                results = self._fetch_watchlist_ticker_csp(ticker, portfolio_context)
+                if not results:
                     watchlist_errors += 1
                     continue
 
-                if result.get('_skip_diagnostic'):
-                    skipped_csp_diagnostics.append(result)
-                    self._set_cached_watchlist_data(ticker, result)
-                    continue
+                self._set_cached_watchlist_data(ticker, results)
 
-                self._set_cached_watchlist_data(ticker, result)
-                result['held_position'] = is_held
-                watchlist_csp_candidates.append(result)
-                watchlist_processed += 1
+                for result in results:
+                    if result.get('_skip_diagnostic'):
+                        skipped_csp_diagnostics.append(result)
+                        continue
+                    result['held_position'] = is_held
+                    result['existing_position'] = short_puts.get(ticker, 0)
+                    watchlist_csp_candidates.append(result)
+                    watchlist_processed += 1
 
             logger.info(f"Watchlist CSP: {watchlist_cached} cached, {watchlist_processed} fetched, "
                        f"{watchlist_errors} errors, {len(skipped_csp_diagnostics)} skipped")
@@ -407,7 +700,15 @@ class RecommendationEngine:
             # ════════════════════════════════════════════════════════════
             # LANE 2: Covered Calls — from portfolio positions only
             # ════════════════════════════════════════════════════════════
-            for ticker in positions.keys():
+            # Deduplicate positions by canonical underlying
+            seen_position_canonical = set()
+            deduped_position_tickers = []
+            for pk in positions.keys():
+                cu = canonical_underlying(pk)
+                if cu not in seen_position_canonical:
+                    seen_position_canonical.add(cu)
+                    deduped_position_tickers.append(pk)
+            for ticker in deduped_position_tickers:
                 try:
                     # Get stock price for this ticker
                     stock_price = conn.get_stock_price(ticker)
@@ -434,14 +735,18 @@ class RecommendationEngine:
                               f"{existing_short_calls} existing short calls, {available_calls} available, "
                               f"{existing_short_puts} existing short puts")
 
+                    # Determine OTM target — always use growth-tuned default
+                    sp = (growth_cfg.get('screener_profile', {}) or {}) if growth_cfg else {}
+                    otm_target = sp.get('call_default_otm_pct', 10)
+
                     # Fetch options data for this ticker
                     result = self._options_data_provider._process_ticker_for_otm(
                         conn=conn,
                         ticker=ticker,
-                        otm_percentage=10,  # Default OTM
+                        otm_percentage=otm_target,  # Growth-tuned or default OTM
                         portfolio_context=portfolio_context,
                         expiration=None,  # Get all expirations
-                        option_type=None  # Get both CALL and PUT
+                        option_type='CALL'  # Covered-call lane only
                     )
 
                     if 'error' in result:
@@ -462,27 +767,8 @@ class RecommendationEngine:
                                 **call
                             })
 
-                    # Process PUTs — add to watchlist CSP lane if ticker is
-                    # also on watchlist (supplementary data from Moomoo)
-                    if ticker in effective_watchlist:
-                        cash_remaining = cash_available_for_csp
-                        for put in result.get('puts', []):
-                            cash_required = float(put.get('strike', 0)) * 100
-                            if cash_required > 0 and cash_remaining >= cash_required:
-                                watchlist_csp_candidates.append({
-                                    'ticker': ticker,
-                                    'stock_price': stock_price,
-                                    'option_type': 'PUT',
-                                    'max_contracts': 1,
-                                    'existing_position': existing_short_puts,
-                                    'held_position': True,
-                                    'from_watchlist': True,
-                                    **put
-                                })
-                                cash_remaining -= cash_required
-
                 except Exception as e:
-                    logger.error(f"Error processing {ticker} for recommendations: {e}")
+                    logger.error(f"Error processing {ticker} for signals: {e}")
                     continue
 
             # ── Per-ticker diagnostics ───────────────────────────────
@@ -496,74 +782,87 @@ class RecommendationEngine:
                     ticker_diagnostics[t]['top_score'] = max(ticker_diagnostics[t]['top_score'], score)
                 ticker_diagnostics[t]['candidate_count'] += 1
 
-            # ── Sort each lane by score ──────────────────────────────
-            covered_call_candidates.sort(key=lambda x: x.get('score', 0), reverse=True)
-            watchlist_csp_candidates.sort(key=lambda x: x.get('score', 0), reverse=True)
+            # ── Unified ranking: one engine for CSPs and covered calls ──
+            # Always sort by contract_score
+            def _get_rank_score(x):
+                return x.get('wheel_decision', {}).get('contract_score', 0) or x.get('score', 0) or 0
+
+            all_candidates.sort(key=_get_rank_score, reverse=True)
 
             # ── Build lane results with diversity safeguard ──────────
             def _select_top(candidates, max_per=1):
-                """Select top candidates with at most max_per per ticker."""
-                seen = set()
+                """Select top candidates with at most max_per per canonical underlying."""
+                seen_canonical = set()
                 selected = []
                 for opt in candidates:
                     t = opt.get('ticker', 'UNKNOWN')
-                    count = sum(1 for o in selected if o.get('ticker') == t)
+                    cu = canonical_underlying(t)
+                    count = sum(1 for o in selected if canonical_underlying(o.get('ticker', 'UNKNOWN')) == cu)
                     if count < max_per:
                         selected.append(opt)
-                        seen.add(t)
+                        seen_canonical.add(cu)
                 return selected
 
             top_covered_calls = _select_top(covered_call_candidates, max_per=1)
-            top_watchlist_csp = _select_top(watchlist_csp_candidates, max_per=1)
+            top_watchlist_csp = _select_top(watchlist_csp_candidates, max_per=2)
 
-            # ── Legacy mixed recommendations list ────────────────────
-            # Merge both lanes, interleaved by score, for backwards compatibility
-            all_sorted = sorted(all_candidates, key=lambda x: x.get('score', 0), reverse=True)
-            top_mixed = _select_top(all_sorted, max_per=1)[:limit]
+            # Single ranked signal pipeline combining CSPs and covered calls.
+            signals = _select_top(all_candidates, max_per=1)[:limit]
 
             # Log per-ticker diagnostics
             for t, diag in sorted(ticker_diagnostics.items(), key=lambda x: x[1]['top_score'], reverse=True):
                 logger.info(f"  TICKER {t}: top_score={diag['top_score']:.1f}, candidates={diag['candidate_count']}")
 
-            # ── Format all recommendations ───────────────────────────
-            recommendations = []
-            for rank, option in enumerate(top_mixed, 1):
-                recommendations.append(self._format_recommendation(option, rank))
+            # Format the unified signal list.
+            def _format_rec_list(candidates, start_rank=1):
+                return [self._format_recommendation(opt, rank) for rank, opt in enumerate(candidates, start_rank)]
 
-            formatted_cc = []
-            for rank, option in enumerate(top_covered_calls, 1):
-                formatted_cc.append(self._format_recommendation(option, rank))
-
-            formatted_csp = []
-            for rank, option in enumerate(top_watchlist_csp, 1):
-                formatted_csp.append(self._format_recommendation(option, rank))
+            formatted_signals = _format_rec_list(signals)
+            formatted_cc = _format_rec_list(top_covered_calls)
+            formatted_csp = _format_rec_list(top_watchlist_csp)
 
             elapsed = time.time() - start_time
-            logger.info(f"Generated {len(recommendations)} mixed recs, "
+            logger.info(f"Generated {len(formatted_signals)} signals, "
                        f"{len(formatted_cc)} CC, {len(formatted_csp)} CSP in {elapsed:.2f}s")
+
+            # Build blocked signal diagnostics.
+            blocked_signals = []
+            reason_counts = {}
+            for diag in skipped_csp_diagnostics:
+                rcode = diag.get('reason_code', 'unknown')
+                reason_counts[rcode] = reason_counts.get(rcode, 0) + 1
+                blocked_signals.append({
+                    'ticker': diag.get('ticker', ''),
+                    'reason_code': rcode,
+                    'reason_text': diag.get('reason_text', ''),
+                    'signal_type': 'csp',
+                    'actionable': False,
+                })
 
             return {
                 'success': True,
-                'count': len(recommendations),
+                'count': len(formatted_signals),
                 'total_scored': len(all_candidates),
                 'generated_at': datetime.now().isoformat(),
-                'recommendations': recommendations,
-                'lanes': {
-                    'covered_calls': {
-                        'count': len(formatted_cc),
-                        'recommendations': formatted_cc,
-                    },
-                    'watchlist_csp': {
-                        'count': len(formatted_csp),
-                        'recommendations': formatted_csp,
-                    },
-                },
+                'signals': formatted_signals,
+                'broker_buying_power': round(broker_buying_power, 2),
                 'cash_available_for_csp': round(cash_available_for_csp, 2),
                 'cash_reserved_for_csp': round(cash_reserved_for_csp, 2),
+                'cash_diagnostics': portfolio_context.get('_cash_diagnostics', {}),
+                'blocked_signals': blocked_signals,
+                'blocked_reason_counts': dict(sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)),
+                'growth_mode': {
+                    'enabled': True,
+                    'objective': (self._growth_profile or {}).get('objective', 'time_to_2x'),
+                    'target_account_multiple': (self._growth_profile or {}).get('target_account_multiple', 2.0),
+                    'max_drawdown_pct': (self._growth_profile or {}).get('max_drawdown_pct', 0.40),
+                    'screener_profile': ((self._growth_screener_config or {}).get('screener_profile', {}) or {}),
+                    'csp_profile_summary': _build_csp_profile_summary(self._growth_screener_config),
+                },
                 '_diagnostics': {
                     'tickers': ticker_diagnostics,
                     'limit_applied': limit,
-                    'max_per_ticker': 1,
+                    'max_per_ticker': 2,
                     'watchlist_processed': watchlist_processed,
                     'watchlist_cached': watchlist_cached,
                     'watchlist_errors': watchlist_errors,
@@ -575,5 +874,29 @@ class RecommendationEngine:
             }
 
         except Exception as e:
-            logger.exception(f"Error getting top recommendations: {e}")
+            logger.exception(f"Error getting top signals: {e}")
             return {'error': str(e)}
+
+
+def _build_csp_profile_summary(growth_cfg: dict | None) -> str:
+    """
+    Build a human-readable summary of the active Growth CSP screener profile.
+    Returns an empty string if growth mode is not configured.
+    """
+    if not growth_cfg:
+        return ''
+    sp = growth_cfg.get('screener_profile', {}) or {}
+    parts = []
+    parts.append(f"delta {sp.get('csp_target_delta', 0.30)}")
+    parts.append(f"+/-{sp.get('csp_delta_tolerance', 0.12)}")
+    dte = sp.get('csp_preferred_dte', 37)
+    min_dte = sp.get('csp_min_dte', 30)
+    max_dte = sp.get('csp_max_dte', 45)
+    min_otm = sp.get('csp_min_otm_pct', 5)
+    max_otm = sp.get('csp_max_otm_pct', 15)
+    parts.append(f"DTE {min_dte}-{max_dte} (pref {dte})")
+    parts.append(f"OTM {min_otm}-{max_otm}% (pref {sp.get('csp_default_otm_pct', 10)}%)")
+    parts.append(f"IV rank >={sp.get('min_iv_rank', 45)}%")
+    if sp.get('require_cash_fit', True):
+        parts.append("cash-fit req.")
+    return " | ".join(parts)

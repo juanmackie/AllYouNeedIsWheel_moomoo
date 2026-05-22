@@ -18,6 +18,25 @@ from api.services.macro_regime_service import get_macro_service
 logger = logging.getLogger('api.services.options_data')
 
 
+def _normalize_expiration(expiration):
+    value = str(expiration or '').strip()
+    if not value:
+        return ''
+    if len(value) >= 10 and value[4] == '-' and value[7] == '-':
+        return value[:10].replace('-', '')
+    return value.replace('-', '')
+
+
+def _parse_expiration_date(expiration):
+    normalized = _normalize_expiration(expiration)
+    if len(normalized) != 8:
+        return None
+    try:
+        return datetime.strptime(normalized, '%Y%m%d').date()
+    except ValueError:
+        return None
+
+
 class OptionsDataService:
     """
     Handles options data retrieval, chain processing, and candidate building.
@@ -32,6 +51,12 @@ class OptionsDataService:
         self._screening_profile_provider = screening_profile_provider
         self._portfolio_context_provider = portfolio_context_provider
         self._yfinance_iv_cache = {}
+        self._growth_profile = None  # Set by recommendation engine when growth mode is active
+
+    def _get_config(self):
+        if hasattr(self._config_provider, 'config'):
+            return self._config_provider.config
+        return self._config_provider
         
     def _get_connection(self):
         return self._connection_provider._ensure_connection()
@@ -39,6 +64,20 @@ class OptionsDataService:
     def _get_portfolio_context(self):
         return self._portfolio_context_provider.get_portfolio_context()
     
+    def _get_growth_profile(self):
+        """Return growth profile — always-on."""
+        config = self._get_config()
+        growth_mode = config.get('growth_mode', {}) if config else {}
+        if growth_mode:
+            return {
+                'objective': growth_mode.get('objective', 'time_to_2x'),
+                'target_account_multiple': float(growth_mode.get('target_account_multiple', 2.0)),
+                'max_drawdown_pct': float(growth_mode.get('max_drawdown_pct', 0.40)),
+                'execution_scope': growth_mode.get('execution_scope', 'short_premium_wheel'),
+                'long_options_mode': growth_mode.get('long_options_mode', 'research_only'),
+            }
+        return self._growth_profile
+
     def _strip_ticker_prefix(self, ticker):
         return clean_yfinance_ticker(ticker)
 
@@ -135,6 +174,41 @@ class OptionsDataService:
             logger.warning(f"yfinance: Failed to get option chain for {ticker}: {e}")
             return None
 
+    def _get_yfinance_expiration_dates(self, ticker, profile=None):
+        """Return yfinance expirations filtered to the active DTE profile."""
+        try:
+            import yfinance as yf
+
+            bare_ticker = self._strip_ticker_prefix(ticker)
+            all_exps = yf.Ticker(bare_ticker).options
+            if not all_exps:
+                return []
+
+            today = datetime.now().date()
+            min_dte = (profile or {}).get('min_dte', 0)
+            max_dte = (profile or {}).get('max_dte', 365)
+            filtered = []
+            fallback = []
+
+            for exp in all_exps:
+                exp_date = _parse_expiration_date(exp)
+                if not exp_date:
+                    continue
+                dte = (exp_date - today).days
+                if dte <= 0:
+                    continue
+                item = (_normalize_expiration(exp), dte)
+                fallback.append(item)
+                if min_dte <= dte <= max_dte:
+                    filtered.append(item)
+
+            expirations = filtered or fallback
+            expirations.sort(key=lambda item: item[1])
+            return expirations[:(profile or {}).get('max_expirations', 50)]
+        except Exception as e:
+            logger.debug(f"yfinance: Failed to get expirations for {ticker}: {e}")
+            return []
+
     def _build_candidate(self, ticker, option, stock_price, desired_otm, profile, portfolio_context):
         """
         Build a scored candidate for a single option contract.
@@ -144,6 +218,8 @@ class OptionsDataService:
         """
         # Gather IV / earnings / macro context
         vix_regime = portfolio_context.get('vix_regime')
+        option['expiration'] = _normalize_expiration(option.get('expiration', ''))
+
         if option.get('implied_volatility', 0) > 0:
             self.iv_earnings_service.record_iv_data(
                 ticker,
@@ -204,21 +280,22 @@ class OptionsDataService:
             earnings_adjustment=earnings_adjustment,
             earnings_info=earnings_info,
             macro_regime=macro_regime,
+            growth_profile=self._get_growth_profile(),
         )
 
-        # TODO 1.1: Handle hard blockers (returned as WheelDecision with hard_blockers)
+        if decision is None:
+            return None
+
         if decision and decision.hard_blockers:
-            # Return a minimal candidate with hard blockers for API consumers
-            return {
-                'symbol': decision.ticker,
-                'strike': decision.strike,
-                'expiration': decision.expiration,
-                'option_type': decision.option_type,
-                'hard_blockers': decision.hard_blockers,
-                'warnings': decision.warnings,
-                'score': 0,
-                'score_details': {},
-            }
+            logger.debug(
+                "Filtered %s %s %s %s due to hard blockers: %s",
+                decision.ticker,
+                decision.option_type,
+                decision.expiration,
+                decision.strike,
+                decision.hard_blockers,
+            )
+            return None
 
         # Convert WheelDecision back to legacy dict format for API compatibility
         candidate = {
@@ -245,6 +322,8 @@ class OptionsDataService:
             'rationale': decision.rationale,
             'warnings': decision.warnings,
             'hard_blockers': decision.hard_blockers,  # TODO 1.1
+            'quote_quality': decision.quote_quality,
+            'blocked_reason_codes': decision.blocked_reason_codes,
             'otm_pct': decision.otm_pct,
             'annualized_return': decision.annualized_return,
             'return_on_underlying': decision.return_on_underlying,  # TODO 1.2
@@ -304,13 +383,16 @@ class OptionsDataService:
 
     def _get_candidate_expirations(self, conn, ticker, profile, expiration=None):
         if expiration:
-            return [expiration]
+            return [_normalize_expiration(expiration)]
 
         try:
             # Use the rate-limited method in MoomooConnection
             from moomoo import RET_OK
             ret, data = conn.get_option_expiration_dates(ticker)
             if ret != RET_OK or data is None or data.empty:
+                yf_expirations = self._get_yfinance_expiration_dates(ticker, profile)
+                if yf_expirations:
+                    return [value for value, _ in yf_expirations[:profile.get('max_expirations', 5)]]
                 fallback = get_closest_friday().strftime('%Y%m%d')
                 logger.debug(f"get_option_expiration_dates failed for {ticker}: ret={ret}, data empty or None")
                 return [fallback]
@@ -333,8 +415,10 @@ class OptionsDataService:
             logger.debug(f"_get_candidate_expirations for {ticker}: min_dte={min_dte} (type={type(min_dte)}), max_dte={max_dte} (type={type(max_dte)})")
 
             for raw_date in data[expiration_column].tolist():
-                normalized = raw_date.replace('-', '')
-                expiry_date = datetime.strptime(normalized, '%Y%m%d').date()
+                normalized = _normalize_expiration(raw_date)
+                expiry_date = _parse_expiration_date(normalized)
+                if not expiry_date:
+                    continue
                 dte = (expiry_date - today).days
                 logger.debug(f"  Checking expiration {normalized}: dte={dte} (type={type(dte)})")
                 if dte <= 0:
@@ -354,6 +438,9 @@ class OptionsDataService:
             return result
         except Exception as exc:
             logger.exception(f"Error loading option expirations for {ticker}: {exc}")
+            yf_expirations = self._get_yfinance_expiration_dates(ticker, profile)
+            if yf_expirations:
+                return [value for value, _ in yf_expirations[:profile.get('max_expirations', 5)]]
             return [get_closest_friday().strftime('%Y%m%d')]
 
     def get_otm_options(self, ticker, otm_percentage=10, option_type=None, expiration=None):
@@ -420,7 +507,10 @@ class OptionsDataService:
             options_chains = []
 
             for side in sides:
-                profile = self._screening_profile_provider.get_screening_profile(side)
+                profile = self._screening_profile_provider.get_screening_profile(
+                    side,
+                    growth_mode_config=self._get_config().get('growth_mode', {})
+                )
                 logger.debug(f"Processing {ticker} {side} with profile: min_dte={profile.get('min_dte')}, max_dte={profile.get('max_dte')}, preferred_dte={profile.get('preferred_dte')}")
                 expirations = self._get_candidate_expirations(conn, ticker, profile, expiration)
                 logger.debug(f"Got {len(expirations)} expirations for {ticker} {side}: {expirations[:3]}...")
@@ -483,11 +573,15 @@ class OptionsDataService:
                 if option_type and option_type != side:
                     continue
 
-                profile = self._screening_profile_provider.get_screening_profile(side)
+                profile = self._screening_profile_provider.get_screening_profile(
+                    side,
+                    growth_mode_config=self._get_config().get('growth_mode', {})
+                )
                 candidates = []
                 seen_contracts = set()
 
                 for option in grouped_options[side]:
+                    option['expiration'] = _normalize_expiration(option.get('expiration', ''))
                     contract_key = (
                         option.get('expiration'),
                         option.get('strike'),
@@ -510,7 +604,7 @@ class OptionsDataService:
 
                 candidates.sort(
                     key=lambda item: (
-                        item.get('score', 0),
+                        item.get('wheel_decision', {}).get('contract_score', 0),
                         item.get('annualized_return', 0),
                         item.get('premium_per_contract', 0)
                     ),
@@ -541,7 +635,23 @@ class OptionsDataService:
             # Use the rate-limited method in MoomooConnection
             from moomoo import RET_OK
             ret, data = conn.get_option_expiration_dates(ticker)
-            if ret != RET_OK: return {"error": f"Failed to get expirations: {data}"}
+            if ret != RET_OK or data is None or data.empty:
+                profile = self._screening_profile_provider.get_screening_profile(
+                    option_type,
+                    growth_mode_config=self._get_config().get('growth_mode', {}),
+                ) if option_type in ['CALL', 'PUT'] else {}
+                yf_expirations = self._get_yfinance_expiration_dates(ticker, profile)
+                return {
+                    "ticker": ticker,
+                    "expirations": [
+                        {
+                            "value": value,
+                            "label": f"{value[0:4]}-{value[4:6]}-{value[6:8]}",
+                            "dte": dte,
+                        }
+                        for value, dte in yf_expirations
+                    ]
+                }
             
             expiration_column = 'expiration_date'
             if expiration_column not in data.columns:
@@ -554,34 +664,33 @@ class OptionsDataService:
 
             from datetime import datetime, date
             today = date.today()
-            
-            # Define DTE ranges based on option type
-            if option_type == 'CALL':
-                min_dte, max_dte = 5, 35
-            elif option_type == 'PUT':
-                min_dte, max_dte = 7, 45
+
+            if option_type in ['CALL', 'PUT']:
+                profile = self._screening_profile_provider.get_screening_profile(
+                    option_type,
+                    growth_mode_config=self._get_config().get('growth_mode', {}),
+                )
+                min_dte = profile.get('min_dte', 0)
+                max_dte = profile.get('max_dte', 365)
             else:
                 min_dte, max_dte = 0, 365  # All future dates up to 1 year
             
             expirations = []
             for date_str in data[expiration_column].tolist():
-                try:
-                    # Parse the date string (format: YYYY-MM-DD)
-                    exp_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                    
-                    # Calculate DTE
-                    dte = (exp_date - today).days
-                    
-                    # Filter: must be in the future and within preferred range
-                    if dte >= min_dte and dte <= max_dte:
-                        expirations.append({
-                            "value": date_str.replace('-', ''),
-                            "label": date_str,
-                            "dte": dte
-                        })
-                except ValueError:
-                    # Skip invalid date formats
+                exp_date = _parse_expiration_date(date_str)
+                if not exp_date:
                     continue
+
+                dte = (exp_date - today).days
+
+                # Filter: must be in the future and within preferred range
+                if dte >= min_dte and dte <= max_dte:
+                    value = _normalize_expiration(date_str)
+                    expirations.append({
+                        "value": value,
+                        "label": f"{value[0:4]}-{value[4:6]}-{value[6:8]}",
+                        "dte": dte
+                    })
             
             # Sort by DTE (ascending)
             expirations.sort(key=lambda x: x['dte'])

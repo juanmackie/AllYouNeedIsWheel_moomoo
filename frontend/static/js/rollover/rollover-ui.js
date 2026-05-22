@@ -1,7 +1,7 @@
 import { rolloverState } from './rollover-state.js';
 import { formatPercentage, formatDate, getBadgeColor, calculateMidPrice, calculateTargetStrike, roundStrikeToNearestHalf, parseExpirationDate, formatExpirationDisplay, addDaysToDate, formatDateToAPIfmt } from './rollover-calculator.js';
 import { formatCurrency } from '../utils/formatters.js';
-import { loadOptionPositions, loadPendingOrders, fetchRolloverSuggestions, addRolloverOrder, executeOrderById, cancelOrderById } from './rollover-api.js';
+import { loadOptionPositions, loadPendingOrders, fetchRolloverSuggestions } from './rollover-api.js';
 import { fetchOptionExpirations } from '../dashboard/api.js';
 
 function populateOptionsTable(options) {
@@ -176,8 +176,8 @@ function populateRolloverSuggestionsTable(suggestions) {
             <td>${formattedIV}</td>
             <td>
                 <button class="btn btn-sm btn-success rollover-btn" data-suggestion-id="${index}"
-                    data-bs-toggle="tooltip" data-bs-placement="top" title="Execute this rollover order">
-                    Execute Rollover
+                    data-bs-toggle="tooltip" data-bs-placement="top" title="Review this rollover signal">
+                    Review Rollover
                 </button>
             </td>
         `;
@@ -191,215 +191,14 @@ function populateRolloverSuggestionsTable(suggestions) {
         executeAllRow.innerHTML = `
             <td colspan="11" class="text-center">
                 <button id="execute-rollover-btn" class="btn btn-primary mt-2">
-                    <i class="bi bi-check2-all"></i> Execute Rollover with First Option
+                    <i class="bi bi-check2-all"></i> Review Rollover with First Option
                 </button>
             </td>
         `;
         tableBody.appendChild(executeAllRow);
     }
 
-    const rolloverButtons = tableBody.querySelectorAll('.rollover-btn');
-    rolloverButtons.forEach(button => {
-        button.addEventListener('click', async (event) => {
-            const suggestionId = parseInt(event.target.getAttribute('data-suggestion-id'));
-            await addRolloverOrder(suggestionId);
-        });
-    });
-
     initializeRolloverTooltips();
-}
-
-function populatePendingOrdersTable(orders) {
-    const tableBody = document.getElementById('pending-orders-table-body');
-    if (!tableBody) return;
-
-    tableBody.innerHTML = '';
-
-    if (!orders || orders.length === 0) {
-        const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = '<td colspan="10" class="text-center">No pending rollover orders found</td>';
-        tableBody.appendChild(noDataRow);
-        return;
-    }
-
-    orders.sort((a, b) => {
-        const timestampA = a.timestamp || a.date_created || 0;
-        const timestampB = b.timestamp || b.date_created || 0;
-
-        if (!isNaN(timestampA) && !isNaN(timestampB)) {
-            return timestampB - timestampA;
-        } else {
-            return new Date(timestampB) - new Date(timestampA);
-        }
-    });
-
-    orders.forEach(order => {
-        const row = document.createElement('tr');
-
-        const strike = order.strike ? formatCurrency(order.strike) : 'N/A';
-
-        let limitPriceDisplay;
-        if (order.order_type === 'MARKET') {
-            limitPriceDisplay = 'Market';
-        } else if (order.order_type === 'LIMIT') {
-            const limitPrice = parseFloat(order.limit_price) || 0;
-            const perSharePrice = limitPrice / 100;
-
-            let priceContext = '';
-            if (order.action === 'BUY' && order.ask > 0) {
-                priceContext = `<small class="text-muted" title="Ask price per share">(ask)</small>`;
-            } else if (order.action === 'SELL' && order.bid > 0 && order.ask > 0) {
-                const bidAskTooltip = `bid: ${formatCurrency(order.bid)}, ask: ${formatCurrency(order.ask)}`;
-                priceContext = `<small class="text-muted" title="${bidAskTooltip}">(mid)</small>`;
-            }
-
-            limitPriceDisplay = `${formatCurrency(perSharePrice)} ${priceContext}`;
-        } else {
-            limitPriceDisplay = '-';
-        }
-
-        const createdAt = formatDate(order.timestamp || order.date_created);
-
-        let statusText = order.status || 'pending';
-        let rowClass = '';
-
-        if (statusText === 'executed' || statusText === 'filled') {
-            rowClass = 'table-success';
-            statusText = 'Executed';
-        } else if (statusText === 'cancelled' || statusText === 'rejected' || statusText === 'canceled') {
-            rowClass = 'table-danger';
-            statusText = statusText === 'cancelled' || statusText === 'canceled' ? 'Cancelled' : 'Rejected';
-        } else if (statusText === 'processing') {
-            rowClass = 'table-warning';
-            statusText = 'Processing';
-        } else if (statusText === 'ready') {
-            rowClass = 'table-info';
-            statusText = 'Ready for Submission';
-        } else {
-            statusText = 'Pending';
-        }
-
-        let statusHtml = `<span class="badge bg-${getBadgeColor(order.status)}">${statusText}</span>`;
-
-        if (createdAt) {
-            statusHtml += `<br><small class="text-muted">${createdAt}</small>`;
-        }
-
-        if (order.moomoo_order_id) {
-            statusHtml += `
-                <br><small class="text-muted"><strong>Order ID:</strong> ${order.moomoo_order_id}</small>
-                <br><small class="text-muted"><strong>Moomoo Status:</strong> ${order.moomoo_status || 'Unknown'}</small>
-            `;
-
-            if (order.avg_fill_price && order.status === 'executed') {
-                statusHtml += `<br><small class="text-muted"><strong>Fill Price:</strong> ${formatCurrency(order.avg_fill_price)}</small>`;
-            }
-        }
-
-        const quantityCell = order.status === 'pending' && !String(order.id).startsWith('temp-')
-            ? `<input type="number" class="form-control form-control-sm quantity-input" data-order-id="${order.id}" value="${order.quantity}" min="1" max="100">`
-            : `${order.quantity}`;
-
-        let actionButtons = '';
-        const isTemporaryOrder = String(order.id).startsWith('temp-');
-
-        if (isTemporaryOrder) {
-            actionButtons = `
-                <button class="btn btn-sm btn-outline-secondary" disabled>
-                    <i class="bi bi-hourglass"></i> Pending Submission
-                </button>
-            `;
-        } else if (statusText === 'Pending') {
-            actionButtons = `
-                <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary execute-order-btn" data-order-id="${order.id}"
-                        data-bs-toggle="tooltip" data-bs-placement="top" title="Execute this rollover order">
-                        <i class="bi bi-play-fill"></i> Execute
-                    </button>
-                    <button class="btn btn-outline-danger cancel-order-btn" data-order-id="${order.id}"
-                        data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel this order">
-                        <i class="bi bi-x-circle"></i> Cancel
-                    </button>
-                </div>
-            `;
-        } else if (statusText === 'Processing') {
-            actionButtons = `
-                <button class="btn btn-sm btn-warning cancel-order-btn" data-order-id="${order.id}"
-                    data-bs-toggle="tooltip" data-bs-placement="top" title="Cancel this order">
-                    <i class="bi bi-x-circle"></i> Cancel
-                </button>
-            `;
-        } else {
-            actionButtons = '-';
-        }
-
-        row.className = rowClass;
-
-        row.innerHTML = `
-            <td>${isTemporaryOrder ? '<span class="badge bg-info">Pending</span>' : order.id}</td>
-            <td>${order.action}</td>
-            <td>${order.ticker}</td>
-            <td>${order.option_type}</td>
-            <td>${strike}</td>
-            <td>${order.expiration || 'N/A'}</td>
-            <td>${quantityCell}</td>
-            <td>${limitPriceDisplay}</td>
-            <td>${statusHtml}</td>
-            <td>${actionButtons}</td>
-        `;
-
-        tableBody.appendChild(row);
-    });
-
-    const executeButtons = tableBody.querySelectorAll('.execute-order-btn');
-    executeButtons.forEach(button => {
-        button.addEventListener('click', async (event) => {
-            const orderId = event.target.closest('.execute-order-btn').getAttribute('data-order-id');
-            await executeOrderById(parseInt(orderId));
-        });
-    });
-
-    const cancelButtons = tableBody.querySelectorAll('.cancel-order-btn');
-    cancelButtons.forEach(button => {
-        button.addEventListener('click', async (event) => {
-            const orderId = event.target.closest('.cancel-order-btn').getAttribute('data-order-id');
-            await cancelOrderById(parseInt(orderId));
-        });
-    });
-
-    initializeRolloverTooltips();
-
-    const quantityInputs = tableBody.querySelectorAll('.quantity-input');
-    quantityInputs.forEach(input => {
-        input.addEventListener('change', async (event) => {
-            const orderId = event.target.getAttribute('data-order-id');
-            const newQuantity = parseInt(event.target.value, 10);
-
-            if (newQuantity > 0) {
-                try {
-                    const response = await fetch(`/api/portfolio/orders/${orderId}/quantity`, {
-                        method: 'PATCH',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ quantity: newQuantity })
-                    });
-
-                    if (!response.ok) {
-                        throw new Error('Failed to update quantity');
-                    }
-
-                    await response.json();
-                    await loadPendingOrders();
-                } catch (error) {
-                    console.error(`Error updating quantity for order ${orderId}:`, error);
-                    await loadPendingOrders();
-                }
-            } else {
-                await loadPendingOrders();
-            }
-        });
-    });
 }
 
 function clearRolloverSuggestions() {
@@ -414,7 +213,7 @@ function clearRolloverSuggestions() {
 }
 
 function initializeRolloverTooltips() {
-    const tooltipTriggerList = [].slice.call(document.querySelectorAll('.roll-option-btn[data-bs-toggle="tooltip"], .rollover-btn[data-bs-toggle="tooltip"], .execute-order-btn[data-bs-toggle="tooltip"], .cancel-order-btn[data-bs-toggle="tooltip"]'));
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('.roll-option-btn[data-bs-toggle="tooltip"], .rollover-btn[data-bs-toggle="tooltip"]'));
     tooltipTriggerList.forEach(function (tooltipTriggerEl) {
         const existingTooltip = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
         if (!existingTooltip) {
@@ -490,7 +289,8 @@ async function selectOptionToRoll(optionId) {
                 expirationDates = expirationData.expirations;
             }
         } catch (error) {
-            console.error(`Error fetching expiration dates for ${ticker}:`, error);
+            const isTimeout = error?.message?.includes('Request timed out');
+            (isTimeout ? console.warn : console.error)(`Error fetching expiration dates for ${ticker}:`, error);
         }
 
         tableBody.innerHTML = '';
@@ -617,7 +417,6 @@ async function selectOptionToRoll(optionId) {
 async function initializeRollover() {
     try {
         await loadOptionPositions();
-        await loadPendingOrders();
 
         const optionsTable = document.getElementById('options-approaching-table');
         if (optionsTable) {
@@ -639,10 +438,7 @@ async function initializeRollover() {
                     const currentSelectedOption = rolloverState.selectedOption ? JSON.parse(JSON.stringify(rolloverState.selectedOption)) : null;
                     const currentSuggestions = rolloverState.rolloverSuggestions ? JSON.parse(JSON.stringify(rolloverState.rolloverSuggestions)) : [];
 
-                    await Promise.all([
-                        loadOptionPositions(),
-                        loadPendingOrders()
-                    ]);
+                    await loadOptionPositions();
 
                     if (currentSelectedOption && currentSuggestions && currentSuggestions.length > 0) {
                         rolloverState.selectedOption = currentSelectedOption;
@@ -656,18 +452,7 @@ async function initializeRollover() {
             });
         }
 
-        const refreshPendingOrdersBtn = document.getElementById('refresh-pending-orders');
-        if (refreshPendingOrdersBtn) {
-            refreshPendingOrdersBtn.addEventListener('click', async () => {
-                try {
-                    await loadPendingOrders();
-                } catch (error) {
-                    console.error('Error refreshing pending orders:', error);
-                }
-            });
-        }
-
-        // Event delegation for execute rollover button
+        // Event delegation for rollover review button
         const suggestionsTable = document.getElementById('rollover-suggestions-table-body');
         if (suggestionsTable) {
             suggestionsTable.addEventListener('click', (event) => {
@@ -700,31 +485,9 @@ async function initializeRollover() {
     }
 }
 
-// Confirm roll modal handler
-const confirmRollBtn = document.getElementById('confirmRollModal-confirm');
-if (confirmRollBtn) {
-    confirmRollBtn.addEventListener('click', async () => {
-        const modalEl = document.getElementById('confirmRollModal');
-        if (!modalEl) return;
-        
-        const suggestionId = modalEl.dataset.suggestionId;
-        if (suggestionId === undefined) return;
-        
-        // Parse the suggestion ID (could be index or actual ID)
-        const id = parseInt(suggestionId);
-        if (isNaN(id)) {
-            // Handle non-numeric IDs
-            await addRolloverOrder(suggestionId);
-        } else {
-            await addRolloverOrder(id);
-        }
-    });
-}
-
 export {
     populateOptionsTable,
     populateRolloverSuggestionsTable,
-    populatePendingOrdersTable,
     clearRolloverSuggestions,
     initializeRolloverTooltips,
     selectOptionToRoll,

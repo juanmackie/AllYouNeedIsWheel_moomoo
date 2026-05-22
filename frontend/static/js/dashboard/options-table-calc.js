@@ -73,8 +73,9 @@ function calculateEarningsSummary() {
             const sharesOwned = optionData.position || 0;
             const ticker = optionData.symbol || Object.keys(tickerData.data.data)[0];
             const isCustomTicker = state.customTickers.has(ticker);
+            const isWatchlistTicker = state.watchlistTickers?.has(ticker);
 
-            if (sharesOwned < 100 && !isCustomTicker) {
+            if (sharesOwned < 100 && !isCustomTicker && !isWatchlistTicker) {
                 return;
             }
 
@@ -92,7 +93,7 @@ function calculateEarningsSummary() {
                 }
             }
 
-            if ((sharesOwned >= 100 || isCustomTicker) && optionData.puts && optionData.puts.length > 0) {
+            if ((sharesOwned >= 100 || isCustomTicker || isWatchlistTicker) && optionData.puts && optionData.puts.length > 0) {
                 const putOption = optionData.puts[0];
                 if (putOption) {
                     const putPremiumPerContract = calculatePremium(putOption.bid, putOption.ask, putOption.last) * 100;

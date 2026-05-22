@@ -1,6 +1,6 @@
 # AllYouNeedIsWheel (Moomoo Edition)
 
-A financial options trading assistant for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and manage orders through a local web dashboard.
+A financial options signal desk for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and review signals through a local web dashboard.
 
 **Risk-Adjusted Scoring, IV Environment Analysis & Macro Regime Detection** — Intelligent option ranking with IV rank tracking, earnings warnings, dynamic expiration profiles, and FRED-powered macro economic context.
 
@@ -17,7 +17,7 @@ A financial options trading assistant for the "Wheel Strategy" powered by the [M
 - **Portfolio Dashboard** — positions, cash balance, margin metrics, and weekly option income
 - **Wheel Strategy Focus** — cash-secured puts and covered calls with OTM analysis
 - **Options Rollover** — roll positions approaching strike price to later expirations
-- **Order Management** — create, execute, and cancel option orders from the browser
+- **Signal-Only Workflow** — review opportunities in-app, then place trades in your broker
 - **OpenD Connection Status** — the web UI shows real-time OpenD connection and login state
 - **Auto Launch** — optional one-click start that can open OpenD for you on Windows
 - **Dynamic Watchlist** — optional TradingView-powered stock screening for wheel strategy candidates
@@ -163,7 +163,7 @@ To have the launcher open OpenD for you, edit `connection.json`:
 
 ## OpenD Login
 
-OpenD requires manual login and may show a graphic verification step (captcha). The app cannot automate this. When OpenD is running but not logged in, the dashboard shows a "LOGIN REQUIRED" banner and disables execute buttons until you complete the step in the OpenD window.
+OpenD requires manual login and may show a graphic verification step (captcha). The app cannot automate this. When OpenD is running but not logged in, the dashboard shows a "LOGIN REQUIRED" banner and keeps signal actions review-only.
 
 ## Configuration
 
@@ -215,7 +215,7 @@ Live trading config. Not committed to version control.
 
 ## API Endpoints
 
-The app exposes a full REST API for system status, portfolio data, options analysis, orders, earnings, and macro regime detection.
+The app exposes a full REST API for system status, portfolio data, options analysis, earnings, and macro regime detection.
 
 **Base URL:** `http://127.0.0.1:8000`
 
@@ -224,7 +224,7 @@ The app exposes a full REST API for system status, portfolio data, options analy
 | **System** | `GET /health`, `GET /api/system/opend-status` |
 | **Portfolio** | `GET /api/portfolio/`, `GET /api/portfolio/positions`, `GET /api/portfolio/weekly-income`, `GET /api/portfolio/roll-pressure`, `GET /api/portfolio/alerts` |
 | **Options** | `GET /api/options/otm`, `GET /api/options/stock-price`, `GET /api/options/expirations`, `GET /api/options/top-recommendations`, `GET /api/options/cash-status` |
-| **Orders** | CRUD + execute/cancel/rollover under `/api/options/order/*` |
+| **Orders** | Retired. Review signals in the dashboard and place trades in Moomoo manually. |
 | **Earnings & IV** | `GET /api/earnings/status`, `POST /api/earnings/refresh`, `GET /api/earnings/pending` |
 | **Macro Regime** | `GET /api/macro/regime`, `GET /api/macro/cache/status` |
 | **VIX Regime** | `GET /api/options/vix-regime` |
@@ -238,9 +238,9 @@ The app exposes a full REST API for system status, portfolio data, options analy
 
 | URL | Description |
 |---|---|
-| `http://127.0.0.1:8000/` | Dashboard (options analysis, positions, orders) |
+| `http://127.0.0.1:8000/` | Dashboard (options analysis, positions, signals) |
 | `http://127.0.0.1:8000/portfolio` | Detailed portfolio view |
-| `http://127.0.0.1:8000/rollover` | Option rollover manager |
+| `http://127.0.0.1:8000/rollover` | Option rollover signal review |
 
 ---
 
@@ -361,7 +361,7 @@ The application uses SQLite (`options.db`) with automatic migrations. Key tables
 
 | Table | Purpose |
 |---|---|
-| `orders` | Option orders with Greeks, execution status, rollover flags |
+| `orders` | Legacy table retained for historical data only |
 | `iv_history` | IV data over time for 30-day rolling IV rank (purged after 45 days) |
 | `earnings_calendar` | Earnings dates from Yahoo Finance (refreshed every 6 hours) |
 
@@ -385,6 +385,38 @@ The system uses a multi-factor scoring algorithm (0-100) to rank option plays.
 | Quarterlies | 46-90 | 0.25-0.35 | 15% |
 
 > 📖 **Full scoring algorithm, formulas, weights, and data models:** see [SCORING.md](SCORING.md)
+
+## Evaluator Loop & Feedback Calibration
+
+The system includes an in-process evaluator loop that tracks recommendation
+outcomes and uses them to calibrate scoring weights over time.
+
+**Evaluator:** Records predicted metrics (score, return, delta, IV, confidence)
+when a recommendation is generated, and resolves outcomes (expired worthless,
+assigned, closed early) after expiration.  Persisted in `~/.wheel/evaluator/outcomes.db`.
+
+**Feedback Loop:** When an outcome is resolved, each scoring factor's contribution
+is compared against the actual return.  Factors that over-predict get their
+influence reduced; factors that under-predict get increased.  Bias multipliers
+are clamped to `[0.5, 2.0]` and applied in `score_contract()` on every call.
+Persistence: `~/.wheel/evaluator/feedback.db`.
+
+**Calibrator:** A gradient-free optimiser that iterates weight combinations
+against historical outcomes to minimise prediction error.  Runs weekly.
+Persistence: `~/.wheel/evaluator/calibration.db`.
+
+**Scheduler:** APScheduler runs the evaluator daily at 8:00 AM and the
+calibrator weekly on Sunday at 8:15 AM (Australia/Brisbane time).  A host-level
+lock ensures only one process schedules jobs under multi-worker deployments.
+
+**Dashboard Widget:** Shows tracked/resolved counts, assignment vs expiry rate,
+top over/under-predicting factors, latest calibration result, and last run times.
+
+**Manual triggers:**
+- `POST /api/options/evaluator/cron` — Run evaluator cycle
+- `POST /api/options/calibrator/run` — Run calibration cycle
+- `GET /api/options/evaluator/stats` — Full status payload
+- `GET /api/options/feedback/biases` — Current bias multipliers
 
 ## Docker (Optional)
 

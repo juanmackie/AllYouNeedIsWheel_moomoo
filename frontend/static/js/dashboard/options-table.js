@@ -4,11 +4,68 @@
  */
 import { fetchTickers, fetchAccountData, fetchOptionExpirations, fetchStockPrices } from './api.js';
 import { fetchWatchlistTickers } from './api-portfolio.js';
-import { state, loadOtmSettings, loadCustomTickers } from './options-table-state.js';
+import { state, loadOtmSettings, loadCustomTickers, ensureTickerDataState, getSavedTabPreference, setSavedTabPreference } from './options-table-state.js';
 import { calculateEarningsSummary } from './options-table-calc.js';
-import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, addPutQtyInputEventListeners, initializeOptionsTableTooltips } from './options-table-rendering.js';
+import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, addPutQtyInputEventListeners, initializeOptionsTableTooltips, insertProgressBanner, updateProgressBanner, finishProgressBanner, failProgressBanner } from './options-table-rendering.js';
 import { addOptionsTableEventListeners, setupCustomTickerEventListeners } from './options-table-events.js';
 import { refreshOptionsForTicker, refreshAllOptions, refreshOptionsForTickerByType, sellAllOptions } from './options-table-actions.js';
+
+function canonicalTicker(ticker) {
+    return String(ticker || '').replace(/^[A-Z]{2}\./, '').toUpperCase();
+}
+
+function uniqueTickersByUnderlying(...groups) {
+    const seen = new Set();
+    const result = [];
+
+    groups.flat().forEach(ticker => {
+        const key = canonicalTicker(ticker);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        result.push(ticker);
+    });
+
+    return result;
+}
+
+async function fetchScreeningConfig() {
+    try {
+        const resp = await fetch('/api/options/screening-config');
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.success) {
+                state.screeningConfig = {
+                    growthModeEnabled: data.growth_mode_enabled ?? true,
+                    cspDefaultOtmPct: data.csp_default_otm_pct,
+                    callDefaultOtmPct: data.call_default_otm_pct,
+                    cspMinDte: data.csp_min_dte,
+                    cspMaxDte: data.csp_max_dte,
+                    cspPreferredDte: data.csp_preferred_dte,
+                    cspMinOtmPct: data.csp_min_otm_pct,
+                    cspMaxOtmPct: data.csp_max_otm_pct,
+                    defaultTab: data.default_tab,
+                    cspProfileSummary: data.csp_profile_summary,
+                };
+                return state.screeningConfig;
+            }
+        }
+    } catch (e) {
+        console.error('Error fetching screening config:', e);
+    }
+    state.screeningConfig = {
+        growthModeEnabled: false,
+        cspDefaultOtmPct: 10,
+        callDefaultOtmPct: 10,
+        cspMinDte: 30,
+        cspMaxDte: 45,
+        cspPreferredDte: 37,
+        cspMinOtmPct: 5,
+        cspMaxOtmPct: 15,
+        defaultTab: 'PUT',
+        cspProfileSummary: null,
+    };
+    return state.screeningConfig;
+}
 
 async function loadTickers() {
     try {
@@ -21,16 +78,17 @@ async function loadTickers() {
         console.error('Error loading custom tickers:', error);
     }
 
-    loadOtmSettings();
-
     const optionsTableContainer = document.getElementById('options-table-container');
     if (!optionsTableContainer) {
         console.error("Options table container not found");
         return;
     }
 
-    const putTabWasActive = document.querySelector('#put-options-tab.active') !== null ||
-                           document.querySelector('#put-options-section.active') !== null;
+    const cfg = await fetchScreeningConfig();
+    loadOtmSettings();
+    const savedTab = getSavedTabPreference();
+    const defaultTab = savedTab || cfg.defaultTab || 'CALL';
+    const putTabWasActive = defaultTab === 'PUT';
 
     const tabsHTML = `
         <ul class="nav nav-tabs mb-3" id="options-tabs" role="tablist">
@@ -164,133 +222,152 @@ async function loadTickers() {
         watchlistTickers = watchlistResp.tickers;
     }
 
-    const putTickers = [...new Set([...portfolioTickers, ...watchlistTickers, ...state.customTickers])];
+    state.watchlistTickers = new Set(watchlistTickers);
+    state.portfolioTickers = portfolioTickers;
+
+    const putTickers = uniqueTickersByUnderlying(portfolioTickers, watchlistTickers, [...state.customTickers]);
 
     document.querySelector('#call-options-table tbody').innerHTML = '';
     document.querySelector('#put-options-table tbody').innerHTML = '';
 
     const totalTickers = putTickers.length;
-    for (let i = 0; i < totalTickers; i++) {
-        const ticker = putTickers[i];
-        const isPortfolioTicker = portfolioTickers.includes(ticker);
 
-        if (!state.tickersData[ticker]) {
-            state.tickersData[ticker] = {
-                data: {
-                    data: {}
-                },
-                callOtmPercentage: 10,
-                putOtmPercentage: 10,
-                putQuantity: 1,
-                errors: {}
-            };
+    // ── Determine active vs inactive tab ──────────────────────────
+    // Load the currently visible side first so the user sees useful
+    // content quickly.  The other side is deferred to Phase 2.
+    const activeType = putTabWasActive ? 'PUT' : 'CALL';
+    const inactiveType = activeType === 'CALL' ? 'PUT' : 'CALL';
+    const getStatusRowId = (type, sym) => type === 'CALL' ? `call-status-${sym}` : `put-status-${sym}`;
 
-            state.tickersData[ticker].data.data[ticker] = {
-                stock_price: 0,
-                position: 0,
-                calls: [],
-                puts: []
-            };
-        }
+    /**
+     * Load one option type across all applicable tickers with a progress banner.
+     * Returns after all tickers in this phase have been attempted.
+     */
+    async function loadPhase(optionType) {
+        const tableId = optionType === 'CALL' ? 'call-options-table' : 'put-options-table';
+        const typeLabel = optionType === 'CALL' ? 'covered calls' : 'cash-secured puts';
 
-        const progressMessage = `Loading data for ${ticker} (${i+1}/${totalTickers})...`;
+        insertProgressBanner(totalTickers);
+        updateProgressBanner(0, totalTickers, '', `Loading ${typeLabel}...`);
 
-        if (isPortfolioTicker) {
-            const callStatusRow = document.createElement('tr');
-            callStatusRow.id = `call-status-${ticker}`;
-            callStatusRow.innerHTML = `
+        for (let i = 0; i < totalTickers; i++) {
+            const ticker = putTickers[i];
+            const isPortfolioTicker = portfolioTickers.includes(ticker);
+
+            // CALL data only matters for portfolio tickers (need 100+ shares)
+            if (optionType === 'CALL' && !isPortfolioTicker) {
+                updateProgressBanner(i + 1, totalTickers, ticker, 'skipped (no position)');
+                continue;
+            }
+
+            ensureTickerDataState(ticker);
+            updateProgressBanner(i + 1, totalTickers, ticker, 'starting...');
+
+            // Create a status row inside the table so the user sees movement
+            const statusRowId = getStatusRowId(optionType, ticker);
+            const statusRow = document.createElement('tr');
+            statusRow.id = statusRowId;
+            statusRow.innerHTML = `
                 <td colspan="13" class="text-center">
                     <div class="d-flex align-items-center justify-content-center">
                         <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
-                        <span>${progressMessage}</span>
+                        <span>Loading ${typeLabel} for ${ticker} (${i+1}/${totalTickers})...</span>
                     </div>
                 </td>
             `;
-            document.querySelector('#call-options-table tbody').appendChild(callStatusRow);
+            const tbody = document.querySelector(`#${tableId} tbody`);
+            if (tbody) tbody.appendChild(statusRow);
+
+            // Build progress callback for sub-steps within a ticker
+            const makeOnProgress = () => {
+                return (step) => {
+                    updateProgressBanner(i + 1, totalTickers, ticker, step);
+                };
+            };
+
+            try {
+                // Load only the requested option type (with 20s per-request timeout)
+                await refreshOptionsForTickerByType(ticker, optionType, false, makeOnProgress());
+
+                document.getElementById(statusRowId)?.remove();
+                addTickerRowToTable(tableId, optionType, ticker);
+
+                addPutQtyInputEventListeners();
+                updateProgressBanner(i + 1, totalTickers, ticker, 'done');
+            } catch (error) {
+                console.error(`Error loading ${optionType} for ${ticker}:`, error);
+
+                const errorMessage = `Error loading data for ${ticker}: ${error.message}`;
+                updateProgressBanner(i + 1, totalTickers, ticker, error.message, errorMessage);
+
+                const row = document.getElementById(statusRowId);
+                if (row) {
+                    row.innerHTML = `
+                        <td colspan="13" class="text-center text-danger">
+                            <i class="bi bi-exclamation-triangle"></i> ${errorMessage}
+                        </td>
+                    `;
+                    setTimeout(() => row.remove(), 3000);
+                }
+            }
+
+            const earningsSummary = calculateEarningsSummary();
+            displayPremiumSummary(earningsSummary);
         }
-
-        const putStatusRow = document.createElement('tr');
-        putStatusRow.id = `put-status-${ticker}`;
-        putStatusRow.innerHTML = `
-            <td colspan="13" class="text-center">
-                <div class="d-flex align-items-center justify-content-center">
-                    <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
-                    <span>${progressMessage}</span>
-                </div>
-            </td>
-        `;
-        document.querySelector('#put-options-table tbody').appendChild(putStatusRow);
-
-        try {
-            if (isPortfolioTicker) {
-                await refreshOptionsForTicker(ticker, false);
-            } else {
-                await refreshOptionsForTickerByType(ticker, 'PUT', false);
-            }
-
-            document.getElementById(`call-status-${ticker}`)?.remove();
-            document.getElementById(`put-status-${ticker}`)?.remove();
-
-            if (isPortfolioTicker) {
-                addTickerRowToTable('call-options-table', 'CALL', ticker);
-            }
-            addTickerRowToTable('put-options-table', 'PUT', ticker);
-
-            addPutQtyInputEventListeners();
-        } catch (error) {
-            console.error(`Error loading data for ticker ${ticker}:`, error);
-
-            const errorMessage = `Error loading data for ${ticker}: ${error.message}`;
-            if (isPortfolioTicker && document.getElementById(`call-status-${ticker}`)) {
-                document.getElementById(`call-status-${ticker}`).innerHTML = `
-                    <td colspan="13" class="text-center text-danger">
-                        <i class="bi bi-exclamation-triangle"></i> ${errorMessage}
-                    </td>
-                `;
-            }
-            if (document.getElementById(`put-status-${ticker}`)) {
-                document.getElementById(`put-status-${ticker}`).innerHTML = `
-                    <td colspan="13" class="text-center text-danger">
-                        <i class="bi bi-exclamation-triangle"></i> ${errorMessage}
-                    </td>
-                `;
-            }
-
-            setTimeout(() => {
-                document.getElementById(`call-status-${ticker}`)?.remove();
-                document.getElementById(`put-status-${ticker}`)?.remove();
-            }, 3000);
-        }
-
-        const earningsSummary = calculateEarningsSummary();
-        displayPremiumSummary(earningsSummary);
     }
 
-    document.querySelectorAll('tr[id^="call-status-"], tr[id^="put-status-"]').forEach(row => row.remove());
+    // ── Phase 1: Load the active (visible) tab first ──────────────
+    //   This runs synchronously so the user sees the active tab
+    //   populate as fast as possible.
+    await loadPhase(activeType);
+    finishProgressBanner();
 
-    if (document.querySelector('#call-options-table tbody').children.length === 0) {
+    // ── Phase 2: Load the inactive tab in the background ──────────
+    //   The inactive side loads one ticker at a time (same rate
+    //   limiting as Phase 1) but the user can already interact with
+    //   the dashboard.
+    function showEmptyTableMessage(tableId, message) {
+        const tbody = document.querySelector(`#${tableId} tbody`);
+        if (!tbody || tbody.children.length > 0) return;
         const row = document.createElement('tr');
         row.innerHTML = `
             <td colspan="13" class="text-center p-3">
-                <div class="alert alert-info m-0">
-                    No covered call opportunities found.
-                </div>
+                <div class="alert alert-info m-0">${message}</div>
             </td>
         `;
-        document.querySelector('#call-options-table tbody').appendChild(row);
+        tbody.appendChild(row);
     }
 
-    if (document.querySelector('#put-options-table tbody').children.length === 0) {
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td colspan="13" class="text-center p-3">
-                <div class="alert alert-info m-0">
-                    No cash secured put opportunities found.
-                    Add a ticker or configure your watchlist to see put opportunities.
-                </div>
-            </td>
-        `;
-        document.querySelector('#put-options-table tbody').appendChild(row);
+    // Show empty state for the active table immediately after Phase 1
+    if (activeType === 'CALL') {
+        showEmptyTableMessage('call-options-table', 'No eligible covered calls. You need 100+ shares of a ticker and a ranked call contract.');
+    } else {
+        if (putTickers.length === 0) {
+            showEmptyTableMessage('put-options-table', 'No watchlist or custom tickers for cash-secured puts. Add tickers via the watchlist or the "Add" button above.');
+        } else {
+            showEmptyTableMessage('put-options-table', 'No cash-secured put opportunities found. Check that tickers have available put data or adjust cash-fit filters.');
+        }
+    }
+
+    if (totalTickers > 0 && totalTickers <= 6) {
+        // Fire-and-forget background loading for the inactive side.
+        // NOT awaited so the rest of initialisation can proceed.
+        loadPhase(inactiveType)
+            .then(() => {
+                finishProgressBanner();
+                // Show empty state for the inactive table now that Phase 2 is done
+                if (inactiveType === 'CALL') {
+                    showEmptyTableMessage('call-options-table', 'No eligible covered calls. You need 100+ shares of a ticker and a ranked call contract.');
+                } else {
+                    const putTickersCount = [...new Set([...state.portfolioTickers, ...state.watchlistTickers, ...state.customTickers])].length;
+                    if (putTickersCount === 0) {
+                        showEmptyTableMessage('put-options-table', 'No watchlist or custom tickers for cash-secured puts. Add tickers via the watchlist or the "Add" button above.');
+                    } else {
+                        showEmptyTableMessage('put-options-table', 'No cash-secured put opportunities found. Check that tickers have available put data or adjust cash-fit filters.');
+                    }
+                }
+            })
+            .catch(err => console.error('Background phase error:', err));
     }
 
     const earningsSummary = calculateEarningsSummary();

@@ -1,9 +1,11 @@
 import StateModel from '../utils/state-model.js';
 import { formatCurrency } from '../utils/formatters.js';
+import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
 
 let contentEl;
 let stateEl;
 let lastUpdatedEl;
+let loadingBannerId = null;
 
 function initElements() {
     contentEl = document.getElementById('earnings-vol-content');
@@ -105,6 +107,16 @@ function renderCard(signal) {
 }
 
 function renderSignals(payload) {
+    // Finish the loading banner if active
+    if (loadingBannerId) {
+        if (payload.signals && payload.signals.length > 0) {
+            finishPanelLoading(loadingBannerId, 'Signals loaded');
+        } else {
+            finishPanelLoading(loadingBannerId, 'No signals found');
+        }
+        loadingBannerId = null;
+    }
+
     contentEl.innerHTML = '';
     const signals = payload.signals || [];
 
@@ -132,14 +144,19 @@ export async function loadEarningsVolSignals(manualRefresh = false) {
     if (!contentEl) initElements();
     if (!contentEl) return;
 
-    contentEl.classList.add('d-none');
-    StateModel.showLoading('earnings-vol-state', 'Scanning earnings volatility signals...');
+    // Show an inline loading banner instead of hiding content.
+    // If this is a refresh, existing content stays visible underneath.
+    loadingBannerId = showPanelLoading('earnings-vol-signals-section', 'Scanning earnings volatility signals...');
 
     try {
         const payload = await fetchEarningsVolSignals(manualRefresh);
         renderSignals(payload);
     } catch (error) {
         console.error('Error loading earnings vol signals:', error);
+        if (loadingBannerId) {
+            failPanelLoading(loadingBannerId, 'Unable to load earnings vol signals');
+            loadingBannerId = null;
+        }
         contentEl.classList.add('d-none');
         StateModel.showError('earnings-vol-state', 'Unable to load earnings vol signals.', () => loadEarningsVolSignals(true));
     }

@@ -1,9 +1,14 @@
 <section class="app-section recommendation-stage" id="top-recommendations-section">
     <div class="app-section__header">
         <div>
-            <span class="app-section__eyebrow">Opportunity desk</span>
-            <h2>Top recommendations</h2>
-            <p>Highest-conviction wheel candidates ranked by risk-adjusted return, liquidity, and volatility.</p>
+            <span class="app-section__eyebrow" id="top-recs-eyebrow">Opportunity desk</span>
+            <h2 id="top-recs-title">Top Signals</h2>
+            <p id="top-recs-desc">Highest-conviction wheel signals ranked by growth impact, premium efficiency, and buying power fit.</p>
+            <div id="buying-power-indicator" class="small text-muted d-none">
+                Broker buying power: <span id="bp-amount"></span>
+                <span class="text-secondary">|</span>
+                Open short-put collateral: <span id="bp-reserved"></span>
+            </div>
         </div>
         <div class="app-section__actions">
             <small id="top-recs-last-updated" class="text-muted d-none"></small>
@@ -12,28 +17,39 @@
             </button>
         </div>
     </div>
+    <div id="growth-mode-banner" class="d-none mb-2">
+        <div class="alert alert-info d-flex align-items-center gap-2 py-2 px-3 mb-0" role="alert">
+            <i class="bi bi-rocket-takeoff fs-5"></i>
+            <div>
+                <strong>Growth Mode active</strong> &mdash; candidates ranked for <span id="growth-mode-objective">time to 2x</span>.
+                Max drawdown budget: <span id="growth-mode-drawdown">40%</span>.
+                <div id="growth-mode-csp-profile" class="small text-muted mt-1">
+                    <span id="growth-csp-profile-label">CSP profile:</span>
+                    <span id="growth-csp-profile-text"></span>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <div id="top-recommendations-container" class="recommendation-stage__body">
         <div id="top-recommendations-state"></div>
         <div id="top-recommendations-content" class="d-none">
-            <div id="lanes-covered-calls-section" class="mb-3 d-none">
-                <h6 class="text-muted text-uppercase small fw-semibold mb-2">
-                    <i class="bi bi-graph-up-arrow text-success"></i> Covered Calls
-                </h6>
-                <div class="row g-2" id="lanes-covered-calls-cards"></div>
-            </div>
-            <div id="lanes-watchlist-csp-section" class="mb-3 d-none">
-                <h6 class="text-muted text-uppercase small fw-semibold mb-2">
-                    <i class="bi bi-shield-check text-danger"></i> Watchlist Cash-Secured Puts
-                </h6>
-                <div class="row g-2" id="lanes-watchlist-csp-cards"></div>
-            </div>
             <div id="top-recommendations-cards" class="row g-2"></div>
         </div>
     </div>
 
+    <div id="blocked-candidates-section" class="d-none mt-3">
+        <details class="small text-muted">
+            <summary class="text-secondary">
+                <span id="blocked-candidates-count">0</span> signals did not qualify
+                <i class="bi bi-chevron-down"></i>
+            </summary>
+            <div id="blocked-candidates-list" class="mt-2 p-2 bg-light rounded"></div>
+        </details>
+    </div>
+
     <div class="app-section__footer">
-        Recommendations account for your existing positions and only show contracts you can realistically sell.
+        Signals ranked by premium efficiency, liquidity, and 2x portfolio impact. Only contracts you can realistically sell based on broker buying power are shown.
     </div>
 </section>
 
@@ -90,16 +106,27 @@
                         <span>Macro</span>
                         <span class="macro-impact fw-semibold"></span>
                     </div>
+                    <div class="growth-mode-details d-none">
+                        <hr class="my-1">
+                        <div class="d-flex justify-content-between">
+                            <span>Goal impact</span>
+                            <span class="growth-impact fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Risk budget</span>
+                            <span class="risk-budget fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Stress loss</span>
+                            <span class="stress-loss fw-semibold"></span>
+                        </div>
+                        <div class="mt-1 small text-muted growth-rationale"></div>
+                    </div>
                 </div>
             </div>
-            <div class="card-footer bg-transparent border-0 pt-0">
-                <div class="d-grid gap-1">
-                    <button class="btn btn-outline-primary btn-sm add-order-btn" type="button">
-                        <i class="bi bi-plus-lg"></i> Stage
-                    </button>
-                    <button class="btn btn-success btn-sm execute-now-btn" type="button">
-                        <i class="bi bi-lightning-charge-fill"></i> Execute
-                    </button>
+            <div class="card-footer bg-transparent border-0 pt-0 signal-details-footer">
+                <div class="small text-muted text-center">
+                    <i class="bi bi-info-circle"></i> Signal only — review and place in your broker app
                 </div>
             </div>
         </article>

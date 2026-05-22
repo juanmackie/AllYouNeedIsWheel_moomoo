@@ -495,6 +495,66 @@ Primary system goal: turn noisy option-chain data into a short, defensible list 
 7. Phase 7: performance and refresh flow.
 8. Phase 8: docs and long-term automation.
 
+## Phase 9: Evaluator Loop, Scheduler, and Dashboard (Completed)
+
+### TODO 9.1: Wire feedback-driven weight correction into scoring
+
+- `score_contract()` in `core/wheel_decision.py` now calls `get_adjusted_weights()`
+  from `core/feedback_loop.py` at the start of each scoring pass.
+- Bias multipliers are applied to the base weight for each factor before computing
+  CALL and PUT base scores.  Weights are re-normalised to sum to 1.0.
+- `score_details` JSON is persisted with each recommendation in the evaluator DB.
+- When a recommendation resolves, `resolve_outcome()` reads stored score_details
+  and passes them to the feedback loop, so factor contributions use real outcome data.
+- Acceptance criteria:
+  - Unit tests prove biased weights change the final score path.
+  - Resolved outcomes consume stored score_details and update bias rows.
+
+### TODO 9.2: Add in-process scheduler (APScheduler)
+
+- `core/scheduler.py` implements a BackgroundScheduler with:
+  - Daily evaluator at 8:00 AM Australia/Brisbane time.
+  - Weekly calibration on Sunday at 8:15 AM Australia/Brisbane time.
+- Host-level single-owner lock prevents duplicate scheduling under multi-worker launches.
+- SQLite state persisted in `~/.wheel/evaluator/scheduler_state.db` tracks
+  `last_run`, `last_status`, and `last_message` for each job.
+- Existing POST endpoints (`/evaluator/cron`, `/calibrator/run`) remain as manual
+  triggers that call the same internal functions.
+- Acceptance criteria:
+  - Scheduler starts with the Flask app.
+  - Only one process per host registers jobs.
+  - Dashboard can read last-run times.
+
+### TODO 9.3: Surface evaluator/calibrator in dashboard
+
+- `/api/options/evaluator/stats` now includes `scheduler`, `calibration`, and
+  `feedback_summary` in its response payload.
+- A compact evaluator widget card shows tracked/resolved counts, assignment vs
+  expiry rate, top over/under-predicting factors, latest calibration result, and
+  last evaluator/calibrator run time.
+- Acceptance criteria:
+  - Widget loads on dashboard page load.
+  - Empty/error fallbacks render safely.
+
+### TODO 9.4: Clean up dead growth-mode code
+
+- Removed `GrowthProfile` dataclass, `GrowthDecision` dataclass, and
+  `compute_growth_score()` function from `core/growth_mode.py`.
+- Kept all still-used functions: `compute_stress_loss`, `compute_risk_budget_used`,
+  `compute_confidence_score`, `classify_covered_call_intent`, `estimate_target_gap`,
+  `should_block_for_data_quality`.
+- Acceptance criteria:
+  - No dead code remains in growth_mode.py.
+  - Tests that only tested legacy APIs are updated or removed.
+
+### TODO 9.5: Update documentation
+
+- `SCORING.md` documents the feedback loop, bias correction, scheduler, and
+  evaluator/calibrator endpoints.
+- `README.md` and `SIGNAL_GENERATOR_10X_TODO.md` reference the new capabilities.
+- Acceptance criteria:
+  - Docs are current as of 2026-05-17.
+
 ## Definition Of Done
 
 - The generator can explain every top signal in plain language.

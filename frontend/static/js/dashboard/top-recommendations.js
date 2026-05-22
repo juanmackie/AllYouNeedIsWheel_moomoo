@@ -2,20 +2,22 @@
  * Top Recommendations Module
  * Displays the highest-scoring option opportunities with auto-refresh
  */
-import { fetchTopRecommendations, saveOptionOrder, executeOrder } from './api.js';
-import { showAlert } from '../utils/alerts.js';
+import { fetchTopRecommendations } from './api.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 import { getMacroData } from './macro.js';
+import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
 import StateModel from '../utils/state-model.js';
 
 // Module state
-let recommendationsData = null;
+let signalsData = null;
 let autoRefreshInterval = null;
 let isVisible = true;
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+let loadingBannerId = null;
 
 // DOM Elements (initialized lazily)
 let container, contentEl, cardsContainer, lastUpdatedEl;
+let blockedListEl, blockedCountEl, bpIndicator;
 
 /**
  * Initialize DOM element references
@@ -25,6 +27,9 @@ function initElements() {
     contentEl = document.getElementById('top-recommendations-content');
     cardsContainer = document.getElementById('top-recommendations-cards');
     lastUpdatedEl = document.getElementById('top-recs-last-updated');
+    blockedListEl = document.getElementById('blocked-candidates-list');
+    blockedCountEl = document.getElementById('blocked-candidates-count');
+    bpIndicator = document.getElementById('buying-power-indicator');
 }
 
 /**
@@ -182,13 +187,6 @@ function createRecommendationCard(rec) {
         detailsEl.appendChild(existingDiv);
     }
     
-    // Action buttons
-    const addOrderBtn = clone.querySelector('.add-order-btn');
-    const executeNowBtn = clone.querySelector('.execute-now-btn');
-    
-    addOrderBtn.addEventListener('click', () => handleAddOrder(rec));
-    executeNowBtn.addEventListener('click', () => handleExecuteNow(rec));
-    
     // Add card border based on rank
     if (rec.rank === 1) {
         card.classList.add('border-warning');
@@ -205,94 +203,21 @@ function createRecommendationCard(rec) {
 }
 
 /**
- * Handle "Add Order" button click
- * @param {Object} rec - Recommendation data
- */
-async function handleAddOrder(rec) {
-    try {
-        const orderData = {
-            ticker: rec.ticker,
-            option_type: rec.option_type,
-            strike: rec.strike,
-            expiration: rec.expiration,
-            action: 'SELL',
-            quantity: rec.option_type === 'CALL' ? rec.max_contracts : 1,
-            order_type: 'LIMIT',
-            limit_price: rec.mid_price,
-            bid: rec.bid,
-            ask: rec.ask,
-            last: rec.mid_price
-        };
-        
-        const result = await saveOptionOrder(orderData);
-        
-        if (result && result.order_id) {
-            const strikeStr = rec.strike != null ? `$${rec.strike.toFixed(2)}` : 'N/A';
-            showAlert(`Order added for ${rec.ticker} ${rec.option_type} ${strikeStr}. Check Pending Orders to execute.`, 'success');
-        } else {
-            showAlert('Failed to add order. Please try again.', 'danger');
-        }
-    } catch (error) {
-        console.error('Error adding order:', error);
-        showAlert(`Error adding order: ${error.message}`, 'danger');
-    }
-}
-
-/**
- * Handle "Execute Now" button click
- * @param {Object} rec - Recommendation data
- */
-async function handleExecuteNow(rec) {
-    try {
-        // First, create the order
-        const orderData = {
-            ticker: rec.ticker,
-            option_type: rec.option_type,
-            strike: rec.strike,
-            expiration: rec.expiration,
-            action: 'SELL',
-            quantity: rec.option_type === 'CALL' ? rec.max_contracts : 1,
-            order_type: 'LIMIT',
-            limit_price: rec.mid_price,
-            bid: rec.bid,
-            ask: rec.ask,
-            last: rec.mid_price
-        };
-        
-        const saveResult = await saveOptionOrder(orderData);
-        
-        if (!saveResult || !saveResult.order_id) {
-            showAlert('Failed to create order. Please try again.', 'danger');
-            return;
-        }
-        
-        // Then execute it immediately
-        const executeResult = await executeOrder(saveResult.order_id);
-        
-        if (executeResult && executeResult.success) {
-            const strikeStr = rec.strike != null ? `$${rec.strike.toFixed(2)}` : 'N/A';
-            showAlert(`Order executed successfully for ${rec.ticker} ${rec.option_type} ${strikeStr}!`, 'success');
-        } else {
-            showAlert(`Order created but execution failed: ${executeResult?.error || 'Unknown error'}. Check Pending Orders.`, 'warning');
-        }
-    } catch (error) {
-        console.error('Error executing order:', error);
-        showAlert(`Error executing order: ${error.message}`, 'danger');
-    }
-}
-
-/**
- * Show loading state
+ * Show loading state — uses an inline banner at the top of the panel
+ * so the existing content (if any) stays visible during refresh.
  */
 function showLoading() {
-    StateModel.showLoading('top-recommendations-state', 'Analyzing live opportunities...');
-    document.getElementById('top-recommendations-content').classList.add('d-none');
+    loadingBannerId = showPanelLoading('top-recommendations-container', 'Analyzing live opportunities...');
 }
 
 /**
- * Show content with recommendations
+ * Show content with signals — finish the loading banner
  */
 function showContent() {
+    if (loadingBannerId) {
+        finishPanelLoading(loadingBannerId, 'Recommendations loaded');
+        loadingBannerId = null;
+    }
     document.getElementById('top-recommendations-state').innerHTML = '';
     document.getElementById('top-recommendations-content').classList.remove('d-none');
 }
@@ -301,7 +226,11 @@ function showContent() {
  * Show empty state
  */
 function showEmpty() {
-    StateModel.showEmpty('top-recommendations-state', 'No recommendations available right now. Check back after market open or add positions to your portfolio.');
+    if (loadingBannerId) {
+        finishPanelLoading(loadingBannerId, 'No signals');
+        loadingBannerId = null;
+    }
+    StateModel.showEmpty('top-recommendations-state', 'No signals available right now. Check back after market open or add positions to your portfolio.');
     document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
@@ -309,7 +238,11 @@ function showEmpty() {
  * Show error state
  */
 function showError() {
-    StateModel.showError('top-recommendations-state', 'Unable to load recommendations.', () => loadTopRecommendations());
+    if (loadingBannerId) {
+        failPanelLoading(loadingBannerId, 'Unable to load signals');
+        loadingBannerId = null;
+    }
+    StateModel.showError('top-recommendations-state', 'Unable to load signals.', () => loadTopRecommendations());
     document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
@@ -354,77 +287,183 @@ function updateTimestamp(timestamp, cacheInfo = null) {
  * @param {string} containerId - DOM id of the lane's card row
  * @param {Array} recs - Array of recommendation objects for this lane
  */
-function renderLaneCards(containerId, recs) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-    container.innerHTML = '';
-    if (!recs || recs.length === 0) return;
-
-    recs.forEach(rec => {
-        const card = createRecommendationCard(rec);
-        container.appendChild(card);
-    });
-}
-
 /**
- * Show or hide a lane section
- * @param {string} sectionId - DOM id of the lane section wrapper
- * @param {boolean} visible - whether to show
+ * Apply growth mode banner and labels
+ * @param {Object} result - Full API response
  */
-function setLaneVisible(sectionId, visible) {
-    const el = document.getElementById(sectionId);
-    if (el) {
-        if (visible) el.classList.remove('d-none');
-        else el.classList.add('d-none');
+function applyGrowthMode(result) {
+    const growthMode = result?.growth_mode;
+    // Growth mode is always-on — always show the growth banner
+    document.getElementById('growth-mode-banner')?.classList.remove('d-none');
+    document.getElementById('growth-mode-objective').textContent = growthMode?.objective?.replace(/_/g, ' ') || 'time to 2x';
+    document.getElementById('growth-mode-drawdown').textContent = `${((growthMode?.max_drawdown_pct ?? 0.40) * 100).toFixed(0)}%`;
+    document.getElementById('top-recs-title').textContent = 'Growth signals';
+    document.getElementById('top-recs-eyebrow').textContent = 'Growth mode';
+    document.getElementById('top-recs-desc').textContent = 'Signals ranked by estimated impact on reaching your 2x account target.';
+
+    // Show CSP screener profile
+    const cspProfileText = document.getElementById('growth-csp-profile-text');
+    if (cspProfileText) {
+        if (growthMode.csp_profile_summary) {
+            cspProfileText.textContent = growthMode.csp_profile_summary;
+            document.getElementById('growth-csp-profile-label').classList.remove('d-none');
+        } else if (growthMode.screener_profile && Object.keys(growthMode.screener_profile).length > 0) {
+            const sp = growthMode.screener_profile;
+            const parts = [];
+            parts.push(`Δ ${sp.csp_target_delta ?? '?'} ±${sp.csp_delta_tolerance ?? '?'}`);
+            const dtePref = sp.csp_preferred_dte ?? '?';
+            const dteMin = sp.csp_min_dte ?? '?';
+            const dteMax = sp.csp_max_dte ?? '?';
+            parts.push(`DTE ${dteMin}-${dteMax} (pref ${dtePref})`);
+            parts.push(`OTM ${sp.csp_default_otm_pct ?? '?'}%`);
+            parts.push(`IV ≥${sp.min_iv_rank ?? '?'}%`);
+            if (sp.require_cash_fit) parts.push('cash-fit req.');
+            cspProfileText.textContent = parts.join(' | ');
+            document.getElementById('growth-csp-profile-label').classList.remove('d-none');
+        } else {
+            cspProfileText.textContent = '';
+        }
     }
 }
 
 /**
- * Render recommendations from lanes structure (v2) or legacy list
- * @param {Object} result - Full API response with lanes + recommendations
+ * Apply growth mode fields to a recommendation card
+ * @param {HTMLElement} card - Card document fragment
+ * @param {Object} rec - Recommendation data
+ */
+function applyGrowthFieldsToCard(card, rec) {
+    const growthDetails = card.querySelector('.growth-mode-details');
+    if (!growthDetails) return;
+
+    // Growth mode is always-on — growth details are always visible
+    growthDetails.classList.remove('d-none');
+
+    // Show the unified contract_score (always growth-weighted)
+    const score = rec.score ?? rec.contract_score ?? 0;
+    const scoreBadge = card.querySelector('.score-badge');
+    if (scoreBadge) {
+        scoreBadge.textContent = `Score: ${score.toFixed(1)}`;
+        scoreBadge.className = `score-badge badge fs-6 ${score >= 70 ? 'bg-success' : score >= 50 ? 'bg-warning text-dark' : 'bg-secondary'}`;
+    }
+
+    const goalImpact = card.querySelector('.growth-impact');
+    if (goalImpact) {
+        const label = score >= 70 ? 'High' : score >= 50 ? 'Medium' : 'Low';
+        goalImpact.textContent = `${label} (${score.toFixed(1)})`;
+        goalImpact.className = `fw-semibold ${score >= 70 ? 'text-success' : score >= 50 ? 'text-warning' : 'text-muted'}`;
+    }
+
+    const riskBudget = card.querySelector('.risk-budget');
+    if (riskBudget && rec.risk_budget_used_pct != null) {
+        const pct = rec.risk_budget_used_pct;
+        riskBudget.textContent = `${pct.toFixed(1)}%`;
+        riskBudget.className = `fw-semibold ${pct > 50 ? 'text-danger' : pct > 25 ? 'text-warning' : 'text-success'}`;
+    }
+
+    const stressLoss = card.querySelector('.stress-loss');
+    if (stressLoss && rec.stress_loss != null) {
+        stressLoss.textContent = `$${rec.stress_loss.toFixed(0)}`;
+        stressLoss.className = `fw-semibold ${rec.stress_loss > 5000 ? 'text-danger' : rec.stress_loss > 2000 ? 'text-warning' : 'text-muted'}`;
+    }
+
+    const growthRationale = card.querySelector('.growth-rationale');
+    if (growthRationale && rec.score_rationale) {
+        growthRationale.textContent = rec.score_rationale;
+    }
+
+    // Covered call intent
+    if (rec.covered_call_intent) {
+        const ccBadge = card.querySelector('.covered-call-intent');
+        if (ccBadge) {
+            ccBadge.textContent = rec.covered_call_intent;
+            ccBadge.classList.remove('d-none');
+            if (rec.covered_call_intent === 'upside-capping risk') {
+                ccBadge.className = 'badge bg-warning text-dark covered-call-intent';
+            } else if (rec.covered_call_intent === 'profit-taking') {
+                ccBadge.className = 'badge bg-info covered-call-intent';
+            } else {
+                ccBadge.className = 'badge bg-secondary covered-call-intent';
+            }
+        }
+    }
+
+}
+
+/**
+ * Render blocked signal diagnostics
+ * @param {Array} blocked - Array of blocked signal objects
+ */
+function renderBlockedSignals(blocked) {
+    const section = document.getElementById('blocked-candidates-section');
+    if (!section) return;
+    if (!blocked || blocked.length === 0) {
+        section.classList.add('d-none');
+        return;
+    }
+    section.classList.remove('d-none');
+    if (blockedCountEl) blockedCountEl.textContent = blocked.length;
+    if (!blockedListEl) return;
+    blockedListEl.innerHTML = blocked.map(b => `
+        <div class="d-flex justify-content-between align-items-center py-1 border-bottom border-light">
+            <span class="fw-semibold">${b.ticker || '?'}</span>
+            <span class="text-muted small">${b.reason_text || b.reason_code || 'Unknown'}</span>
+        </div>
+    `).join('');
+}
+
+/**
+ * Update buying power indicator
+ * @param {Object} result - API response
+ */
+function updateBuyingPowerIndicator(result) {
+    if (!bpIndicator) return;
+    const bp = result?.broker_buying_power;
+    const reserved = result?.cash_reserved_for_csp;
+    if (bp != null && bp > 0) {
+        bpIndicator.classList.remove('d-none');
+        const bpEl = document.getElementById('bp-amount');
+        const reservedEl = document.getElementById('bp-reserved');
+        if (bpEl) bpEl.textContent = formatCurrency(bp);
+        if (reservedEl) reservedEl.textContent = formatCurrency(reserved || 0);
+    } else {
+        bpIndicator.classList.add('d-none');
+    }
+}
+
+/**
+ * Render the unified signal payload.
+ * @param {Object} result - Full API response with signals
  * @param {string} timestamp - Generation timestamp
  * @param {Object|null} cacheInfo - Cache metadata
  */
 function renderRecommendations(result, timestamp, cacheInfo = null) {
     if (!cardsContainer) return;
     
-    // Clear all lane containers and the legacy fallback
+    // Apply growth mode banner
+    applyGrowthMode(result);
+    
+    // Update buying power indicator
+    updateBuyingPowerIndicator(result);
+    
+    // Clear the grid and render the canonical signal list.
     cardsContainer.innerHTML = '';
-
-    const ccRecs = result?.lanes?.covered_calls?.recommendations || [];
-    const wcRecs = result?.lanes?.watchlist_csp?.recommendations || [];
-    const hasLanes = ccRecs.length > 0 || wcRecs.length > 0;
-    
-    if (hasLanes) {
-        renderLaneCards('lanes-covered-calls-cards', ccRecs);
-        renderLaneCards('lanes-watchlist-csp-cards', wcRecs);
-        setLaneVisible('lanes-covered-calls-section', ccRecs.length > 0);
-        setLaneVisible('lanes-watchlist-csp-section', wcRecs.length > 0);
-
-        showContent();
-        updateTimestamp(timestamp, cacheInfo);
-        return;
-    }
-    
-    // Legacy fallback: render recommendations list directly
-    setLaneVisible('lanes-covered-calls-section', false);
-    setLaneVisible('lanes-watchlist-csp-section', false);
-    
-    const recs = (result && result.recommendations) || [];
-    
-    if (!recs || recs.length === 0) {
-        showEmpty();
-        updateTimestamp(null);
-        return;
-    }
-    
-    recs.forEach(rec => {
+    const signals = result?.signals || [];
+    signals.forEach(rec => {
         const card = createRecommendationCard(rec);
+        applyGrowthFieldsToCard(card, rec);
         cardsContainer.appendChild(card);
     });
     
-    showContent();
-    updateTimestamp(timestamp, cacheInfo);
+    // Blocked signal diagnostics
+    renderBlockedSignals(result?.blocked_signals || []);
+    
+    if (signals.length > 0) {
+        showContent();
+        updateTimestamp(timestamp, cacheInfo);
+    } else {
+        showEmpty();
+        updateTimestamp(null);
+    }
 }
 
 /**
@@ -444,7 +483,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
             return;
         }
         
-        recommendationsData = result;
+        signalsData = result;
         
         const cacheInfo = result._cache || null;
         

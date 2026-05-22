@@ -10,6 +10,7 @@ from typing import Optional, Dict, List
 logger = logging.getLogger('api.services.alpha_vantage')
 
 ALPHA_VANTAGE_BASE = 'https://www.alphavantage.co/query'
+_UNSET = object()
 
 _cache: Optional[Dict] = None
 _cache_timestamp: Optional[datetime] = None
@@ -21,8 +22,11 @@ _cache_lock = threading.Lock()
 
 class AlphaVantageEarningsProvider:
 
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.environ.get('ALPHA_VANTAGE_API_KEY', '')
+    def __init__(self, api_key: Optional[str] = _UNSET):
+        if api_key is _UNSET:
+            self.api_key = os.environ.get('ALPHA_VANTAGE_API_KEY', '')
+        else:
+            self.api_key = api_key
         if not self.api_key:
             logger.warning('ALPHA_VANTAGE_API_KEY is not set; Alpha Vantage provider will be unavailable')
 

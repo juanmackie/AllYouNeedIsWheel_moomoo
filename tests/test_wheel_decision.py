@@ -191,6 +191,24 @@ class TestScoreContract(unittest.TestCase):
         self.assertEqual(result.option_type, "PUT")
         self.assertGreater(result.contract_score, 0)
 
+    def test_accepts_dash_formatted_expiration(self):
+        """Broker/yfinance expirations may arrive as YYYY-MM-DD."""
+        option = dict(self.base_option)
+        option['expiration'] = (datetime.now() + timedelta(days=21)).strftime('%Y-%m-%d')
+
+        result = score_contract(
+            ticker="AAPL",
+            option=option,
+            stock_price=100.0,
+            profile=self.base_profile,
+            portfolio_context=self.base_portfolio,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertFalse(result.hard_blockers)
+        self.assertRegex(result.expiration, r'^\d{8}$')
+        self.assertGreater(result.dte, 0)
+
 
 class TestHelperFunctionsEdgeCases(unittest.TestCase):
     """Edge-case tests for pure helper functions (boundary values, zero-division guards)"""
@@ -682,7 +700,55 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         opt = dict(self.base_option, bid=0, ask=0, last=0)
         result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
         self.assertIsNotNone(result)
-        self.assertTrue(result.hard_blockers)  # mid_price=0 < min_mid_price
+        self.assertTrue(result.hard_blockers)  # no_market
+
+    def test_quote_quality_no_bid_blocks(self):
+        """score_contract blocks bid=0, ask=5 (ask-only) with no_bid reason code."""
+        opt = dict(self.base_option, bid=0, ask=5.0, last=0)
+        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.hard_blockers)
+        self.assertIn('no_bid', result.blocked_reason_codes)
+
+    def test_quote_quality_no_ask_blocks(self):
+        """score_contract blocks bid=5, ask=0 (bid-only) with no_ask reason code."""
+        opt = dict(self.base_option, bid=5.0, ask=0, last=0)
+        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.hard_blockers)
+        self.assertIn('no_ask', result.blocked_reason_codes)
+
+    def test_quote_quality_tradable_passes(self):
+        """score_contract passes with bid=2, ask=2.50 (two-sided market)."""
+        opt = dict(self.base_option, bid=2.0, ask=2.50, last=2.25)
+        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
+        self.assertIsNotNone(result)
+        self.assertFalse(result.hard_blockers)
+        self.assertEqual(result.quote_quality, 'tradable')
+        self.assertGreater(result.contract_score, 0)
+
+    def test_quote_quality_wide_spread_blocks(self):
+        """score_contract blocks bid=0.5, ask=5 (wide spread) with wide_spread reason code."""
+        opt = dict(self.base_option, bid=0.5, ask=5.0, last=0)
+        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.hard_blockers)
+        self.assertIn('wide_spread', result.blocked_reason_codes)
+
+    def test_quote_quality_last_only_blocks(self):
+        """score_contract blocks last-only quote (bid=0, ask=0, last=3) with no_market reason code."""
+        opt = dict(self.base_option, bid=0, ask=0, last=3.0)
+        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.hard_blockers)
+        self.assertIn('no_market', result.blocked_reason_codes)
+
+    def test_quote_quality_zero_mark_blocks(self):
+        """score_contract blocks zero mid price even with bid>0, ask>0 if mid <= 0."""
+        opt = dict(self.base_option, bid=0.01, ask=0.01, last=0)
+        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.hard_blockers)
 
     def test_score_contract_call_successful(self):
         """score_contract returns valid WheelDecision for valid CALL"""

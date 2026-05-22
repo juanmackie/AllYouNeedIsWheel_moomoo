@@ -12,20 +12,27 @@ import threading
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import pytz
-from moomoo import (
-    OpenQuoteContext,
-    OpenSecTradeContext,
-    OpenUSTradeContext,
-    RET_OK,
-    RET_ERROR,
-    SecurityFirm,
-    TrdEnv,
-    TrdMarket,
-    TrdSide,
-    OrderType,
-    ModifyOrderOp,
-    OptionType,
-)
+try:
+    from moomoo import (
+        OpenQuoteContext,
+        OpenSecTradeContext,
+        RET_OK,
+        RET_ERROR,
+        SecurityFirm,
+        TrdEnv,
+
+        OptionType,
+    )
+except ImportError:
+    # Allow graceful fallback during test collection / environments without full moomoo SDK
+    OpenQuoteContext = None
+    OpenSecTradeContext = None
+    RET_OK = None
+    RET_ERROR = None
+    SecurityFirm = None
+    TrdEnv = None
+
+    OptionType = None
 
 from core.logging_config import get_logger
 from core.rate_limiter import RateLimiter
@@ -93,7 +100,6 @@ class MoomooConnection:
         self._connected = False
         self._account_cache = None
         self.last_error = None
-        self.trading_password = os.environ.get('MOOMOO_TRADING_PASSWORD', '')
         self._connection_lock = threading.Lock()
         self._last_activity = None
         self._initialized = True
@@ -199,15 +205,6 @@ class MoomooConnection:
         fallback_account = self._find_account_by_env(desired_env)
         return desired_env, fallback_account.get('acc_id') if fallback_account else ''
 
-    def _resolve_order_account(self):
-        default_env = TrdEnv.SIMULATE if self.readonly else TrdEnv.REAL
-        if self.account_id:
-            matched_account = self._find_account_by_id(self.account_id)
-            if matched_account and matched_account.get('trd_env') == default_env:
-                return default_env, matched_account.get('acc_id')
-        fallback_account = self._find_account_by_env(default_env)
-        return default_env, fallback_account.get('acc_id') if fallback_account else ''
-
     def _format_trade_error(self, action, data, trd_env, account_id=''):
         details = str(data)
         env_label = _env_name(trd_env)
@@ -246,11 +243,6 @@ class MoomooConnection:
                 self._account_cache = None
                 self._last_activity = datetime.now()
                 self.last_error = None
-
-                if not self.readonly and self.trading_password:
-                    ret, data = self.trd_ctx.unlock_trade(self.trading_password)
-                    if ret != RET_OK:
-                        logger.warning(f"Failed to unlock trade: {data}")
 
                 logger.info(f"Successfully connected to moomoo OpenD at {self.host}:{self.port}")
                 logger.info(f"Using security firm {self.security_firm} for filtered US trade context")
@@ -659,92 +651,4 @@ class MoomooConnection:
 
         return None
 
-    def place_order(self, option_code, quantity, action, limit_price):
-        if not self.is_connected():
-            if not self.connect():
-                return None
 
-        try:
-            trd_env, account_id = self._resolve_order_account()
-            trd_side = TrdSide.BUY if action.upper() == 'BUY' else TrdSide.SELL
-
-            ret, data = self.trd_ctx.place_order(
-                price=float(limit_price),
-                qty=float(quantity),
-                code=option_code,
-                trd_side=trd_side,
-                order_type=OrderType.NORMAL,
-                trd_env=trd_env,
-                acc_id=self._account_id_arg(account_id),
-                trd_market=TrdMarket.US
-            )
-
-            if ret == RET_OK:
-                order_id = data.iloc[0]['order_id']
-                return {
-                    'order_id': order_id,
-                    'status': 'Submitted',
-                    'filled': 0,
-                    'remaining': quantity,
-                    'avg_fill_price': 0
-                }
-            else:
-                logger.error(f"Failed to place order: {data}")
-                return None
-        except Exception as e:
-            logger.error(f"Error placing order: {str(e)}")
-            return None
-
-    def check_order_status(self, order_id):
-        if not self.is_connected():
-            if not self.connect():
-                return None
-
-        try:
-            trd_env, account_id = self._resolve_order_account()
-            ret, data = self.trd_ctx.order_list_query(
-                order_id=str(order_id),
-                trd_env=trd_env,
-                acc_id=self._account_id_arg(account_id)
-            )
-
-            if ret == RET_OK and not data.empty:
-                order = data.iloc[0]
-                status_str = str(order.get('order_status', ''))
-                return {
-                    'status': status_str.capitalize(),
-                    'filled': float(order.get('dealt_qty', 0)),
-                    'remaining': float(order.get('qty', 0)) - float(order.get('dealt_qty', 0)),
-                    'avg_fill_price': float(order.get('dealt_avg_price', 0)),
-                    'last_fill_price': float(order.get('dealt_avg_price', 0)),
-                    'commission': 0,
-                    'why_held': ''
-                }
-            return None
-        except Exception as e:
-            logger.error(f"Error checking order status: {str(e)}")
-            return None
-
-    def cancel_order(self, order_id):
-        if not self.is_connected():
-            if not self.connect():
-                return None
-
-        try:
-            trd_env, account_id = self._resolve_order_account()
-            ret, data = self.trd_ctx.modify_order(
-                modify_op=ModifyOrderOp.CANCEL,
-                order_id=str(order_id),
-                qty=0,
-                price=0,
-                trd_env=trd_env,
-                acc_id=self._account_id_arg(account_id)
-            )
-
-            if ret == RET_OK:
-                return {'success': True, 'message': f"Cancellation request sent for order {order_id}"}
-            else:
-                return {'success': False, 'error': str(data)}
-        except Exception as e:
-            logger.error(f"Error cancelling order: {str(e)}")
-            return {'success': False, 'error': str(e)}

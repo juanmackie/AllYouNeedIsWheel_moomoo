@@ -512,20 +512,7 @@ class TestMoomooConnectionLifecycle(unittest.TestCase):
         conn.connect()
         mock_quote_class.assert_called()
 
-    @patch('core.context_factory.OpenQuoteContext')
-    @patch('core.context_factory.OpenSecTradeContext')
-    def test_connect_with_unlock_live(self, mock_trd_class, mock_quote_class):
-        mock_trd_ctx = MagicMock()
-        mock_trd_ctx.unlock_trade.return_value = (RET_OK, 'unlocked')
-        mock_trd_class.return_value = mock_trd_ctx
-        mock_quote_class.return_value = MagicMock()
-
-        with patch.dict(os.environ, {'MOOMOO_TRADING_PASSWORD': 'secret'}, clear=True):
-            conn = MoomooConnection(host='127.0.0.1', port=11111, readonly=False)
-            result = conn.connect()
-
-        self.assertTrue(result)
-        mock_trd_ctx.unlock_trade.assert_called_once_with('secret')
+    # unlock_trade removed — execution subsystem deleted
 
     @patch('core.context_factory.OpenQuoteContext')
     @patch('core.context_factory.OpenSecTradeContext')
@@ -537,20 +524,7 @@ class TestMoomooConnectionLifecycle(unittest.TestCase):
         conn.disconnect()
         self.assertFalse(conn._connected)
 
-    @patch('core.context_factory.OpenQuoteContext')
-    @patch('core.context_factory.OpenSecTradeContext')
-    def test_connect_live_unlock_failure_logged(self, mock_trd_class, mock_quote_class):
-        mock_trd_ctx = MagicMock()
-        mock_trd_ctx.unlock_trade.return_value = (RET_ERROR, 'bad password')
-        mock_trd_class.return_value = mock_trd_ctx
-        mock_quote_class.return_value = MagicMock()
-
-        with patch.dict(os.environ, {'MOOMOO_TRADING_PASSWORD': 'wrong'}, clear=True):
-            conn = MoomooConnection(readonly=False)
-            result = conn.connect()
-
-        self.assertTrue(result)
-        mock_trd_ctx.unlock_trade.assert_called_once_with('wrong')
+    # unlock_trade removed — execution subsystem deleted
 
 
 class TestMoomooConnectionDataRetrieval(unittest.TestCase):
@@ -629,66 +603,12 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
             result = conn.get_portfolio()
         self.assertIsNone(result)
 
-    def test_place_order(self):
-        conn = self._make_connected_conn()
-        mock_order_df = MagicMock()
-        mock_order_df.iloc = MagicMock()
-        mock_order_df.iloc.__getitem__.return_value = {'order_id': '12345'}
-        self.mock_trd_ctx.place_order.return_value = (RET_OK, mock_order_df)
-
-        result = conn.place_order('US.AAPL240315C00200000', 1, 'SELL', 2.50)
-        self.assertIsNotNone(result)
-        self.assertEqual(result['order_id'], '12345')
-
-    def test_place_order_fails(self):
-        conn = self._make_connected_conn()
-        self.mock_trd_ctx.place_order.return_value = (RET_ERROR, 'Insufficient funds')
-
-        result = conn.place_order('US.AAPL240315C00200000', 1, 'SELL', 2.50)
-        self.assertIsNone(result)
-
-    def test_check_order_status(self):
-        conn = self._make_connected_conn()
-        mock_df = MagicMock()
-        mock_df.empty = False
-        mock_order = MagicMock()
-        mock_order.get.side_effect = lambda key, default=0: {
-            'order_status': 'Filled',
-            'dealt_qty': 100,
-            'qty': 100,
-            'dealt_avg_price': 2.45,
-        }.get(key, default)
-        mock_df.iloc = MagicMock()
-        mock_df.iloc.__getitem__.return_value = mock_order
-        self.mock_trd_ctx.order_list_query.return_value = (RET_OK, mock_df)
-
-        result = conn.check_order_status('67890')
-        self.assertIsNotNone(result)
-        self.assertEqual(result['status'], 'Filled')
-
-    def test_check_order_status_empty(self):
-        conn = self._make_connected_conn()
-        mock_df = MagicMock()
-        mock_df.empty = True
-        self.mock_trd_ctx.order_list_query.return_value = (RET_OK, mock_df)
-
-        result = conn.check_order_status('99999')
-        self.assertIsNone(result)
-
-    def test_cancel_order(self):
-        conn = self._make_connected_conn()
-        self.mock_trd_ctx.modify_order.return_value = (RET_OK, None)
-
-        result = conn.cancel_order('12345')
-        self.assertTrue(result['success'])
-
-    def test_cancel_order_fails(self):
-        conn = self._make_connected_conn()
-        self.mock_trd_ctx.modify_order.return_value = (RET_ERROR, 'Already filled')
-
-        result = conn.cancel_order('12345')
-        self.assertFalse(result['success'])
-
+    
+    
+    
+    
+    
+    
     def test_get_connection_info_with_connected(self):
         conn = self._make_connected_conn()
         info = conn.get_connection_info()
@@ -806,25 +726,6 @@ class TestMoomooConnectionAccountResolution(unittest.TestCase):
         trd_env, acc_id = conn._resolve_portfolio_account()
         self.assertEqual(trd_env, TrdEnv.REAL)
         self.assertEqual(acc_id, '')
-
-    def test_resolve_order_account_with_id_matching_env(self):
-        conn = MoomooConnection(readonly=False)
-        accounts = [{'acc_id': '99999', 'trd_env': TrdEnv.REAL, 'security_firm': 'FUTU'}]
-        conn.trd_ctx = self._make_mock_trd_ctx(accounts)
-        conn.account_id = '99999'
-
-        trd_env, acc_id = conn._resolve_order_account()
-        self.assertEqual(trd_env, TrdEnv.REAL)
-        self.assertEqual(acc_id, '99999')
-
-    def test_resolve_order_account_no_accounts_falls_back_empty(self):
-        conn = MoomooConnection(readonly=False)
-        conn.trd_ctx = self._make_mock_trd_ctx([])
-
-        trd_env, acc_id = conn._resolve_order_account()
-        self.assertEqual(trd_env, TrdEnv.REAL)
-        self.assertEqual(acc_id, '')
-
     @patch('core.context_factory.OpenQuoteContext')
     @patch('core.context_factory.OpenSecTradeContext')
     def test_safe_disconnect_handles_exception_in_close(self, mock_trd_class, mock_quote_class):

@@ -28,6 +28,28 @@ DEFAULT_CONNECTION_CONFIG = {
         'NFLX', 'UBER', 'SOFI', 'PLTR', 'BABA', 'DIS', 'BA', 'JPM',
         'V', 'MA', 'KO', 'PEP', 'WMT', 'COST', 'HD', 'INTC', 'F'
     ],
+    'growth_mode': {
+        'enabled': True,
+        'objective': 'time_to_2x',
+        'target_account_multiple': 2.0,
+        'max_drawdown_pct': 0.40,
+        'execution_scope': 'short_premium_wheel',
+        'long_options_mode': 'research_only',
+        'screener_profile': {
+            'csp_target_delta': 0.30,
+            'csp_delta_tolerance': 0.12,
+            'csp_min_dte': 30,
+            'csp_max_dte': 45,
+            'csp_preferred_dte': 37,
+            'csp_default_otm_pct': 10,
+            'call_default_otm_pct': 10,
+            'csp_min_otm_pct': 5,
+            'csp_max_otm_pct': 15,
+            'min_iv_rank': 45,
+            'max_watchlist_tickers': 25,
+            'require_cash_fit': True,
+        },
+    },
 }
 
 

@@ -10,6 +10,8 @@ Pytest/Unittest configuration.
 import sys
 import os
 import shutil
+import tempfile
+import uuid
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -20,6 +22,29 @@ _test_appdata_root = PROJECT_ROOT / "_tmp" / "appdata"
 _test_appdata_root.mkdir(parents=True, exist_ok=True)
 os.environ["APPDATA"] = str(_test_appdata_root)
 os.environ["appdata"] = str(_test_appdata_root)
+
+_test_temp_root = PROJECT_ROOT / "_tmp" / "pytest"
+_test_temp_root.mkdir(parents=True, exist_ok=True)
+os.environ["TEMP"] = str(_test_temp_root)
+os.environ["TMP"] = str(_test_temp_root)
+os.environ["TMPDIR"] = str(_test_temp_root)
+tempfile.tempdir = str(_test_temp_root)
+
+
+def _safe_mkdtemp(suffix="", prefix="tmp", dir=None):
+    base_dir = Path(dir) if dir else _test_temp_root
+    base_dir.mkdir(parents=True, exist_ok=True)
+    for _ in range(1000):
+        candidate = base_dir / f"{prefix}{uuid.uuid4().hex[:8]}{suffix}"
+        try:
+            candidate.mkdir(parents=False)
+            return str(candidate)
+        except FileExistsError:
+            continue
+    raise FileExistsError("Unable to allocate a temporary directory")
+
+
+tempfile.mkdtemp = _safe_mkdtemp
 
 # Redirect moomoo SDK log output away from Roaming to avoid PermissionError
 # during test collection when moomoo imports trigger file-logging init.

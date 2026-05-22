@@ -7,7 +7,6 @@ from pathlib import Path
 import logging
 
 from .schema import create_tables, migrate_database
-from .orders_repository import OrdersRepository
 from .iv_repository import IVRepository
 from .earnings_repository import EarningsRepository
 from .trade_events_repository import TradeEventsRepository
@@ -22,38 +21,16 @@ class OptionsDatabase:
         else:
             self.db_path = Path(db_name).resolve()
 
-        conn = sqlite3.connect(self.db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        conn = sqlite3.connect(str(self.db_path))
         create_tables(conn)
         conn.close()
         migrate_database(self.db_path)
 
-        self._orders = OrdersRepository(self.db_path)
         self._iv = IVRepository(self.db_path)
         self._earnings = EarningsRepository(self.db_path)
         self._trade_events = TradeEventsRepository(self.db_path)
-
-    # --- Orders ---
-
-    def save_order(self, order_data):
-        return self._orders.save_order(order_data)
-
-    def get_pending_orders(self, executed=False, limit=50, isRollover=None):
-        return self._orders.get_pending_orders(executed=executed, limit=limit, isRollover=isRollover)
-
-    def update_order_status(self, order_id, status, executed=False, execution_details=None):
-        return self._orders.update_order_status(order_id, status, executed=executed, execution_details=execution_details)
-
-    def delete_order(self, order_id):
-        return self._orders.delete_order(order_id)
-
-    def update_order_quantity(self, order_id, quantity):
-        return self._orders.update_order_quantity(order_id, quantity)
-
-    def get_order(self, order_id):
-        return self._orders.get_order(order_id)
-
-    def get_orders(self, status=None, executed=None, ticker=None, limit=50, status_filter=None, isRollover=None):
-        return self._orders.get_orders(status=status, executed=executed, ticker=ticker, limit=limit, status_filter=status_filter, isRollover=isRollover)
 
     # --- IV History ---
 

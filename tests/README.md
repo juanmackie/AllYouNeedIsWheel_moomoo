@@ -34,21 +34,27 @@ Manual end-to-end checklist for verifying UI and pipeline functionality:
 - [ ] Rapid typing in OTM% only triggers one refresh (debounce works)
 - [ ] Refresh All / individual ticker refresh buttons work
 - [ ] Expiration dropdown works
-- [ ] Sell/Add buttons add orders to pending
+- [ ] Signal actions update the visible candidate rows
 - [ ] Custom ticker add/delete works (Puts tab)
 - [ ] IV rank badges show with correct colors (🔴 🟡 ⚫ 🟢)
 - [ ] Earnings `(e)` badges show with date tooltip and per-ticker refresh
+- [ ] **Watchlist CSP**: A watchlist-only ticker (not held, not custom) appears in the Cash-Secured Puts table when it has valid put data and passes cash-fit filters
+- [ ] **Watchlist CC exclusion**: The same watchlist-only ticker does NOT appear in the Covered Calls table
+- [ ] **Refresh All Puts includes watchlist**: Clicking "Refresh All Puts" fetches data for watchlist-only tickers (not just held 100+ share positions)
+- [ ] **Excluded ticker isolation**: Excluding a held ticker does not hide a valid watchlist or custom CSP candidate with the same ticker
+- [ ] **CSP empty-state varies**: When no watchlist or custom tickers exist, the empty message says "No watchlist or custom tickers" rather than a generic message
+- [ ] **Concentration warning**: A held ticker with a CSP that ties up >30% of cash shows a `"Held + CSP: XX% of cash"` warning badge in the ticker cell
 
 ### Top Recommendations
 - [ ] Cards load automatically with score/ranking
-- [ ] Add Order / Execute Now buttons work
+- [ ] Signal cards show source, confidence, and warnings
 - [ ] Refresh button updates recommendations
 
-### Pending Orders
-- [ ] Pending orders display correctly
-- [ ] Execute / Cancel / Quantity edit work
-- [ ] Cancel All works with confirmation
-- [ ] Filled orders display with timestamps and weekly summary
+### Rollover Signals
+- [ ] Roll pressure positions display correctly
+- [ ] Rollover suggestions show paired close/open legs
+- [ ] Rollover review modal opens with signal-only copy
+- [ ] Weekly income and filled-position summaries still load correctly
 
 ### Earnings Pipeline
 - [ ] `/api/portfolio/roll-pressure` loads without 500 error

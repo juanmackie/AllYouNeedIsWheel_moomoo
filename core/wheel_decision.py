@@ -23,6 +23,13 @@ from core.scoring_factors import (
     _compute_size_fit,
     _compute_expected_move_buffer,
 )
+from core.growth_mode import (
+    compute_stress_loss,
+    compute_risk_budget_used,
+    compute_confidence_score,
+    classify_covered_call_intent,
+    estimate_target_gap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +132,10 @@ class WheelDecision:
     macro_advice: str = ""
     profile_type: str = "monthly"
 
+    # -- Quote quality ------------------------------------------------------
+    quote_quality: str = ""              # tradable | no_bid | no_ask | zero_mark | wide_spread | low_liquidity
+    blocked_reason_codes: list[str] = field(default_factory=list)
+
     # -- Decision flags -----------------------------------------------------
     hard_blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -154,6 +165,14 @@ class WheelDecision:
     return_on_underlying: Optional[float] = None  # CALL: premium / (stock_price * 100)
     return_on_secured_cash: Optional[float] = None  # PUT: premium / (strike * 100)
 
+    # -- Growth-aware metrics (always-on) -----------------------------------
+    remaining_gap_to_target: float = 0.0
+    risk_budget_used_pct: float = 0.0
+    stress_loss: float = 0.0
+    confidence_score: float = 0.0
+    covered_call_intent: str = ""   # income | profit-taking | upside-capping risk
+    score_rationale: str = ""
+
     # -- Internal tracking --------------------------------------------------
     _theta_delta_ratio: float = 0.0    # Raw theta/delta ratio
 
@@ -171,10 +190,10 @@ class WheelDecision:
         return bool(self.warnings)
 
 
-def _create_failed_decision(ticker: str, option_type: str, strike: float, expiration: str, reason: str) -> WheelDecision:
+def _create_failed_decision(ticker: str, option_type: str, strike: float, expiration: str, reason: str, blocked_reason_codes: list[str] | None = None) -> WheelDecision:
     """
     Create a WheelDecision that failed hard filters.
-    Populates hard_blockers with the reason.
+    Populates hard_blockers with the reason and blocked_reason_codes with machine-readable codes.
     """
     return WheelDecision(
         ticker=ticker,
@@ -182,7 +201,30 @@ def _create_failed_decision(ticker: str, option_type: str, strike: float, expira
         strike=strike,
         expiration=expiration,
         hard_blockers=[reason],
+        blocked_reason_codes=blocked_reason_codes or [],
     )
+
+
+def _normalize_expiration(expiration: str) -> str:
+    """Return YYYYMMDD for common broker/yfinance expiration formats."""
+    value = str(expiration or '').strip()
+    if not value:
+        return ''
+
+    if len(value) >= 10 and value[4] == '-' and value[7] == '-':
+        return value[:10].replace('-', '')
+
+    return value.replace('-', '')
+
+
+def _coerce_optional_float(value):
+    """Return a float when possible, otherwise None."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +263,7 @@ def score_contract(
     earnings_adjustment: float = 0.0,
     earnings_info: dict | None = None,
     macro_regime: dict | None = None,
+    growth_profile: dict | None = None,
 ) -> WheelDecision | None:
     """
     Score a single option contract and return a WheelDecision.
@@ -235,7 +278,7 @@ def score_contract(
 
     # -- Parse inputs -------------------------------------------------------
     strike = float(option.get('strike', 0) or 0)
-    expiration = str(option.get('expiration', '') or '')
+    expiration = _normalize_expiration(option.get('expiration', '') or '')
     option_type = str(option.get('option_type', '') or '').upper()
     
     if strike <= 0 or not expiration:
@@ -250,25 +293,56 @@ def score_contract(
     dte = (expiry_date - datetime.now().date()).days
     if dte <= 0:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Expired or no time value")
-    
+
+    if option_type == 'PUT':
+        min_dte = _coerce_optional_float(profile.get('min_dte'))
+        max_dte = _coerce_optional_float(profile.get('max_dte'))
+        if min_dte is not None and dte < min_dte:
+            return _create_failed_decision(
+                ticker,
+                'PUT',
+                strike,
+                expiration,
+                f"CSP DTE below target range: {dte} < {min_dte:.0f}",
+                ['outside_csp_dte_range'],
+            )
+        if max_dte is not None and dte > max_dte:
+            return _create_failed_decision(
+                ticker,
+                'PUT',
+                strike,
+                expiration,
+                f"CSP DTE above target range: {dte} > {max_dte:.0f}",
+                ['outside_csp_dte_range'],
+            )
+
     bid = float(option.get('bid', 0) or 0)
     ask = float(option.get('ask', 0) or 0)
     last = float(option.get('last', 0) or 0)
+
+    # -- Strict quote quality gates for sell signals -------------------------
+    # Require a two-sided market with executable bid and ask.
+    # Ask-only, last-only, zero-mark, or zero-bid quotes are hard blockers.
+    blocked_reason_codes = []
+    if bid <= 0 and ask <= 0:
+        return _create_failed_decision(ticker, option_type, strike, expiration, "No two-sided market - no bid or ask available", ['no_market'])
+    if bid <= 0:
+        return _create_failed_decision(ticker, option_type, strike, expiration, "No executable bid - ask-only quote", ['no_bid'])
+    if ask <= 0:
+        return _create_failed_decision(ticker, option_type, strike, expiration, "No ask price available", ['no_ask'])
+
     mid_price = _calculate_mid_price(bid, ask, last)
+    if mid_price <= 0:
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Zero computed mid price", ['zero_mark'])
     if mid_price < profile.get('min_mid_price', 0.05):
         return _create_failed_decision(ticker, option_type, strike, expiration, f"Mid price too low: {mid_price}")
-    
-    spread_pct = 100.0
-    if bid > 0 and ask > 0 and mid_price > 0:
-        spread_pct = ((ask - bid) / mid_price) * 100
-    elif bid == 0 and ask == 0:
-        spread_pct = 100.0
-    else:
-        spread_pct = 100.0  # Large penalty için)
-    
+
+    spread_pct = ((ask - bid) / mid_price) * 100
+
     if spread_pct > profile.get('max_spread_pct', 60):
-        return _create_failed_decision(ticker, option_type, strike, expiration, f"Spread too wide: {spread_pct:.1f}%")
-    
+        return _create_failed_decision(ticker, option_type, strike, expiration, f"Spread too wide: {spread_pct:.1f}%", ['wide_spread'])
+
+    quote_quality = 'tradable'
     delta = float(option.get('delta', 0) or 0)
     implied_volatility = float(option.get('implied_volatility', 0) or 0)
     open_interest = int(option.get('open_interest', 0) or 0)
@@ -279,7 +353,7 @@ def score_contract(
         return _create_failed_decision(ticker, option_type, strike, expiration, f"Premium too low: {premium_per_contract}")
     
     if open_interest < profile.get('min_open_interest', 10) and volume < profile.get('min_volume', 1):
-        return _create_failed_decision(ticker, option_type, strike, expiration, "Open interest and volume too low")
+        return _create_failed_decision(ticker, option_type, strike, expiration, "Open interest and volume too low", ['low_liquidity'])
 
     # -- Enrich Greeks if missing (TODO 0.3) -----------------------
     if implied_volatility > 0 and abs(delta) < 0.001:
@@ -296,6 +370,7 @@ def score_contract(
     available_cash = float(portfolio_context.get('available_cash', cash_balance) or 0)
     cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', available_cash) or 0)
     cash_reserved_for_csp = float(portfolio_context.get('cash_reserved_for_csp', 0) or 0)
+    broker_buying_power = float(portfolio_context.get('broker_buying_power', cash_available_for_csp) or cash_available_for_csp)
     account_value = portfolio_context.get('account_value', cash_balance)
     vix_regime = portfolio_context.get('vix_regime')
 
@@ -312,6 +387,8 @@ def score_contract(
         stock_price=stock_price,
         bid=bid,
         ask=ask,
+        quote_quality=quote_quality,
+        blocked_reason_codes=blocked_reason_codes,
         last=last,
         mid_price=round(mid_price, 4),
         premium_per_contract=round(premium_per_contract, 2),
@@ -351,10 +428,36 @@ def score_contract(
     if from_yfinance:
         decision.warnings.append('Data from yfinance (not Moomoo) - verify before trading')
 
+    # -- Fetch feedback-adjusted weights -------------------------------------
+    # Apply bias multipliers from the feedback loop so the recommendation
+    # reflects historical over/under-prediction patterns.
+    try:
+        from core.feedback_loop import get_adjusted_weights
+        factor_biases = get_adjusted_weights({
+            'iv_adjusted': 1.0,
+            'theta_delta': 1.0,
+            'liquidity': 1.0,
+            'expected_value': 1.0,
+            'upside': 1.0,
+            'otm_fit': 1.0,
+            'buffer': 1.0,
+            'capital_efficiency': 1.0,
+        })
+    except Exception:
+        factor_biases = {}
+
+    iv_adj_bias = factor_biases.get('iv_adjusted', 1.0)
+    theta_delta_bias = factor_biases.get('theta_delta', 1.0)
+    liquidity_bias = factor_biases.get('liquidity', 1.0)
+    ev_bias = factor_biases.get('expected_value', 1.0)
+    upside_bias = factor_biases.get('upside', 1.0)
+    otm_bias = factor_biases.get('otm_fit', 1.0)
+    buffer_bias = factor_biases.get('buffer', 1.0)
+    ce_bias = factor_biases.get('capital_efficiency', 1.0)
+
     # -- IV-adjusted return -------------------------------------------------
-    # TODO 1.2: Fix PUT return denominator to use strike * 100 (secured cash)
-    # For CALLs: return on underlying value (stock_price * 100)
-    # For PUTs: return on secured cash (strike * 100)
+    # PUT return denominator uses strike * 100 (secured cash).
+    # CALL return denominator uses stock_price * 100 (underlying value).
     if option_type == 'CALL':
         capital_at_risk = stock_price * 100
         decision.return_on_underlying = round(
@@ -416,18 +519,36 @@ def score_contract(
         decision.if_called_return = round(if_called_return, 2)
         decision.cost_basis_score = round(cost_basis_score * 100, 1)
         decision.otm_score = _score_proximity(
-            otm_pct, 10, max(10 * 0.75, 6)
+            otm_pct, profile.get('default_otm_pct', 10), max(profile.get('default_otm_pct', 10) * 0.75, 6)
         ) * 100
         decision.upside_score = _score_positive_metric(if_called_return, 12) * 100
 
-        # CALL base score
+        # CALL base score — growth-oriented weights (premium, capital efficiency, liquidity, theta decay)
+        # Weights are multiplied by feedback bias factors so factors that
+        # historically over-predict get reduced influence, and those that
+        # under-predict get increased influence.
+        w_iv_adj = 0.35 * iv_adj_bias
+        w_tdr = 0.15 * theta_delta_bias
+        w_liq = 0.15 * liquidity_bias
+        w_ev = 0.10 * ev_bias
+        w_upside = 0.15 * upside_bias
+        w_otm = 0.10 * otm_bias
+        total_w = w_iv_adj + w_tdr + w_liq + w_ev + w_upside + w_otm
+        if total_w > 0:
+            w_iv_adj /= total_w
+            w_tdr /= total_w
+            w_liq /= total_w
+            w_ev /= total_w
+            w_upside /= total_w
+            w_otm /= total_w
+
         base_score = (
-            decision.iv_adjusted_score * 0.25 +
-            decision.tdr_score * 0.20 +
-            decision.liquidity_score * 0.18 +
-            decision.ev_score * 0.15 +
-            decision.upside_score * 0.12 +
-            decision.otm_score * 0.10
+            decision.iv_adjusted_score * w_iv_adj +
+            decision.tdr_score * w_tdr +
+            decision.liquidity_score * w_liq +
+            decision.ev_score * w_ev +
+            decision.upside_score * w_upside +
+            decision.otm_score * w_otm
         )
 
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
@@ -440,7 +561,7 @@ def score_contract(
 
         # Warnings
         if spread_pct > profile.get('ideal_spread_pct', 12):
-            decision.warnings.append('Wide bid/ask spread')
+            decision.warnings.append(f'Wide bid/ask spread ({spread_pct:.0f}%)')
         if open_interest < profile.get('ideal_open_interest', 500):
             decision.warnings.append('Below ideal open interest')
         if avg_cost > 0 and strike < avg_cost:
@@ -492,11 +613,32 @@ def score_contract(
             return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Strike {strike} not below stock price {stock_price}")
 
         otm_pct = ((stock_price - strike) / stock_price) * 100
+        min_otm_pct = _coerce_optional_float(profile.get('min_otm_pct'))
+        max_otm_pct = _coerce_optional_float(profile.get('max_otm_pct'))
+        if min_otm_pct is not None and otm_pct < min_otm_pct:
+            return _create_failed_decision(
+                ticker,
+                'PUT',
+                strike,
+                expiration,
+                f"CSP OTM below target range: {otm_pct:.1f}% < {min_otm_pct:.0f}%",
+                ['outside_csp_otm_range'],
+            )
+        if max_otm_pct is not None and otm_pct > max_otm_pct:
+            return _create_failed_decision(
+                ticker,
+                'PUT',
+                strike,
+                expiration,
+                f"CSP OTM above target range: {otm_pct:.1f}% > {max_otm_pct:.0f}%",
+                ['outside_csp_otm_range'],
+            )
         cash_required = strike * 100
 
-        # Cash reserve check using centralized CSP buying power
-        if cash_required > cash_available_for_csp:
-            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, available ${cash_available_for_csp:.0f} (reserved ${cash_reserved_for_csp:.0f})")
+        # Cash reserve check using broker buying power (authoritative)
+        # Broker buying power already accounts for open positions — no local subtraction needed
+        if cash_required > broker_buying_power:
+            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, broker buying power ${broker_buying_power:.0f} (open short-put collateral ${cash_reserved_for_csp:.0f})")
 
         breakeven = strike - mid_price
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
@@ -519,20 +661,38 @@ def score_contract(
         decision.ce_score = round(ce_score, 1)
         decision.capital_efficiency = round(capital_efficiency, 1)
         decision.otm_score = _score_proximity(
-            otm_pct, 10, max(10 * 0.75, 6)
+            otm_pct, profile.get('default_otm_pct', 10), max(profile.get('default_otm_pct', 10) * 0.75, 6)
         ) * 100
         decision.buffer_score = _score_positive_metric(
             breakeven_buffer_pct, max(10, 8)
         ) * 100
 
-        # PUT base score
+        # PUT base score — growth-oriented weights (premium, theta decay, EV, liquidity, buffer, capital efficiency)
+        # Weights are multiplied by feedback bias factors so factors that
+        # historically over-predict get reduced influence, and those that
+        # under-predict get increased influence.
+        w_iv_adj = 0.35 * iv_adj_bias
+        w_tdr = 0.15 * theta_delta_bias
+        w_ev = 0.10 * ev_bias
+        w_liq = 0.15 * liquidity_bias
+        w_buf = 0.10 * buffer_bias
+        w_ce = 0.15 * ce_bias
+        total_w = w_iv_adj + w_tdr + w_ev + w_liq + w_buf + w_ce
+        if total_w > 0:
+            w_iv_adj /= total_w
+            w_tdr /= total_w
+            w_ev /= total_w
+            w_liq /= total_w
+            w_buf /= total_w
+            w_ce /= total_w
+
         base_score = (
-            decision.iv_adjusted_score * 0.25 +
-            decision.tdr_score * 0.20 +
-            decision.ev_score * 0.18 +
-            decision.liquidity_score * 0.15 +
-            decision.buffer_score * 0.12 +
-            decision.ce_score * 0.10
+            decision.iv_adjusted_score * w_iv_adj +
+            decision.tdr_score * w_tdr +
+            decision.ev_score * w_ev +
+            decision.liquidity_score * w_liq +
+            decision.buffer_score * w_buf +
+            decision.ce_score * w_ce
         )
 
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
@@ -545,11 +705,11 @@ def score_contract(
 
         # Warnings
         if spread_pct > profile.get('ideal_spread_pct', 12):
-            decision.warnings.append('Wide bid/ask spread')
+            decision.warnings.append(f'Wide bid/ask spread ({spread_pct:.0f}%)')
         if open_interest < profile.get('ideal_open_interest', 500):
             decision.warnings.append('Below ideal open interest')
-        if available_cash > 0 and cash_required > cash_available_for_csp:
-            decision.warnings.append(f'Cash required (${cash_required:.0f}) exceeds CSP buying power (${cash_available_for_csp:.0f})')
+        if available_cash > 0 and cash_required > broker_buying_power:
+            decision.warnings.append(f'Cash required (${cash_required:.0f}) exceeds broker buying power (${broker_buying_power:.0f})')
         if iv_status_str == 'extreme_low':
             decision.warnings.append(f'IV extremely low ({decision.iv_rank:.0f}%) - poor risk/reward')
         elif iv_status_str == 'low':
@@ -590,6 +750,103 @@ def score_contract(
 
     else:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Unknown option type")
+
+    # -- Growth-aware scoring (always-on) ----------------------------------
+    # Stress loss, risk budget, confidence, covered call intent, and target gap
+    # are always computed — there is no "income mode" alternative.
+    account_value = float(portfolio_context.get('account_value', 0) or 0)
+    cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
+    growth_obj = growth_profile or {}
+    max_drawdown_pct = float(growth_obj.get('max_drawdown_pct', 0.40))
+
+    # Stress loss
+    stress_loss = compute_stress_loss(
+        premium_per_contract=premium_per_contract,
+        abs_delta=abs(delta),
+        stock_price=stock_price,
+        strike=strike,
+        option_type=option_type,
+        num_contracts=max(decision.max_contracts, 1),
+    )
+    decision.stress_loss = stress_loss
+
+    # Risk budget used
+    risk_budget = compute_risk_budget_used(
+        stress_loss=stress_loss,
+        account_value=max(account_value, cash_balance, 1),
+        max_drawdown_pct=max_drawdown_pct,
+    )
+    decision.risk_budget_used_pct = risk_budget
+
+    # Determine staleness from quote data
+    is_stale = False
+    quote_ts = option.get('quote_timestamp')
+    if quote_ts:
+        try:
+            ts = datetime.fromisoformat(quote_ts) if isinstance(quote_ts, str) else quote_ts
+            if (datetime.now() - ts).total_seconds() > 300:
+                is_stale = True
+        except (ValueError, TypeError):
+            pass
+    if from_yfinance:
+        is_stale = True
+
+    # Confidence score
+    decision.confidence_score = compute_confidence_score(
+        data_source=decision.price_source,
+        has_yfinance_fallback=option.get('from_yfinance', False),
+        is_stale=is_stale,
+        spread_pct=spread_pct,
+        open_interest=open_interest,
+    )
+
+    # Covered call intent
+    if option_type == 'CALL':
+        shares_owned = float(portfolio_context.get('positions', {}).get(ticker, {}).get('position', 0) or 0)
+        avg_cost = float(portfolio_context.get('positions', {}).get(ticker, {}).get('avg_cost', 0) or 0)
+        decision.covered_call_intent = classify_covered_call_intent(
+            strike=strike,
+            stock_price=stock_price,
+            premium_per_contract=premium_per_contract,
+            annualized_return=annualized_return_raw,
+            shares_owned=int(shares_owned),
+            avg_cost=avg_cost,
+        )
+
+        # Penalize low-premium covered calls on strong holdings
+        if decision.covered_call_intent == "upside-capping risk" and annualized_return_raw < 12:
+            decision.hard_blockers.append('Low-premium CC caps upside without meaningful 2x acceleration')
+        elif decision.covered_call_intent == "income" and annualized_return_raw < 6:
+            decision.warnings.append('Low premium relative to growth target')
+
+    # Growth score is contract_score now — no separate field.
+    # Target gap contribution (estimated)
+    income_per_month = premium_per_contract * 4  # rough monthly estimate
+    target_multiple = float(growth_obj.get('target_account_multiple', 2.0))
+    decision.remaining_gap_to_target = estimate_target_gap(
+        account_value=max(account_value, cash_balance, 1),
+        target_multiple=target_multiple,
+        current_premium_income=income_per_month,
+        projected_months=1,
+    )
+
+    # Score rationale (replaces growth_rationale)
+    rationale_parts = []
+    if decision.contract_score >= 70:
+        rationale_parts.append("Strong growth candidate")
+    elif decision.contract_score >= 50:
+        rationale_parts.append("Moderate growth contribution")
+    else:
+        rationale_parts.append("Limited growth impact")
+
+    if decision.risk_budget_used_pct > 0:
+        rationale_parts.append(f"Uses {decision.risk_budget_used_pct:.0f}% of drawdown budget")
+    if decision.covered_call_intent:
+        rationale_parts.append(f"CC intent: {decision.covered_call_intent}")
+    if decision.confidence_score < 60:
+        rationale_parts.append("Low confidence — verify data")
+
+    decision.score_rationale = " | ".join(rationale_parts) if rationale_parts else ""
 
     return decision
 

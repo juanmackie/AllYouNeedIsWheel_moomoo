@@ -1,7 +1,8 @@
 import { rolloverState } from './rollover-state.js';
 import { calculatePercentDifference, parseExpirationDate, formatDateToAPIfmt, addDaysToDate, calculateTargetStrike, findClosestStrike, isValidStrike, calculateMidPrice } from './rollover-calculator.js';
 import { formatCurrency } from '../utils/formatters.js';
-import { fetchPositions, fetchOptionData, fetchPendingOrders, cancelOrder, executeOrder, fetchStockPrices as apiFetchStockPrices, fetchRollPressure } from '../dashboard/api.js';
+import { showAlert } from '../utils/alerts.js';
+import { fetchPositions, fetchOptionData, fetchStockPrices as apiFetchStockPrices, fetchRollPressure } from '../dashboard/api.js';
 
 async function processOptionPositions(optionPositions) {
     const validOptions = optionPositions.filter(position =>
@@ -126,17 +127,9 @@ async function loadOptionPositions() {
 }
 
 async function loadPendingOrders() {
+    rolloverState.pendingOrders = [];
     const { populatePendingOrdersTable } = await import('./rollover-ui.js');
-    try {
-        const result = await fetchPendingOrders(false, true);
-        if (!result) {
-            throw new Error('Failed to fetch pending orders');
-        }
-        rolloverState.pendingOrders = result.orders || [];
-        populatePendingOrdersTable(rolloverState.pendingOrders);
-    } catch (error) {
-        console.error('Error loading pending orders:', error);
-    }
+    populatePendingOrdersTable([]);
 }
 
 async function fetchRolloverSuggestions() {
@@ -324,151 +317,10 @@ async function fetchRolloverSuggestions() {
     }
 }
 
-async function addRolloverOrder(suggestionId) {
-    const { populateRolloverSuggestionsTable } = await import('./rollover-ui.js');
-    try {
-        if (!rolloverState.selectedOption || !rolloverState.rolloverSuggestions || suggestionId < 0 || suggestionId >= rolloverState.rolloverSuggestions.length) {
-            throw new Error('Invalid rollover suggestion selected');
-        }
-
-        const suggestion = rolloverState.rolloverSuggestions[suggestionId];
-        const st = rolloverState.selectedOption;
-        const quantity = Math.abs(st.position);
-
-        const sellBid = suggestion.bid || 0;
-        const sellAsk = suggestion.ask || 0;
-        const sellMidPrice = calculateMidPrice(sellBid, sellAsk);
-
-        if (sellMidPrice <= 0) {
-            throw new Error('Cannot determine a valid limit price for the sell order');
-        }
-
-        const buyAsk = st.ask || st.market_price;
-        const buyBid = st.bid || 0;
-
-        if (buyAsk <= 0) {
-            throw new Error('Cannot determine a valid limit price for the buy order');
-        }
-
-        const buyLimitPricePerContract = buyAsk * 100;
-        const sellLimitPrice = sellMidPrice;
-
-        const rolloverData = {
-            ticker: st.symbol.split(' ')[0],
-            current_option_type: st.optionType,
-            current_strike: st.strike,
-            current_expiration: st.expiration,
-            new_strike: suggestion.strike,
-            new_expiration: suggestion.expiration,
-            quantity: quantity,
-            current_order_type: 'LIMIT',
-            new_order_type: 'LIMIT',
-            current_limit_price: buyLimitPricePerContract,
-            new_limit_price: sellLimitPrice,
-            current_bid: buyBid,
-            current_ask: buyAsk,
-            new_bid: sellBid,
-            new_ask: sellAsk,
-            isRollover: true
-        };
-
-        const currentSuggestions = [...rolloverState.rolloverSuggestions];
-        const currentOption = { ...st };
-
-        const response = await fetch('/api/options/rollover', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(rolloverData)
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`HTTP error ${response.status}: ${errorText}`);
-        }
-
-        const result = await response.json();
-
-        if (result.success) {
-            await Promise.all([
-                loadPendingOrders(),
-                loadOptionPositions()
-            ]);
-
-            rolloverState.rolloverSuggestions = currentSuggestions;
-            rolloverState.selectedOption = currentOption;
-
-            if (rolloverState.rolloverSuggestions.length > 0) {
-                populateRolloverSuggestionsTable(rolloverState.rolloverSuggestions);
-            }
-        } else {
-            throw new Error(result.error || 'Failed to submit rollover orders');
-        }
-    } catch (error) {
-        console.error('Error preparing rollover order:', error);
-    }
-}
-
-async function executeOrderById(orderId) {
-    try {
-        if (!orderId) {
-            throw new Error('Invalid order ID');
-        }
-
-        const order = rolloverState.pendingOrders.find(o => o.id === orderId);
-        if (!order) {
-            throw new Error(`Order with ID ${orderId} not found`);
-        }
-
-        if (order.order_type === 'LIMIT') {
-            if (order.action === 'BUY' && order.ask > 0) {
-                // Log buy order details if needed
-            } else if (order.action === 'SELL' && (order.bid > 0 || order.ask > 0)) {
-                const sellMidPrice = calculateMidPrice(order.bid, order.ask);
-                if (sellMidPrice > 0) {
-                    // Log sell order details if needed
-                }
-            }
-        }
-
-        const result = await executeOrder(orderId);
-
-        if (result && result.success) {
-            await loadPendingOrders();
-        } else {
-            throw new Error(result.error || 'Failed to execute order');
-        }
-    } catch (error) {
-        console.error('Error executing order:', error);
-    }
-}
-
-async function cancelOrderById(orderId) {
-    try {
-        if (!orderId) {
-            throw new Error('Invalid order ID');
-        }
-
-        const result = await cancelOrder(orderId);
-
-        if (result && result.success) {
-            await loadPendingOrders();
-        } else {
-            throw new Error(result.error || 'Failed to cancel order');
-        }
-    } catch (error) {
-        console.error('Error cancelling order:', error);
-    }
-}
-
 export {
     processOptionPositions,
     fetchStockPrices,
     loadOptionPositions,
     loadPendingOrders,
     fetchRolloverSuggestions,
-    addRolloverOrder,
-    executeOrderById,
-    cancelOrderById,
 };

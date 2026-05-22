@@ -27,3 +27,6 @@ openai>=1.0.0
 
 # Math/statistics dependencies
 scipy>=1.12.0
+
+# In-process scheduler
+apscheduler>=3.10.0

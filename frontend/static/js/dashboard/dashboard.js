@@ -7,12 +7,11 @@
  */
 import { loadPortfolioData } from './account.js';
 import { loadTickers } from './options-table.js';
-import { loadPendingOrders } from './orders.js';
 import { initializeTopRecommendations } from './top-recommendations.js';
 import { loadMacroRegime } from './macro.js';
 import { initializeLLMAdvisor } from './llm-advisor.js';
 import { showAlert } from '../utils/alerts.js';
-import { fetchWeeklyOptionIncome, executeCloseOrder } from './api.js';
+import { fetchWeeklyOptionIncome } from './api.js';
 import { formatCurrency } from '../utils/formatters.js';
 import { initializeDashboard } from './dashboard-init.js';
 

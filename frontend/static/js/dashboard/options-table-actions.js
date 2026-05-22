@@ -1,104 +1,55 @@
-import { state, getSelectedExpirationPreference, getRenderExpirationValue, loadExcludedTickers } from './options-table-state.js';
+import { state, getSelectedExpirationPreference, getRenderExpirationValue, loadExcludedTickers, ensureTickerDataState } from './options-table-state.js';
 import { calculatePremium, calculateEarningsSummary, updateEarningsSummary } from './options-table-calc.js';
 import { showAlert } from '../utils/alerts.js';
-import { fetchOptionData, fetchTickers, saveOptionOrder, fetchAccountData, fetchOptionExpirations } from './api.js';
+import { fetchOptionData, fetchTickers, fetchAccountData, fetchOptionExpirations } from './api.js';
 import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, showToast, addPutQtyInputEventListeners } from './options-table-rendering.js';
 import { addOptionsTableEventListeners } from './options-table-events.js';
 
-let loadPendingOrdersFunc = null;
 
-export async function getLoadPendingOrdersFunction() {
-    if (typeof window.loadPendingOrders === 'function') {
-        return window.loadPendingOrders;
-    }
 
-    if (!loadPendingOrdersFunc) {
-        try {
-            const requestEvent = new CustomEvent('requestPendingOrdersRefresh', {
-                detail: { source: 'options-table' }
-            });
-            document.dispatchEvent(requestEvent);
-        } catch (error) {
-            console.error('Error trying to request pending orders refresh:', error);
-        }
-    }
-
-    return null;
-}
-
-export async function refreshPendingOrders() {
-    try {
-        if (typeof window.loadPendingOrders === 'function') {
-            await window.loadPendingOrders();
-            return;
-        }
-
-        const event = new CustomEvent('ordersUpdated');
-        document.dispatchEvent(event);
-
-        const refreshButton = document.getElementById('refresh-pending-orders');
-        if (refreshButton) {
-            refreshButton.click();
-            return;
-        }
-    } catch (error) {
-        console.error('Error refreshing pending orders:', error);
-    }
-}
-
-export async function refreshOptionsForTicker(ticker, updateUI = false) {
+export async function refreshOptionsForTicker(ticker, updateUI = false, onProgress = null) {
     try {
         const putTabWasActive = document.querySelector('#put-options-tab.active') !== null ||
                                document.querySelector('#put-options-section.active') !== null;
 
-        if (!state.tickersData[ticker]) {
-            state.tickersData[ticker] = {
-                callOtmPercentage: 10,
-                putOtmPercentage: 10,
-                putQuantity: 1,
-                errors: {}
-            };
-        }
+        ensureTickerDataState(ticker);
 
-        const callOtmPercentage = state.tickersData[ticker]?.callOtmPercentage || 10;
-        const putOtmPercentage = state.tickersData[ticker]?.putOtmPercentage || 10;
+        const callOtmPercentage = state.tickersData[ticker]?.callOtmPercentage || getDefaultOtm('CALL');
+        const putOtmPercentage = state.tickersData[ticker]?.putOtmPercentage || getDefaultOtm('PUT');
+
+        if (onProgress) onProgress('loading expirations');
 
         let allExpirations = [];
-        try {
-            const expirationData = await fetchOptionExpirations(ticker);
+        const cachedExpirations = state.tickersData[ticker]?.expirations || [];
+        if (cachedExpirations.length > 0) {
+            allExpirations = cachedExpirations;
+        } else {
+            try {
+                const expirationData = await fetchOptionExpirations(ticker);
 
-            if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
-                allExpirations = expirationData.expirations;
-                state.tickersData[ticker].expirations = allExpirations;
+                if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
+                    allExpirations = expirationData.expirations;
+                    state.tickersData[ticker].expirations = allExpirations;
+                }
+            } catch (error) {
+                const isTimeout = error?.message?.includes('Request timed out');
+                (isTimeout ? console.warn : console.error)(`Error fetching expiration dates for ${ticker}:`, error);
             }
-        } catch (error) {
-            console.error(`Error fetching expiration dates for ${ticker}:`, error);
         }
 
         const selectedCallExpiration = getSelectedExpirationPreference(ticker, 'CALL');
         const selectedPutExpiration = getSelectedExpirationPreference(ticker, 'PUT');
 
+        if (onProgress) onProgress('loading calls');
         const callOptionData = await fetchOptionData(ticker, callOtmPercentage, 'CALL', selectedCallExpiration);
+        if (onProgress) onProgress('loading puts');
         const putOptionData = await fetchOptionData(ticker, putOtmPercentage, 'PUT', selectedPutExpiration);
 
-        if (!state.tickersData[ticker]) {
-            state.tickersData[ticker] = {
-                data: {
-                    data: {}
-                },
-                callOtmPercentage: callOtmPercentage,
-                putOtmPercentage: putOtmPercentage,
-                putQuantity: 1,
-                errors: {}
-            };
-
-            state.tickersData[ticker].data.data[ticker] = {
-                stock_price: 0,
-                position: 0,
-                calls: [],
-                puts: []
-            };
-        }
+        ensureTickerDataState(ticker, {
+            callOtmPercentage,
+            putOtmPercentage,
+            putQuantity: 1
+        });
 
         if (callOptionData && callOptionData.data && callOptionData.data[ticker]) {
             state.tickersData[ticker].data = state.tickersData[ticker].data || { data: {} };
@@ -152,8 +103,9 @@ export async function refreshOptionsForTicker(ticker, updateUI = false) {
             addOptionsTableEventListeners();
         }
     } catch (error) {
-        console.error(`Error refreshing options for ${ticker}:`, error);
-        showAlert(`Error refreshing options for ${ticker}: ${error.message}`, 'danger');
+        const isTimeout = error?.message?.includes('Request timed out');
+        (isTimeout ? console.warn : console.error)(`Error refreshing options for ${ticker}:`, error);
+        if (!isTimeout) showAlert(`Error refreshing options for ${ticker}: ${error.message}`, 'danger');
     }
 }
 
@@ -199,9 +151,13 @@ export async function refreshAllOptions(optionType) {
             });
         } else if (optionType === 'PUT') {
             tickersToRefresh = allTickers.filter(ticker => {
-                const sharesOwned = state.tickersData[ticker]?.data?.data?.[ticker]?.position || 0;
-                return state.customTickers.has(ticker) || 
-                       (sharesOwned >= 100 && !excludedTickers.includes(ticker));
+                const isCustom = state.customTickers.has(ticker);
+                const isWatchlist = state.watchlistTickers?.has(ticker);
+
+                if (isCustom || isWatchlist) return true;
+
+                // Portfolio ticker — include unless explicitly excluded
+                return !excludedTickers.includes(ticker);
             });
         } else {
             tickersToRefresh = allTickers;
@@ -262,49 +218,45 @@ export async function refreshAllOptions(optionType) {
     }
 }
 
-export async function refreshOptionsForTickerByType(ticker, optionType, updateUI = false) {
+export async function refreshOptionsForTickerByType(ticker, optionType, updateUI = false, onProgress = null) {
     try {
         let otmPercentage;
         if (optionType === 'CALL') {
-            otmPercentage = state.tickersData[ticker]?.callOtmPercentage || 10;
+            otmPercentage = state.tickersData[ticker]?.callOtmPercentage || getDefaultOtm('CALL');
         } else {
-            otmPercentage = state.tickersData[ticker]?.putOtmPercentage || 10;
+            otmPercentage = state.tickersData[ticker]?.putOtmPercentage || getDefaultOtm('PUT');
         }
 
-        let allExpirations = [];
-        try {
-            const expirationData = await fetchOptionExpirations(ticker, optionType);
+        ensureTickerDataState(ticker, {
+            callOtmPercentage: optionType === 'CALL' ? otmPercentage : 10,
+            putOtmPercentage: optionType === 'PUT' ? otmPercentage : 10,
+            putQuantity: 1
+        });
 
-            if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
-                allExpirations = expirationData.expirations;
-                state.tickersData[ticker].expirations = allExpirations;
+        if (onProgress) onProgress('loading expirations');
+
+        let allExpirations = [];
+        const cachedExpirations = state.tickersData[ticker]?.expirations || [];
+        if (cachedExpirations.length > 0) {
+            allExpirations = cachedExpirations;
+        } else {
+            try {
+                const expirationData = await fetchOptionExpirations(ticker, optionType);
+
+                if (expirationData && expirationData.expirations && expirationData.expirations.length > 0) {
+                    allExpirations = expirationData.expirations;
+                    state.tickersData[ticker].expirations = allExpirations;
+                }
+            } catch (error) {
+                console.error(`Error fetching expiration dates for ${ticker}:`, error);
             }
-        } catch (error) {
-            console.error(`Error fetching expiration dates for ${ticker}:`, error);
         }
 
         const selectedExpiration = getSelectedExpirationPreference(ticker, optionType);
 
+        const stepText = optionType === 'CALL' ? 'loading calls' : 'loading puts';
+        if (onProgress) onProgress(stepText);
         const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
-
-        if (!state.tickersData[ticker]) {
-            state.tickersData[ticker] = {
-                data: {
-                    data: {}
-                },
-                callOtmPercentage: optionType === 'CALL' ? otmPercentage : 10,
-                putOtmPercentage: optionType === 'PUT' ? otmPercentage : 10,
-                putQuantity: optionType === 'PUT' ? 1 : 0,
-                errors: {}
-            };
-
-            state.tickersData[ticker].data.data[ticker] = {
-                stock_price: 0,
-                position: 0,
-                calls: [],
-                puts: []
-            };
-        }
 
         if (optionData && optionData.data && optionData.data[ticker]) {
             if (optionData.data[ticker].stock_price) {
@@ -346,144 +298,12 @@ export async function refreshOptionsForTickerByType(ticker, optionType, updateUI
             addOptionsTableEventListeners();
         }
     } catch (error) {
-        console.error(`Error refreshing ${optionType} options for ${ticker}:`, error);
-        showAlert(`Error refreshing ${optionType} options for ${ticker}: ${error.message}`, 'danger');
+        const isTimeout = error?.message?.includes('Request timed out');
+        (isTimeout ? console.warn : console.error)(`Error refreshing ${optionType} options for ${ticker}:`, error);
+        if (!isTimeout) showAlert(`Error refreshing ${optionType} options for ${ticker}: ${error.message}`, 'danger');
     }
 }
 
 export async function sellAllOptions(optionType) {
-    const successOrders = [];
-    const failedOrders = [];
-
-    const tickers = Object.keys(state.tickersData);
-
-    const buttonId = optionType === 'CALL' ? 'sell-all-calls' : 'sell-all-puts';
-    const button = document.getElementById(buttonId);
-    if (button) {
-        button.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...`;
-        button.disabled = true;
-    }
-
-    try {
-        for (const ticker of tickers) {
-            const tickerData = state.tickersData[ticker];
-
-            if (!tickerData || !tickerData.data || !tickerData.data.data || !tickerData.data.data[ticker]) {
-                continue;
-            }
-
-            const optionData = tickerData.data.data[ticker];
-
-            const sharesOwned = optionData.position || 0;
-            if (optionType === 'CALL' && sharesOwned < 100) {
-                continue;
-            }
-
-            let options = [];
-            if (optionType === 'CALL' && optionData.calls && optionData.calls.length > 0) {
-                options = optionData.calls;
-            } else if (optionType === 'PUT' && optionData.puts && optionData.puts.length > 0) {
-                options = optionData.puts;
-            } else {
-                continue;
-            }
-
-            if (options.length === 0) {
-                continue;
-            }
-
-            const option = options[0];
-            if (!option) {
-                continue;
-            }
-
-            if (button) {
-                button.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing ${ticker}...`;
-            }
-
-            const orderData = {
-                ticker: ticker,
-                option_type: optionType,
-                strike: parseFloat(option.strike),
-                expiration: option.expiration,
-                action: 'SELL',
-                quantity: optionType === 'CALL' ? 
-                    Math.floor(sharesOwned / 100) : 
-                    (tickerData.putQuantity || 1),
-                bid: parseFloat(option.bid || 0),
-                ask: parseFloat(option.ask || 0),
-                last: parseFloat(option.last || 0),
-                premium: calculatePremium(option.bid, option.ask, option.last),
-                delta: parseFloat(option.delta || 0),
-                gamma: parseFloat(option.gamma || 0),
-                theta: parseFloat(option.theta || 0),
-                vega: parseFloat(option.vega || 0),
-                implied_volatility: parseFloat(option.implied_volatility || 0),
-                timestamp: new Date().toISOString(),
-                stock_price: state.tickersData[ticker]?.data?.data?.[ticker]?.stock_price || 0
-            };
-
-            if (orderData.bid <= 0 && button.closest('tr')) {
-                orderData.bid = parseFloat(option.bid || 0);
-                orderData.ask = parseFloat(option.ask || 0);
-                orderData.last = parseFloat(option.last || 0);
-                orderData.premium = calculatePremium(option.bid, option.ask, option.last);
-            }
-
-            if (orderData.bid <= 0 && orderData.ask <= 0 && orderData.last <= 0 && orderData.premium <= 0) {
-                orderData.premium = Math.max(orderData.strike * 0.01, 0.05);
-            }
-
-            try {
-                button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
-                button.disabled = true;
-
-                const result = await saveOptionOrder(orderData);
-
-                if (result && result.order_id) {
-                    successOrders.push(`${ticker} ${optionType} ${option.strike} ${option.expiration}`);
-                } else {
-                    failedOrders.push(`${ticker} ${optionType} ${option.strike} ${option.expiration}`);
-                }
-            } catch (error) {
-                failedOrders.push(`${ticker} ${optionType} ${option.strike} ${option.expiration}`);
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-
-        if (button) {
-            button.innerHTML = `<i class="bi bi-check2-all"></i> Add All`;
-            button.disabled = false;
-        }
-
-        if (successOrders.length > 0) {
-            showAlert(`Successfully created ${successOrders.length} ${optionType.toLowerCase()} option orders`, 'success');
-
-            await refreshPendingOrders();
-
-            setTimeout(async () => {
-                await refreshPendingOrders();
-            }, 500);
-
-            setTimeout(async () => {
-                await refreshPendingOrders();
-            }, 1500);
-        } else {
-            showAlert(`No ${optionType.toLowerCase()} option orders were created`, 'warning');
-        }
-
-        return successOrders.length;
-    } catch (error) {
-        console.error(`Error in sellAllOptions for ${optionType}:`, error);
-
-        if (button) {
-            button.innerHTML = `<i class="bi bi-check2-all"></i> Add All`;
-            button.disabled = false;
-        }
-
-        showAlert(`Error adding ${optionType.toLowerCase()} options: ${error.message}`, 'danger');
-
-        return 0;
-    }
+    showAlert('Signal only mode — review trades in your broker app', 'info');
 }

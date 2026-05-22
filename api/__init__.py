@@ -17,7 +17,7 @@ from datetime import datetime
 from flask import Flask, current_app
 from flask_cors import CORS
 from core.logging_config import get_logger
-from core.connection import probe_opend_status
+from core.context_factory import probe_opend_status
 
 # Configure logging
 logger = get_logger('autotrader.api', 'api')

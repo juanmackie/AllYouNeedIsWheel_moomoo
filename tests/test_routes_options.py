@@ -49,15 +49,7 @@ def _patch_service(mock_options_service=None):
     return mock_options_service
 
 
-def _make_mock_db():
-    """Build a mock database with common methods."""
-    db = MagicMock()
-    db.save_order.return_value = 42
-    db.get_pending_orders.return_value = []
-    db.get_order.return_value = {'id': 1, 'status': 'pending', 'ticker': 'AAPL'}
-    db.delete_order.return_value = True
-    db.update_order_quantity.return_value = True
-    return db
+
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +207,32 @@ class TestOtmOptions(unittest.TestCase):
         self.assertEqual(resp.status_code, 503)
         self.mock_service.get_otm_options.assert_not_called()
 
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
+    def test_rejects_put_otm_outside_growth_range(self, mock_probe, mock_get_svc):
+        """Should reject PUT OTM requests outside the Growth Mode CSP range."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_get_svc.return_value = self.mock_service
+
+        app = _make_app(connection_config={
+            'host': '127.0.0.1',
+            'port': 11111,
+            'growth_mode': {
+                'enabled': True,
+                'screener_profile': {
+                    'csp_min_otm_pct': 5,
+                    'csp_max_otm_pct': 15,
+                },
+            },
+        })
+        with app.test_client() as client:
+            resp = self._make_request(client, tickers='AAPL', otm='4', optionType='PUT')
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(data['success'])
+        self.mock_service.get_otm_options.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Stock price
@@ -298,463 +316,10 @@ class TestStockPrice(unittest.TestCase):
         self.assertEqual(resp.status_code, 503)
 
 
-# ---------------------------------------------------------------------------
-# Save order
-# ---------------------------------------------------------------------------
 
-class TestSaveOrder(unittest.TestCase):
-    """POST /api/options/order"""
 
-    def setUp(self):
-        _reset_service_global()
-        self.mock_db = _make_mock_db()
-        self.mock_service = _patch_service()
-        self.mock_service.db = self.mock_db
 
-    @patch('api.routes.options.get_options_service')
-    def test_saves_valid_order(self, mock_get_svc):
-        """Should save order and return 201 with order_id."""
-        mock_get_svc.return_value = self.mock_service
 
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            payload = {
-                'ticker': 'AAPL', 'option_type': 'PUT',
-                'strike': 150.0, 'expiration': '20240510',
-                'action': 'SELL', 'quantity': 1,
-            }
-            resp = client.post('/api/options/order',
-                               data=json.dumps(payload),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 201)
-        self.assertTrue(data['success'])
-        self.assertEqual(data['order_id'], 42)
-        self.mock_db.save_order.assert_called_once_with(payload)
-
-    @patch('api.routes.options.get_options_service')
-    def test_rejects_missing_fields(self, mock_get_svc):
-        """Should return 400 when required fields are missing."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.post('/api/options/order',
-                               data=json.dumps({'ticker': 'AAPL'}),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 400)
-        self.assertFalse(data['success'])
-
-    @patch('api.routes.options.get_options_service')
-    def test_rejects_empty_body(self, mock_get_svc):
-        """Should return 400 when no JSON body sent."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.post('/api/options/order',
-                               data=json.dumps({}),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 400)
-
-
-# ---------------------------------------------------------------------------
-# Pending orders
-# ---------------------------------------------------------------------------
-
-class TestPendingOrders(unittest.TestCase):
-    """GET /api/options/pending-orders"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_db = _make_mock_db()
-        self.mock_service = _patch_service()
-        self.mock_service.db = self.mock_db
-
-    @patch('api.routes.options.get_options_service')
-    def test_returns_orders(self, mock_get_svc):
-        """Should return pending orders from database."""
-        self.mock_db.get_pending_orders.return_value = [
-            {'id': 1, 'ticker': 'AAPL', 'status': 'pending'}
-        ]
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.get('/api/options/pending-orders')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(len(data['orders']), 1)
-
-    @patch('api.routes.options.get_options_service')
-    def test_forwards_executed_param(self, mock_get_svc):
-        """Should forward executed query parameter."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            client.get('/api/options/pending-orders',
-                       query_string={'executed': 'true'})
-
-        self.mock_db.get_pending_orders.assert_called_once_with(
-            executed=True, isRollover=None
-        )
-
-    @patch('api.routes.options.get_options_service')
-    def test_forwards_is_rollover_param(self, mock_get_svc):
-        """Should forward isRollover query parameter."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            client.get('/api/options/pending-orders',
-                       query_string={'isRollover': 'true'})
-
-        self.mock_db.get_pending_orders.assert_called_once_with(
-            executed=False, isRollover=True
-        )
-
-
-# ---------------------------------------------------------------------------
-# Delete order
-# ---------------------------------------------------------------------------
-
-class TestDeleteOrder(unittest.TestCase):
-    """DELETE /api/options/order/<order_id>"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_db = _make_mock_db()
-
-    def test_deletes_existing_order(self):
-        """Should delete existing order and return 200."""
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.delete('/api/options/order/1')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(data['success'])
-        self.mock_db.get_order.assert_called_once_with(1)
-        self.mock_db.delete_order.assert_called_once_with(1)
-
-    def test_returns_404_for_missing_order(self):
-        """Should return 404 when order not found."""
-        self.mock_db.get_order.return_value = None
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.delete('/api/options/order/999')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 404)
-        self.assertIn('error', data)
-
-    def test_returns_500_when_db_not_configured(self):
-        """Should return 500 when database not initialized."""
-        app = _make_app()  # no database in config
-        with app.test_client() as client:
-            resp = client.delete('/api/options/order/1')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 500)
-        self.assertIn('error', data)
-
-
-# ---------------------------------------------------------------------------
-# Execute order
-# ---------------------------------------------------------------------------
-
-class TestExecuteOrder(unittest.TestCase):
-    """POST /api/options/execute/<order_id>"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_db = _make_mock_db()
-        self.mock_service = _patch_service()
-        self.mock_service.execute_order.return_value = (
-            {'success': True, 'execution_id': 'EX-001'}, 200
-        )
-
-    @patch('api.routes.options.get_options_service')
-    def test_executes_order_successfully(self, mock_get_svc):
-        """Should execute order and return result."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.post('/api/options/execute/1')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(data['success'])
-        self.mock_service.execute_order.assert_called_once_with(1, self.mock_db)
-
-    @patch('api.routes.options.get_options_service')
-    def test_returns_500_when_db_not_configured(self, mock_get_svc):
-        """Should return 500 when database not initialized."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()  # no database
-        with app.test_client() as client:
-            resp = client.post('/api/options/execute/1')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 500)
-
-
-# ---------------------------------------------------------------------------
-# Check orders
-# ---------------------------------------------------------------------------
-
-class TestCheckOrders(unittest.TestCase):
-    """POST /api/options/check-orders"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_service = _patch_service()
-        self.mock_service.check_pending_orders.return_value = {
-            'checked': 3, 'updated': 1
-        }
-
-    @patch('api.routes.options.get_options_service')
-    def test_checks_orders(self, mock_get_svc):
-        """Should check pending orders and return result."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/check-orders')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(data['checked'], 3)
-        self.mock_service.check_pending_orders.assert_called_once()
-
-    @patch('api.routes.options.get_options_service')
-    def test_handles_exception(self, mock_get_svc):
-        """Should return 500 on exception."""
-        mock_get_svc.side_effect = RuntimeError('check failed')
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/check-orders')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 500)
-        self.assertIn('error', data)
-
-
-# ---------------------------------------------------------------------------
-# Rollover
-# ---------------------------------------------------------------------------
-
-class TestRollover(unittest.TestCase):
-    """POST /api/options/rollover"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_db = _make_mock_db()
-        self.mock_service = _patch_service()
-        self.mock_service.db = self.mock_db
-
-    def _valid_payload(self):
-        return {
-            'ticker': 'AAPL',
-            'current_option_type': 'PUT',
-            'current_strike': 150.0,
-            'current_expiration': '20240510',
-            'new_strike': 145.0,
-            'new_expiration': '20240610',
-            'quantity': 1,
-        }
-
-    @patch('api.routes.options.get_options_service')
-    def test_creates_buy_and_sell_orders(self, mock_get_svc):
-        """Should create buy-to-close and sell-to-open orders."""
-        mock_get_svc.return_value = self.mock_service
-        self.mock_db.save_order.side_effect = [101, 102]  # buy_id, sell_id
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.post('/api/options/rollover',
-                               data=json.dumps(self._valid_payload()),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 201)
-        self.assertTrue(data['success'])
-        self.assertEqual(data['buy_order_id'], 101)
-        self.assertEqual(data['sell_order_id'], 102)
-        self.assertEqual(self.mock_db.save_order.call_count, 2)
-
-    @patch('api.routes.options.get_options_service')
-    def test_rejects_missing_fields(self, mock_get_svc):
-        """Should return 400 when required fields are missing."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.post('/api/options/rollover',
-                               data=json.dumps({'ticker': 'AAPL'}),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('error', data)
-
-    @patch('api.routes.options.get_options_service')
-    def test_handles_save_failure(self, mock_get_svc):
-        """Should return 500 if save_order fails."""
-        mock_get_svc.return_value = self.mock_service
-        self.mock_db.save_order.return_value = None
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.post('/api/options/rollover',
-                               data=json.dumps(self._valid_payload()),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 500)
-        self.assertIn('error', data)
-
-
-# ---------------------------------------------------------------------------
-# Cancel order
-# ---------------------------------------------------------------------------
-
-class TestCancelOrder(unittest.TestCase):
-    """POST /api/options/cancel/<order_id>"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_service = _patch_service()
-        self.mock_service.cancel_order.return_value = (
-            {'success': True, 'cancelled': True}, 200
-        )
-
-    @patch('api.routes.options.get_options_service')
-    def test_cancels_order(self, mock_get_svc):
-        """Should cancel order and return result."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/cancel/1')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(data['success'])
-        self.mock_service.cancel_order.assert_called_once_with(1)
-
-    @patch('api.routes.options.get_options_service')
-    def test_handles_exception(self, mock_get_svc):
-        """Should return 500 on exception."""
-        mock_get_svc.side_effect = RuntimeError('cancel failed')
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/cancel/1')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 500)
-
-
-# ---------------------------------------------------------------------------
-# Update order quantity
-# ---------------------------------------------------------------------------
-
-class TestUpdateOrderQuantity(unittest.TestCase):
-    """PUT /api/options/order/<order_id>/quantity"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_db = _make_mock_db()
-
-    def test_updates_quantity(self):
-        """Should update quantity for a pending order."""
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.put('/api/options/order/1/quantity',
-                              data=json.dumps({'quantity': 5}),
-                              content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(data['success'])
-        self.assertEqual(data['quantity'], 5)
-        self.mock_db.update_order_quantity.assert_called_once_with(1, 5)
-
-    def test_rejects_negative_quantity(self):
-        """Should return 400 for invalid quantity."""
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.put('/api/options/order/1/quantity',
-                              data=json.dumps({'quantity': -1}),
-                              content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('error', data)
-
-    def test_rejects_missing_quantity(self):
-        """Should return 400 when quantity not provided."""
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.put('/api/options/order/1/quantity',
-                              data=json.dumps({}),
-                              content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 400)
-
-    def test_rejects_updating_non_pending_order(self):
-        """Should reject quantity update for non-pending order."""
-        self.mock_db.get_order.return_value = {
-            'id': 1, 'status': 'executed'
-        }
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.put('/api/options/order/1/quantity',
-                              data=json.dumps({'quantity': 5}),
-                              content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('error', data)
-
-    def test_returns_404_for_missing_order(self):
-        """Should return 404 when order not found."""
-        self.mock_db.get_order.return_value = None
-
-        app = _make_app(database=self.mock_db)
-        with app.test_client() as client:
-            resp = client.put('/api/options/order/999/quantity',
-                              data=json.dumps({'quantity': 5}),
-                              content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 404)
-        self.assertIn('error', data)
-
-    def test_returns_500_when_db_not_configured(self):
-        """Should return 500 when database not initialized."""
-        app = _make_app()  # no database
-        with app.test_client() as client:
-            resp = client.put('/api/options/order/1/quantity',
-                              data=json.dumps({'quantity': 5}),
-                              content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 500)
 
 
 # ---------------------------------------------------------------------------
@@ -881,7 +446,7 @@ class TestTopRecommendations(unittest.TestCase):
         _reset_service_global()
         self.mock_service = _patch_service()
         self.mock_service.get_top_recommendations.return_value = {
-            'recommendations': [{'ticker': 'AAPL', 'score': 85}]
+            'signals': [{'ticker': 'AAPL', 'score': 85}]
         }
         self.mock_service._get_portfolio_context.return_value = {
             'cash_balance': 10000, 'positions': {}
@@ -903,7 +468,7 @@ class TestTopRecommendations(unittest.TestCase):
             data = resp.get_json()
 
         self.assertEqual(resp.status_code, 200)
-        self.assertIn('recommendations', data)
+        self.assertIn('signals', data)
         self.assertEqual(data['_cache']['cache_status'], 'MISS')
         self.mock_service.get_top_recommendations.assert_called_once()
 
@@ -915,7 +480,7 @@ class TestTopRecommendations(unittest.TestCase):
         """Should return cached recommendations on cache hit."""
         mock_probe.return_value = {'status': 'connected'}
         cached_data = {
-            'recommendations': [{'ticker': 'AAPL', 'score': 85}],
+            'signals': [{'ticker': 'AAPL', 'score': 85}],
         }
         mock_cache.get.return_value = (
             cached_data,
@@ -943,7 +508,7 @@ class TestTopRecommendations(unittest.TestCase):
         """Should serve stale cache and trigger background refresh."""
         mock_probe.return_value = {'status': 'connected'}
         cached_data = {
-            'recommendations': [{'ticker': 'AAPL', 'score': 85}],
+            'signals': [{'ticker': 'AAPL', 'score': 85}],
         }
         mock_cache.get.return_value = (
             cached_data,
@@ -962,7 +527,7 @@ class TestTopRecommendations(unittest.TestCase):
         self.assertEqual(data['_cache']['cache_status'], 'STALE')
         # Background refresh runs in a daemon thread; the main response
         # comes from cache. Store the call count for reference.
-        self.assertEqual(data['recommendations'][0]['ticker'], 'AAPL')
+        self.assertEqual(data['signals'][0]['ticker'], 'AAPL')
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
@@ -998,7 +563,7 @@ class TestTopRecommendations(unittest.TestCase):
             'error': 'API timeout'
         }
         stale_data = {
-            'recommendations': [{'ticker': 'AAPL', 'score': 80}],
+            'signals': [{'ticker': 'AAPL', 'score': 80}],
         }
         # First call (from the main cache check) returns MISS
         # Second call (from the error fallback handler) returns stale data
@@ -1021,7 +586,7 @@ class TestTopRecommendations(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(data['_cache']['cache_status'], 'STALE_FALLBACK')
         # The stale data should be served despite API failure
-        self.assertEqual(data['recommendations'][0]['ticker'], 'AAPL')
+        self.assertEqual(data['signals'][0]['ticker'], 'AAPL')
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
@@ -1284,6 +849,7 @@ class TestWatchlistTickers(unittest.TestCase):
         mock_config.get.side_effect = lambda k, d=None: {
             'watchlist': ['AAPL', 'MSFT'],
             'watchlist_mode': 'static',
+            'growth_mode': {'enabled': True, 'screener_profile': {'min_iv_rank': 45}},
         }.get(k, d)
         mock_get_config.return_value = mock_config
 
@@ -1300,6 +866,10 @@ class TestWatchlistTickers(unittest.TestCase):
         self.assertTrue(data['success'])
         self.assertEqual(data['count'], 3)
         self.assertIn('mode', data)
+        self.assertTrue(data['growth_mode_enabled'])
+        mock_wl.get_effective_watchlist.assert_called_once_with(
+            growth_mode_config={'enabled': True, 'screener_profile': {'min_iv_rank': 45}}
+        )
 
     @patch('api.services.watchlist_manager.WatchlistManager')
     @patch('api.services.config.get_config')
@@ -1321,6 +891,53 @@ class TestWatchlistTickers(unittest.TestCase):
         self.assertEqual(data['count'], 1)
         self.assertEqual(data['tickers'], ['AAPL'])
 
+
+# ---------------------------------------------------------------------------
+# Screening config
+# ---------------------------------------------------------------------------
+
+class TestScreeningConfig(unittest.TestCase):
+    """GET /api/options/screening-config"""
+
+    @patch('api.services.config.get_config')
+    def test_returns_growth_csp_bounds(self, mock_get_config):
+        """Should expose the Growth Mode CSP defaults and bounds."""
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda k, d=None: {
+            'growth_mode': {
+                'enabled': True,
+                'screener_profile': {
+                    'csp_target_delta': 0.30,
+                    'csp_delta_tolerance': 0.12,
+                    'csp_min_dte': 30,
+                    'csp_max_dte': 45,
+                    'csp_preferred_dte': 37,
+                    'csp_default_otm_pct': 10,
+                    'csp_min_otm_pct': 5,
+                    'csp_max_otm_pct': 15,
+                    'min_iv_rank': 45,
+                },
+            },
+        }.get(k, d)
+        mock_get_config.return_value = mock_config
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/screening-config')
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data['success'])
+        self.assertTrue(data['growth_mode_enabled'])
+        self.assertEqual(data['csp_default_otm_pct'], 10)
+        self.assertEqual(data['call_default_otm_pct'], 10)
+        self.assertEqual(data['csp_min_dte'], 30)
+        self.assertEqual(data['csp_max_dte'], 45)
+        self.assertEqual(data['csp_preferred_dte'], 37)
+        self.assertEqual(data['csp_min_otm_pct'], 5)
+        self.assertEqual(data['csp_max_otm_pct'], 15)
+        self.assertEqual(data['csp_profile_summary']['dte_range'], '30-45')
+        self.assertEqual(data['csp_profile_summary']['otm_range'], '5-15')
 
 # ---------------------------------------------------------------------------
 # Cash status CSP fields
@@ -1368,12 +985,16 @@ class TestCashStatusCSPFields(unittest.TestCase):
         self.assertIn('cash_available_for_csp', data)
         self.assertIn('cash_reserved_for_csp', data)
         self.assertIn('available_cash', data)
+        self.assertIn('broker_buying_power', data)
+        self.assertIn('broker_buying_power_source', data)
         # available_cash = max(50000, 55000) = 55000
         self.assertEqual(data['available_cash'], 55000.0)
         # cash_reserved = 1 * 150 * 100 = 15000
         self.assertEqual(data['cash_reserved_for_csp'], 15000.0)
-        # cash_available_for_csp = 55000 - 15000 = 40000
-        self.assertEqual(data['cash_available_for_csp'], 40000.0)
+        # broker_buying_power = available_cash (NOT reduced by open short puts)
+        self.assertEqual(data['broker_buying_power'], 55000.0)
+        # cash_available_for_csp = broker_buying_power (no subtraction)
+        self.assertEqual(data['cash_available_for_csp'], 55000.0)
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
@@ -1400,110 +1021,6 @@ class TestCashStatusCSPFields(unittest.TestCase):
         self.assertIn('cash_reserved', data)
         self.assertIn('cash_available', data)
 
-
-# ---------------------------------------------------------------------------
-# Prefilled close order
-# ---------------------------------------------------------------------------
-
-class TestPrefilledClose(unittest.TestCase):
-    """POST /api/options/prefilled-close"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_service = _patch_service()
-        self.mock_service._ensure_connection.return_value = MagicMock()
-
-    def _valid_payload(self):
-        return {
-            'ticker': 'AAPL',
-            'option_type': 'PUT',
-            'strike': 150.0,
-            'expiration': '20240510',
-            'quantity': 1,
-        }
-
-    @patch('api.routes.options.get_options_service')
-    @patch('api.services.options_service.OptionsService')
-    def test_creates_prefilled_close(self, mock_options_cls, mock_get_svc):
-        """Should return a prefilled close order quote."""
-        mock_get_svc.return_value = self.mock_service
-        mock_conn = MagicMock()
-        mock_conn.get_option_chain.return_value = {
-            'options': [{'strike': 150.0, 'bid': 0.45, 'ask': 0.55}]
-        }
-        self.mock_service._ensure_connection.return_value = mock_conn
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/prefilled-close',
-                               data=json.dumps(self._valid_payload()),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(data['success'])
-        self.assertEqual(data['quote']['action'], 'BUY')
-        # mid_price = (0.45 + 0.55) / 2 = 0.50
-        self.assertEqual(data['quote']['limit_price'], 0.50)
-
-    @patch('api.routes.options.get_options_service')
-    @patch('api.services.options_service.OptionsService')
-    def test_rejects_missing_fields(self, mock_options_cls, mock_get_svc):
-        """Should return 400 when required fields are missing."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/prefilled-close',
-                               data=json.dumps({'ticker': 'AAPL'}),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 400)
-        self.assertFalse(data['success'])
-
-    @patch('api.routes.options.get_options_service')
-    @patch('api.services.options_service.OptionsService')
-    def test_returns_503_when_connection_fails(self, mock_options_cls,
-                                                mock_get_svc):
-        """Should return 503 when connection to moomoo fails."""
-        mock_get_svc.return_value = self.mock_service
-        self.mock_service._ensure_connection.return_value = None
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/prefilled-close',
-                               data=json.dumps(self._valid_payload()),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 503)
-        self.assertFalse(data['success'])
-
-    @patch('api.routes.options.get_options_service')
-    @patch('api.services.options_service.OptionsService')
-    def test_uses_provided_limit_price(self, mock_options_cls, mock_get_svc):
-        """Should use provided limit_price instead of mid-price."""
-        mock_get_svc.return_value = self.mock_service
-        mock_conn = MagicMock()
-        mock_conn.get_option_chain.return_value = {
-            'options': [{'strike': 150.0, 'bid': 0.45, 'ask': 0.55}]
-        }
-        self.mock_service._ensure_connection.return_value = mock_conn
-
-        payload = self._valid_payload()
-        payload['limit_price'] = 0.75
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.post('/api/options/prefilled-close',
-                               data=json.dumps(payload),
-                               content_type='application/json')
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        # Should use the provided limit_price (0.75), not calculated mid (0.50)
-        self.assertEqual(data['quote']['limit_price'], 0.75)
 
 
 # ---------------------------------------------------------------------------

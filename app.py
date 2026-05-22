@@ -74,6 +74,24 @@ def create_application():
     app.config['connection_config'] = connection_config
     logger.info(f"Using connection config: {connection_config}")
 
+    @app.context_processor
+    def inject_screening_config():
+        conn_config = current_app.config.get('connection_config', {})
+        growth_mode = conn_config.get('growth_mode', {})
+        screener_profile = growth_mode.get('screener_profile', {})
+        return {
+            'screening_config': {
+                'growth_mode_enabled': bool(growth_mode.get('enabled', True)),
+                'csp_default_otm_pct': screener_profile.get('csp_default_otm_pct', 10),
+                'call_default_otm_pct': screener_profile.get('call_default_otm_pct', 10),
+                'csp_min_dte': screener_profile.get('csp_min_dte', 30),
+                'csp_max_dte': screener_profile.get('csp_max_dte', 45),
+                'csp_preferred_dte': screener_profile.get('csp_preferred_dte', 37),
+                'csp_min_otm_pct': screener_profile.get('csp_min_otm_pct', 5),
+                'csp_max_otm_pct': screener_profile.get('csp_max_otm_pct', 15),
+            }
+        }
+
     @app.after_request
     def disable_static_asset_cache(response):
         if request.path.startswith('/static/'):
@@ -110,6 +128,18 @@ try:
 except Exception as e:
     logger.error(f"Failed to start earnings updater: {e}")
 
+# Start evaluator/calibrator scheduler (daily evaluator, weekly calibration)
+try:
+    from core.scheduler import start_scheduler, stop_scheduler
+    started = start_scheduler()
+    if started:
+        logger.info("Evaluator/calibrator scheduler started (this process owns the lock)")
+    else:
+        logger.info("Evaluator/calibrator scheduler skipped (another process owns the lock)")
+    atexit.register(stop_scheduler)
+except Exception as e:
+    logger.error(f"Failed to start evaluator/calibrator scheduler: {e}")
+
 # Web routes
 @app.route('/')
 def index():
@@ -118,6 +148,10 @@ def index():
     """
     logger.info("Rendering dashboard page")
     return render_template('dashboard.html')
+
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
 
 @app.route('/portfolio')
 def portfolio():
@@ -188,17 +222,26 @@ def refresh_all_earnings():
     service = IVEarningsService(db)
     portfolio = PortfolioService()
 
-    # Get all active items
+    # Get all active items from positions + watchlist
     positions = portfolio.get_positions() or []
-    recent_orders = db.get_orders(limit=100) or []
 
     all_tickers = set()
     for p in positions:
         all_tickers.add(p.get('symbol'))
 
-    for o in recent_orders:
-        if o.get('ticker'):
-            all_tickers.add(o.get('ticker'))
+    try:
+        from api.services.watchlist_manager import WatchlistManager
+        connection_config = current_app.config.get('connection_config', {})
+        wm = WatchlistManager(connection_config)
+        growth_mode = connection_config.get('growth_mode', {})
+        watchlist_tickers = [
+            t.strip().upper()
+            for t in wm.get_effective_watchlist(growth_mode_config=growth_mode)
+            if t.strip()
+        ]
+        all_tickers.update(watchlist_tickers)
+    except Exception:
+        pass
 
     if not all_tickers:
         return jsonify({'success': True, 'updated': 0, 'message': 'No active symbols found'})

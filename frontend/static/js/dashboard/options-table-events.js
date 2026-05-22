@@ -1,4 +1,4 @@
-import { state, setSelectedExpirationPreference, getSelectedExpirationPreference, saveOtmSettings, removeTicker } from './options-table-state.js';
+import { state, setSelectedExpirationPreference, getSelectedExpirationPreference, ensureTickerDataState, saveOtmSettings, removeTicker, setSavedTabPreference, getDefaultOtm, getOtmBounds, normalizeOtmValue } from './options-table-state.js';
 import { calculatePremium } from './options-table-calc.js';
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency } from '../utils/formatters.js';
@@ -23,12 +23,14 @@ export async function handleExpirationChange(selectElement) {
         });
 
         const otmPercentage = optionType === 'CALL'
-            ? state.tickersData[ticker]?.callOtmPercentage || 10
-            : state.tickersData[ticker]?.putOtmPercentage || 10;
+            ? state.tickersData[ticker]?.callOtmPercentage || getDefaultOtm('CALL')
+            : state.tickersData[ticker]?.putOtmPercentage || getDefaultOtm('PUT');
 
         const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
 
         if (optionData && optionData.data && optionData.data[ticker]) {
+            ensureTickerDataState(ticker);
+
             if (!state.tickersData[ticker].errors) {
                 state.tickersData[ticker].errors = {};
             }
@@ -45,8 +47,9 @@ export async function handleExpirationChange(selectElement) {
             addOptionsTableEventListeners();
         }
     } catch (error) {
-        console.error(`Error updating options for new expiration: ${error.message}`);
-        showAlert(`Error updating options: ${error.message}`, 'danger');
+        const isTimeout = error?.message?.includes('Request timed out');
+        (isTimeout ? console.warn : console.error)(`Error updating options for new expiration: ${error.message}`);
+        if (!isTimeout) showAlert(`Error updating options: ${error.message}`, 'danger');
 
         updateOptionsTable();
         addOptionsTableEventListeners();
@@ -66,6 +69,11 @@ export function addOptionsTableEventListeners() {
                 event.preventDefault();
                 tab.show();
             });
+
+            tabEl.addEventListener('shown.bs.tab', () => {
+                const tabId = tabEl.getAttribute('id');
+                setSavedTabPreference(tabId === 'put-options-tab' ? 'PUT' : 'CALL');
+            });
         });
     } else {
         const callTab = document.getElementById('call-options-tab');
@@ -80,6 +88,7 @@ export function addOptionsTableEventListeners() {
                 putTab.classList.remove('active');
                 callSection.classList.add('show', 'active');
                 putSection.classList.remove('show', 'active');
+                setSavedTabPreference('CALL');
             });
         
             putTab.addEventListener('click', (e) => {
@@ -88,6 +97,7 @@ export function addOptionsTableEventListeners() {
                 putTab.classList.add('active');
                 callSection.classList.remove('show', 'active');
                 putSection.classList.add('show', 'active');
+                setSavedTabPreference('PUT');
             });
         }
     }
@@ -116,7 +126,8 @@ export function addOptionsTableEventListeners() {
                         }
                         button.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
                     } catch (error) {
-                        console.error('Error refreshing ticker:', error);
+                        const isTimeout = error?.message?.includes('Request timed out');
+                        (isTimeout ? console.warn : console.error)('Error refreshing ticker:', error);
                     } finally {
                         button.disabled = false;
                     }
@@ -140,6 +151,13 @@ export function addOptionsTableEventListeners() {
                         const otmInput = inputGroup.querySelector('.otm-input');
                         const otmPercentage = parseInt(otmInput.value, 10);
                         const optionType = otmInput.dataset.optionType || 'CALL';
+                        const bounds = getOtmBounds(optionType);
+                        const normalizedOtm = normalizeOtmValue(optionType, otmPercentage);
+
+                        if (isNaN(otmPercentage) || otmPercentage < bounds.min || otmPercentage > bounds.max) {
+                            otmInput.value = normalizedOtm;
+                            showToast('warning', 'Invalid Value', `${optionType === 'PUT' ? 'CSP' : 'Call'} OTM% must be between ${bounds.min} and ${bounds.max}`);
+                        }
 
                         const row = button.closest('tr');
                         let selectedExpiration = null;
@@ -152,9 +170,9 @@ export function addOptionsTableEventListeners() {
 
                         if (state.tickersData[ticker]) {
                             if (optionType === 'CALL') {
-                                state.tickersData[ticker].callOtmPercentage = otmPercentage;
+                                state.tickersData[ticker].callOtmPercentage = normalizedOtm;
                             } else {
-                                state.tickersData[ticker].putOtmPercentage = otmPercentage;
+                                state.tickersData[ticker].putOtmPercentage = normalizedOtm;
                             }
 
                             saveOtmSettings();
@@ -163,9 +181,11 @@ export function addOptionsTableEventListeners() {
                         }
 
                         if (selectedExpiration) {
-                            const optionData = await fetchOptionData(ticker, otmPercentage, optionType, selectedExpiration);
+                            const optionData = await fetchOptionData(ticker, normalizedOtm, optionType, selectedExpiration);
 
                             if (optionData && optionData.data && optionData.data[ticker]) {
+                                ensureTickerDataState(ticker);
+
                                 if (optionType === 'CALL') {
                                     state.tickersData[ticker].data.data[ticker].calls = optionData.data[ticker].calls || [];
                                 } else {
@@ -179,7 +199,7 @@ export function addOptionsTableEventListeners() {
                                 button.classList.add('btn-outline-secondary');
                                 button.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
 
-                                showToast('success', 'OTM Applied', `${ticker} ${optionType} options refreshed with ${otmPercentage}% OTM`);
+                                showToast('success', 'OTM Applied', `${ticker} ${optionType} options refreshed with ${normalizedOtm}% OTM`);
                             }
                         } else {
                             await refreshOptionsForTickerByType(ticker, optionType, true);
@@ -253,21 +273,7 @@ export function addOptionsTableEventListeners() {
                         orderData.premium = Math.max(orderData.strike * 0.01, 0.05);
                     }
 
-                    try {
-                        button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
-                        button.disabled = true;
-
-                        const result = await saveOptionOrder(orderData);
-
-                        if (result && result.order_id) {
-                            await refreshPendingOrders();
-                        }
-                    } catch (error) {
-                        console.error('Error saving order:', error);
-                    } finally {
-                        button.innerHTML = 'Add';
-                        button.disabled = false;
-                    }
+                    showAlert('Signal only mode — review trades in your broker app', 'info');
                 }
             }
 
@@ -323,8 +329,9 @@ export function addOptionsTableEventListeners() {
 
                 try {
                     await refreshAllOptions();
-                } catch (error) {
-                    console.error('Error refreshing all options:', error);
+                    } catch (error) {
+                        const isTimeout = error?.message?.includes('Request timed out');
+                        (isTimeout ? console.warn : console.error)('Error refreshing all options:', error);
                 } finally {
                     button.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All';
                     button.disabled = false;
@@ -347,8 +354,9 @@ export function addOptionsTableEventListeners() {
 
                 try {
                     await refreshAllOptions('CALL');
-                } catch (error) {
-                    console.error('Error refreshing all call options:', error);
+                    } catch (error) {
+                        const isTimeout = error?.message?.includes('Request timed out');
+                        (isTimeout ? console.warn : console.error)('Error refreshing all call options:', error);
                 } finally {
                     button.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All Calls';
                     button.disabled = false;
@@ -371,8 +379,9 @@ export function addOptionsTableEventListeners() {
 
                 try {
                     await refreshAllOptions('PUT');
-                } catch (error) {
-                    console.error('Error refreshing all put options:', error);
+                    } catch (error) {
+                        const isTimeout = error?.message?.includes('Request timed out');
+                        (isTimeout ? console.warn : console.error)('Error refreshing all put options:', error);
                 } finally {
                     button.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All Puts';
                     button.disabled = false;
@@ -411,8 +420,9 @@ export function addOptionsTableEventListeners() {
 
             try {
                 await refreshAllOptions();
-            } catch (error) {
-                console.error('Error refreshing all options:', error);
+                } catch (error) {
+                    const isTimeout = error?.message?.includes('Request timed out');
+                    (isTimeout ? console.warn : console.error)('Error refreshing all options:', error);
             } finally {
                 refreshAllButton.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All';
                 refreshAllButton.disabled = false;
@@ -435,8 +445,9 @@ export function addOptionsTableEventListeners() {
 
             try {
                 await refreshAllOptions('CALL');
-            } catch (error) {
-                console.error('Error refreshing all call options:', error);
+                } catch (error) {
+                    const isTimeout = error?.message?.includes('Request timed out');
+                    (isTimeout ? console.warn : console.error)('Error refreshing all call options:', error);
             } finally {
                 refreshAllCallsButton.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All Calls';
                 refreshAllCallsButton.disabled = false;
@@ -452,8 +463,9 @@ export function addOptionsTableEventListeners() {
 
             try {
                 await refreshAllOptions('PUT');
-            } catch (error) {
-                console.error('Error refreshing all put options:', error);
+                } catch (error) {
+                    const isTimeout = error?.message?.includes('Request timed out');
+                    (isTimeout ? console.warn : console.error)('Error refreshing all put options:', error);
             } finally {
                 refreshAllPutsButton.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All Puts';
                 refreshAllPutsButton.disabled = false;
@@ -488,12 +500,7 @@ export function setupCustomTickerEventListeners() {
             addCustomTickerBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Adding...';
 
             try {
-                let otmPercent = 5;
-
-                const otmPercentSelect = document.getElementById('otm-percent');
-                if (otmPercentSelect) {
-                    otmPercent = parseInt(otmPercentSelect.value, 10);
-                }
+                const otmPercent = getDefaultOtm('CALL');
 
                 const expirationData = await fetchOptionExpirations(ticker);
 
@@ -504,32 +511,20 @@ export function setupCustomTickerEventListeners() {
 
                 state.customTickers.add(ticker);
 
-                if (!state.tickersData[ticker]) {
-                    state.tickersData[ticker] = {
-                        data: {
-                            data: {}
-                        },
-                        callOtmPercentage: parseInt(otmPercent, 10),
-                        putOtmPercentage: parseInt(otmPercent, 10),
-                        putQuantity: 1,
-                        expirations: expirationData.expirations
-                    };
+                const tickerState = ensureTickerDataState(ticker, {
+                    callOtmPercentage: otmPercent,
+                    putOtmPercentage: getDefaultOtm('PUT'),
+                    putQuantity: 1
+                });
+                tickerState.expirations = expirationData.expirations;
 
-                    state.tickersData[ticker].data.data[ticker] = {
-                        stock_price: 0,
-                        position: 0,
-                        calls: [],
-                        puts: []
-                    };
-
-                    try {
-                        const stockPriceData = await fetchStockPrices([ticker]);
-                        if (stockPriceData && stockPriceData.data && stockPriceData.data[ticker]) {
-                            state.tickersData[ticker].data.data[ticker].stock_price = stockPriceData.data[ticker];
-                        }
-                    } catch (priceError) {
-                        console.error('Error fetching stock price:', priceError);
+                try {
+                    const stockPriceData = await fetchStockPrices([ticker]);
+                    if (stockPriceData && stockPriceData.data && stockPriceData.data[ticker]) {
+                        state.tickersData[ticker].data.data[ticker].stock_price = stockPriceData.data[ticker];
                     }
+                } catch (priceError) {
+                    console.error('Error fetching stock price:', priceError);
                 }
 
                 localStorage.setItem('customTickers', JSON.stringify([...state.customTickers]));
