@@ -12,9 +12,14 @@ pytest tests/
 
 | File | Description |
 |------|-------------|
-| `test_rate_limiter.py` | Tests for `core/rate_limiter.py` — basic rate limiting, burst detection, thread safety |
+| `test_rate_limiter.py` | Tests for `core/rate_limiter.py` — virtual scheduling, burst detection, thread safety (uses `FakeClock` — no real wall-clock waits) |
 | `test_tvscreener_service.py` | Tests for TradingView screener integration |
 | `test_options_service_tvscreener.py` | Tests for options service with tvscreener |
+| `test_routes_validation.py` | Pydantic validation for risk sizing and PoP routes |
+| `test_risk_sizing.py` | Risk sizing service (ATR calculation, TTL cache behavior) |
+| `test_openbb_service.py` | OpenBB service (VIX fetch, macro data, TTL cache) |
+| `test_technical_regime.py` | Technical regime service (EMA, ADX, TTL cache) |
+| `test_pop_service.py` | Probability-of-profit service (delta, Monte Carlo) |
 
 ## Smoke Testing
 
@@ -25,7 +30,7 @@ Manual end-to-end checklist for verifying UI and pipeline functionality:
 - [ ] Navigation works (Dashboard, Portfolio, Rollover)
 - [ ] Theme toggle (light/dark) works and persists
 - [ ] Account summary shows correct cash, positions, weekly income
-- [ ] Earnings status badge visible in header ("RUNNING", "STOPPED", "REFRESHING")
+- [ ] Earnings status badge visible in header ("RUNNING"/"STOPPED" — reflects APScheduler state, not old BackgroundTaskManager)
 - [ ] "Refresh All" (earnings) button works with spinner feedback
 
 ### Options Table
@@ -59,7 +64,7 @@ Manual end-to-end checklist for verifying UI and pipeline functionality:
 ### Earnings Pipeline
 - [ ] `/api/portfolio/roll-pressure` loads without 500 error
 - [ ] `/api/portfolio/alerts` loads without 500 error
-- [ ] Background threads stop gracefully on server kill
+- [ ] Scheduler shuts down cleanly on server kill (APScheduler `atexit` handler)
 - [ ] Global "Refresh All" earnings updates all active symbols
 - [ ] Per-ticker refresh only updates that row
 

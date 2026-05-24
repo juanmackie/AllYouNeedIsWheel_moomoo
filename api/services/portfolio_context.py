@@ -20,6 +20,16 @@ class PortfolioContext:
         self._config_provider = config_provider
         self.config = config_provider.config if config_provider and hasattr(config_provider, 'config') else {}
         self._portfolio_service = None
+
+    def _default_vix_regime(self):
+        """Return a neutral VIX regime without making any live requests."""
+        return {
+            'regime': 'normal',
+            'vix': 20.0,
+            'delta_adjustment': 0.0,
+            'exposure_multiplier': 1.0,
+            'description': 'Normal volatility (VIX 15-30) - standard delta targets',
+        }
         
     def _get_portfolio_service(self):
         if self._portfolio_service is not None:
@@ -35,7 +45,14 @@ class PortfolioContext:
         self._portfolio_service = PortfolioService()
         return self._portfolio_service
     
-    def get_portfolio_context(self):
+    def _build_context_from_cached_portfolio(self, portfolio):
+        """
+        Build a lightweight portfolio context from an in-memory snapshot.
+
+        This path is intentionally non-blocking: it avoids broker refreshes,
+        earnings lookups, and market-regime calls so the dashboard can compute
+        cache keys immediately even when the connection is slow.
+        """
         context = {
             'cash_balance': 0.0,
             'account_value': 0.0,
@@ -48,8 +65,119 @@ class PortfolioContext:
             'broker_buying_power': 0.0,
             'broker_buying_power_source': 'none',
             'open_short_put_collateral': 0.0,
-            'vix_regime': self._vix_regime_provider.get_vix_regime() if self._vix_regime_provider else {'regime': 'normal', 'vix': 20.0}
+            'vix_regime': self._default_vix_regime(),
         }
+
+        if not isinstance(portfolio, dict):
+            return context
+
+        summary = {k: v for k, v in portfolio.items() if k != 'positions'}
+        raw_positions = portfolio.get('positions', {}) or {}
+
+        cash_fields = ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']
+        raw_cash = 0.0
+        source_field = 'none'
+        for f in cash_fields:
+            v = summary.get(f)
+            if v is None:
+                continue
+            try:
+                raw_cash = float(v)
+                if raw_cash > 0:
+                    source_field = f
+                    break
+            except (TypeError, ValueError):
+                continue
+
+        context['cash_balance'] = float(summary.get('available_cash', summary.get('cash_balance', 0)) or 0)
+        context['account_value'] = float(summary.get('account_value', 0) or 0)
+        context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
+        context['available_cash'] = max(raw_cash, context['excess_liquidity'])
+        context['broker_buying_power'] = context['available_cash']
+        context['broker_buying_power_source'] = source_field
+
+        cash_reserved = 0.0
+        for raw_symbol, position in raw_positions.items():
+            raw_symbol = str(raw_symbol or '')
+            symbol = raw_symbol.replace('US.', '')
+            if not symbol:
+                continue
+
+            pos = dict(position or {})
+            qty_value = pos.get('position', pos.get('shares', 0))
+            try:
+                pos_qty = int(float(qty_value or 0))
+            except (TypeError, ValueError):
+                pos_qty = 0
+            pos['position'] = pos_qty
+            if 'shares' not in pos:
+                pos['shares'] = pos_qty
+
+            security_type = str(pos.get('security_type', '') or '').upper()
+            if security_type == 'STK':
+                context['positions'][symbol] = pos
+                if raw_symbol and raw_symbol != symbol:
+                    context['positions'][raw_symbol] = pos
+            elif security_type == 'OPT' and pos_qty < 0:
+                option_type = str(pos.get('option_type', '') or '').upper()
+                contracts = abs(pos_qty)
+                if option_type == 'CALL':
+                    context['short_calls'][symbol] = context['short_calls'].get(symbol, 0) + contracts
+                elif option_type == 'PUT':
+                    context['short_puts'][symbol] = context['short_puts'].get(symbol, 0) + contracts
+                    strike = float(pos.get('strike', 0) or 0)
+                    cash_required = strike * 100 * contracts
+                    cash_reserved += cash_required
+
+        context['cash_reserved_for_csp'] = cash_reserved
+        context['open_short_put_collateral'] = cash_reserved
+        context['cash_available_for_csp'] = max(0, context['broker_buying_power'])
+        context['_cash_diagnostics'] = {
+            'raw_summary_fields': {f: summary.get(f) for f in ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']},
+            'available_cash': context['available_cash'],
+            'broker_buying_power': context['broker_buying_power'],
+            'broker_buying_power_source': source_field,
+            'excess_liquidity': context['excess_liquidity'],
+            'open_short_put_collateral': cash_reserved,
+            'cash_reserved_for_csp': cash_reserved,
+            'cash_available_for_csp': context['cash_available_for_csp'],
+        }
+        return context
+
+    def get_portfolio_context(self, refresh=True):
+        context = {
+            'cash_balance': 0.0,
+            'account_value': 0.0,
+            'excess_liquidity': 0.0,
+            'positions': {},
+            'short_calls': {},
+            'short_puts': {},
+            'cash_reserved_for_csp': 0.0,
+            'cash_available_for_csp': 0.0,
+            'broker_buying_power': 0.0,
+            'broker_buying_power_source': 'none',
+            'open_short_put_collateral': 0.0,
+            'vix_regime': self._vix_regime_provider.get_vix_regime() if refresh and self._vix_regime_provider else self._default_vix_regime()
+        }
+
+        if not refresh:
+            try:
+                portfolio_service = self._get_portfolio_service()
+                if portfolio_service is None:
+                    return context
+
+                cached_portfolio = getattr(portfolio_service, 'peek_cached_portfolio', None)
+                if cached_portfolio is None:
+                    return context
+
+                portfolio = cached_portfolio()
+                if not portfolio:
+                    return context
+
+                return self._build_context_from_cached_portfolio(portfolio)
+            except Exception as exc:
+                logger.debug(f"Error building cached portfolio context: {exc}")
+                return context
 
         try:
             portfolio_service = self._get_portfolio_service()
@@ -111,7 +239,7 @@ class PortfolioContext:
                         context['short_puts'][symbol] = context['short_puts'].get(symbol, 0) + contracts
 
             # Calculate cash reserved for existing short puts (diagnostics only)
-            cash_reserved = self._calculate_cash_reserved(context)
+            cash_reserved = self._calculate_cash_reserved(context, option_positions=option_positions)
             context['cash_reserved_for_csp'] = cash_reserved
             context['open_short_put_collateral'] = cash_reserved
 
@@ -152,7 +280,7 @@ class PortfolioContext:
                 return numeric_value
         return 0.0
 
-    def _calculate_cash_reserved(self, portfolio_context):
+    def _calculate_cash_reserved(self, portfolio_context, option_positions=None):
         """
         Calculate cash reserved for existing short put positions.
         Each short put requires cash equal to strike * 100 per contract.
@@ -170,13 +298,12 @@ class PortfolioContext:
             return reserved
             
         try:
-            # Get option positions to find strike prices
-            portfolio_service = self._get_portfolio_service()
-            if portfolio_service is None:
-                return reserved
-                
-            option_positions = portfolio_service.get_positions('OPT') or []
-            
+            if option_positions is None:
+                portfolio_service = self._get_portfolio_service()
+                if portfolio_service is None:
+                    return reserved
+                option_positions = portfolio_service.get_positions('OPT') or []
+
             for position in option_positions:
                 symbol = str(position.get('symbol', '') or '').replace('US.', '')
                 pos_qty = int(position.get('position', 0) or 0)

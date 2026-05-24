@@ -95,6 +95,35 @@ class TestPortfolioContextBuild(unittest.TestCase):
         context = self.ctx.get_portfolio_context()
         self.assertEqual(context['short_calls'], {})
 
+    def test_cached_context_uses_snapshot_without_refresh(self):
+        self.portfolio_service.peek_cached_portfolio.return_value = {
+            'available_cash': 5000.0,
+            'account_value': 100000.0,
+            'excess_liquidity': 6000.0,
+            'positions': {
+                'US.AAPL': {'shares': 100, 'security_type': 'STK', 'avg_cost': 150.0},
+                'US.AAPL240315P00150000': {
+                    'shares': -2,
+                    'security_type': 'OPT',
+                    'option_type': 'PUT',
+                    'strike': 150.0,
+                    'avg_cost': 3.0,
+                },
+            },
+        }
+
+        context = self.ctx.get_portfolio_context(refresh=False)
+
+        self.portfolio_service.get_portfolio_summary.assert_not_called()
+        self.portfolio_service.get_positions.assert_not_called()
+        self.portfolio_service.peek_cached_portfolio.assert_called_once()
+        self.assertEqual(context['cash_balance'], 5000.0)
+        self.assertEqual(context['account_value'], 100000.0)
+        self.assertEqual(context['broker_buying_power'], 6000.0)
+        self.assertEqual(context['short_puts']['AAPL240315P00150000'], 2)
+        self.assertEqual(context['cash_reserved_for_csp'], 30000.0)
+        self.assertEqual(context['vix_regime']['regime'], 'normal')
+
 
 class TestPortfolioContextHelpers(unittest.TestCase):
     """Test helper methods"""

@@ -96,7 +96,7 @@ export async function fetchTopRecommendations(limit = 3, manualRefresh = false) 
     } catch (error) {
         const isTimeout = error?.message?.includes('Request timed out');
         (isTimeout ? console.warn : console.error)('Error fetching top recommendations:', error);
-        if (!isRealAccountUnavailableError(error)) showAlert(`Error fetching top recommendations: ${error.message}`, 'danger');
-        return { signals: [], count: 0, error: error.message };
+        if (!isRealAccountUnavailableError(error) && !isTimeout) showAlert(`Error fetching top recommendations: ${error.message}`, 'danger');
+        return { signals: [], count: 0, error: error.message, timedOut: isTimeout };
     }
 }

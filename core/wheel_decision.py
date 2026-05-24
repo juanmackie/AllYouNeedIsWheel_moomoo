@@ -23,6 +23,7 @@ from core.scoring_factors import (
     _compute_size_fit,
     _compute_expected_move_buffer,
 )
+from core.connection_constants import _normalize_iv
 from core.growth_mode import (
     compute_stress_loss,
     compute_risk_budget_used,
@@ -264,6 +265,7 @@ def score_contract(
     earnings_info: dict | None = None,
     macro_regime: dict | None = None,
     growth_profile: dict | None = None,
+    evaluator_repo=None,
 ) -> WheelDecision | None:
     """
     Score a single option contract and return a WheelDecision.
@@ -344,7 +346,7 @@ def score_contract(
 
     quote_quality = 'tradable'
     delta = float(option.get('delta', 0) or 0)
-    implied_volatility = float(option.get('implied_volatility', 0) or 0)
+    implied_volatility = _normalize_iv(option.get('implied_volatility', 0))
     open_interest = int(option.get('open_interest', 0) or 0)
     volume = int(option.get('volume', 0) or 0)
     premium_per_contract = mid_price * 100
@@ -429,20 +431,22 @@ def score_contract(
         decision.warnings.append('Data from yfinance (not Moomoo) - verify before trading')
 
     # -- Fetch feedback-adjusted weights -------------------------------------
-    # Apply bias multipliers from the feedback loop so the recommendation
+    # Apply bias multipliers from EvaluatorRepository so the recommendation
     # reflects historical over/under-prediction patterns.
+    # Disabled by default; enable via config evaluator.feedback_enabled.
+    factor_biases = {}
     try:
-        from core.feedback_loop import get_adjusted_weights
-        factor_biases = get_adjusted_weights({
-            'iv_adjusted': 1.0,
-            'theta_delta': 1.0,
-            'liquidity': 1.0,
-            'expected_value': 1.0,
-            'upside': 1.0,
-            'otm_fit': 1.0,
-            'buffer': 1.0,
-            'capital_efficiency': 1.0,
-        })
+        if evaluator_repo is not None:
+            factor_biases = evaluator_repo.get_adjusted_weights({
+                'iv_adjusted': 1.0,
+                'theta_delta': 1.0,
+                'liquidity': 1.0,
+                'expected_value': 1.0,
+                'upside': 1.0,
+                'otm_fit': 1.0,
+                'buffer': 1.0,
+                'capital_efficiency': 1.0,
+            })
     except Exception:
         factor_biases = {}
 
@@ -887,7 +891,7 @@ def score_existing_position(
     # Greeks
     delta = float(position_data.get('delta', 0) or 0)
     theta = float(position_data.get('theta', 0) or 0)
-    iv = float(position_data.get('implied_volatility', 0) or 0)
+    iv = _normalize_iv(position_data.get('implied_volatility', 0))
 
     # Extrinsic value approximation: option price - intrinsic
     if option_type == 'CALL':

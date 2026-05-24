@@ -157,6 +157,16 @@ class PortfolioService:
         self._portfolio_cache_time = now
         return self._portfolio_cache
 
+    def peek_cached_portfolio(self):
+        """
+        Return the in-memory portfolio snapshot without refreshing it.
+
+        This is intentionally non-blocking and may return stale data. It is
+        useful for UI cache-key generation where freshness is less important
+        than avoiding a slow broker round-trip.
+        """
+        return self._portfolio_cache
+
     def invalidate_cache(self):
         """Manually invalidate portfolio cache (call after trades)."""
         self._portfolio_cache = None

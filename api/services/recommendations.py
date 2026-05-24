@@ -9,8 +9,8 @@ import pandas as pd
 from datetime import datetime
 from core.utils import get_closest_friday
 from core.wheel_decision import score_contract
-from core.evaluator import record_recommendation
 from core.ticker_utils import canonical_underlying
+from core.connection_constants import _normalize_iv
 from api.services.iv_earnings_service import IVEarningsService
 from api.services.utils import clean_yfinance_ticker
 from api.services.macro_regime_service import get_macro_service
@@ -146,12 +146,20 @@ class RecommendationEngine:
             if not conn:
                 return None
 
-            stock_price = conn.get_stock_price(ticker)
-            if stock_price is None or stock_price <= 0:
-                return None
-
             cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', 0) or 0)
             if cash_available_for_csp <= 0:
+                return None
+
+            # Short-circuit cash-fit failures using cached price, avoiding rate limiter entirely
+            cached_price = conn.get_cached_stock_price(ticker)
+            if cached_price is not None and cached_price > 0:
+                min_strike_estimate = cached_price * 0.50
+                if min_strike_estimate * 100 > cash_available_for_csp:
+                    logger.debug(f"Watchlist {ticker}: even deep OTM put (${min_strike_estimate:.2f}) exceeds buying power ${cash_available_for_csp:.2f}")
+                    return None
+
+            stock_price = conn.get_stock_price(ticker)
+            if stock_price is None or stock_price <= 0:
                 return None
 
             growth_cfg = getattr(self, '_growth_screener_config', None)
@@ -159,6 +167,12 @@ class RecommendationEngine:
             min_dte = sp.get('csp_min_dte', 30)
             max_dte = sp.get('csp_max_dte', 45)
             pref_dte = sp.get('csp_preferred_dte', 37)
+
+            # Cash-fit prefilter: skip if even a deep OTM put exceeds buying power
+            min_strike_estimate = stock_price * 0.50
+            if min_strike_estimate * 100 > cash_available_for_csp:
+                logger.debug(f"Watchlist {ticker}: even deep OTM put (${min_strike_estimate:.2f}) exceeds buying power ${cash_available_for_csp:.2f}")
+                return None
 
             from moomoo import RET_OK
             today = datetime.now()
@@ -242,6 +256,10 @@ class RecommendationEngine:
                             'implied_volatility': float(opt.get('implied_volatility', 0) or 0),
                             'open_interest': int(opt.get('open_interest', 0) or opt.get('openInterest', 0) or 0),
                             'volume': int(opt.get('volume', 0) or 0),
+                            'delta': float(opt.get('delta', 0) or 0),
+                            'gamma': float(opt.get('gamma', 0) or 0),
+                            'theta': float(opt.get('theta', 0) or 0),
+                            'vega': float(opt.get('vega', 0) or 0),
                         }
 
                         from core.greeks import enrich_option_with_greeks
@@ -251,38 +269,28 @@ class RecommendationEngine:
                             'PUT', dte=dte,
                             growth_mode_config=getattr(self, '_growth_screener_config', None)
                         )
+                        iv_val = _normalize_iv(contract.get('implied_volatility', 0))
+                        iv_env_adj, iv_rank_val, iv_status = self.iv_earnings_service.get_iv_environment_score(ticker, iv_val)
                         decision = score_contract(
                             ticker=ticker,
                             option=contract,
                             stock_price=stock_price,
                             profile=wl_profile,
                             portfolio_context=portfolio_context,
-                            iv_env_adjustment=0,
-                            iv_rank=0.5,
-                            iv_status_str='normal',
+                            iv_env_adjustment=iv_env_adj,
+                            iv_rank=iv_rank_val,
+                            iv_status_str=iv_status,
                             earnings_adjustment=0,
                             earnings_info={},
                             macro_regime=macro_regime,
                             growth_profile=getattr(self, '_growth_profile', None),
+                            evaluator_repo=self._get_evaluator_repo(),
                         )
 
                         if decision is None or decision.hard_blockers:
                             continue
 
                         pick_score = decision.contract_score
-
-                        # Record for evaluator (non-blocking)
-                        try:
-                            record_recommendation(
-                                ticker=ticker, strike=decision.strike,
-                                expiration=decision.expiration,
-                                option_type=decision.option_type,
-                                dte=decision.dte,
-                                decision=decision,
-                                source='moomoo', strategy='csp',
-                            )
-                        except Exception:
-                            pass
 
                         result = _format_decision_to_candidate(
                             ticker, stock_price, decision,
@@ -292,6 +300,7 @@ class RecommendationEngine:
                         candidates.append((pick_score, result))
 
                 except Exception:
+                    logger.warning("Candidate scoring failed for %s", ticker, exc_info=True)
                     continue
 
             if not candidates:
@@ -412,38 +421,28 @@ class RecommendationEngine:
                             'PUT', dte=dte,
                             growth_mode_config=getattr(self, '_growth_screener_config', None)
                         )
+                        iv_val = _normalize_iv(contract.get('implied_volatility', 0))
+                        iv_env_adj, iv_rank_val, iv_status = self.iv_earnings_service.get_iv_environment_score(ticker, iv_val)
                         decision = score_contract(
                             ticker=ticker,
                             option=contract,
                             stock_price=stock_price,
                             profile=wl_profile,
                             portfolio_context=portfolio_context,
-                            iv_env_adjustment=0,
-                            iv_rank=0.5,
-                            iv_status_str='normal',
+                            iv_env_adjustment=iv_env_adj,
+                            iv_rank=iv_rank_val,
+                            iv_status_str=iv_status,
                             earnings_adjustment=0,
                             earnings_info={},
                             macro_regime=macro_regime,
                             growth_profile=getattr(self, '_growth_profile', None),
+                            evaluator_repo=self._get_evaluator_repo(),
                         )
 
                         if decision is None or decision.hard_blockers:
                             continue
 
                         pick_score = decision.contract_score
-
-                        # Record for evaluator (non-blocking)
-                        try:
-                            record_recommendation(
-                                ticker=ticker, strike=decision.strike,
-                                expiration=decision.expiration,
-                                option_type=decision.option_type,
-                                dte=decision.dte,
-                                decision=decision,
-                                source='yfinance', strategy='csp',
-                            )
-                        except Exception:
-                            pass
 
                         result = _format_decision_to_candidate(
                             ticker, stock_price, decision,
@@ -453,6 +452,7 @@ class RecommendationEngine:
                         candidates.append((pick_score, result))
 
                 except Exception:
+                    logger.warning("YFinance candidate scoring failed for %s", ticker, exc_info=True)
                     continue
 
             if not candidates:
@@ -479,6 +479,13 @@ class RecommendationEngine:
             'reason_code': reason_code,
             'reason_text': reason_text,
         }
+
+    def _get_evaluator_repo(self):
+        """Return evaluator repo only if feedback is enabled in config."""
+        evaluator_cfg = self.config.get('evaluator', {})
+        if evaluator_cfg.get('feedback_enabled', False):
+            return self.db.evaluator
+        return None
 
     def _format_recommendation(self, option, rank=0):
         """Format a raw option dict into a standardized recommendation dict (signal-only)."""
@@ -604,12 +611,16 @@ class RecommendationEngine:
             self._growth_screener_config = growth_cfg
 
             # Ensure connection
+            conn_start = time.time()
             conn = self._get_connection()
+            logger.info(f"[TIMING] Get connection: {time.time() - conn_start:.2f}s")
             if not conn:
                 return {'error': 'Failed to establish connection to moomoo'}
 
             # Get portfolio context for positions and cash balance
+            ctx_start = time.time()
             portfolio_context = self._get_portfolio_context()
+            logger.info(f"[TIMING] Portfolio context: {time.time() - ctx_start:.2f}s")
             positions = portfolio_context.get('positions', {})
             available_cash = float(portfolio_context.get('available_cash', 0) or 0)
             broker_buying_power = float(portfolio_context.get('broker_buying_power', 0) or 0)
@@ -659,10 +670,21 @@ class RecommendationEngine:
             ticker_diagnostics = {}
 
             # ════════════════════════════════════════════════════════════
-            # LANE 1: Watchlist CSPs — process ALL watchlist tickers
-            # (including those already held as positions)
-            # Uses Moomoo as primary data source, falls back to yfinance
+            # LANE 1: Watchlist CSPs — process watchlist tickers only when
+            # there is enough buying power for at least very small CSPs.
+            # Uses Moomoo as primary data source, falls back to yfinance.
             # ════════════════════════════════════════════════════════════
+            csp_start = time.time()
+            min_csp_buying_power = float(
+                (growth_cfg.get('screener_profile', {}) or {}).get('min_csp_buying_power', 5000)
+            ) if growth_cfg else 5000.0
+            if cash_available_for_csp < min_csp_buying_power:
+                logger.info(
+                    "Watchlist CSP scan will continue below the usual minimum buying power: %.2f < %.2f",
+                    cash_available_for_csp,
+                    min_csp_buying_power,
+                )
+
             for ticker in effective_watchlist:
                 is_held = ticker in positions
 
@@ -694,12 +716,14 @@ class RecommendationEngine:
                     watchlist_csp_candidates.append(result)
                     watchlist_processed += 1
 
-            logger.info(f"Watchlist CSP: {watchlist_cached} cached, {watchlist_processed} fetched, "
-                       f"{watchlist_errors} errors, {len(skipped_csp_diagnostics)} skipped")
+            csp_elapsed = time.time() - csp_start
+            logger.info(f"[TIMING] Watchlist CSP scan: {csp_elapsed:.2f}s "
+                       f"({watchlist_processed} fetched, {watchlist_cached} cached, {watchlist_errors} errors)")
 
             # ════════════════════════════════════════════════════════════
             # LANE 2: Covered Calls — from portfolio positions only
             # ════════════════════════════════════════════════════════════
+            cc_start = time.time()
             # Deduplicate positions by canonical underlying
             seen_position_canonical = set()
             deduped_position_tickers = []
@@ -736,6 +760,9 @@ class RecommendationEngine:
                               f"{existing_short_puts} existing short puts")
 
                     # Determine OTM target — always use growth-tuned default
+                    if available_calls <= 0:
+                        continue
+
                     sp = (growth_cfg.get('screener_profile', {}) or {}) if growth_cfg else {}
                     otm_target = sp.get('call_default_otm_pct', 10)
 
@@ -770,6 +797,9 @@ class RecommendationEngine:
                 except Exception as e:
                     logger.error(f"Error processing {ticker} for signals: {e}")
                     continue
+
+            cc_elapsed = time.time() - cc_start
+            logger.info(f"[TIMING] Covered call scan: {cc_elapsed:.2f}s")
 
             # ── Per-ticker diagnostics ───────────────────────────────
             all_candidates = covered_call_candidates + watchlist_csp_candidates
@@ -821,9 +851,11 @@ class RecommendationEngine:
             formatted_cc = _format_rec_list(top_covered_calls)
             formatted_csp = _format_rec_list(top_watchlist_csp)
 
+            scoring_elapsed = time.time() - cc_start - cc_elapsed
             elapsed = time.time() - start_time
-            logger.info(f"Generated {len(formatted_signals)} signals, "
-                       f"{len(formatted_cc)} CC, {len(formatted_csp)} CSP in {elapsed:.2f}s")
+            logger.info(f"[TIMING] Scoring & ranking: {scoring_elapsed:.2f}s")
+            logger.info(f"[TIMING] Total: {elapsed:.2f}s — generated {len(formatted_signals)} signals, "
+                       f"{len(formatted_cc)} CC, {len(formatted_csp)} CSP")
 
             # Build blocked signal diagnostics.
             blocked_signals = []
@@ -838,6 +870,39 @@ class RecommendationEngine:
                     'signal_type': 'csp',
                     'actionable': False,
                 })
+
+            # ── Catalyst flow defensive warnings ──────────────
+            try:
+                from api.services.catalyst_flow_service import CatalystFlowService
+                if not hasattr(self, '_cat_warn_svc'):
+                    self._cat_warn_svc = CatalystFlowService(
+                        config_provider=self.config,
+                        watchlist_provider=self._watchlist_provider,
+                    )
+                catalyst_svc = self._cat_warn_svc
+                seen = set()
+                for sig_list in (formatted_signals, formatted_cc, formatted_csp):
+                    for sig in sig_list:
+                        t = sig.get('ticker', '')
+                        if not t or t in seen:
+                            continue
+                        seen.add(t)
+                        cw = catalyst_svc.get_ticker_warnings(t)
+                        if cw:
+                            sig.setdefault('warnings', [])
+                            for w in cw:
+                                if w not in sig['warnings']:
+                                    sig['warnings'].append(w)
+            except Exception as exc:
+                logger.debug("Catalyst flow warnings skipped: %s", exc)
+
+            # Record surfaced signals for the evaluator (non-blocking)
+            try:
+                evaluator_cfg = self.config.get('evaluator', {})
+                if evaluator_cfg.get('enabled', True) and evaluator_cfg.get('record_signals', True):
+                    self.db.evaluator.record_surfaced_signals(formatted_signals, source='recommendations')
+            except Exception:
+                logger.warning("Evaluator signal recording failed", exc_info=True)
 
             return {
                 'success': True,

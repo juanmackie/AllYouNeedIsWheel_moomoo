@@ -194,7 +194,12 @@ def _compute_expected_move_buffer(decision) -> float:
     if decision.stock_price <= 0 or decision.implied_volatility <= 0 or decision.dte <= 0:
         return 0.0
 
-    expected_move = decision.stock_price * decision.implied_volatility * ((decision.dte / 365) ** 0.5)
+    # Normalize IV to decimal form (safety net for Moomoo percentage format)
+    iv = decision.implied_volatility
+    if iv > 3.0:
+        iv = iv / 100.0
+
+    expected_move = decision.stock_price * iv * ((decision.dte / 365) ** 0.5)
     expected_move_pct = (expected_move / decision.stock_price) * 100
     buffer = decision.otm_pct - expected_move_pct
     return round(buffer, 1)

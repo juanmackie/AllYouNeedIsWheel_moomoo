@@ -52,7 +52,7 @@ class ScreeningProfileProvider(Protocol):
 
 class PortfolioContextProvider(Protocol):
     """Provides portfolio context dict."""
-    def _get_portfolio_context(self) -> dict:
+    def _get_portfolio_context(self, refresh: bool = True) -> dict:
         ...
 
 

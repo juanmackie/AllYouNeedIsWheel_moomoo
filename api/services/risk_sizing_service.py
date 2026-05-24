@@ -9,10 +9,10 @@ Formula:
 """
 
 import logging
-from datetime import datetime
 from typing import Dict, Any, List, Optional, TypedDict
 
 from api.services.utils import clean_yfinance_ticker, validate_ticker
+from core.ttl_cache import make_ttl_cache
 
 logger = logging.getLogger('api.services.risk_sizing')
 
@@ -50,30 +50,21 @@ class RiskSizingService:
     CACHE_TTL_SECONDS = 900  # 15 minutes
 
     def __init__(self):
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache = make_ttl_cache(maxsize=256, ttl=self.CACHE_TTL_SECONDS)
         # risk_pct: 0.01 = 1% of account
         # atr_period: 14 days is standard
         self.default_risk_pct = 0.01
         self.default_atr_period = 14
 
-    def _is_cache_valid(self, entry: Dict[str, Any]) -> bool:
-        if not entry:
-            return False
-        age = (datetime.now() - entry['timestamp']).total_seconds()
-        return age < self.CACHE_TTL_SECONDS
-
     def _get_cached(self, ticker: str) -> Optional[Dict[str, Any]]:
         entry = self._cache.get(ticker)
-        if entry and self._is_cache_valid(entry):
+        if entry is not None:
             logger.debug(f"Risk sizing cache hit for {ticker}")
-            return entry['data']
+            return entry
         return None
 
     def _set_cached(self, ticker: str, data: Dict[str, Any]) -> None:
-        self._cache[ticker] = {
-            'data': data,
-            'timestamp': datetime.now()
-        }
+        self._cache[ticker] = data
 
     def calculate_atr(self, ticker: str, period: int = 14) -> float:
         """
@@ -239,7 +230,9 @@ class RiskSizingService:
     def clear_cache(self, ticker: Optional[str] = None) -> None:
         """Clear cache for a ticker or all tickers."""
         if ticker:
-            self._cache.pop(ticker, None)
+            prefix = f"{ticker}_"
+            for key in [k for k in list(self._cache.keys()) if k == ticker or str(k).startswith(prefix)]:
+                self._cache.pop(key, None)
             logger.info(f"Cleared risk sizing cache for {ticker}")
         else:
             self._cache.clear()

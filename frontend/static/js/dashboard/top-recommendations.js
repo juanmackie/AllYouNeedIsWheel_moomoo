@@ -12,12 +12,20 @@ import StateModel from '../utils/state-model.js';
 let signalsData = null;
 let autoRefreshInterval = null;
 let isVisible = true;
+let listenersBound = false;
+let isInitialized = false;
+let activeSignalType = 'all';
+let _isLoading = false; // in-flight guard — prevents overlapping requests
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const GENERATING_RETRY_DELAYS_MS = [8000, 15000, 30000, 60000];
 let loadingBannerId = null;
+let generatingRetryTimer = null;
+let generatingRetryCount = 0;
 
 // DOM Elements (initialized lazily)
 let container, contentEl, cardsContainer, lastUpdatedEl;
 let blockedListEl, blockedCountEl, bpIndicator;
+let tabContainer, signalCountDisplay;
 
 /**
  * Initialize DOM element references
@@ -30,6 +38,8 @@ function initElements() {
     blockedListEl = document.getElementById('blocked-candidates-list');
     blockedCountEl = document.getElementById('blocked-candidates-count');
     bpIndicator = document.getElementById('buying-power-indicator');
+    tabContainer = document.getElementById('signal-tabs');
+    signalCountDisplay = document.getElementById('signal-count-display');
 }
 
 /**
@@ -59,6 +69,74 @@ function getRankBadge(rank) {
         3: { class: 'rank-bronze', icon: '🥉', label: '#3' }
     };
     return badges[rank] || { class: 'rank-standard', icon: `#${rank}`, label: `#${rank}` };
+}
+
+/**
+ * Get confidence badge class and label based on confidence score
+ * @param {number} confidence - Confidence score (0-100)
+ * @returns {Object} badge class and label
+ */
+function getConfidenceBadge(confidence) {
+    if (confidence == null) return { class: 'bg-secondary', label: 'Conf: ?' };
+    if (confidence >= 80) return { class: 'bg-success', label: 'High conf' };
+    if (confidence >= 60) return { class: 'bg-info', label: 'Med conf' };
+    if (confidence >= 40) return { class: 'bg-warning text-dark', label: 'Low conf' };
+    return { class: 'bg-danger', label: 'Poor conf' };
+}
+
+/**
+ * Get data source display string and class
+ * @param {Object} rec - Recommendation data
+ * @returns {Object} text and icon class
+ */
+function getDataSourceInfo(rec) {
+    const source = rec.data_source || rec.wheel_decision?.price_source || 'unknown';
+    const quoteTs = rec.wheel_decision?.quote_timestamp || rec.wheel_decision?.generated_at;
+    let freshness = '';
+    if (quoteTs) {
+        const ageSec = (Date.now() - new Date(quoteTs).getTime()) / 1000;
+        if (ageSec < 60) freshness = 'just now';
+        else if (ageSec < 300) freshness = `${Math.floor(ageSec / 60)}m ago`;
+        else if (ageSec < 3600) freshness = `${Math.floor(ageSec / 60)}m ago`;
+        else freshness = '>1h ago';
+    }
+    const isBroker = source === 'broker' || source === 'Moomoo';
+    const icon = isBroker ? 'bi-database-check' : 'bi-database-exclamation';
+    const label = isBroker ? `Moomoo` : `${source}`;
+    const freshnessClass = freshness && freshness.includes('>') ? 'text-warning' : '';
+    return { icon, label, freshness, freshnessClass, isBroker };
+}
+
+/**
+ * Extract top score drivers from score_details
+ * @param {Object} scoreDetails - Score breakdown dict
+ * @returns {Object} { positive: string[], negative: string[] }
+ */
+function extractScoreDrivers(scoreDetails) {
+    if (!scoreDetails) return { positive: [], negative: [] };
+    const thresholds = { iv_adjusted: 70, liquidity: 70, theta_delta: 65, expected_value: 60, iv_environment: 65, upside: 70, buffer: 70, capital_efficiency: 65, delta_fit: 60, otm_fit: 65, annualized: 60 };
+    const labels = { iv_adjusted: 'IV-adj return', liquidity: 'Liquidity', theta_delta: 'Theta/Delta', expected_value: 'Expected value', iv_environment: 'IV environment', upside: 'Upside', buffer: 'Buffer', capital_efficiency: 'Capital eff.', delta_fit: 'Delta fit', otm_fit: 'OTM fit', annualized: 'Yield' };
+    const positive = [];
+    const negative = [];
+    for (const [key, val] of Object.entries(scoreDetails)) {
+        if (typeof val !== 'number') continue;
+        const label = labels[key] || key;
+        const threshold = thresholds[key] || 60;
+        if (val >= threshold) positive.push(`${label}: ${val.toFixed(0)}`);
+        else if (val < 40) negative.push(`${label}: ${val.toFixed(0)}`);
+    }
+    // Sort by value descending for positive, ascending for negative
+    positive.sort((a, b) => {
+        const va = parseFloat(a.split(': ')[1]);
+        const vb = parseFloat(b.split(': ')[1]);
+        return vb - va;
+    });
+    negative.sort((a, b) => {
+        const va = parseFloat(a.split(': ')[1]);
+        const vb = parseFloat(b.split(': ')[1]);
+        return va - vb;
+    });
+    return { positive: positive.slice(0, 3), negative: negative.slice(0, 3) };
 }
 
 /**
@@ -101,6 +179,14 @@ function createRecommendationCard(rec) {
     // Ticker
     clone.querySelector('.ticker-badge').textContent = rec.ticker;
     
+    // Signal type badge
+    const signalType = rec.signal_type || (rec.option_type === 'CALL' ? 'covered_call' : 'csp');
+    const signalTypeBadge = clone.querySelector('.signal-type-badge');
+    const signalLabels = { csp: 'CSP', covered_call: 'Covered Call', call: 'Call', put: 'Put' };
+    const signalColors = { csp: 'bg-danger', covered_call: 'bg-success', call: 'bg-info', put: 'bg-warning text-dark' };
+    signalTypeBadge.textContent = signalLabels[signalType] || signalType;
+    signalTypeBadge.classList.add(signalColors[signalType] || 'bg-secondary');
+    
     // Option type badge
     const optionTypeBadge = clone.querySelector('.option-type-badge');
     optionTypeBadge.textContent = rec.option_type;
@@ -128,6 +214,20 @@ function createRecommendationCard(rec) {
     const scoreBadge = clone.querySelector('.score-badge');
     scoreBadge.textContent = rec.score != null ? `Score: ${rec.score.toFixed(1)}` : 'Score: N/A';
     scoreBadge.classList.add(getScoreColorClass(rec.score));
+
+    // Confidence badge
+    const confidenceBadge = clone.querySelector('.confidence-badge');
+    const confidence = rec.confidence ?? rec.confidence_score ?? rec.wheel_decision?.confidence_score ?? 100;
+    const ci = getConfidenceBadge(confidence);
+    confidenceBadge.textContent = ci.label;
+    confidenceBadge.classList.add(ci.class);
+
+    // Data source + freshness
+    const sourceEl = clone.querySelector('.signal-data-source');
+    const sourceInfo = getDataSourceInfo(rec);
+    const sourceIcon = sourceInfo.isBroker ? 'bi-database-check text-success' : 'bi-database-exclamation text-warning';
+    const freshnessClass = sourceInfo.freshnessClass || 'text-muted';
+    sourceEl.innerHTML = `<i class="bi ${sourceIcon}"></i> ${sourceInfo.label} <span class="${freshnessClass}">${sourceInfo.freshness ? '· ' + sourceInfo.freshness : ''}</span>`;
     
     // Warnings
     const warningsEl = clone.querySelector('.recommendation-warnings');
@@ -175,6 +275,66 @@ function createRecommendationCard(rec) {
         macroImpactEl.innerHTML = '<span class="text-muted">Macro: N/A</span>';
     }
 
+    // CSP-specific details
+    const cspSection = clone.querySelector('.csp-details');
+    if (signalType === 'csp' || signalType === 'put') {
+        cspSection.classList.remove('d-none');
+        const cashReq = rec.cash_required || rec.wheel_decision?.cash_required;
+        const bp = signalsData?.broker_buying_power || 0;
+        const cashPct = cashReq && bp > 0 ? (cashReq / bp) * 100 : 0;
+        const cashRemaining = bp > 0 && cashReq ? bp - cashReq : 0;
+        const breakevenBuffer = rec.breakeven_buffer_pct ?? rec.wheel_decision?.breakeven_buffer_pct;
+        const expectedMove = rec.expected_move_buffer ?? rec.wheel_decision?.expected_move_buffer;
+
+        clone.querySelector('.csp-cash-required').textContent = cashReq ? formatCurrency(cashReq) : 'N/A';
+        clone.querySelector('.csp-cash-pct').textContent = cashPct > 0 ? `${cashPct.toFixed(1)}%` : 'N/A';
+        const remainingEl = clone.querySelector('.csp-cash-remaining');
+        // No separate CSP cash remaining element in template, skip for now
+        clone.querySelector('.csp-breakeven-buffer').textContent = breakevenBuffer != null ? `${breakevenBuffer.toFixed(1)}%` : 'N/A';
+        clone.querySelector('.csp-expected-move').textContent = expectedMove != null ? `${expectedMove.toFixed(1)}%` : 'N/A';
+    }
+
+    // Covered call-specific details
+    const ccSection = clone.querySelector('.cc-details');
+    if (signalType === 'covered_call' || signalType === 'call') {
+        ccSection.classList.remove('d-none');
+        const ifCalledReturn = rec.wheel_decision?.if_called_return;
+        const ifCalledProceeds = rec.strike != null && rec.premium_per_contract != null
+            ? (rec.strike * 100) + rec.premium_per_contract : null;
+        const avgCost = rec.wheel_decision?.avg_cost || 0;
+        const costBasisDist = rec.strike != null && avgCost > 0
+            ? ((rec.strike - avgCost) / avgCost) * 100 : null;
+        const intent = rec.covered_call_intent || rec.wheel_decision?.covered_call_intent || '';
+
+        clone.querySelector('.cc-if-called-return').textContent = ifCalledReturn != null ? `${ifCalledReturn.toFixed(1)}%` : 'N/A';
+        clone.querySelector('.cc-if-called-proceeds').textContent = ifCalledProceeds != null ? formatCurrency(ifCalledProceeds) : 'N/A';
+        clone.querySelector('.cc-cost-basis-dist').textContent = costBasisDist != null ? `${costBasisDist.toFixed(1)}%` : 'N/A';
+        const intentLabels = { 'income': 'Income', 'profit-taking': 'Profit-taking', 'upside-capping risk': 'Capping upside' };
+        clone.querySelector('.cc-intent').textContent = intentLabels[intent] || intent || 'N/A';
+    }
+
+    // Score drivers
+    const driversSection = clone.querySelector('.score-drivers');
+    const scoreDetails = rec.score_details || rec.wheel_decision?.score_details;
+    const drivers = extractScoreDrivers(scoreDetails);
+    if (drivers.positive.length > 0 || drivers.negative.length > 0) {
+        driversSection.classList.remove('d-none');
+        if (drivers.positive.length > 0) {
+            driversSection.querySelector('.score-drivers__positive').textContent = 'Drivers: ' + drivers.positive.join(' | ');
+        }
+        if (drivers.negative.length > 0) {
+            driversSection.querySelector('.score-drivers__negative').textContent = 'Drags: ' + drivers.negative.join(' | ');
+        }
+    }
+
+    // Hard blockers (if any leak through — should be empty for surfaced signals)
+    const blockersEl = clone.querySelector('.hard-blockers');
+    const hardBlockers = rec.hard_blockers || rec.wheel_decision?.hard_blockers || rec.blocked_reason_codes;
+    if (hardBlockers && hardBlockers.length > 0) {
+        blockersEl.classList.remove('d-none');
+        blockersEl.querySelector('.hard-blockers-list').textContent = hardBlockers.join(' | ');
+    }
+
     // Show existing positions if any
     if (rec.existing_position > 0) {
         const detailsEl = clone.querySelector('.recommendation-details');
@@ -211,9 +371,76 @@ function showLoading() {
 }
 
 /**
+ * Show generating state — signals are being computed but took longer than expected.
+ * Keeps any existing stale content visible beneath the banner.
+ */
+function showGenerating() {
+    if (loadingBannerId) {
+        finishPanelLoading(loadingBannerId, 'Signals still generating...');
+        loadingBannerId = null;
+    }
+    // Don't hide existing content — stale signals remain visible
+    if (contentEl) contentEl.classList.remove('d-none');
+    const stateEl = document.getElementById('top-recommendations-state');
+    if (stateEl) {
+        const nextRetry = scheduleGeneratingRetry();
+        let notice = stateEl.querySelector('[data-generating-notice="true"]');
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.dataset.generatingNotice = 'true';
+            notice.className = 'text-warning small text-center py-2';
+            stateEl.appendChild(notice);
+        }
+        if (nextRetry.scheduled) {
+            notice.textContent = `Fresh signals are being computed. Showing prior data while retry ${nextRetry.attempt}/${GENERATING_RETRY_DELAYS_MS.length} runs in ${Math.round(nextRetry.delay / 1000)}s.`;
+        } else {
+            notice.textContent = 'Signal generation is still taking longer than expected. Automatic retries are paused for now; use Refresh after broker data settles.';
+        }
+    }
+    if (lastUpdatedEl) {
+        lastUpdatedEl.textContent = lastUpdatedEl.textContent || 'Generating...';
+        lastUpdatedEl.classList.remove('d-none');
+    }
+}
+
+function clearGeneratingRetry() {
+    if (generatingRetryTimer) {
+        clearTimeout(generatingRetryTimer);
+        generatingRetryTimer = null;
+    }
+}
+
+function resetGeneratingRetryState() {
+    clearGeneratingRetry();
+    generatingRetryCount = 0;
+}
+
+function scheduleGeneratingRetry() {
+    if (generatingRetryTimer) {
+        return {
+            scheduled: true,
+            delay: GENERATING_RETRY_DELAYS_MS[Math.max(0, generatingRetryCount - 1)] || GENERATING_RETRY_DELAYS_MS[0],
+            attempt: Math.max(generatingRetryCount, 1),
+        };
+    }
+    if (generatingRetryCount >= GENERATING_RETRY_DELAYS_MS.length) {
+        return { scheduled: false, delay: null, attempt: generatingRetryCount };
+    }
+    const delay = GENERATING_RETRY_DELAYS_MS[generatingRetryCount];
+    const attempt = generatingRetryCount + 1;
+    generatingRetryCount += 1;
+    generatingRetryTimer = setTimeout(() => {
+        generatingRetryTimer = null;
+        loadTopRecommendations(false);
+    }, delay);
+    return { scheduled: true, delay, attempt };
+}
+
+/**
  * Show content with signals — finish the loading banner
  */
 function showContent() {
+    resetGeneratingRetryState();
     if (loadingBannerId) {
         finishPanelLoading(loadingBannerId, 'Recommendations loaded');
         loadingBannerId = null;
@@ -226,11 +453,12 @@ function showContent() {
  * Show empty state
  */
 function showEmpty() {
+    resetGeneratingRetryState();
     if (loadingBannerId) {
         finishPanelLoading(loadingBannerId, 'No signals');
         loadingBannerId = null;
     }
-    StateModel.showEmpty('top-recommendations-state', 'No signals available right now. Check back after market open or add positions to your portfolio.');
+    StateModel.showEmpty('top-recommendations-state', 'No signals available right now. Try refresh or adjust criteria.');
     document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
@@ -238,6 +466,7 @@ function showEmpty() {
  * Show error state
  */
 function showError() {
+    resetGeneratingRetryState();
     if (loadingBannerId) {
         failPanelLoading(loadingBannerId, 'Unable to load signals');
         loadingBannerId = null;
@@ -371,22 +600,6 @@ function applyGrowthFieldsToCard(card, rec) {
         growthRationale.textContent = rec.score_rationale;
     }
 
-    // Covered call intent
-    if (rec.covered_call_intent) {
-        const ccBadge = card.querySelector('.covered-call-intent');
-        if (ccBadge) {
-            ccBadge.textContent = rec.covered_call_intent;
-            ccBadge.classList.remove('d-none');
-            if (rec.covered_call_intent === 'upside-capping risk') {
-                ccBadge.className = 'badge bg-warning text-dark covered-call-intent';
-            } else if (rec.covered_call_intent === 'profit-taking') {
-                ccBadge.className = 'badge bg-info covered-call-intent';
-            } else {
-                ccBadge.className = 'badge bg-secondary covered-call-intent';
-            }
-        }
-    }
-
 }
 
 /**
@@ -431,6 +644,67 @@ function updateBuyingPowerIndicator(result) {
 }
 
 /**
+ * Get the display label for a signal type
+ */
+function getSignalType(rec) {
+    return rec.signal_type || (rec.option_type === 'CALL' ? 'covered_call' : 'csp');
+}
+
+/**
+ * Render signals filtered by active tab
+ */
+function renderFilteredSignals() {
+    if (!signalsData || !cardsContainer) return;
+    const allSignals = signalsData.signals || [];
+    const filtered = activeSignalType === 'all'
+        ? allSignals
+        : allSignals.filter(s => getSignalType(s) === activeSignalType);
+
+    cardsContainer.innerHTML = '';
+    filtered.forEach(rec => {
+        const card = createRecommendationCard(rec);
+        applyGrowthFieldsToCard(card, rec);
+        cardsContainer.appendChild(card);
+    });
+
+    // Update count display
+    if (signalCountDisplay) {
+        const typeLabel = activeSignalType === 'all' ? 'Total' : activeSignalType.replace(/_/g, ' ');
+        signalCountDisplay.textContent = `${filtered.length} ${typeLabel} signals of ${allSignals.length} total`;
+    }
+
+    if (filtered.length > 0) {
+        showContent();
+    }
+}
+
+/**
+ * Switch active signal type tab
+ * @param {string} signalType - 'all', 'csp', 'covered_call', 'call', 'put'
+ */
+function switchSignalTab(signalType) {
+    activeSignalType = signalType;
+    // Update tab button states
+    const tabBtns = document.querySelectorAll('#signal-tabs [data-signal-type]');
+    tabBtns.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.signalType === signalType);
+    });
+    renderFilteredSignals();
+}
+
+/**
+ * Initialize signal-type tab buttons
+ */
+function initSignalTabs() {
+    const tabBtns = document.querySelectorAll('#signal-tabs [data-signal-type]');
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            switchSignalTab(btn.dataset.signalType);
+        });
+    });
+}
+
+/**
  * Render the unified signal payload.
  * @param {Object} result - Full API response with signals
  * @param {string} timestamp - Generation timestamp
@@ -438,6 +712,7 @@ function updateBuyingPowerIndicator(result) {
  */
 function renderRecommendations(result, timestamp, cacheInfo = null) {
     if (!cardsContainer) return;
+    signalsData = result;
     
     // Apply growth mode banner
     applyGrowthMode(result);
@@ -445,20 +720,19 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
     // Update buying power indicator
     updateBuyingPowerIndicator(result);
     
-    // Clear the grid and render the canonical signal list.
-    cardsContainer.innerHTML = '';
-    const signals = result?.signals || [];
-    signals.forEach(rec => {
-        const card = createRecommendationCard(rec);
-        applyGrowthFieldsToCard(card, rec);
-        cardsContainer.appendChild(card);
-    });
+    // Show tabs and render filtered
+    if (result?.signals?.length > 0) {
+        if (tabContainer) tabContainer.classList.remove('d-none');
+        renderFilteredSignals();
+    } else {
+        if (tabContainer) tabContainer.classList.add('d-none');
+        cardsContainer.innerHTML = '';
+    }
     
     // Blocked signal diagnostics
     renderBlockedSignals(result?.blocked_signals || []);
     
-    if (signals.length > 0) {
-        showContent();
+    if (result?.signals?.length > 0) {
         updateTimestamp(timestamp, cacheInfo);
     } else {
         showEmpty();
@@ -470,16 +744,55 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
  * Load top recommendations from API
  */
 export async function loadTopRecommendations(manualRefresh = false) {
+    if (_isLoading) {
+        console.debug('Top recommendations: already loading, skipping duplicate request');
+        return;
+    }
+    if (manualRefresh) {
+        resetGeneratingRetryState();
+    }
+    _isLoading = true;
+    
     if (!container) initElements();
     
-    showLoading();
+    if (!generatingRetryTimer) {
+        showLoading();
+    }
     
     try {
         const result = await fetchTopRecommendations(3, manualRefresh);
         
         if (result.error) {
-            console.error('Error loading top recommendations:', result.error);
-            showError();
+            if (result.timedOut) {
+                console.warn('Top recommendations timed out — showing generating state');
+                showGenerating();
+            } else {
+                console.error('Error loading top recommendations:', result.error);
+                showError();
+            }
+            return;
+        }
+        
+        // Backend is still generating — don't replace what's on screen
+        if (result.generating) {
+            console.warn('Top recommendations: backend is generating fresh data');
+            showGenerating();
+            return;
+        }
+
+        if (result.generation_timed_out) {
+            resetGeneratingRetryState();
+            if (loadingBannerId) {
+                failPanelLoading(loadingBannerId, 'Signal generation timed out');
+                loadingBannerId = null;
+            }
+            StateModel.showEmpty(
+                'top-recommendations-state',
+                result.message || 'Signal generation is taking too long. Try again after broker data catches up.'
+            );
+            if (contentEl) contentEl.classList.add('d-none');
+            if (tabContainer) tabContainer.classList.add('d-none');
+            updateTimestamp(result.generated_at, null);
             return;
         }
         
@@ -503,6 +816,8 @@ export async function loadTopRecommendations(manualRefresh = false) {
     } catch (error) {
         console.error('Error loading top recommendations:', error);
         showError();
+    } finally {
+        _isLoading = false;
     }
 }
 
@@ -549,6 +864,9 @@ function handleVisibilityChange() {
  * Set up event listeners
  */
 function setupEventListeners() {
+    if (listenersBound) return;
+    listenersBound = true;
+
     // Refresh button
     const refreshBtn = document.getElementById('refresh-top-recommendations');
     if (refreshBtn) {
@@ -565,6 +883,9 @@ function setupEventListeners() {
         });
     }
     
+    // Signal-type tabs
+    initSignalTabs();
+    
     // Visibility change
     document.addEventListener('visibilitychange', handleVisibilityChange);
 }
@@ -574,10 +895,14 @@ function setupEventListeners() {
  */
 export function initializeTopRecommendations() {
     initElements();
+    if (!container) return;
     setupEventListeners();
     
     // Initial load
-    loadTopRecommendations();
+    if (!isInitialized) {
+        isInitialized = true;
+        loadTopRecommendations();
+    }
     
     // Start auto-refresh
     startAutoRefresh();
@@ -588,5 +913,6 @@ export function initializeTopRecommendations() {
  */
 export function cleanupTopRecommendations() {
     stopAutoRefresh();
+    clearGeneratingRetry();
     document.removeEventListener('visibilitychange', handleVisibilityChange);
 }

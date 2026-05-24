@@ -82,11 +82,33 @@ def start_earnings_updater(app, task_manager):
 
 
 def create_evaluator_worker(app):
-    """Return a callable that runs the recommendation-evaluator cycle."""
+    """Return a callable that runs the recommendation-evaluator cycle.
+
+    NOTE: The scheduler in core/scheduler.py now handles evaluator jobs
+    via APScheduler. This worker is kept for backward compatibility but
+    callers should prefer start_scheduler() from core.scheduler instead.
+    """
     def _evaluator_worker():
         from core.evaluator import run_evaluation_cycle
         with app.app_context():
-            result = run_evaluation_cycle()
+            db = app.config.get('database')
+            if not db:
+                logger.warning("Evaluator worker: no database in app config")
+                return
+            from api.services.config import get_config
+            cfg = get_config()
+            ev_cfg = cfg.get('evaluator', {}) if cfg else {}
+            portfolio_service = None
+            try:
+                import api
+                portfolio_service = api.get_service('portfolio')
+            except Exception:
+                logger.warning("Portfolio service init failed for evaluator worker", exc_info=True)
+            result = run_evaluation_cycle(
+                db.evaluator,
+                portfolio_service=portfolio_service,
+                config=ev_cfg,
+            )
             if result.get('resolved', 0) > 0:
                 logger.info("Evaluator: resolved %d expired recommendations", result['resolved'])
             elif result.get('errors', 0) > 0:

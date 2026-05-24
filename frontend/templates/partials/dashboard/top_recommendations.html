@@ -31,6 +31,19 @@
         </div>
     </div>
 
+    <div id="signal-tabs" class="d-none mb-2">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Signal type filter">
+            <button type="button" class="btn btn-outline-primary active" data-signal-type="all">All</button>
+            <button type="button" class="btn btn-outline-primary" data-signal-type="csp">CSP</button>
+            <button type="button" class="btn btn-outline-primary" data-signal-type="covered_call">Covered Call</button>
+            <button type="button" class="btn btn-outline-primary" data-signal-type="call">Call</button>
+            <button type="button" class="btn btn-outline-primary" data-signal-type="put">Put</button>
+        </div>
+        <div class="signal-summary d-inline-block ms-2 small text-muted">
+            <span id="signal-count-display"></span>
+        </div>
+    </div>
+
     <div id="top-recommendations-container" class="recommendation-stage__body">
         <div id="top-recommendations-state"></div>
         <div id="top-recommendations-content" class="d-none">
@@ -41,7 +54,8 @@
     <div id="blocked-candidates-section" class="d-none mt-3">
         <details class="small text-muted">
             <summary class="text-secondary">
-                <span id="blocked-candidates-count">0</span> signals did not qualify
+                <span class="fw-semibold">Ticker diagnostics</span>
+                <span id="blocked-candidates-count">0</span> tickers with no qualifying signal
                 <i class="bi bi-chevron-down"></i>
             </summary>
             <div id="blocked-candidates-list" class="mt-2 p-2 bg-light rounded"></div>
@@ -61,6 +75,7 @@
                     <div class="d-flex align-items-center gap-2">
                         <span class="rank-badge fs-6 fw-bold"></span>
                         <span class="ticker-badge fw-bold"></span>
+                        <span class="signal-type-badge badge"></span>
                     </div>
                     <span class="option-type-badge badge"></span>
                 </div>
@@ -83,9 +98,12 @@
                     </div>
                 </div>
 
-                <div class="d-flex justify-content-center mb-2">
+                <div class="d-flex justify-content-center mb-2 gap-2 flex-wrap">
                     <span class="score-badge fs-6"></span>
+                    <span class="confidence-badge badge"></span>
                 </div>
+
+                <div class="signal-data-source small text-muted text-center mb-2"></div>
 
                 <div class="recommendation-warnings small mb-2"></div>
 
@@ -106,6 +124,58 @@
                         <span>Macro</span>
                         <span class="macro-impact fw-semibold"></span>
                     </div>
+
+                    <div class="csp-details d-none">
+                        <hr class="my-1">
+                        <div class="d-flex justify-content-between">
+                            <span>Cash required</span>
+                            <span class="csp-cash-required fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>% of available cash</span>
+                            <span class="csp-cash-pct fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Breakeven buffer</span>
+                            <span class="csp-breakeven-buffer fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Expected move buffer</span>
+                            <span class="csp-expected-move fw-semibold"></span>
+                        </div>
+                    </div>
+
+                    <div class="cc-details d-none">
+                        <hr class="my-1">
+                        <div class="d-flex justify-content-between">
+                            <span>If-called return</span>
+                            <span class="cc-if-called-return fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>If-called proceeds</span>
+                            <span class="cc-if-called-proceeds fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Distance to cost basis</span>
+                            <span class="cc-cost-basis-dist fw-semibold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Intent</span>
+                            <span class="cc-intent fw-semibold"></span>
+                        </div>
+                    </div>
+
+                    <div class="score-drivers d-none">
+                        <hr class="my-1">
+                        <div class="score-drivers__positive small text-success"></div>
+                        <div class="score-drivers__negative small text-warning mt-1"></div>
+                    </div>
+
+                    <div class="hard-blockers d-none">
+                        <hr class="my-1">
+                        <div class="hard-blockers-list small text-danger"></div>
+                    </div>
+
                     <div class="growth-mode-details d-none">
                         <hr class="my-1">
                         <div class="d-flex justify-content-between">

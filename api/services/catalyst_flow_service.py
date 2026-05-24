@@ -1,0 +1,332 @@
+"""
+Catalyst Flow Service - scans watchlist options chains for unusual activity.
+
+Read-only service that surfaces research signals only.
+Reuses Moomoo connection for option chain data.
+"""
+
+import logging
+import time
+from datetime import datetime
+
+from core.catalyst_flow_decision import classify_catalyst_flow
+
+logger = logging.getLogger("api.services.catalyst_flow")
+
+
+class CatalystFlowService:
+    """Self-contained scanner for anomalous options flow."""
+
+    _shared_cache = {}
+    _shared_cache_ttl = 300  # 5 minutes
+
+    def __init__(self, config_provider=None, watchlist_provider=None):
+        self._config_provider = config_provider
+        self._watchlist_provider = watchlist_provider
+        self.connection = None
+
+    @property
+    def config(self):
+        if hasattr(self._config_provider, "config"):
+            return self._config_provider.config
+        return self._config_provider or {}
+
+    def _get_catalyst_config(self):
+        return self.config.get("catalyst_flow", {})
+
+    def _ensure_connection(self):
+        if self.connection is not None and self.connection.is_connected():
+            return self.connection
+        from core.connection import MoomooConnection
+        host = str(self.config.get("host", "127.0.0.1"))
+        port = int(self.config.get("port", 11111))
+        self.connection = MoomooConnection(
+            host=host, port=port,
+            readonly=True,
+            account_id=self.config.get("account_id"),
+            security_firm=self.config.get("security_firm"),
+        )
+        if self.connection.connect():
+            return self.connection
+        logger.error("CatalystFlowService: failed to connect to Moomoo")
+        return None
+
+    def _get_effective_watchlist(self):
+        manager = self._watchlist_provider
+        if manager is None:
+            from api.services.watchlist_manager import WatchlistManager
+            manager = WatchlistManager(config_provider=self._config_provider)
+        return manager.get_effective_watchlist(
+            growth_mode_config=self.config.get("growth_mode", {})
+        )
+
+    def get_signals(
+        self,
+        tickers=None,
+        limit=6,
+        refresh=False,
+        min_premium_notional=None,
+        min_volume=None,
+        min_fresh_volume_ratio=None,
+        max_scan_tickers=None,
+        max_expirations=None,
+    ):
+        """
+        Scan watchlist for anomalous options flow.
+
+        Args:
+            tickers: Optional list to override watchlist.
+            limit: Max signals to return.
+            refresh: Force bypass cache.
+            min_premium_notional: Override config premium threshold.
+            min_volume: Override config volume threshold.
+            min_fresh_volume_ratio: Override config fresh volume/OI threshold.
+            max_scan_tickers: Override config ticker scan cap.
+            max_expirations: Override config expiration scan cap.
+
+        Returns:
+            dict: { success, generated_at, count, signals, scanned, elapsed_seconds, thresholds }
+        """
+        start_ts = time.time()
+        conn = self._ensure_connection()
+        if not conn:
+            return {"success": False, "error": "Failed to connect to Moomoo", "signals": [], "count": 0}
+
+        cfg = self._get_catalyst_config()
+        if min_premium_notional is not None:
+            scan_config = dict(cfg)
+            scan_config["min_premium_notional"] = min_premium_notional
+        else:
+            scan_config = dict(cfg)
+        if min_volume is not None:
+            scan_config["min_volume"] = min_volume
+        if min_fresh_volume_ratio is not None:
+            scan_config["min_fresh_volume_ratio"] = min_fresh_volume_ratio
+        if max_scan_tickers is not None:
+            scan_config["max_scan_tickers"] = max_scan_tickers
+        if max_expirations is not None:
+            scan_config["max_expirations"] = max_expirations
+
+        watchlist = tickers or self._get_effective_watchlist()
+        limit = max(1, min(int(limit or 6), 20))
+        scan_limit = int(scan_config.get("max_scan_tickers", max(limit * 4, 25)))
+        scan_tickers = watchlist[: max(1, min(len(watchlist), scan_limit))]
+
+        from moomoo import RET_OK
+
+        all_signals = []
+        scanned = 0
+        errors = []
+        cache_hits = 0
+        tickers_scanned = []
+        candidate_count = 0
+        rejected_by_threshold_count = 0
+
+        for ticker in scan_tickers:
+            cached = CatalystFlowService._shared_cache.get(ticker)
+            if not refresh and cached and time.time() - cached["ts"] < CatalystFlowService._shared_cache_ttl:
+                if cached["signals"]:
+                    all_signals.extend(cached["signals"])
+                cache_hits += 1
+                continue
+
+            try:
+                result = self._scan_ticker(conn, ticker, scan_config)
+                scanned += 1
+                tickers_scanned.append(ticker)
+                if not result:
+                    rejected_by_threshold_count += 1
+            except Exception as exc:
+                logger.debug("Catalyst scan error %s: %s", ticker, exc)
+                errors.append(ticker)
+                result = None
+
+            CatalystFlowService._shared_cache[ticker] = {"ts": time.time(), "signals": result or []}
+            if result:
+                all_signals.extend(result)
+
+        all_signals.sort(key=lambda s: s.get("score", 0), reverse=True)
+        candidate_count = len(all_signals)
+
+        # Record surfaced signals to evaluator for tracking
+        self._record_signals(all_signals[:limit])
+
+        return {
+            "success": True,
+            "generated_at": datetime.now().isoformat(),
+            "count": min(len(all_signals), limit),
+            "signals": all_signals[:limit],
+            "scanned": scanned,
+            "cache_hits": cache_hits,
+            "errors": errors,
+            "tickers_scanned": tickers_scanned,
+            "candidate_count": candidate_count,
+            "rejected_by_threshold_count": rejected_by_threshold_count,
+            "research_only": True,
+            "elapsed_seconds": round(time.time() - start_ts, 1),
+            "thresholds": {
+                "min_premium_notional": scan_config.get("min_premium_notional", 1_000_000),
+                "min_fresh_volume_ratio": scan_config.get("min_fresh_volume_ratio", 5),
+                "min_volume": scan_config.get("min_volume", 500),
+                "max_expirations": scan_config.get("max_expirations", 3),
+                "max_dte": scan_config.get("max_dte", 60),
+                "max_scan_tickers": scan_config.get("max_scan_tickers", max(limit * 4, 25)),
+            },
+        }
+
+    def _scan_ticker(self, conn, ticker, config):
+        """Fetch option chains and classify catalyst flow for one ticker."""
+        from moomoo import RET_OK
+
+        stock_price = conn.get_stock_price(ticker)
+        stock_price_source = "moomoo"
+        if stock_price is None or stock_price <= 0:
+            price = self._get_fallback_price(ticker)
+            if not price:
+                return None
+            stock_price = price
+            stock_price_source = "yfinance"
+
+        ret, data = conn.get_option_expiration_dates(ticker)
+        if ret != RET_OK or data is None:
+            return None
+
+        exp_column = "expiration_date"
+        if exp_column not in data.columns:
+            if "strike_time" in data.columns:
+                exp_column = "strike_time"
+            elif "option_expiry_date" in data.columns:
+                exp_column = "option_expiry_date"
+            else:
+                return None
+
+        today = datetime.now().date()
+        max_dte = int(config.get("max_dte", 60))
+        valid_exps = []
+        for raw in data[exp_column].tolist():
+            exp_str = str(raw).replace("-", "")
+            try:
+                exp_date = datetime.strptime(exp_str, "%Y%m%d").date()
+                dte = (exp_date - today).days
+                if dte <= 0:
+                    continue
+                if dte > max_dte:
+                    continue
+                valid_exps.append((dte, exp_str))
+            except ValueError:
+                continue
+
+        valid_exps.sort(key=lambda x: x[0])
+        valid_exps = [v for _, v in valid_exps]
+
+        if not valid_exps:
+            return None
+
+        max_exp = min(len(valid_exps), int(config.get("max_expirations", 3)))
+        option_list = []
+
+        for exp_str in valid_exps[:max_exp]:
+            for right in ("C", "P"):
+                chain = conn.get_option_chain(ticker, exp_str, right, target_strike=stock_price)
+                if chain and chain.get("options"):
+                    side = "CALL" if right == "C" else "PUT"
+                    for opt in chain["options"]:
+                        normalized = dict(opt)
+                        normalized["option_type"] = side
+                        normalized["expiration"] = normalized.get("expiration") or exp_str
+                        option_list.append(normalized)
+
+        if not option_list:
+            return None
+
+        from db.database import OptionsDatabase
+        db_path = self.config.get("db_path", "options.db")
+        from api.services.iv_earnings_service import IVEarningsService
+        try:
+            db_earn = OptionsDatabase(db_path)
+            iv_svc = IVEarningsService(db_earn)
+            earnings_info = iv_svc.get_earnings_info(ticker)
+        except Exception:
+            earnings_info = {}
+
+        signals = classify_catalyst_flow(
+            ticker=ticker,
+            stock_price=stock_price,
+            option_list=option_list,
+            earnings_info=earnings_info,
+            config=config,
+        )
+
+        if not signals:
+            return None
+
+        normalized_signals = []
+        for signal in signals:
+            item = signal.to_dict()
+            item["stock_price_source"] = stock_price_source
+            normalized_signals.append(item)
+        return normalized_signals
+
+    def _record_signals(self, signals: list[dict]):
+        """Record surfaced catalyst signals to evaluator for outcome tracking."""
+        try:
+            cfg = self.config.get("evaluator", {})
+            if not cfg.get("enabled", True) or not cfg.get("record_signals", True):
+                return
+            from db.database import OptionsDatabase
+            db_path = self.config.get("db_path", "options.db")
+            db = OptionsDatabase(db_path)
+            formatted = []
+            for rank, sig in enumerate(signals, 1):
+                formatted.append({
+                    "ticker": sig.get("ticker"),
+                    "option_type": sig.get("side"),
+                    "strike": sig.get("strike"),
+                    "expiration": (sig.get("cluster_expirations") or [None])[0] or "",
+                    "dte": None,
+                    "signal_type": "catalyst_flow",
+                    "strategy": "catalyst_watch",
+                    "data_source": "moomoo",
+                    "rank": rank,
+                    "score": sig.get("score", 0),
+                    "confidence": sig.get("score", 0),
+                    "annualized_return": None,
+                    "premium_per_contract": None,
+                    "delta": None,
+                    "implied_volatility": None,
+                    "capital_required": None,
+                    "wheel_decision": {},
+                    "score_details": sig,
+                })
+            db.evaluator.record_surfaced_signals(formatted, source="catalyst_watch")
+        except Exception as exc:
+            logger.debug("Failed to record catalyst signals to evaluator: %s", exc)
+
+    def get_ticker_warnings(self, ticker: str) -> list[str]:
+        """Return defensive warnings from shared cache only — never triggers broker calls."""
+        cached = CatalystFlowService._shared_cache.get(ticker)
+        if not cached or not cached.get("signals"):
+            return []
+        if time.time() - cached.get("ts", 0) > CatalystFlowService._shared_cache_ttl:
+            return []
+        warnings = []
+        for sig in cached["signals"]:
+            side = sig.get("side")
+            if side == "CALL" and not sig.get("is_hedged"):
+                warnings.append("Bullish call flow detected \u2014 upside cap risk for covered calls")
+            elif side == "PUT" and not sig.get("is_hedged"):
+                warnings.append("Bearish put flow detected \u2014 tail risk for CSPs")
+        return warnings
+
+    def _get_fallback_price(self, ticker):
+        """Get stock price from yfinance as fallback."""
+        try:
+            import yfinance as yf
+            from api.services.utils import clean_yfinance_ticker
+            bare = clean_yfinance_ticker(ticker)
+            hist = yf.Ticker(bare).history(period="1d")
+            if not hist.empty:
+                return float(hist["Close"].iloc[-1])
+        except Exception:
+            logger.warning("YFinance price fallback failed for %s", ticker, exc_info=True)
+        return None

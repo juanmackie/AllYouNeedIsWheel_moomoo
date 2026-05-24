@@ -141,6 +141,14 @@ class TestOtmOptions(unittest.TestCase):
     def test_returns_options_successfully(self, mock_probe, mock_get_svc):
         """Should return OTM options for valid parameters."""
         mock_probe.return_value = {'status': 'connected'}
+        self.mock_service.get_otm_options.return_value = {
+            'data': {
+                'AAPL': {
+                    'calls': [{'price_source': 'yfinance', 'chain_source': 'yfinance'}],
+                    'puts': [],
+                }
+            }
+        }
         mock_get_svc.return_value = self.mock_service
 
         app = _make_app()
@@ -149,7 +157,8 @@ class TestOtmOptions(unittest.TestCase):
             data = resp.get_json()
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(data['status'], 'success')
+        self.assertEqual(data['source_policy']['mode'], 'research_with_fallbacks')
+        self.assertIn('yfinance', data['source_policy']['external_fallback_sources_used'])
         self.mock_service.get_otm_options.assert_called_once_with(
             ticker='AAPL', otm_percentage=10.0,
             option_type=None, expiration=None
@@ -341,6 +350,11 @@ class TestExpirations(unittest.TestCase):
     def test_returns_expirations(self, mock_probe, mock_get_svc):
         """Should return option expirations for a ticker."""
         mock_probe.return_value = {'status': 'connected'}
+        self.mock_service.get_option_expirations.return_value = {
+            'ticker': 'AAPL',
+            'expiration_source': 'yfinance',
+            'expirations': ['20240510', '20240610']
+        }
         mock_get_svc.return_value = self.mock_service
 
         app = _make_app()
@@ -352,6 +366,7 @@ class TestExpirations(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn('expirations', data)
         self.assertEqual(len(data['expirations']), 2)
+        self.assertIn('yfinance', data['source_policy']['external_fallback_sources_used'])
         self.mock_service.get_option_expirations.assert_called_once_with('AAPL', None)
 
     @patch('api.routes.options.get_options_service')
@@ -452,12 +467,13 @@ class TestTopRecommendations(unittest.TestCase):
             'cash_balance': 10000, 'positions': {}
         }
 
+    @patch('api.routes.options._generate_in_background')
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
     @patch('api.routes.options.recommendation_cache')
     def test_returns_recommendations_cache_miss(self, mock_cache, mock_probe,
-                                                  mock_get_svc):
-        """Should fetch fresh recommendations on cache miss."""
+                                                  mock_get_svc, mock_gen):
+        """Should return generating signal on cache miss with no stale fallback."""
         mock_probe.return_value = {'status': 'connected'}
         mock_cache.get.return_value = (None, {'cache_status': 'MISS'})
         mock_get_svc.return_value = self.mock_service
@@ -467,10 +483,11 @@ class TestTopRecommendations(unittest.TestCase):
             resp = client.get('/api/options/top-recommendations')
             data = resp.get_json()
 
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn('signals', data)
-        self.assertEqual(data['_cache']['cache_status'], 'MISS')
-        self.mock_service.get_top_recommendations.assert_called_once()
+        self.assertEqual(resp.status_code, 202)
+        self.assertTrue(data.get('generating'))
+        self.assertEqual(data.get('message'), 'Signals are being computed. Check back shortly.')
+        self.mock_service._get_portfolio_context.assert_called_once_with(refresh=False)
+        mock_gen.assert_called_once()
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
@@ -497,6 +514,7 @@ class TestTopRecommendations(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(data['_cache']['cache_status'], 'HIT')
+        self.mock_service._get_portfolio_context.assert_called_once_with(refresh=False)
         # Should NOT call get_top_recommendations (cache hit)
         self.mock_service.get_top_recommendations.assert_not_called()
 
@@ -534,7 +552,7 @@ class TestTopRecommendations(unittest.TestCase):
     @patch('api.routes.options.recommendation_cache')
     def test_manual_refresh_bypasses_cache(self, mock_cache, mock_probe,
                                             mock_get_svc):
-        """Should bypass cache when refresh=true."""
+        """Should bypass cache when refresh=true and return generating signal."""
         mock_probe.return_value = {'status': 'connected'}
         mock_get_svc.return_value = self.mock_service
 
@@ -544,19 +562,20 @@ class TestTopRecommendations(unittest.TestCase):
                               query_string={'refresh': 'true'})
             data = resp.get_json()
 
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(data['_cache']['cache_status'], 'MISS')
-        # Should call get_top_recommendations despite cache
-        self.mock_service.get_top_recommendations.assert_called_once()
+        self.assertEqual(resp.status_code, 202)
+        self.assertTrue(data.get('generating'))
+        self.assertEqual(data.get('message'), 'Signals are being computed. Check back shortly.')
 
+    @patch('api.routes.options._generate_in_background')
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
     @patch('api.routes.options.recommendation_cache')
     def test_fallback_to_stale_on_failure(self, mock_cache, mock_probe,
-                                           mock_get_svc):
+                                           mock_get_svc, mock_gen):
         """Should return stale cache as fallback when fresh fetch fails.
 
-        Flow: cache miss → fresh fetch fails with error → fallback to stale.
+        Flow: cache miss → fresh generation starts in background → 
+              stale fallback returned immediately.
         """
         mock_probe.return_value = {'status': 'connected'}
         self.mock_service.get_top_recommendations.return_value = {
@@ -566,7 +585,7 @@ class TestTopRecommendations(unittest.TestCase):
             'signals': [{'ticker': 'AAPL', 'score': 80}],
         }
         # First call (from the main cache check) returns MISS
-        # Second call (from the error fallback handler) returns stale data
+        # Second call (from the stale fallback handler) returns stale data
         mock_cache.get.side_effect = [
             (None, {'cache_status': 'MISS', 'cache_age_seconds': 0,
                      'portfolio_changed': False, 'is_valid': True,
@@ -588,10 +607,11 @@ class TestTopRecommendations(unittest.TestCase):
         # The stale data should be served despite API failure
         self.assertEqual(data['signals'][0]['ticker'], 'AAPL')
 
+    @patch('api.routes.options._generate_in_background')
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
     @patch('api.routes.options.recommendation_cache')
-    def test_enforces_limit_range(self, mock_cache, mock_probe, mock_get_svc):
+    def test_enforces_limit_range(self, mock_cache, mock_probe, mock_get_svc, mock_gen):
         """Should clamp limit between 1 and 10."""
         mock_probe.return_value = {'status': 'connected'}
         mock_cache.get.return_value = (None, {'cache_status': 'MISS'})
@@ -602,8 +622,38 @@ class TestTopRecommendations(unittest.TestCase):
             client.get('/api/options/top-recommendations',
                        query_string={'limit': '100'})
 
-        # Should clamp to 10
-        self.mock_service.get_top_recommendations.assert_called_once_with(limit=10)
+        # Should clamp to 10 when passed to background generation
+        mock_gen.assert_called_once()
+        args, _ = mock_gen.call_args
+        _, limit, _ = args
+        self.assertEqual(limit, 10)
+
+    @patch('api.routes.options._generate_in_background')
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
+    @patch('api.routes.options.recommendation_cache')
+    def test_generating_on_cache_miss(self, mock_cache, mock_probe,
+                                       mock_get_svc, mock_gen):
+        """Should return 202 generating when cache is cold (no stale fallback)."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_cache.get.return_value = (None, {'cache_status': 'MISS',
+                                                'cache_age_seconds': 0,
+                                                'portfolio_changed': False,
+                                                'is_valid': True,
+                                                'background_refresh_failed': False,
+                                                'cached_at': ''})
+        mock_get_svc.return_value = self.mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/top-recommendations')
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 202)
+        self.assertTrue(data.get('generating'))
+        self.assertEqual(data.get('message'), 'Signals are being computed. Check back shortly.')
+        # Background generation should have been started
+        mock_gen.assert_called_once()
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')

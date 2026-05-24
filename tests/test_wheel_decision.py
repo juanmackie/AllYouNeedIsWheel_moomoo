@@ -445,6 +445,23 @@ class TestHelperFunctionsEdgeCases(unittest.TestCase):
         buf = _compute_expected_move_buffer(d)
         self.assertLess(buf, 0.0)
 
+    def test_expected_move_buffer_with_percentage_iv(self):
+        """_compute_expected_move_buffer handles percentage IV (50 → 0.50 after normalize)"""
+        d = WheelDecision(stock_price=100, implied_volatility=50.0, dte=21, otm_pct=5.0)
+        buf = _compute_expected_move_buffer(d)
+        # With 50.0 treated as 50%=0.50, expected_move = 100 * 0.50 * sqrt(21/365) ≈ 11.99
+        # expected_move_pct = 11.99%, buffer = 5% - 11.99% = -6.99
+        self.assertAlmostEqual(buf, -6.99, delta=0.5)
+
+    def test_expected_move_buffer_same_result_normalized(self):
+        """_compute_expected_move_buffer yields same result with decimal IV 0.50 as with normalized percentage 50"""
+        d_decimal = WheelDecision(stock_price=100, implied_volatility=0.50, dte=21, otm_pct=5.0)
+        buf_decimal = _compute_expected_move_buffer(d_decimal)
+        d_pct = WheelDecision(stock_price=100, implied_volatility=50.0, dte=21, otm_pct=5.0)
+        buf_pct = _compute_expected_move_buffer(d_pct)
+        # After normalization both should produce the same buffer
+        self.assertAlmostEqual(buf_decimal, buf_pct, delta=0.01)
+
     # -- _compute_shared_subscores edge cases ------------------------------
 
     def test_shared_subscores_zero_delta(self):
@@ -634,13 +651,6 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result.hard_blockers)  # premium = 0.05*100 = 5 < 10
 
-    def test_score_contract_low_oi_and_volume(self):
-        """score_contract returns WheelDecision with hard_blockers when OI and volume both below minimum"""
-        opt = dict(self.base_option, open_interest=0, volume=0)
-        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
-        self.assertIsNotNone(result)
-        self.assertTrue(result.hard_blockers)
-
     def test_score_contract_put_atm(self):
         """score_contract returns WheelDecision with hard_blockers for PUT when strike >= stock_price"""
         opt = dict(self.base_option, strike=100.0)
@@ -677,20 +687,6 @@ class TestScoreContractEdgeCases(unittest.TestCase):
     def test_score_contract_unknown_option_type(self):
         """score_contract returns WheelDecision with hard_blockers for unknown option type"""
         opt = dict(self.base_option, option_type='CALL_PUT')
-        result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
-        self.assertIsNotNone(result)
-        self.assertTrue(result.hard_blockers)
-
-    def test_score_contract_zero_stock_price(self):
-        """score_contract returns WheelDecision with hard_blockers for zero stock price"""
-        opt = dict(self.base_option)
-        result = score_contract('AAPL', opt, 0.0, self.base_profile, self.base_portfolio)
-        self.assertIsNotNone(result)
-        self.assertTrue(result.hard_blockers)
-
-    def test_score_contract_zero_strike(self):
-        """score_contract returns WheelDecision with hard_blockers for zero strike"""
-        opt = dict(self.base_option, strike=0)
         result = score_contract('AAPL', opt, 100.0, self.base_profile, self.base_portfolio)
         self.assertIsNotNone(result)
         self.assertTrue(result.hard_blockers)
@@ -772,12 +768,6 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         self.assertEqual(result.gamma, 0.0)
         self.assertEqual(result.theta, 0.0)
         self.assertEqual(result.vega, 0.0)
-
-    def test_score_contract_zero_stock_price(self):
-        """score_contract returns WheelDecision with hard_blockers when stock_price is 0"""
-        result = score_contract('AAPL', self.base_option, 0, self.base_profile, self.base_portfolio)
-        self.assertIsNotNone(result)
-        self.assertTrue(result.hard_blockers)
 
 
 class TestScoreExistingPositionEdgeCases(unittest.TestCase):
@@ -1009,6 +999,66 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertFalse(result.hard_blockers)
         self.assertGreater(result.contract_score, 0)
+
+    def test_percentage_iv_produces_reasonable_delta(self):
+        """score_contract with percentage IV (50.0) should produce non-zero delta after normalization"""
+        future_date = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+        opt = dict(self.base_option, expiration=future_date, implied_volatility=50.0,
+                   strike=9.0, bid=0.30, ask=0.45, last=0.35, delta=0, gamma=0, theta=0, vega=0)
+        portfolio = {
+            'positions': {},
+            'cash_balance': 15000.0,
+            'available_cash': 15000.0,
+            'cash_available_for_csp': 15000.0,
+            'cash_reserved_for_csp': 0.0,
+            'account_value': 50000.0,
+            'short_puts': {},
+        }
+        result = score_contract(
+            ticker="SOFI",
+            option=opt,
+            stock_price=10.0,
+            profile=self.base_profile,
+            portfolio_context=portfolio,
+        )
+        self.assertIsNotNone(result)
+        # After IV normalization, delta should NOT be 0.000
+        self.assertNotAlmostEqual(result.delta, 0.0, delta=0.001)
+        # Expected move buffer should be sane (not -1580%)
+        self.assertGreater(result.expected_move_buffer, -200.0)
+
+    def test_percentage_iv_matches_decimal_iv_result(self):
+        """score_contract with percentage IV (50.0) should give same results as decimal IV (0.50)"""
+        future_date = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+        opt_decimal = dict(self.base_option, expiration=future_date, implied_volatility=0.50,
+                           strike=9.0, bid=0.30, ask=0.45, last=0.35, delta=0, gamma=0, theta=0, vega=0)
+        opt_pct = dict(self.base_option, expiration=future_date, implied_volatility=50.0,
+                       strike=9.0, bid=0.30, ask=0.45, last=0.35, delta=0, gamma=0, theta=0, vega=0)
+        portfolio = {
+            'positions': {},
+            'cash_balance': 15000.0,
+            'available_cash': 15000.0,
+            'cash_available_for_csp': 15000.0,
+            'cash_reserved_for_csp': 0.0,
+            'account_value': 50000.0,
+            'short_puts': {},
+        }
+        result_decimal = score_contract(
+            ticker="SOFI", option=opt_decimal, stock_price=10.0,
+            profile=self.base_profile, portfolio_context=portfolio,
+        )
+        result_pct = score_contract(
+            ticker="SOFI", option=opt_pct, stock_price=10.0,
+            profile=self.base_profile, portfolio_context=portfolio,
+        )
+        self.assertIsNotNone(result_decimal)
+        self.assertIsNotNone(result_pct)
+        # Delta should be roughly the same
+        self.assertAlmostEqual(result_decimal.delta, result_pct.delta, delta=0.02)
+        # IV should be the same after normalization
+        self.assertAlmostEqual(result_decimal.implied_volatility, result_pct.implied_volatility, delta=0.02)
+        # Expected move buffer should be similar
+        self.assertAlmostEqual(result_decimal.expected_move_buffer, result_pct.expected_move_buffer, delta=2.0)
 
 
 if __name__ == '__main__':

@@ -129,6 +129,15 @@ class TestPortfolioServiceCaching(unittest.TestCase):
         self.assertEqual(result, {'account_value': 20000})
         self.svc._fetch_portfolio.assert_called_once()
 
+    def test_peek_cached_portfolio_returns_without_refresh(self):
+        self.svc._portfolio_cache = {'account_value': 10000}
+        self.svc._portfolio_cache_time = datetime.now() - timedelta(seconds=60)
+        self.svc._fetch_portfolio = Mock(side_effect=AssertionError('should not refresh'))
+
+        result = self.svc.peek_cached_portfolio()
+        self.assertEqual(result, {'account_value': 10000})
+        self.svc._fetch_portfolio.assert_not_called()
+
     def test_invalidate_cache_clears(self):
         self.svc._portfolio_cache = {'account_value': 10000}
         self.svc._portfolio_cache_time = datetime.now()

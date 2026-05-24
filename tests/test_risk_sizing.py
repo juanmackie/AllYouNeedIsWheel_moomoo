@@ -46,17 +46,17 @@ class TestRiskSizingService(unittest.TestCase):
         expected = int(risk_amount // risk_per_contract)
         self.assertEqual(expected, 1)
     
-    def test_cache_validity(self):
-        """Cache should be valid for 15 minutes"""
-        entry = {
-            'data': {},
-            'timestamp': __import__('datetime').datetime.now()
-        }
-        self.assertTrue(self.service._is_cache_valid(entry))
-        
-        # Expire the cache
-        entry['timestamp'] = __import__('datetime').datetime.now() - __import__('datetime').timedelta(minutes=20)
-        self.assertFalse(self.service._is_cache_valid(entry))
+    def test_cache_clear_by_ticker_prefix(self):
+        """Ticker-level cache clearing should remove all matching variants."""
+        self.service._set_cached('AAPL_45000_0.01_14', {'max_contracts': 1})
+        self.service._set_cached('AAPL_50000_0.02_14', {'max_contracts': 2})
+        self.service._set_cached('MSFT_45000_0.01_14', {'max_contracts': 3})
+
+        self.service.clear_cache('AAPL')
+
+        self.assertIsNone(self.service._get_cached('AAPL_45000_0.01_14'))
+        self.assertIsNone(self.service._get_cached('AAPL_50000_0.02_14'))
+        self.assertIsNotNone(self.service._get_cached('MSFT_45000_0.01_14'))
 
 
 if __name__ == '__main__':

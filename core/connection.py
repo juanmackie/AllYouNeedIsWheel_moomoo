@@ -24,21 +24,6 @@ from core.context_factory import probe_opend_status, create_contexts
 
 from core.ticker_utils import TickerCache, format_symbol
 
-from core.context_factory import probe_opend_status, create_contexts
-from core.connection_constants import (
-    _safe_close_context,
-    _is_truthy_flag,
-    _clean_account_id,
-    _env_name,
-    _normalize_trd_env,
-    _normalize_security_firm,
-    _infer_security_type_from_code,
-    _parse_option_code_metadata,
-    _safe_float,
-    _first_non_zero,
-)
-from core.ticker_utils import TickerCache, format_symbol
-
 # MoomooConnection is lazy-loaded via __getattr__ to avoid
 # triggering moomoo SDK imports at module-load time.
 

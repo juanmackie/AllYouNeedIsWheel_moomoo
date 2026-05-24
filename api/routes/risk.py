@@ -4,6 +4,7 @@ Exposes ATR-based position sizing via REST API.
 """
 
 import logging
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from flask import Blueprint, request, jsonify
 from api.routes.utils import error_response, success_response
 from api.services.risk_sizing_service import get_risk_sizing_service
@@ -11,6 +12,38 @@ from api.services.risk_sizing_service import get_risk_sizing_service
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('risk', __name__, url_prefix='/api/risk')
+
+
+class SizingQuery(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    ticker: str = Field(min_length=1)
+    account_value: float = Field(default=45000, gt=0)
+    risk_pct: float = Field(default=0.01, gt=0, le=1)
+    atr_period: int = Field(default=14, gt=0)
+
+    @field_validator('ticker', mode='before')
+    @classmethod
+    def _normalize_ticker(cls, value):
+        return str(value).strip().upper()
+
+
+class BatchSizingRequest(BaseModel):
+    tickers: list[str] = Field(default_factory=list)
+    account_value: float = Field(default=45000, gt=0)
+    risk_pct: float = Field(default=0.01, gt=0, le=1)
+
+    @field_validator('tickers', mode='before')
+    @classmethod
+    def _normalize_tickers(cls, value):
+        if value is None:
+            return []
+        return [str(t).strip().upper() for t in value if str(t).strip()]
+
+
+def _validation_error(exc: ValidationError):
+    message = '; '.join(err.get('msg', 'Invalid value') for err in exc.errors()) or 'Invalid request parameters'
+    return error_response(message, status_code=400)
 
 
 @bp.route('/sizing')
@@ -27,29 +60,25 @@ def get_sizing():
     Returns:
         JSON with sizing breakdown.
     """
-    ticker = request.args.get('ticker', '').strip().upper()
-    if not ticker:
-        return error_response('Missing required parameter: ticker', status_code=400)
-
     try:
-        account_value = float(request.args.get('account_value', 45000))
-        risk_pct = float(request.args.get('risk_pct', 0.01))
-        atr_period = int(request.args.get('atr_period', 14))
+        params = SizingQuery.model_validate(request.args.to_dict())
 
         service = get_risk_sizing_service()
         result = service.calculate_position_size(
-            ticker=ticker,
-            account_value=account_value,
-            risk_pct=risk_pct,
-            atr_period=atr_period
+            ticker=params.ticker,
+            account_value=params.account_value,
+            risk_pct=params.risk_pct,
+            atr_period=params.atr_period,
         )
 
         return success_response({
             'data': result,
         })
 
+    except ValidationError as exc:
+        return _validation_error(exc)
     except Exception as e:
-        logger.error(f"Error calculating position size for {ticker}: {e}")
+        logger.error(f"Error calculating position size: {e}")
         return error_response(str(e))
 
 
@@ -65,23 +94,19 @@ def get_batch_sizing():
         JSON with sizing for each ticker.
     """
     try:
-        data = request.get_json()
-        tickers = data.get('tickers', [])
-        account_value = float(data.get('account_value', 45000))
-        risk_pct = float(data.get('risk_pct', 0.01))
-
-        if not tickers:
+        payload = BatchSizingRequest.model_validate(request.get_json(silent=True) or {})
+        if not payload.tickers:
             return error_response('No tickers provided', status_code=400)
 
         service = get_risk_sizing_service()
         results = {}
 
-        for ticker in tickers:
+        for ticker in payload.tickers:
             try:
                 result = service.calculate_position_size(
-                    ticker=ticker.strip().upper(),
-                    account_value=account_value,
-                    risk_pct=risk_pct
+                    ticker=ticker,
+                    account_value=payload.account_value,
+                    risk_pct=payload.risk_pct,
                 )
                 results[ticker] = result
             except Exception as e:
@@ -92,6 +117,8 @@ def get_batch_sizing():
             'data': results,
         })
 
+    except ValidationError as exc:
+        return _validation_error(exc)
     except Exception as e:
         logger.error(f"Error in batch sizing: {e}")
         return error_response(str(e))

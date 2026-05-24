@@ -192,9 +192,9 @@ class OptionsService:
         """Get top signals (delegates to recommendation_engine)."""
         return self.recommendation_engine.get_top_recommendations(limit)
 
-    def _get_portfolio_context(self):
-        """Get portfolio context (delegates to portfolio_context_helper)"""
-        return self.portfolio_context_helper.get_portfolio_context()
+    def _get_portfolio_context(self, refresh=True):
+        """Get portfolio context (delegates to portfolio_context_helper)."""
+        return self.portfolio_context_helper.get_portfolio_context(refresh=refresh)
 
     def _calculate_cash_reserved(self, portfolio_context):
         """Calculate cash reserved (delegates to portfolio_context_helper)"""

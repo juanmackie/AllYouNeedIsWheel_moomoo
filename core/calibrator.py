@@ -1,40 +1,32 @@
 """
 Calibrator — automatic weight adjustment from historical outcomes.
 
-Reads resolved outcomes from the evaluator DB and adjusts scoring weights
-to minimise the gap between predicted score rank and actual realised return.
+Stores calibration results in the app's options.db via EvaluatorRepository.
+The old independent SQLite files are no longer used.
 
-This is a simple gradient-free optimiser that tweaks weights in small
+Calibration is a simple gradient-free optimiser that tweaks weights in small
 steps and keeps the combination that best predicts actual outcomes.
 
-Usage:
-    from core.calibrator import run_calibration_cycle
-    result = run_calibration_cycle()
+Scoring does NOT consume calibration weights automatically unless enabled
+via the 'calibrator_enabled' and 'calibrator_shadow_mode' feature flags.
 """
 
+import random
 import logging
-import sqlite3
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass, field, asdict
 from typing import Optional
-
-from core.evaluator import get_recent_outcomes, get_summary_stats
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Weight profile
-# ---------------------------------------------------------------------------
 
 @dataclass
 class ScoringWeights:
-    """Configurable weights for the growth-oriented scoring formula."""
-    iv_adjusted: float = 0.35      # premium weight
-    theta_delta: float = 0.15      # theta decay weight
-    liquidity: float = 0.15        # liquidity weight
-    expected_value: float = 0.10   # EV weight
-    upside_or_buffer: float = 0.15 # upside (CALL) or buffer/CE (PUT)
-    otm_fit: float = 0.10         # OTM proximity weight
+    iv_adjusted: float = 0.35
+    theta_delta: float = 0.15
+    liquidity: float = 0.15
+    expected_value: float = 0.10
+    upside_or_buffer: float = 0.15
+    otm_fit: float = 0.10
 
     def to_tuple(self) -> tuple:
         return (self.iv_adjusted, self.theta_delta, self.liquidity,
@@ -45,7 +37,6 @@ class ScoringWeights:
         return cls(*t)
 
     def normalise(self):
-        """Ensure weights sum to 1.0."""
         total = sum(self.to_tuple())
         if total > 0:
             self.iv_adjusted /= total
@@ -55,173 +46,73 @@ class ScoringWeights:
             self.upside_or_buffer /= total
             self.otm_fit /= total
 
-
-DEFAULT_GROWTH_WEIGHTS = ScoringWeights(
-    iv_adjusted=0.35,
-    theta_delta=0.15,
-    liquidity=0.15,
-    expected_value=0.10,
-    upside_or_buffer=0.15,
-    otm_fit=0.10,
-)
-
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
-
-CALIBRATION_DB = Path.home() / '.wheel' / 'evaluator' / 'calibration.db'
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
-def _get_calibration_db() -> sqlite3.Connection:
-    CALIBRATION_DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(CALIBRATION_DB))
-    conn.row_factory = sqlite3.Row
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS calibration_history (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            cycle           INTEGER NOT NULL,
-            w_iv_adjusted   REAL,
-            w_theta_delta   REAL,
-            w_liquidity     REAL,
-            w_expected_value REAL,
-            w_upside_buffer REAL,
-            w_otm_fit       REAL,
-            loss            REAL,
-            samples         INTEGER,
-            created_at      TEXT
-        )
-    """)
-    return conn
-
-
-def _save_calibration(cycle: int, weights: ScoringWeights, loss: float, samples: int):
-    conn = _get_calibration_db()
-    try:
-        conn.execute("""
-            INSERT INTO calibration_history
-                (cycle, w_iv_adjusted, w_theta_delta, w_liquidity,
-                 w_expected_value, w_upside_buffer, w_otm_fit,
-                 loss, samples, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            cycle,
-            weights.iv_adjusted, weights.theta_delta, weights.liquidity,
-            weights.expected_value, weights.upside_or_buffer, weights.otm_fit,
-            loss, samples,
-            __import__('datetime').datetime.now().isoformat(),
-        ))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_latest_calibration() -> Optional[dict]:
-    """Return the most recent calibration result."""
-    conn = _get_calibration_db()
-    try:
-        row = conn.execute(
-            "SELECT * FROM calibration_history ORDER BY cycle DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Loss function
-# ---------------------------------------------------------------------------
-
-def _compute_loss(weights: ScoringWeights, outcomes: list[dict]) -> float:
-    """
-    Compute the mean absolute error between predicted rank and actual outcome.
-
-    Lower loss = better calibration.  Uses the predicted score (contract_score)
-    as a rank proxy vs. actual annualised return.
-    """
-    scored = []
-    for o in outcomes:
-        pred = o.get('predicted_score') or 0
-        actual = o.get('actual_ann_return') or 0
-        if pred > 0 and o.get('actual_outcome') in ('expired_worthless', 'assigned'):
-            # For expired-worthless, the actual return is the premium kept
-            # For assigned, adjust for the cost basis
-            scored.append((pred, actual))
-
-    if len(scored) < 10:
-        return float('inf')  # Not enough data
-
-    # Mean absolute error of z-score normalised values
-    preds = [s[0] for s in scored]
-    actuals = [s[1] for s in scored]
-    p_mean = sum(preds) / len(preds)
-    a_mean = sum(actuals) / len(actuals)
-    p_std = (sum((p - p_mean)**2 for p in preds) / len(preds))**0.5 or 1
-    a_std = (sum((a - a_mean)**2 for a in actuals) / len(actuals))**0.5 or 1
-
-    error = sum(abs((p - p_mean)/p_std - (a - a_mean)/a_std) for p, a in scored) / len(scored)
-    return error
-
-
-# ---------------------------------------------------------------------------
-# Optimisation
-# ---------------------------------------------------------------------------
-
-def _perturb(weights: ScoringWeights, step: float = 0.03) -> ScoringWeights:
-    """Randomly perturb each weight by ±step, then normalise."""
-    import random
-    new = ScoringWeights(
-        iv_adjusted=weights.iv_adjusted + random.uniform(-step, step),
-        theta_delta=weights.theta_delta + random.uniform(-step, step),
-        liquidity=weights.liquidity + random.uniform(-step, step),
-        expected_value=weights.expected_value + random.uniform(-step, step),
-        upside_or_buffer=weights.upside_or_buffer + random.uniform(-step, step),
-        otm_fit=weights.otm_fit + random.uniform(-step, step),
-    )
-    new.normalise()
-    return new
+DEFAULT_GROWTH_WEIGHTS = ScoringWeights()
 
 
 def run_calibration_cycle(
+    evaluator_repo,
     outcomes: Optional[list[dict]] = None,
     iterations: int = 100,
     step: float = 0.03,
+    config: Optional[dict] = None,
 ) -> dict:
     """
     Run one calibration cycle.
 
-    1. Fetch resolved outcomes from the evaluator DB.
+    1. Fetch resolved valid outcomes from evaluator_repo.
     2. Start from the default growth weights (or last calibration).
     3. Try random perturbations and keep the best.
-    4. Save the result.
+    4. Save the result. When calibrator_enabled=True, accepted=True is stored
+       so downstream consumers can query accepted calibration weights.
+       In shadow mode (calibrator_shadow_mode=True, calibrator_enabled=False),
+       weights are stored as accepted=False for comparison only.
+    5. Calibration weights are NOT auto-applied to live scoring — that requires
+       explicit integration in the scorer (future work).
 
     Returns a summary dict.
     """
+    if config is None:
+        config = {}
+
+    if not config.get('enabled', True):
+        return {'success': False, 'message': 'Evaluator disabled', 'samples': 0}
+
+    calibrator_enabled = config.get('calibrator_enabled', False)
+    calibrator_shadow = config.get('calibrator_shadow_mode', True)
+
+    if not calibrator_enabled and not calibrator_shadow:
+        return {'success': False, 'message': 'Calibrator disabled via feature flag', 'samples': 0}
+
     if outcomes is None:
-        outcomes = get_recent_outcomes(days=90)
+        outcomes = evaluator_repo.get_valid_training_outcomes(limit=200)
+    else:
+        outcomes = [o for o in outcomes if o.get('resolved_outcome') is not None]
 
-    # Exclude unresolved
-    outcomes = [o for o in outcomes if o.get('actual_outcome') is not None]
-
-    if len(outcomes) < 10:
+    min_samples = config.get('calibrator_min_samples', 50)
+    if len(outcomes) < min_samples:
         return {
             'success': False,
-            'message': f'Need >=10 resolved outcomes, got {len(outcomes)}',
+            'message': f'Need >= {min_samples} resolved outcomes, got {len(outcomes)}',
             'samples': len(outcomes),
         }
 
-    # Starting weights
-    last = get_latest_calibration()
-    if last:
+    # Starting weights — from last calibration or defaults
+    last = evaluator_repo.get_latest_calibration()
+    if last and last.get('weights'):
         best = ScoringWeights(
-            iv_adjusted=last['w_iv_adjusted'],
-            theta_delta=last['w_theta_delta'],
-            liquidity=last['w_liquidity'],
-            expected_value=last['w_expected_value'],
-            upside_or_buffer=last['w_upside_buffer'],
-            otm_fit=last['w_otm_fit'],
+            iv_adjusted=last['weights'].get('iv_adjusted', 0.35),
+            theta_delta=last['weights'].get('theta_delta', 0.15),
+            liquidity=last['weights'].get('liquidity', 0.15),
+            expected_value=last['weights'].get('expected_value', 0.10),
+            upside_or_buffer=last['weights'].get('upside_or_buffer', 0.15),
+            otm_fit=last['weights'].get('otm_fit', 0.10),
         )
     else:
-        best = ScoringWeights(**DEFAULT_GROWTH_WEIGHTS.to_tuple())
+        best = ScoringWeights()
 
     best_loss = _compute_loss(best, outcomes)
 
@@ -232,40 +123,67 @@ def run_calibration_cycle(
             best = candidate
             best_loss = loss
 
-    # Determine cycle number
-    conn = _get_calibration_db()
-    try:
-        row = conn.execute("SELECT MAX(cycle) as m FROM calibration_history").fetchone()
-        cycle = (row['m'] or 0) + 1
-    finally:
-        conn.close()
+    cycle = evaluator_repo.get_next_calibration_cycle()
 
-    _save_calibration(cycle, best, best_loss, len(outcomes))
+    # Run shadow loss on current default weights for comparison
+    shadow_loss = _compute_loss(DEFAULT_GROWTH_WEIGHTS, outcomes)
+
+    evaluator_repo.save_calibration(
+        cycle=cycle,
+        samples=len(outcomes),
+        loss=best_loss,
+        weights=best.to_dict(),
+        shadow_loss=shadow_loss,
+        accepted=calibrator_enabled,
+    )
 
     return {
         'success': True,
         'cycle': cycle,
         'samples': len(outcomes),
         'loss': round(best_loss, 4),
-        'weights': {
-            'iv_adjusted': round(best.iv_adjusted, 4),
-            'theta_delta': round(best.theta_delta, 4),
-            'liquidity': round(best.liquidity, 4),
-            'expected_value': round(best.expected_value, 4),
-            'upside_or_buffer': round(best.upside_or_buffer, 4),
-            'otm_fit': round(best.otm_fit, 4),
-        },
+        'shadow_loss': round(shadow_loss, 4),
+        'weights': best.to_dict(),
+        'improvement': round(shadow_loss - best_loss, 4) if shadow_loss != float('inf') else None,
     }
 
 
-def get_calibration_history(limit: int = 20) -> list[dict]:
-    """Return recent calibration cycles for the dashboard."""
-    conn = _get_calibration_db()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM calibration_history ORDER BY cycle DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+def _compute_loss(weights: ScoringWeights, outcomes: list[dict]) -> float:
+    """
+    Mean absolute error of z-score normalised predicted vs actual returns.
+    """
+    scored = []
+    for o in outcomes:
+        pred = float(o.get('score', 0) or 0)
+        actual = float(o.get('actual_return', 0) or 0)
+        if pred > 0:
+            scored.append((pred, actual))
+
+    if len(scored) < 10:
+        return float('inf')
+
+    preds = [s[0] for s in scored]
+    actuals = [s[1] for s in scored]
+    p_mean = sum(preds) / len(preds)
+    a_mean = sum(actuals) / len(actuals)
+    p_std = (sum((p - p_mean) ** 2 for p in preds) / len(preds)) ** 0.5 or 1
+    a_std = (sum((a - a_mean) ** 2 for a in actuals) / len(actuals)) ** 0.5 or 1
+
+    error = sum(
+        abs((p - p_mean) / p_std - (a - a_mean) / a_std)
+        for p, a in scored
+    ) / len(scored)
+    return error
+
+
+def _perturb(weights: ScoringWeights, step: float = 0.03) -> ScoringWeights:
+    new = ScoringWeights(
+        iv_adjusted=weights.iv_adjusted + random.uniform(-step, step),
+        theta_delta=weights.theta_delta + random.uniform(-step, step),
+        liquidity=weights.liquidity + random.uniform(-step, step),
+        expected_value=weights.expected_value + random.uniform(-step, step),
+        upside_or_buffer=weights.upside_or_buffer + random.uniform(-step, step),
+        otm_fit=weights.otm_fit + random.uniform(-step, step),
+    )
+    new.normalise()
+    return new

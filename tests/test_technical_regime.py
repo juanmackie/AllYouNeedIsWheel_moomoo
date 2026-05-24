@@ -65,15 +65,11 @@ class TestTechnicalRegimeService(unittest.TestCase):
         self.assertEqual(strength, 'ranging')
     
     def test_cache_validity(self):
-        """Cache should be valid for 1 hour"""
-        entry = {
-            'data': {'regime': 'bullish'},
-            'timestamp': datetime.now() - timedelta(minutes=30)
-        }
-        self.assertTrue(self.service._is_cache_valid(entry))
-        
-        entry['timestamp'] = datetime.now() - timedelta(hours=2)
-        self.assertFalse(self.service._is_cache_valid(entry))
+        """Cache should store and return combined regime values."""
+        self.service._set_cached('AAPL', {'regime': 'bullish'})
+        cached = self.service._get_cached('AAPL')
+        self.assertEqual(cached, {'regime': 'bullish'})
+        self.assertEqual(self.service._cache.ttl, 3600)
 
 
 if __name__ == '__main__':

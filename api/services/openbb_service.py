@@ -9,9 +9,11 @@ Provides 4 methods used by the Wheel Strategy scoring pipeline:
 """
 
 import logging
+import time
 import threading
-from datetime import datetime
 from typing import Optional, Dict, Any
+
+from core.ttl_cache import make_ttl_cache
 
 logger = logging.getLogger('api.services.openbb')
 
@@ -27,7 +29,7 @@ class OpenBBService:
         self._obb = None
         self._initialized = False
         self._init_lock = threading.Lock()
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache = make_ttl_cache(maxsize=256, ttl=3600)
         self._cache_lock = threading.Lock()
         self._ttl = {
             'unusual_options': 300,
@@ -58,16 +60,17 @@ class OpenBBService:
     def _get_cache(self, key: str, ttl: int) -> Optional[Dict]:
         with self._cache_lock:
             entry = self._cache.get(key)
-            if not entry:
+            if entry is None:
                 return None
-            if (datetime.now() - entry['timestamp']).total_seconds() > ttl:
-                del self._cache[key]
+            timestamp = entry.get('_timestamp', 0)
+            if timestamp and (time.time() - timestamp) > ttl:
+                self._cache.pop(key, None)
                 return None
             return entry['data']
 
     def _set_cache(self, key: str, data: Dict):
         with self._cache_lock:
-            self._cache[key] = {'data': data, 'timestamp': datetime.now()}
+            self._cache[key] = {'data': data, '_timestamp': time.time()}
 
     def _safe_fetch(self, key: str, ttl: int, func):
         cached = self._get_cache(key, ttl)
@@ -166,7 +169,7 @@ class OpenBBService:
                         if rsi_col:
                             result['rsi'] = round(float(rsi_df[rsi_col[0]].iloc[-1]), 2)
                 except Exception:
-                    pass
+                    logger.warning("OpenBB RSI fetch failed for %s", ticker, exc_info=True)
 
                 # SMA 200
                 try:
@@ -176,7 +179,7 @@ class OpenBBService:
                         result['sma_200'] = round(float(sma200), 2)
                         result['price_vs_sma_200'] = round((last_close / sma200 - 1) * 100, 1)
                 except Exception:
-                    pass
+                    logger.warning("OpenBB SMA 200 fetch failed for %s", ticker, exc_info=True)
 
                 # ATR
                 try:
@@ -189,7 +192,7 @@ class OpenBBService:
                             result['atr'] = round(atr, 2)
                             result['atr_pct'] = round(atr / last_close * 100, 2) if last_close > 0 else 0
                 except Exception:
-                    pass
+                    logger.warning("OpenBB ATR fetch failed for %s", ticker, exc_info=True)
 
                 if result:
                     result['last_close'] = round(last_close, 2)
@@ -233,7 +236,7 @@ class OpenBBService:
                                 except (TypeError, ValueError):
                                     pass
             except Exception:
-                pass
+                logger.warning("OpenBB key metrics fetch failed for %s", ticker, exc_info=True)
 
             # Company profile for beta
             try:
@@ -247,7 +250,7 @@ class OpenBBService:
                         except (TypeError, ValueError):
                             pass
             except Exception:
-                pass
+                logger.warning("OpenBB profile fetch failed for %s", ticker, exc_info=True)
 
             # Insider trading
             try:
@@ -268,7 +271,7 @@ class OpenBBService:
                                 pass
                     result['insider_net_shares'] = round(net_shares, 0)
             except Exception:
-                pass
+                logger.warning("OpenBB insider fetch failed for %s", ticker, exc_info=True)
 
             # Pass/fail gate
             passes = True
@@ -429,7 +432,7 @@ class OpenBBService:
             if pattern is None:
                 self._cache.clear()
             else:
-                for k in [k for k in self._cache if pattern in k]:
+                for k in [k for k in list(self._cache.keys()) if pattern in k]:
                     del self._cache[k]
 
     def get_cache_stats(self) -> Dict:

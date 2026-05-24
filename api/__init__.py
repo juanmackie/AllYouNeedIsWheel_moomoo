@@ -55,6 +55,7 @@ def get_service(name):
         ValueError: If service is not registered
     """
     if name not in _service_registry:
+        logger.error(f"Unknown service requested: {name}")
         raise ValueError(f"Unknown service: {name}")
 
     # Return cached instance if exists
@@ -95,7 +96,7 @@ def create_app(config=None):
 
     # Default configuration
     app.config.from_mapping(
-        SECRET_KEY='dev',
+        SECRET_KEY=os.environ.get('SECRET_KEY', 'dev'),
         DATABASE='sqlite:///:memory:',
         LLM_ENABLED=os.environ.get('LLM_ENABLED', 'false'),
     )

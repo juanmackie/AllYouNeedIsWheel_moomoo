@@ -15,7 +15,6 @@ from db.database import OptionsDatabase
 from config import apply_env_overrides
 from api.services.iv_earnings_service import IVEarningsService
 from core.background_manager import BackgroundTaskManager
-from core.tasks import start_earnings_updater as _start_tasks, stop_all_tasks
 
 # Configure logging
 logger = get_logger('autotrader.app', 'api')
@@ -118,20 +117,17 @@ if connection_config.get('portfolio_env') == 'REAL' and not connection_config.ge
         connection_config['portfolio_env'] = 'SIMULATE'
         connection_config['readonly'] = True
 
-# Start background earnings updater (runs every 6 hours)
+# Start health monitor
 try:
-    _start_tasks(app, task_manager)
-    # Start health monitor
     task_manager.start_health_monitor(interval=60)
-    # Register stop signal for graceful shutdown
-    atexit.register(lambda: stop_all_tasks(task_manager))
+    atexit.register(task_manager.stop_health_monitor)
 except Exception as e:
-    logger.error(f"Failed to start earnings updater: {e}")
+    logger.error(f"Failed to start health monitor: {e}")
 
 # Start evaluator/calibrator scheduler (daily evaluator, weekly calibration)
 try:
     from core.scheduler import start_scheduler, stop_scheduler
-    started = start_scheduler()
+    started = start_scheduler(db=app.config.get('database'), app=app)
     if started:
         logger.info("Evaluator/calibrator scheduler started (this process owns the lock)")
     else:
@@ -185,13 +181,13 @@ def earnings_status():
     db = current_app.config.get('database') or OptionsDatabase()
     service = IVEarningsService(db)
 
-    # Check task status using the task manager
-    earnings_task_status = task_manager.get_status('earnings_updater')
-    is_running = earnings_task_status and earnings_task_status.get('running', False)
+    from core.scheduler import get_scheduler_info
+    scheduler_info = get_scheduler_info()
 
     return jsonify({
-        'status': 'running' if is_running else 'stopped',
-        'cache_stats': service.get_cache_stats()
+        'status': 'running' if scheduler_info.get('running') else 'stopped',
+        'scheduler': scheduler_info,
+        'cache_stats': service.get_cache_stats(),
     })
 
 @app.route('/api/earnings/update/<ticker>')
@@ -241,7 +237,7 @@ def refresh_all_earnings():
         ]
         all_tickers.update(watchlist_tickers)
     except Exception:
-        pass
+        logger.warning("Could not load watchlist tickers for earnings update", exc_info=True)
 
     if not all_tickers:
         return jsonify({'success': True, 'updated': 0, 'message': 'No active symbols found'})

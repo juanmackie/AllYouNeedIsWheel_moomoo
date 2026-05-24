@@ -3,6 +3,7 @@ Probability of Profit API Routes
 """
 
 import logging
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from flask import Blueprint, request, jsonify
 from api.routes.utils import error_response, success_response
 from api.services.pop_service import get_pop, calculate_pop_delta
@@ -10,6 +11,44 @@ from api.services.pop_service import get_pop, calculate_pop_delta
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('pop', __name__, url_prefix='/api/pop')
+
+
+class PopEstimateQuery(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    ticker: str = Field(min_length=1)
+    strike: float = Field(gt=0)
+    expiration: str = Field(min_length=1)
+    option_type: str = Field(alias='type')
+    delta: float | None = None
+    iv: float | None = None
+    dte: int | None = Field(default=None, gt=0)
+    method: str = Field(default='delta')
+
+    @field_validator('ticker', mode='before')
+    @classmethod
+    def _normalize_ticker(cls, value):
+        return str(value).strip().upper()
+
+    @field_validator('expiration', mode='before')
+    @classmethod
+    def _normalize_expiration(cls, value):
+        return str(value).strip()
+
+    @field_validator('option_type', mode='before')
+    @classmethod
+    def _normalize_option_type(cls, value):
+        return str(value).strip().upper()
+
+    @field_validator('method', mode='before')
+    @classmethod
+    def _normalize_method(cls, value):
+        return str(value).strip().lower()
+
+
+def _validation_error(exc: ValidationError):
+    message = '; '.join(err.get('msg', 'Invalid value') for err in exc.errors()) or 'Invalid request parameters'
+    return error_response(message, status_code=400)
 
 
 @bp.route('/estimate')
@@ -30,21 +69,26 @@ def estimate_pop():
     Returns:
         JSON with PoP estimate.
     """
-    ticker = request.args.get('ticker', '').strip().upper()
-    strike = request.args.get('strike', type=float)
-    expiration = request.args.get('expiration', '').strip()
-    option_type = request.args.get('type', '').strip().upper()
-    delta = request.args.get('delta', type=float)
-    iv = request.args.get('iv', type=float)
-    dte = request.args.get('dte', type=int)
-    method = request.args.get('method', 'delta').strip().lower()
-
-    if not ticker or not strike or not expiration or not option_type:
-        return error_response('Missing required parameters', status_code=400)
-
     try:
-        result = get_pop(ticker, strike, expiration, option_type, delta, iv, dte, method)
+        params = PopEstimateQuery.model_validate(request.args.to_dict())
+        if params.option_type not in {'CALL', 'PUT'}:
+            return error_response("Invalid option type", status_code=400)
+        if params.method not in {'delta', 'monte_carlo'}:
+            return error_response("Invalid method", status_code=400)
+
+        result = get_pop(
+            params.ticker,
+            params.strike,
+            params.expiration,
+            params.option_type,
+            params.delta,
+            params.iv,
+            params.dte,
+            params.method,
+        )
         return success_response({'data': result})
+    except ValidationError as exc:
+        return _validation_error(exc)
     except Exception as e:
-        logger.error(f"Error estimating PoP for {ticker}: {e}")
+        logger.error(f"Error estimating PoP: {e}")
         return error_response(str(e), status_code=500)

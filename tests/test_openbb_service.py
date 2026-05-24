@@ -34,7 +34,7 @@ class TestOpenBBService(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_cache_hit_returns_data(self):
-        self.service._cache['test_key'] = {'data': {'value': 42}, 'timestamp': datetime.now()}
+        self.service._cache['test_key'] = {'data': {'value': 42}, '_timestamp': datetime.now().timestamp()}
         result = self.service._get_cache('test_key', 300)
         self.assertEqual(result, {'value': 42})
 
@@ -42,7 +42,7 @@ class TestOpenBBService(unittest.TestCase):
         from datetime import timedelta
         self.service._cache['old_key'] = {
             'data': {'value': 42},
-            'timestamp': datetime.now() - timedelta(seconds=600)
+            '_timestamp': (datetime.now() - timedelta(seconds=600)).timestamp()
         }
         result = self.service._get_cache('old_key', 300)
         self.assertIsNone(result)
@@ -53,7 +53,7 @@ class TestOpenBBService(unittest.TestCase):
         self.assertEqual(self.service._cache['new_key']['data'], {'value': 99})
 
     def test_safe_fetch_returns_cached(self):
-        self.service._cache['cached'] = {'data': {'cached': True}, 'timestamp': datetime.now()}
+        self.service._cache['cached'] = {'data': {'cached': True}, '_timestamp': datetime.now().timestamp()}
         result = self.service._safe_fetch('cached', 300, lambda: {'fresh': True})
         self.assertEqual(result, {'cached': True})
 

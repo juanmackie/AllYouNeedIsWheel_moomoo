@@ -139,6 +139,21 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _normalize_iv(value, default=0.0):
+    """
+    Normalize implied volatility to decimal form.
+
+    Moomoo returns IV as percentage (e.g. 48.0 for 48%), while Black-Scholes
+    and the rest of the system expect decimal (e.g. 0.48 for 48%).
+    Values > 3.0 are assumed to be percentages and divided by 100.
+    Values already in decimal form (<= 3.0) are passed through unchanged.
+    """
+    iv = _safe_float(value, default)
+    if iv > 3.0:
+        return round(iv / 100.0, 4)
+    return round(iv, 4)
+
+
 def _first_non_zero(*values):
     for value in values:
         numeric_value = _safe_float(value, None)

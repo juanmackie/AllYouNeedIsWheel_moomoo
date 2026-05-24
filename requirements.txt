@@ -1,6 +1,8 @@
 moomoo-api>=10.1.6108
 pandas>=2.2.0
 numpy>=1.26.4
+cachetools>=5.3.0
+pydantic>=2.0.0
 python-dotenv>=1.1.0  # imported as `dotenv`
 loguru>=0.7.2
 pytz>=2024.1

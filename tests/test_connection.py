@@ -8,6 +8,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 import os
+import pandas as pd
 
 # Import the module under test
 from core.connection import (
@@ -26,6 +27,7 @@ from core.connection import (
     TrdEnv,
     SecurityFirm,
 )
+from core.connection_constants import _normalize_iv
 from moomoo import RET_OK, RET_ERROR
 
 
@@ -193,6 +195,41 @@ class TestHelperFunctions(unittest.TestCase):
         # Test with None values
         self.assertEqual(_first_non_zero(None, 0, 5), 5)
         self.assertEqual(_first_non_zero('N/A', 3.14), 3.14)
+
+    # -- _normalize_iv tests ----------------------------------------------
+
+    def test_normalize_iv_moomoo_percentage(self):
+        """_normalize_iv converts Moomoo percentage (48.0) to decimal (0.48)"""
+        self.assertEqual(_normalize_iv(48.0), 0.48)
+        self.assertEqual(_normalize_iv(50.0), 0.50)
+        self.assertEqual(_normalize_iv(120.0), 1.20)
+        self.assertEqual(_normalize_iv(200.0), 2.00)
+
+    def test_normalize_iv_yfinance_decimal(self):
+        """_normalize_iv passes through yfinance decimal (0.48) unchanged"""
+        self.assertEqual(_normalize_iv(0.48), 0.48)
+        self.assertEqual(_normalize_iv(0.30), 0.30)
+        self.assertEqual(_normalize_iv(1.20), 1.20)
+        self.assertEqual(_normalize_iv(0.0), 0.0)
+
+    def test_normalize_iv_edge_cases(self):
+        """_normalize_iv handles boundary values correctly"""
+        # Exactly 3.0 boundary (300% IV) - passes through as decimal
+        self.assertEqual(_normalize_iv(3.0), 3.0)
+        # Just above 3.0 - treated as percentage
+        self.assertEqual(_normalize_iv(3.01), 0.0301)
+        # None and empty
+        self.assertEqual(_normalize_iv(None), 0.0)
+        self.assertEqual(_normalize_iv(''), 0.0)
+        # Negative
+        self.assertEqual(_normalize_iv(-1.0), -1.0)
+
+    def test_normalize_iv_broker_zero_delta_preserved(self):
+        """_normalize_iv does not affect values already in decimal"""
+        # Typical values: 0.15-0.60 for wheel strategy
+        for val in [0.15, 0.25, 0.30, 0.45, 0.60, 0.75]:
+            normalized = _normalize_iv(val)
+            self.assertEqual(normalized, val, f"IV {val} should pass through unchanged, got {normalized}")
 
 
 class TestProbeOpenDStatus(unittest.TestCase):
@@ -495,6 +532,53 @@ class TestMoomooConnectionCaching(unittest.TestCase):
         )
 
 
+class TestMoomooConnectionExpirationCaching(unittest.TestCase):
+    """Test option-expiration caching and pending-request reuse."""
+
+    def setUp(self):
+        MoomooConnection._instances.clear()
+
+    def tearDown(self):
+        MoomooConnection._instances.clear()
+
+    def test_option_expiration_dates_are_cached(self):
+        conn = MoomooConnection()
+        conn._rate_limiter = MagicMock()
+        conn._rate_limiter.check_rate_limit.return_value = None
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.connect = MagicMock(return_value=True)
+
+        expected = (RET_OK, pd.DataFrame({'expiration_date': ['20260529']}))
+        conn.quote_ctx.get_option_expiration_date.return_value = expected
+
+        first = conn.get_option_expiration_dates('AAPL')
+        second = conn.get_option_expiration_dates('AAPL')
+
+        self.assertEqual(first[0], expected[0])
+        self.assertEqual(second[0], expected[0])
+        pd.testing.assert_frame_equal(first[1], expected[1])
+        pd.testing.assert_frame_equal(second[1], expected[1])
+        conn.quote_ctx.get_option_expiration_date.assert_called_once_with(code='US.AAPL')
+
+    def test_option_expiration_dates_reuse_pending_result(self):
+        conn = MoomooConnection()
+        conn._rate_limiter = MagicMock()
+        conn._rate_limiter.check_rate_limit.return_value = None
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.connect = MagicMock(return_value=True)
+
+        pending_result = (RET_OK, pd.DataFrame({'expiration_date': ['20260619']}))
+        conn._wait_for_pending_request = MagicMock(return_value=pending_result)
+
+        result = conn.get_option_expiration_dates('MSFT')
+
+        self.assertEqual(result[0], pending_result[0])
+        pd.testing.assert_frame_equal(result[1], pending_result[1])
+        conn.quote_ctx.get_option_expiration_date.assert_not_called()
+
+
 class TestMoomooConnectionLifecycle(unittest.TestCase):
     """Test connection lifecycle: reconnect, unlock, disconnect edge cases"""
 
@@ -589,6 +673,18 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         result = conn.get_option_chain('US.AAPL', '20230616', 'C')
         self.assertIsNotNone(result)
         self.assertIn('options', result)
+
+    def test_get_option_chain_uses_shared_gate(self):
+        conn = self._make_connected_conn()
+        mock_chain_df = MagicMock()
+        mock_chain_df.empty = True
+        self.mock_quote_ctx.get_option_chain.return_value = (RET_OK, mock_chain_df)
+
+        with patch.object(conn, '_acquire_option_chain_gate', wraps=conn._acquire_option_chain_gate) as acquire_gate:
+            result = conn.get_option_chain('US.AAPL', '20230616', 'C')
+
+        self.assertIsNotNone(result)
+        acquire_gate.assert_called_once()
 
     def test_get_option_chain_fails(self):
         conn = self._make_connected_conn()

@@ -5,8 +5,9 @@ Provides wheel strategy candidate screening via TradingView.
 
 import logging
 import threading
-from datetime import datetime
 from typing import Optional, List
+
+from core.ttl_cache import make_ttl_cache
 
 logger = logging.getLogger('api.services.tvscreener')
 
@@ -18,9 +19,8 @@ class TvscreenerService:
         self._tvscreener = None
         self._initialized = False
         self._init_lock = threading.Lock()
-        self._cache = {}
+        self._cache = make_ttl_cache(maxsize=256, ttl=300)
         self._cache_lock = threading.Lock()
-        self._cache_ttl = 300  # 5 minutes
 
     def _ensure_initialized(self) -> bool:
         """Lazy initialization of tvscreener."""
@@ -65,9 +65,9 @@ class TvscreenerService:
 
         # Check cache
         with self._cache_lock:
-            entry = self._cache.get(cache_key)
-            if entry and (datetime.now() - entry['timestamp']).total_seconds() <= self._cache_ttl:
-                return entry['data']
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
 
         # Fetch from API
         try:
@@ -91,10 +91,7 @@ class TvscreenerService:
 
             # Cache result
             with self._cache_lock:
-                self._cache[cache_key] = {
-                    'data': symbols,
-                    'timestamp': datetime.now()
-                }
+                self._cache[cache_key] = symbols
 
             logger.info(f"Found {len(symbols)} wheel strategy candidates")
             return symbols

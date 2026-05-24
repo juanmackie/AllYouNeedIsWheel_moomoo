@@ -643,6 +643,7 @@ class OptionsDataService:
                 yf_expirations = self._get_yfinance_expiration_dates(ticker, profile)
                 return {
                     "ticker": ticker,
+                    "expiration_source": "yfinance",
                     "expirations": [
                         {
                             "value": value,
@@ -695,7 +696,7 @@ class OptionsDataService:
             # Sort by DTE (ascending)
             expirations.sort(key=lambda x: x['dte'])
             
-            return {"ticker": ticker, "expirations": expirations}
+            return {"ticker": ticker, "expiration_source": "moomoo", "expirations": expirations}
         except Exception as e:
             return {"error": str(e)}
 

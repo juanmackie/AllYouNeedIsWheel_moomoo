@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 import sys
 import os
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1171,6 +1172,119 @@ class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
             )
             self.assertTrue(has_quote_quality,
                             msg="Blocked candidates should include quote-quality reason codes")
+
+
+    def test_iv_rank_plumbed_into_scored_decision(self):
+        """get_iv_environment_score values should appear in the WheelDecision."""
+        self.mock_iv_earnings.get_iv_environment_score.return_value = (5, 0.65, 'above_avg')
+
+        from api.services.recommendations import RecommendationEngine
+        engine = RecommendationEngine(
+            self.mock_connection_provider,
+            self.mock_config_provider,
+            self.mock_db,
+            self.mock_iv_earnings,
+            self.mock_portfolio_context_provider,
+            self.mock_portfolio_service_provider,
+            self.mock_watchlist_manager,
+            self.mock_options_data,
+            self.mock_cash_calculator,
+        )
+
+        future_date = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+        candidate_option = {
+            'strike': 140.0,
+            'expiration': future_date.replace('-', ''),
+            'option_type': 'PUT',
+            'bid': 2.50,
+            'ask': 3.00,
+            'last': 2.75,
+            'delta': -0.20,
+            'gamma': 0.05,
+            'theta': -0.08,
+            'vega': 0.15,
+            'implied_volatility': 0.35,
+            'open_interest': 500,
+            'volume': 200,
+            'dte': 37,
+        }
+        with patch.object(engine, '_fetch_watchlist_csp_moomoo') as mock_fetch:
+            mock_fetch.return_value = [{
+                'ticker': 'AAPL',
+                'stock_price': 150.0,
+                'option_type': 'PUT',
+                'max_contracts': 1,
+                'existing_position': 0,
+                'from_watchlist': True,
+                'strike': 140.0,
+                'expiration': future_date.replace('-', ''),
+                'dte': 37,
+                'mid_price': 2.75,
+                'premium_per_contract': 275.0,
+                'bid': 2.50,
+                'ask': 3.00,
+                'annualized_return': 18.0,
+                'iv_adjusted_return': 50.0,
+                'otm_pct': 6.67,
+                'delta': -0.20,
+                'implied_volatility': 0.35,
+                'open_interest': 500,
+                'volume': 200,
+                'score': 75.0,
+                'iv_rank': 0.65,
+                'iv_status': 'above_avg',
+                'iv_env_adjustment': 5,
+                'size_fit': 85.0,
+                'expected_move_buffer': 3.5,
+                'breakeven': 137.5,
+                'breakeven_buffer_pct': 8.33,
+                'cash_required': 14000.0,
+                'warnings': [],
+                'wheel_decision': {'iv_rank': 0.65, 'iv_env_adjustment': 5, 'iv_status': 'above_avg', 'contract_score': 75.0},
+                'score_details': {},
+                'cash_reserve_enabled': True,
+                'profile_type': 'monthly',
+            }]
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.get('success'))
+        signals = result.get('signals', [])
+        self.assertGreater(len(signals), 0)
+        sig = signals[0]
+        self.assertEqual(sig.get('iv_rank'), 0.65)
+        self.assertEqual(sig.get('iv_status'), 'above_avg')
+        wd = sig.get('wheel_decision', {})
+        self.assertEqual(wd.get('iv_rank'), 0.65)
+
+    def test_cash_prefilter_skips_ticker_when_unaffordable(self):
+        """_fetch_watchlist_csp_moomoo returns None when even minimum strike exceeds buying power."""
+        self.mock_iv_earnings.get_iv_environment_score.return_value = (0, 0.5, 'neutral')
+
+        from api.services.recommendations import RecommendationEngine
+        engine = RecommendationEngine(
+            self.mock_connection_provider,
+            self.mock_config_provider,
+            self.mock_db,
+            self.mock_iv_earnings,
+            self.mock_portfolio_context_provider,
+            self.mock_portfolio_service_provider,
+            self.mock_watchlist_manager,
+            self.mock_options_data,
+            self.mock_cash_calculator,
+        )
+
+        # Set very low buying power: $200 -> even $5 stock * 50% * 100 = $250 > $200
+        portfolio = dict(self.mock_portfolio_context,
+                         cash_available_for_csp=200.0,
+                         available_cash=200.0,
+                         broker_buying_power=200.0)
+
+        result = engine._fetch_watchlist_csp_moomoo('CHEAP', portfolio)
+
+        # Should return None due to cash prefilter (no option chain fetch attempted)
+        self.assertIsNone(result)
+        self.mock_conn.get_option_expiration_dates.assert_not_called()
 
 
 if __name__ == '__main__':

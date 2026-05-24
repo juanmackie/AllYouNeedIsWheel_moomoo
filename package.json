@@ -1,0 +1,13 @@
+{
+  "name": "allyouneediswheel-moomoo-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "vitest": "^1.6.0"
+  }
+}

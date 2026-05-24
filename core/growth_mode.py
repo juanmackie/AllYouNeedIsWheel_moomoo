@@ -50,7 +50,6 @@ def compute_stress_loss(
     else:
         # Covered call: opportunity cost of upside cap
         shock_price = stock_price * (1 + shock_pct)
-        capped_gain = min(shock_price, strike) - stock_price
         loss_per_contract = max(0, (shock_price - strike) * 100) if strike < shock_price else 0
 
     return round(loss_per_contract * num_contracts, 2)

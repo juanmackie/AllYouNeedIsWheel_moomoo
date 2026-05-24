@@ -27,7 +27,7 @@ A financial options signal desk for the "Wheel Strategy" powered by the [Moomoo 
 - **IV Environment Awareness** — 30-day rolling IV rank tracking with color-coded badges (🔴 low, 🟢 high)
 - **Dynamic Screening Profiles** — Auto-detects weekly/monthly/quarterly expirations with optimized parameters
 - **Earnings Integration** — Automatic earnings warnings with multi-source fallback and manual refresh UI
-- **Background Health Monitoring** — Real-time earnings worker status and manual trigger buttons
+- **APScheduler Earnings Job** — Earnings data refreshed every 6 hours via central APScheduler with one-shot initialization on startup
 - **Macro Regime Detection** — FRED-powered economic context (rates, credit stress, growth, inflation) influencing scores and recommendations
 
 ### Macro Regime Detection (Phase 3)
@@ -320,12 +320,23 @@ AllYouNeedIsWheel_moomoo/
 │       ├── openbb_service.py    # OpenBB integration (VIX, macro data)
 │       └── tvscreener_service.py   # TradingView stock screener
 ├── core/
-│   ├── connection.py            # Moomoo OpenD connection + rate limiter
-│   ├── rate_limiter.py          # Thread-safe rate limiting
+│   ├── connection_manager.py    # Moomoo OpenD connection + singleton cache
+│   ├── connection_constants.py  # Connection utility functions
+│   ├── context_factory.py       # Context creation helpers
+│   ├── ticker_utils.py          # Ticker formatting and caching
+│   ├── rate_limiter.py          # Thread-safe rate limiting (virtual scheduling)
+│   ├── ttl_cache.py             # Shared TTL cache helper (cachetools + fallback)
+│   ├── scheduler.py             # APScheduler: evaluator, calibrator, earnings updater
+│   ├── background_manager.py    # Health monitor for background tasks
+│   ├── tasks.py                 # Background task factory functions
+│   ├── wheel_decision.py        # Scoring engine and decision logic
+│   ├── scoring_factors.py       # Pure scoring sub-functions
+│   ├── evaluator.py             # Signal outcome evaluation
+│   ├── calibrator.py            # Weight calibration via gradient-free optimisation
+│   ├── feedback_loop.py         # Bias adjustment from resolved outcomes
 │   ├── currency.py              # Currency conversion
 │   ├── logging_config.py        # Logging setup
-│   ├── utils.py                 # Utility functions
-│   └── wheel_decision.py        # Scoring helpers and decision logic
+│   └── utils.py                 # Utility functions
 ├── db/
 │   └── database.py              # SQLite: orders, iv_history, earnings_calendar
 ├── frontend/
@@ -405,9 +416,10 @@ Persistence: `~/.wheel/evaluator/feedback.db`.
 against historical outcomes to minimise prediction error.  Runs weekly.
 Persistence: `~/.wheel/evaluator/calibration.db`.
 
-**Scheduler:** APScheduler runs the evaluator daily at 8:00 AM and the
-calibrator weekly on Sunday at 8:15 AM (Australia/Brisbane time).  A host-level
-lock ensures only one process schedules jobs under multi-worker deployments.
+**Scheduler:** APScheduler runs the evaluator daily at 8:00 AM, the
+calibrator weekly on Sunday at 8:15 AM (Australia/Brisbane time), and the
+earnings updater every 6 hours via `IntervalTrigger`. A host-level lock
+ensures only one process schedules jobs under multi-worker deployments.
 
 **Dashboard Widget:** Shows tracked/resolved counts, assignment vs expiry rate,
 top over/under-predicting factors, latest calibration result, and last run times.

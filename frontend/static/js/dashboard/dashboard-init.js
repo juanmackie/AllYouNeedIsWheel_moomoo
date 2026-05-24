@@ -3,22 +3,23 @@
  * Split from dashboard.js (F042)
  */
 import { loadPortfolioData } from './account.js';
-import { loadTickers } from './options-table.js';
 import { initializeTopRecommendations } from './top-recommendations.js';
-import { initializeEarningsVolSignals } from './earnings-vol-signals.js';
-import { loadMacroRegime } from './macro.js';
 import { initializeLLMAdvisor } from './llm-advisor.js';
 import { formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
-import { loadTechnicalRegime, loadLockedTickers, loadVixRegime, updateWeeklyEarningsSummary } from './dashboard-regime.js';
+import { loadLockedTickers, updateWeeklyEarningsSummary } from './dashboard-regime.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
+import { loadEvaluatorWidget } from './evaluator-widget.js';
+
+let diagnosticsLoaded = false;
 
 /**
  * Initialize the dashboard with progressive loading
  * Wave 1: Account data (critical path)
  * Wave 2: Positions & orders
- * Wave 3: Below-fold content
+ * Wave 3: Signals (fast path)
+ * Wave Lazy: Diagnostics (only when user opens #research-diagnostics)
  */
 export async function initializeDashboard() {
     try {
@@ -44,40 +45,100 @@ export async function initializeDashboard() {
         } catch (error) { console.error('Wave 2 error:', error); }
         hideWaveLoading('wave2');
 
+        // Signals start loading NOW — before heavier diagnostics
+        initializeTopRecommendations();
+
         showWaveLoading('wave3', 'Loading market data...');
         try {
-            // Kick off the options table independently so a slow ticker
-            // cannot delay the rest of wave 3.
-            const tickersPromise = loadTickers().catch(err => console.error('Options table error:', err));
-
             await Promise.all([
                 updateWeeklyEarningsSummary(),
-                loadVixRegime(), loadMacroRegime(), loadTechnicalRegime(), updateIdleCashPanel()
+                updateIdleCashPanel()
             ]);
-
-            // Do NOT await tickersPromise here – Phase 2 (inactive tab)
-            // continues loading in the background after this point.
         } catch (error) { console.error('Wave 3 error:', error); }
         hideWaveLoading('wave3');
 
         initSizingModeSelector();
 
         const cashReserveToggle = document.getElementById('cash-reserve-toggle');
-        if (cashReserveToggle) {
+        if (cashReserveToggle && !cashReserveToggle.dataset.bound) {
+            cashReserveToggle.dataset.bound = 'true';
             cashReserveToggle.addEventListener('change', (e) => toggleCashReserve(e.target.checked));
         }
 
-        initializeTopRecommendations();
-        initializeEarningsVolSignals();
         initializeLLMAdvisor();
-        await loadLockedTickers();
 
-        document.getElementById('refresh-all-btn')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            initializeDashboard();
-        });
+        // Diagnostics are lazily loaded when the user opens the section
+        initLazyDiagnostics();
+
+        const refreshAllBtn = document.getElementById('refresh-all-btn');
+        if (refreshAllBtn && !refreshAllBtn.dataset.bound) {
+            refreshAllBtn.dataset.bound = 'true';
+            refreshAllBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                initializeDashboard();
+            });
+        }
     } catch (error) {
         console.error('Dashboard initialization error:', error);
+    }
+}
+
+/**
+ * Lazy-load diagnostics when user opens #research-diagnostics
+ */
+async function loadDiagnosticsOnce() {
+    if (diagnosticsLoaded) return;
+    diagnosticsLoaded = true;
+
+    import('./macro.js').then(mod => {
+        mod.loadMacroRegime();
+    }).catch(() => {});
+
+    import('./dashboard-regime.js').then(mod => {
+        mod.loadVixRegime();
+        mod.loadTechnicalRegime();
+    }).catch(() => {});
+
+    loadLockedTickers();
+    loadEvaluatorWidget();
+
+    import('./earnings-vol-signals.js').then(mod => {
+        mod.initializeEarningsVolSignals();
+    }).catch(err => {
+        console.error('Failed to load earnings-vol-signals:', err);
+    });
+
+    import('./options-table.js').then(async mod => {
+        await mod.loadTickers();
+    }).catch(err => {
+        console.error('Options table error:', err);
+    });
+
+    window.setTimeout(() => {
+        import('./catalyst-watch.js').then(mod => {
+            mod.initializeCatalystWatch().catch(err => {
+                console.error('Catalyst watch error:', err);
+            });
+        }).catch(err => {
+            console.error('Catalyst watch error:', err);
+        });
+    }, 1500);
+}
+
+function initLazyDiagnostics() {
+    const details = document.getElementById('research-diagnostics');
+    if (!details) return;
+
+    if (!details.dataset.bound) {
+        details.dataset.bound = 'true';
+        details.addEventListener('toggle', () => {
+            if (!details.open || diagnosticsLoaded) return;
+            loadDiagnosticsOnce();
+        });
+    }
+
+    if (details.open) {
+        loadDiagnosticsOnce();
     }
 }
 

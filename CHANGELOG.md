@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.1.0] - 2026-05-24
+
+### Added
+- **Rate Limiter Virtual Scheduling** — `core/rate_limiter.py` now computes the next-allowed timestamp under the lock then sleeps outside it, eliminating the deadlock window that blocked the entire API. Enforces `0.1s` minimum spacing between consecutive requests to prevent API collisions.
+- **Earnings Updater via APScheduler** — Moved from `BackgroundTaskManager` (60-second restart loop) to the central APScheduler with a 6-hour `IntervalTrigger`. A one-shot background initializer runs on first startup when the `earnings_calendar` table is empty, without blocking Flask.
+- **Connection Cache Key Normalization** — `MoomooConnection.__new__` now normalizes `account_id`, `portfolio_env`, and `security_firm` before computing the singleton key, so `OptionsService` and `PortfolioService` reuse the same connection instance.
+- **FRED CPI Series Fix** — Changed CPI series code from `CPIALLMINMEI` (non-existent, triggered "Bad Request" warnings) to `CPIAUCSL` (All Urban Consumers).
+- **CSP Gate Removed** — Removed the top-level `cash_available_for_csp < min_csp_buying_power` blocker so watchlist scanning can find cheap puts even when total available cash is below $5k. Individual per-contract capital checks remain.
+- **Portfolio Context Query Reduction** — `_calculate_cash_reserved` now accepts an `option_positions` parameter, avoiding a second `get_positions('OPT')` call in `get_portfolio_context`.
+- **Earnings Status Endpoint** — `/api/earnings/status` now reports the APScheduler state instead of the removed `BackgroundTaskManager` task.
+
+### Changed
+- `API.md`: earnings status response now includes `scheduler` object. System Tasks section updated — earnings no longer runs under `BackgroundTaskManager`.
+- `README.md`: scheduler section mentions earnings updater every 6h; project structure updated.
+- `TECH_DEBT_AUDIT.md`: open question #5 resolved; architectural mental model updated.
+- `tests/README.md`: smoke test checklist updated to reflect APScheduler ownership.
+- `tests/test_rate_limiter.py`: switched to `FakeClock` so all tests run without real wall-clock delays.
+
+## [2.2.0] - 2026-05-24
+
+### Added
+- **Shared TTL Cache Utility** — `core/ttl_cache.py` provides `make_ttl_cache(maxsize, ttl)`, wrapping `cachetools.TTLCache` with a built-in `OrderedDict` fallback so the rest of the codebase can use one-liner caches without duplicating expiry/eviction logic.
+- **Pydantic Request Validation** — `api/routes/risk.py` and `api/routes/pop.py` now define `BaseModel` schemas with `field_validator` normalizers (case-stripped tickers, type coercion, invalid-option-type rejection), replacing hand-parsed `request.args` and `request.get_json` calls.
+- **Test Coverage for Cache & Validation** — `test_routes_validation.py`, `test_risk_sizing.py`, `test_openbb_service.py`, `test_technical_regime.py`, `test_pop_service.py`.
+
+### Changed
+- `openbb_service`, `risk_sizing_service`, `tvscreener_service`, `technical_regime_service` — Replaced hand-rolled timestamp-dict caches with `make_ttl_cache()` from `core/ttl_cache.py`. Each service now declares `maxsize` and `ttl` in its constructor, removing ~15 lines of repeated expiry plumbing per file.
+- `requirements.txt`, `pyproject.toml` — Added `cachetools>=5.3.0` and `pydantic>=2.0.0`.
+- `README.md` — Project structure updated.
+- `tests/README.md` — Test file table updated.
+
+### Fixed
+- **Risk Sizing Cache Staleness** — The per-entry timestamp-dict in `risk_sizing_service` used a lazy-expiry scheme that never actually evicted old entries. The new TTL cache enforces global expiration on every access, so stale ATR values no longer persist indefinitely.
+
 ## [2.0.0] - 2026-04-19
 
 ### Added - Phase 1: Risk-Adjusted Scoring

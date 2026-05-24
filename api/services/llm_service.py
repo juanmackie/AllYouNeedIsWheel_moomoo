@@ -121,7 +121,7 @@ def build_advisor_context():
             from api.services.config import get_config
             db_path = get_config().get('db_path')
         except Exception:
-            pass
+            logger.warning("Could not load config db_path for LLM context", exc_info=True)
 
         scored = []
         for pos in opt_positions:
@@ -227,14 +227,14 @@ def build_advisor_context():
         from api.services.macro_regime_service import get_macro_service
         context['macro'] = get_macro_service().get_macro_regime()
     except Exception:
-        pass
+        logger.warning("Could not load macro regime for LLM context", exc_info=True)
 
     try:
         from api import get_service
         options_svc = get_service('options')
         context['vix'] = options_svc._get_vix_regime()
     except Exception:
-        pass
+        logger.warning("Could not load VIX regime for LLM context", exc_info=True)
 
     return context
 

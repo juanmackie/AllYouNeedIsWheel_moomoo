@@ -255,6 +255,125 @@
   border-radius: var(--saas-radius-sm);
 }
 
+/* ── Signal-type tabs ── */
+#signal-tabs .btn-group {
+  flex-wrap: wrap;
+}
+
+#signal-tabs .btn-outline-primary {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: var(--saas-font-mono);
+  letter-spacing: 0.02em;
+  padding: 0.2rem 0.6rem;
+  border-color: var(--saas-border-strong);
+}
+
+#signal-tabs .btn-outline-primary.active {
+  background: var(--saas-accent);
+  border-color: var(--saas-accent);
+  color: #fff;
+}
+
+.signal-summary {
+  font-size: 0.72rem;
+  vertical-align: middle;
+}
+
+/* ── Confidence badge ── */
+.confidence-badge {
+  font-size: 0.62rem;
+  font-weight: 600;
+  font-family: var(--saas-font-mono);
+  letter-spacing: 0.03em;
+  padding: 0.2rem 0.5rem;
+}
+
+/* ── Signal type badge ── */
+.signal-type-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  font-family: var(--saas-font-mono);
+  letter-spacing: 0.03em;
+  padding: 0.15rem 0.4rem;
+}
+
+/* ── Data source line ── */
+.signal-data-source {
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.signal-data-source .bi {
+  font-size: 0.6rem;
+}
+
+/* ── CSP / CC detail sections ── */
+.csp-details,
+.cc-details {
+  font-size: 0.76rem;
+}
+
+.csp-details hr,
+.cc-details hr,
+.score-drivers hr {
+  margin: 6px 0;
+  opacity: 0.4;
+}
+
+/* ── Score drivers ── */
+.score-drivers {
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.score-drivers__positive::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--saas-up);
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.score-drivers__negative::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--saas-warning);
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+/* ── Hard blockers ── */
+.hard-blockers-list {
+  line-height: 1.5;
+}
+
+.hard-blockers-list::before {
+  content: '\26A0';
+  margin-right: 4px;
+  font-size: 0.8rem;
+}
+
+/* ── Blocked candidates diagnostics ── */
+#blocked-candidates-section details {
+  cursor: pointer;
+}
+
+#blocked-candidates-section summary {
+  font-size: 0.78rem;
+}
+
+#blocked-candidates-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 /* ── Top Recommendations ── */
 .recommendation-card {
   overflow: hidden;
@@ -396,6 +515,130 @@
 .recommendation-details .d-flex {
   display: flex;
   justify-content: space-between;
+}
+
+/* Catalyst watch signals */
+.catalyst-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.catalyst-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 100%;
+  padding: 16px;
+  border: 1px solid var(--saas-border);
+  border-radius: var(--saas-radius);
+  background: var(--saas-surface);
+  box-shadow: var(--saas-shadow-sm);
+}
+
+.catalyst-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.catalyst-card__ticker {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--saas-ink);
+}
+
+.catalyst-card__direction {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.catalyst-card__score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin: 4px 0;
+}
+
+.catalyst-card__score-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--saas-ink);
+  font-family: var(--saas-font-mono);
+}
+
+.catalyst-card__score-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--saas-muted);
+}
+
+.catalyst-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.catalyst-card__metrics div {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.catalyst-card__metrics span {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--saas-muted);
+}
+
+.catalyst-card__metrics strong {
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: var(--saas-font-mono);
+  color: var(--saas-ink);
+}
+
+.catalyst-card__extra {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--saas-border);
+}
+
+.catalyst-card__extra-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+}
+
+.catalyst-card__extra-row span {
+  color: var(--saas-muted);
+}
+
+.catalyst-card__extra-row strong {
+  font-weight: 600;
+  font-family: var(--saas-font-mono);
+  color: var(--saas-ink);
+}
+
+.catalyst-card__rationale {
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.catalyst-card__blockers {
+  font-size: 0.68rem;
+  line-height: 1.3;
 }
 
 /* Earnings volatility signals */
@@ -654,6 +897,8 @@
 
   .summary-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
+  .catalyst-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
   .earnings-vol-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   .summary-income-grid { grid-template-columns: 1fr; }
@@ -665,6 +910,8 @@
 
 @media (max-width: 575.98px) {
   .summary-metrics-grid { grid-template-columns: 1fr; }
+
+  .catalyst-grid { grid-template-columns: 1fr; }
 
   .earnings-vol-grid { grid-template-columns: 1fr; }
 }

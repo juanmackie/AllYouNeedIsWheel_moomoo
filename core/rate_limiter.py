@@ -13,6 +13,9 @@ class RateLimiter:
     """
     Enforces rate limits for API requests with burst detection.
     """
+
+    _min_request_spacing = 0.1
+    _burst_cooldown_seconds = 5.0
     
     def __init__(self, max_requests_per_window=8, rate_limit_window=30,
                  burst_threshold=5, burst_window=5):
@@ -41,52 +44,54 @@ class RateLimiter:
         Waits if necessary to stay within moomoo's rate limits.
         Includes burst detection to prevent rapid-fire requests.
         """
+        wait_time = 0.0
+        wait_reason = None
+
         with self._lock:
             now = time.time()
-            
-            # Remove timestamps older than the window
             self._request_timestamps = [
                 ts for ts in self._request_timestamps 
                 if now - ts < self.rate_limit_window
             ]
-            
-            # Check for burst: too many requests in short time
+
+            scheduled_time = now
+
             recent_requests = [ts for ts in self._request_timestamps if now - ts < self.burst_window]
             if len(recent_requests) >= self.burst_threshold:
-                # Burst detected, add extra cooldown
-                burst_wait = 5.0  # 5 second cooldown for burst
-                logger.warning(f"Burst detected ({len(recent_requests)} requests in {self.burst_window}s). Adding {burst_wait}s cooldown...")
-                time.sleep(burst_wait)
-                self._rate_limit_waits += 1
-                
-                # Recalculate after cooldown
-                now = time.time()
-                self._request_timestamps = [
-                    ts for ts in self._request_timestamps 
-                    if now - ts < self.rate_limit_window
-                ]
-            
-            # If we've hit the limit, wait until we can make another request
+                scheduled_time = max(scheduled_time, now + self._burst_cooldown_seconds)
+                wait_reason = (
+                    f"Burst detected ({len(recent_requests)} requests in {self.burst_window}s). "
+                    f"Adding {self._burst_cooldown_seconds}s cooldown..."
+                )
+
             if len(self._request_timestamps) >= self.max_requests_per_window:
-                # Calculate how long to wait
                 oldest_request = min(self._request_timestamps)
-                wait_time = self.rate_limit_window - (now - oldest_request) + 0.5  # larger buffer
-                
-                if wait_time > 0:
-                    logger.warning(f"Rate limit reached ({len(self._request_timestamps)}/{self.max_requests_per_window}). Waiting {wait_time:.1f}s...")
-                    time.sleep(wait_time)
-                    self._rate_limit_waits += 1
-                    
-                    # Recalculate after waiting
-                    now = time.time()
-                    self._request_timestamps = [
-                        ts for ts in self._request_timestamps 
-                        if now - ts < self.rate_limit_window
-                    ]
-            
-            # Add current request timestamp and increment counter
-            self._request_timestamps.append(now)
+                rate_limit_time = oldest_request + self.rate_limit_window + 0.5
+                if rate_limit_time > scheduled_time:
+                    scheduled_time = rate_limit_time
+                    wait_reason = (
+                        f"Rate limit reached ({len(self._request_timestamps)}/{self.max_requests_per_window}). "
+                        f"Waiting for the window to clear..."
+                    )
+
+            if self._request_timestamps:
+                min_next_time = max(self._request_timestamps) + self._min_request_spacing
+                if min_next_time > scheduled_time:
+                    scheduled_time = min_next_time
+                    wait_reason = (
+                        f"Spacing requests by at least {self._min_request_spacing:.1f}s to avoid API collisions..."
+                    )
+
+            self._request_timestamps.append(scheduled_time)
             self._api_calls_count += 1
+            wait_time = scheduled_time - now
+            if wait_time > 0:
+                self._rate_limit_waits += 1
+
+        if wait_time > 0:
+            if wait_reason:
+                logger.warning(f"{wait_reason} Waiting {wait_time:.1f}s...")
+            time.sleep(wait_time)
             
     def get_stats(self):
         """Return rate limiting statistics."""

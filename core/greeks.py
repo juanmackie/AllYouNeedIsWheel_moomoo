@@ -12,6 +12,8 @@ from typing import Optional
 
 from scipy.stats import norm
 
+from core.connection_constants import _normalize_iv
+
 logger = logging.getLogger(__name__)
 
 RISK_FREE_RATE = 0.05  # Approximate current risk-free rate
@@ -40,7 +42,8 @@ def compute_bs_greeks(
         Tuple of (delta, gamma, theta_per_day, vega_per_1pct)
     """
     option_type = option_type.upper()
-    S, K, T, r, sigma = stock_price, strike, max(time_to_expiry_years, 1/365), risk_free_rate, iv
+    sigma = _normalize_iv(iv)
+    S, K, T, r = stock_price, strike, max(time_to_expiry_years, 1/365), risk_free_rate
 
     if sigma <= 0 or S <= 0 or K <= 0:
         return 0.0, 0.0, 0.0, 0.0
@@ -85,8 +88,8 @@ def enrich_option_with_greeks(
 
     Mutates the option dict in-place AND returns it for convenience.
     """
-    # Get current values
-    iv = float(option.get('implied_volatility', 0) or 0)
+    # Get current values (normalize IV as safety net)
+    iv = _normalize_iv(option.get('implied_volatility', 0))
     delta = float(option.get('delta', 0) or 0)
     gamma = float(option.get('gamma', 0) or 0)
     theta = float(option.get('theta', 0) or 0)

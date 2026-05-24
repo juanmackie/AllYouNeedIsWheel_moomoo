@@ -5,6 +5,30 @@ import { fetchOptionData, fetchTickers, fetchAccountData, fetchOptionExpirations
 import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, showToast, addPutQtyInputEventListeners } from './options-table-rendering.js';
 import { addOptionsTableEventListeners } from './options-table-events.js';
 
+const expirationPrefetches = new Map();
+
+async function prefetchExpirations(ticker, optionType = null) {
+    const key = `${ticker}:${optionType || 'ALL'}`;
+    if (expirationPrefetches.has(key)) {
+        return expirationPrefetches.get(key);
+    }
+
+    const promise = fetchOptionExpirations(ticker, optionType)
+        .then(expirationData => {
+            if (expirationData && expirationData.expirations && expirationData.expirations.length > 0 && state.tickersData[ticker]) {
+                state.tickersData[ticker].expirations = expirationData.expirations;
+            }
+            return expirationData;
+        })
+        .catch(() => null)
+        .finally(() => {
+            expirationPrefetches.delete(key);
+        });
+
+    expirationPrefetches.set(key, promise);
+    return promise;
+}
+
 
 
 export async function refreshOptionsForTicker(ticker, updateUI = false, onProgress = null) {
@@ -23,7 +47,7 @@ export async function refreshOptionsForTicker(ticker, updateUI = false, onProgre
         const cachedExpirations = state.tickersData[ticker]?.expirations || [];
         if (cachedExpirations.length > 0) {
             allExpirations = cachedExpirations;
-        } else {
+        } else if (updateUI) {
             try {
                 const expirationData = await fetchOptionExpirations(ticker);
 
@@ -35,6 +59,8 @@ export async function refreshOptionsForTicker(ticker, updateUI = false, onProgre
                 const isTimeout = error?.message?.includes('Request timed out');
                 (isTimeout ? console.warn : console.error)(`Error fetching expiration dates for ${ticker}:`, error);
             }
+        } else {
+            prefetchExpirations(ticker).catch(() => null);
         }
 
         const selectedCallExpiration = getSelectedExpirationPreference(ticker, 'CALL');
@@ -239,7 +265,7 @@ export async function refreshOptionsForTickerByType(ticker, optionType, updateUI
         const cachedExpirations = state.tickersData[ticker]?.expirations || [];
         if (cachedExpirations.length > 0) {
             allExpirations = cachedExpirations;
-        } else {
+        } else if (updateUI) {
             try {
                 const expirationData = await fetchOptionExpirations(ticker, optionType);
 
@@ -250,6 +276,8 @@ export async function refreshOptionsForTickerByType(ticker, optionType, updateUI
             } catch (error) {
                 console.error(`Error fetching expiration dates for ${ticker}:`, error);
             }
+        } else {
+            prefetchExpirations(ticker, optionType).catch(() => null);
         }
 
         const selectedExpiration = getSelectedExpirationPreference(ticker, optionType);

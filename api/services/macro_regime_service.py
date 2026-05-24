@@ -55,7 +55,7 @@ class MacroRegimeService:
         'treasury_2y': 'DGS2',                 # 2-year Treasury yield
         'high_yield_spread': 'BAMLH0A0HYM2',   # ICE BofA High Yield OAS (credit stress)
         'gdp': 'GDP',                          # Gross Domestic Product
-        'cpi': 'CPIALLMINMEI',                 # Consumer Price Index (all items)
+        'cpi': 'CPIAUCSL',                    # Consumer Price Index for All Urban Consumers
     }
 
     # Regime thresholds

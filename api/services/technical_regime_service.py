@@ -5,11 +5,11 @@ Provides a simple color-coded signal: bullish (green), bearish (red), neutral (g
 """
 
 import logging
-import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
 from api.services.utils import clean_yfinance_ticker, validate_ticker
+from core.ttl_cache import make_ttl_cache
 
 logger = logging.getLogger('api.services.technical_regime')
 
@@ -48,27 +48,17 @@ class TechnicalRegimeService:
     CACHE_TTL_SECONDS = 3600  # 1 hour
 
     def __init__(self):
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._cache_lock = None  # Simple dict is fine for single-user
-
-    def _is_cache_valid(self, entry: Dict[str, Any]) -> bool:
-        if not entry:
-            return False
-        age = (datetime.now() - entry['timestamp']).total_seconds()
-        return age < self.CACHE_TTL_SECONDS
+        self._cache = make_ttl_cache(maxsize=256, ttl=self.CACHE_TTL_SECONDS)
 
     def _get_cached(self, ticker: str) -> Optional[Dict[str, Any]]:
         entry = self._cache.get(ticker)
-        if entry and self._is_cache_valid(entry):
+        if entry:
             logger.debug(f"Technical regime cache hit for {ticker}")
-            return entry['data']
+            return entry
         return None
 
     def _set_cached(self, ticker: str, data: Dict[str, Any]) -> None:
-        self._cache[ticker] = {
-            'data': data,
-            'timestamp': datetime.now()
-        }
+        self._cache[ticker] = data
 
     def get_200_ema_regime(self, ticker: str) -> Dict[str, Any]:
         """

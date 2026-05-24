@@ -5,6 +5,11 @@ Options API routes
 from flask import Blueprint, request, jsonify, current_app
 from core.connection import probe_opend_status
 from core.cache_manager import recommendation_cache, RecommendationCache
+from api.routes.source_policy import (
+    attach_source_policy,
+    build_account_source_policy,
+    build_research_source_policy,
+)
 from api.routes.utils import error_response, success_response
 import traceback
 import logging
@@ -20,6 +25,9 @@ bp = Blueprint('options', __name__, url_prefix='/api/options')
 
 # Lazy service access - service created on first use
 _options_service_instance = None
+_generation_in_flight = {}  # cache_key -> started_at timestamp
+_generation_in_flight_lock = threading.Lock()
+GENERATION_IN_FLIGHT_TIMEOUT_SECONDS = 180
 
 
 def get_options_service():
@@ -31,33 +39,54 @@ def get_options_service():
     return _options_service_instance
 
 
-def _trigger_background_refresh(cache_key, limit, portfolio_hash):
+def _generate_in_background(cache_key, limit, portfolio_hash):
     """
-    Trigger a background refresh of signals after returning stale cache.
+    Generate top recommendations in a background thread.
+    Manages the in-flight registry so duplicate cold generations don't stack.
+    Clears the in-flight flag on completion.
     """
-    def refresh_task():
+    with _generation_in_flight_lock:
+        if _generation_in_flight.get(cache_key):
+            logger.info(f"Generation already in flight for {cache_key}, skipping")
+            return False
+        _generation_in_flight[cache_key] = time.time()
+
+    def generation_task():
         try:
-            logger.info(f"Background refresh started for {cache_key}")
-            # Get fresh data
+            logger.info(f"Background generation started for {cache_key}")
             result = get_options_service().get_top_recommendations(limit=limit)
-            
+
             if "error" not in result:
-                # Cache the fresh data
                 result = _normalize_top_recommendations_payload(result)
                 recommendation_cache.set(cache_key, result, portfolio_hash)
-                logger.info(f"Background refresh completed for {cache_key}")
+                logger.info(f"Background generation completed for {cache_key}")
             else:
-                # Mark cache as invalid on failure
                 recommendation_cache.mark_background_refresh_failed(cache_key)
-                logger.error(f"Background refresh failed for {cache_key}: {result['error']}")
+                logger.error(f"Background generation failed for {cache_key}: {result['error']}")
         except Exception as e:
             recommendation_cache.mark_background_refresh_failed(cache_key)
-            logger.error(f"Background refresh exception for {cache_key}: {e}")
-    
-    # Start background thread
-    thread = threading.Thread(target=refresh_task, daemon=True)
+            logger.error(f"Background generation exception for {cache_key}: {e}")
+        finally:
+            with _generation_in_flight_lock:
+                _generation_in_flight.pop(cache_key, None)
+            logger.info(f"In-flight flag cleared for {cache_key}")
+
+    thread = threading.Thread(target=generation_task, daemon=True)
     thread.start()
-    logger.info(f"Background refresh thread started for {cache_key}")
+    logger.info(f"Background generation thread started for {cache_key}")
+    return True
+
+
+def _get_generation_age(cache_key):
+    with _generation_in_flight_lock:
+        started_at = _generation_in_flight.get(cache_key)
+    if not started_at:
+        return None
+    return time.time() - started_at
+
+
+# Alias for backward compatibility
+_trigger_background_refresh = _generate_in_background
 
 
 def _normalize_top_recommendations_payload(payload):
@@ -172,7 +201,16 @@ def otm_options():
         expiration=expiration
     )
     
-    return jsonify(result)
+    return jsonify(
+        attach_source_policy(
+            result,
+            build_research_source_policy(
+                'otm_options',
+                result,
+                fallback_sources_allowed=['yfinance'],
+            ),
+        )
+    )
 
 @bp.route('/stock-price', methods=['GET'])
 def get_stock_price():
@@ -201,10 +239,14 @@ def get_stock_price():
                 price = get_options_service().get_stock_price(ticker)
                 prices[ticker] = price
         
-        return jsonify({
+        return jsonify(attach_source_policy({
             "status": "success",
             "data": prices
-        })
+        }, build_research_source_policy(
+            'stock_prices',
+            prices,
+            fallback_sources_allowed=[],
+        )))
     except Exception as e:
         logger.error(f"Error getting stock price for {tickers_param}: {str(e)}")
         logger.error(traceback.format_exc())
@@ -235,7 +277,16 @@ def get_option_expirations():
             logger.error(f"Error getting expirations for {ticker}: {result['error']}")
             return error_response(result["error"], status_code=404)
             
-        return jsonify(result)
+        return jsonify(
+            attach_source_policy(
+                result,
+                build_research_source_policy(
+                    'option_expirations',
+                    result,
+                    fallback_sources_allowed=['yfinance'],
+                ),
+            )
+        )
             
     except Exception as e:
         logger.error(f"Error getting option expirations for {request.args.get('ticker', 'unknown')}: {str(e)}")
@@ -274,9 +325,10 @@ def get_top_recommendations():
         except (ValueError, TypeError):
             limit = 5
         
-        # Get portfolio context for cache key and hash calculation
+        # Use a cached portfolio snapshot for the cache key so we do not block
+        # the request on a slow broker refresh.
         try:
-            portfolio_context = get_options_service()._get_portfolio_context()
+            portfolio_context = get_options_service()._get_portfolio_context(refresh=False)
             current_portfolio_hash = RecommendationCache.calculate_portfolio_hash(portfolio_context)
         except Exception as e:
             logger.warning(f"Failed to get portfolio context for cache: {e}")
@@ -297,11 +349,7 @@ def get_top_recommendations():
                 cached_result = _normalize_top_recommendations_payload(cached_result)
                 # Cache hit - add metadata to response
                 cached_result['_cache'] = cache_metadata
-                
-                response = jsonify(cached_result)
-                response.headers['X-Cache-Status'] = cache_metadata['cache_status']
-                response.headers['X-Cache-Age'] = str(cache_metadata['cache_age_seconds'])
-                
+
                 logger.info(f"Cache {cache_metadata['cache_status']} for top-recommendations "
                           f"(age={cache_metadata['cache_age_seconds']}s, "
                           f"portfolio_changed={cache_metadata['portfolio_changed']})")
@@ -310,63 +358,84 @@ def get_top_recommendations():
                 if cache_metadata['cache_status'] == 'STALE':
                     _trigger_background_refresh(cache_key, limit, current_portfolio_hash)
                 
+                cached_result = attach_source_policy(
+                    cached_result,
+                    build_research_source_policy(
+                        'top_recommendations',
+                        cached_result,
+                        fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
+                    ),
+                )
+                response = jsonify(cached_result)
+                response.headers['X-Cache-Status'] = cache_metadata['cache_status']
+                response.headers['X-Cache-Age'] = str(cache_metadata['cache_age_seconds'])
                 return response, 200
         
-        # Cache miss or manual refresh - get fresh data
-        logger.info(f"Fetching fresh top recommendations (manual_refresh={manual_refresh})")
+        # Cache miss or manual refresh — generate in background instead of blocking
+        logger.info(f"Generating fresh top recommendations in background (manual_refresh={manual_refresh})")
+        generation_started = _generate_in_background(cache_key, limit, current_portfolio_hash)
+        generation_age = _get_generation_age(cache_key)
+        # Try to serve stale cache while generation runs
         try:
-            result = get_options_service().get_top_recommendations(limit=limit)
-        except Exception as e:
-            logger.error(f"Error getting top recommendations (exception): {str(e)}")
-            logger.error(traceback.format_exc())
-            result = {"error": str(e)}
+            stale_result, stale_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
+            if stale_result is not None and stale_metadata.get('cache_status') in ('STALE', 'HIT'):
+                stale_result = _normalize_top_recommendations_payload(stale_result)
+                stale_result['_cache'] = {
+                    'cache_status': 'STALE_FALLBACK',
+                    'cache_age_seconds': stale_metadata.get('cache_age_seconds', 0),
+                    'portfolio_changed': stale_metadata.get('portfolio_changed', False),
+                    'is_valid': True,
+                    'background_refresh_failed': False,
+                    'cached_at': stale_metadata.get('cached_at', ''),
+                }
+                logger.info("Returning stale cached signals while generating fresh data")
+                stale_result = attach_source_policy(
+                    stale_result,
+                    build_research_source_policy(
+                        'top_recommendations',
+                        stale_result,
+                        fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
+                    ),
+                )
+                response = jsonify(stale_result)
+                response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
+                return response, 200
+        except Exception:
+            logger.warning("Stale cache fallback for top_recommendations failed", exc_info=True)
+        # No stale data at all — return generating signal immediately
+        if not generation_started and generation_age and generation_age > GENERATION_IN_FLIGHT_TIMEOUT_SECONDS:
+            logger.warning(
+                "Top recommendations generation has been in flight for %.1fs; returning timeout diagnostic",
+                generation_age,
+            )
+            return jsonify(attach_source_policy({
+                'success': True,
+                'generating': False,
+                'generation_timed_out': True,
+                'count': 0,
+                'signals': [],
+                'blocked_signals': [],
+                'blocked_reason_counts': {},
+                'generated_at': datetime.datetime.now().isoformat(),
+                'message': 'Signal generation is taking too long. Broker option-chain calls may be stalled.',
+            }, build_research_source_policy(
+                'top_recommendations',
+                {},
+                fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
+            ))), 200
 
-        if "error" in result:
-            error_message = result["error"]
-            logger.error(f"Error getting top recommendations: {error_message}")
-            # Try to return stale cache as fallback before giving up
-            try:
-                stale_result, _ = recommendation_cache.get(cache_key, current_portfolio_hash)
-                if stale_result is not None:
-                    stale_result = _normalize_top_recommendations_payload(stale_result)
-                    logger.warning("Returning stale cached signals as fallback")
-                    stale_result['_cache'] = {
-                        'cache_status': 'STALE_FALLBACK',
-                        'cache_age_seconds': stale_result.get('_cache', {}).get('cache_age_seconds', 0),
-                        'portfolio_changed': False,
-                        'is_valid': True,
-                        'background_refresh_failed': True,
-                        'cached_at': stale_result.get('_cache', {}).get('cached_at', ''),
-                        'error': error_message
-                    }
-                    response = jsonify(stale_result)
-                    response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
-                    return response, 200
-            except Exception:
-                pass
-            return jsonify({"error": error_message}), 500
-
-        # Add cache metadata
-        result = _normalize_top_recommendations_payload(result)
-        result['_cache'] = {
-            'cache_status': 'MISS',
-            'cache_age_seconds': 0,
-            'portfolio_changed': False,
-            'is_valid': True,
-            'background_refresh_failed': False,
-            'cached_at': datetime.datetime.now().isoformat()
-        }
-
-        # Store in cache
-        recommendation_cache.set(cache_key, result, current_portfolio_hash)
-        logger.info(f"Cached fresh top recommendations for key={cache_key[:80]}...")
-
-        # Return response with headers
-        response = jsonify(result)
-        response.headers['X-Cache-Status'] = 'MISS'
-        response.headers['X-Cache-Age'] = '0'
-
-        return response, 200
+        generating_response = jsonify(attach_source_policy({
+            'generating': True,
+            'count': 0,
+            'signals': [],
+            'message': 'Signals are being computed. Check back shortly.',
+        }, build_research_source_policy(
+            'top_recommendations',
+            {},
+            fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
+        )))
+        logger.info("No cache available — returning generating signal to frontend")
+        return generating_response, 202
 
     except Exception as e:
         logger.error(f"Error getting top recommendations: {str(e)}")
@@ -386,12 +455,254 @@ def get_top_recommendations():
                     'cached_at': stale_result.get('_cache', {}).get('cached_at', ''),
                     'error': str(e)
                 }
+                stale_result = attach_source_policy(
+                    stale_result,
+                    build_research_source_policy(
+                        'top_recommendations',
+                        stale_result,
+                        fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
+                    ),
+                )
                 response = jsonify(stale_result)
                 response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
                 return response, 200
         except Exception:
-            pass
+            logger.warning("Research stale cache fallback for top_recommendations failed", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+_catalyst_watch_svc = None
+_catalyst_scan_lock = threading.Lock()
+_catalyst_cache: dict[str, tuple[dict, float]] = {}
+
+def _catalyst_cache_key(limit, min_pn, min_volume, min_fresh, max_scan_tickers, max_expirations):
+    """Build deterministic cache key from query parameters."""
+    return f"{limit}:{min_pn}:{min_volume}:{min_fresh}:{max_scan_tickers}:{max_expirations}"
+
+def _catalyst_empty_response(generated_at=None, thresholds=None, message=None, cache_age_seconds=None, served_from_cache=False):
+    """Full-shape response when catalyst scanning has not produced data yet."""
+    ts = (generated_at or datetime.datetime.now()).isoformat()
+    fallback_thresholds = {
+        "min_premium_notional": 1_000_000,
+        "min_fresh_volume_ratio": 5,
+        "min_volume": 500,
+        "max_expirations": 1,
+        "max_dte": 60,
+        "max_scan_tickers": 2,
+    }
+    if thresholds:
+        fallback_thresholds.update({k: v for k, v in thresholds.items() if v is not None})
+    return {
+        "success": True,
+        "enabled": True,
+        "signals": [],
+        "count": 0,
+        "generated_at": ts,
+        "research_only": True,
+        "scanned": 0,
+        "cache_hits": 0,
+        "errors": [],
+        "tickers_scanned": [],
+        "candidate_count": 0,
+        "rejected_by_threshold_count": 0,
+        "elapsed_seconds": 0,
+        "scan_pending": True,
+        "message": message or "Catalyst scan is still waiting for broker flow data.",
+        "thresholds": fallback_thresholds,
+        "served_from_cache": served_from_cache,
+        "cache_age_seconds": cache_age_seconds,
+        "fresh_attempted": True,
+        "fresh_succeeded": False,
+        "last_successful_generated_at": None,
+    }
+
+
+def _add_freshness_metadata(payload, served_from_cache, cache_age_seconds, fresh_attempted, fresh_succeeded, last_successful_generated_at):
+    enriched = dict(payload)
+    enriched["served_from_cache"] = served_from_cache
+    enriched["cache_age_seconds"] = cache_age_seconds
+    enriched["fresh_attempted"] = fresh_attempted
+    enriched["fresh_succeeded"] = fresh_succeeded
+    enriched["last_successful_generated_at"] = last_successful_generated_at
+    return enriched
+
+@bp.route('/catalyst-watch', methods=['GET'])
+def catalyst_watch():
+    """..."""
+    global _catalyst_watch_svc, _catalyst_cache
+    try:
+        from api.services.catalyst_flow_service import CatalystFlowService
+        from api.services.config import get_config
+
+        cfg = get_config()
+        catalyst_cfg = cfg.get("catalyst_flow", {})
+
+        limit = request.args.get('limit', 6, type=int)
+        limit = max(1, min(limit, 20))
+
+        refresh = request.args.get('refresh', 'false').lower() == 'true'
+        min_pn = request.args.get('min_premium_notional', type=int)
+        min_volume = request.args.get('min_volume', type=int)
+        min_fresh = request.args.get('min_fresh_volume_ratio', type=float)
+        max_scan_tickers = request.args.get('max_scan_tickers', type=int)
+        max_expirations = request.args.get('max_expirations', type=int)
+
+        logger.debug(
+            "GET /catalyst-watch params: limit=%s refresh=%s min_pn=%s min_vol=%s min_fresh=%s max_tickers=%s max_exp=%s",
+            limit, refresh, min_pn, min_volume, min_fresh, max_scan_tickers, max_expirations,
+        )
+
+        if not catalyst_cfg.get("enabled", True):
+            payload = _add_freshness_metadata({
+                "success": True,
+                "enabled": False,
+                "signals": [],
+                "count": 0,
+                "generated_at": datetime.datetime.now().isoformat(),
+                "research_only": True,
+                "scanned": 0,
+                "cache_hits": 0,
+                "errors": [],
+                "tickers_scanned": [],
+                "candidate_count": 0,
+                "rejected_by_threshold_count": 0,
+                "elapsed_seconds": 0,
+                "thresholds": {
+                    "min_premium_notional": 1_000_000,
+                    "min_fresh_volume_ratio": 5,
+                    "min_volume": 500,
+                    "max_expirations": 1,
+                    "max_dte": 60,
+                    "max_scan_tickers": 2,
+                },
+            }, served_from_cache=False, cache_age_seconds=None, fresh_attempted=False, fresh_succeeded=False, last_successful_generated_at=None)
+            logger.debug("GET /catalyst-watch: disabled — fresh_attempted=false served_from_cache=false")
+            return jsonify(attach_source_policy(
+                payload,
+                build_research_source_policy('catalyst_watch', {}, fallback_sources_allowed=['yfinance']),
+            ))
+
+        if _catalyst_watch_svc is None:
+            wl_manager = None
+            try:
+                from api.services.watchlist_manager import WatchlistManager
+                wl_manager = WatchlistManager(config_provider=cfg)
+            except Exception:
+                logger.warning("WatchlistManager init failed for catalyst_watch", exc_info=True)
+            _catalyst_watch_svc = CatalystFlowService(
+                config_provider=cfg, watchlist_provider=wl_manager,
+            )
+
+        ck = _catalyst_cache_key(limit, min_pn, min_volume, min_fresh, max_scan_tickers, max_expirations)
+        now = time.time()
+
+        def _apply_source(result):
+            return jsonify(attach_source_policy(
+                result,
+                build_research_source_policy('catalyst_watch', result, fallback_sources_allowed=['yfinance']),
+            ))
+
+        # Fast cache hit (5s TTL) for non-refresh, same-parameter requests
+        if not refresh and ck in _catalyst_cache:
+            cached_result, cached_ts = _catalyst_cache[ck]
+            if now - cached_ts < 5:
+                cached_age = round(now - cached_ts, 1)
+                payload = _add_freshness_metadata(
+                    cached_result,
+                    served_from_cache=True,
+                    cache_age_seconds=cached_age,
+                    fresh_attempted=False,
+                    fresh_succeeded=True,
+                    last_successful_generated_at=cached_result.get("generated_at"),
+                )
+                logger.debug(
+                    "GET /catalyst-watch: fast cache hit (age=%ss) — served_from_cache=true fresh_attempted=false",
+                    cached_age,
+                )
+                return _apply_source(payload)
+
+        # Background scan that stores to parameter-aware cache
+        def _bg_scan():
+            if not _catalyst_scan_lock.acquire(blocking=False):
+                return
+            try:
+                result = _catalyst_watch_svc.get_signals(
+                    limit=limit,
+                    refresh=refresh,
+                    min_premium_notional=min_pn,
+                    min_volume=min_volume,
+                    min_fresh_volume_ratio=min_fresh,
+                    max_scan_tickers=max_scan_tickers,
+                    max_expirations=max_expirations,
+                )
+                _catalyst_cache[ck] = (result, time.time())
+            except Exception:
+                logger.exception("Background catalyst scan failed")
+            finally:
+                _catalyst_scan_lock.release()
+
+        # If cache exists for these exact params, return it immediately and refresh in background
+        if ck in _catalyst_cache:
+            cached_result, cached_ts = _catalyst_cache[ck]
+            bagr_age = round(now - cached_ts, 1)
+            if _catalyst_scan_lock.acquire(blocking=False):
+                _catalyst_scan_lock.release()
+                t = threading.Thread(target=_bg_scan, daemon=True)
+                t.start()
+            payload = _add_freshness_metadata(
+                cached_result,
+                served_from_cache=True,
+                cache_age_seconds=bagr_age,
+                fresh_attempted=True,
+                fresh_succeeded=False,
+                last_successful_generated_at=cached_result.get("generated_at"),
+            )
+            logger.debug(
+                "GET /catalyst-watch: stale cache (age=%ss) + bg refresh — served_from_cache=true fresh_attempted=true",
+                bagr_age,
+            )
+            return _apply_source(payload)
+
+        # No cache for these params: run scan synchronously with generous timeout
+        t = threading.Thread(target=_bg_scan, daemon=True)
+        t.start()
+        t.join(timeout=45)
+
+        if ck in _catalyst_cache:
+            cached_result, _ = _catalyst_cache[ck]
+            payload = _add_freshness_metadata(
+                cached_result,
+                served_from_cache=False,
+                cache_age_seconds=None,
+                fresh_attempted=True,
+                fresh_succeeded=True,
+                last_successful_generated_at=cached_result.get("generated_at"),
+            )
+            logger.debug(
+                "GET /catalyst-watch: fresh scan succeeded — served_from_cache=false fresh_succeeded=true",
+            )
+            return _apply_source(payload)
+
+        empty = _catalyst_empty_response(
+            thresholds={
+                "min_premium_notional": min_pn if min_pn is not None else catalyst_cfg.get("min_premium_notional"),
+                "min_fresh_volume_ratio": min_fresh if min_fresh is not None else catalyst_cfg.get("min_fresh_volume_ratio"),
+                "min_volume": min_volume if min_volume is not None else catalyst_cfg.get("min_volume"),
+                "max_expirations": max_expirations if max_expirations is not None else catalyst_cfg.get("max_expirations"),
+                "max_dte": catalyst_cfg.get("max_dte"),
+                "max_scan_tickers": max_scan_tickers if max_scan_tickers is not None else catalyst_cfg.get("max_scan_tickers"),
+            },
+            served_from_cache=False,
+            cache_age_seconds=None,
+        )
+        logger.debug(
+            "GET /catalyst-watch: no cache, scan timed out — served_from_cache=false fresh_attempted=true fresh_succeeded=false",
+        )
+        return _apply_source(empty)
+    except Exception as e:
+        logger.error(f"Error in catalyst watch: {e}")
+        logger.error(traceback.format_exc())
+        return error_response(str(e))
 
 
 @bp.route('/screening-config', methods=['GET'])
@@ -484,7 +795,7 @@ def get_cash_status():
         broker_buying_power = available_cash
         reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
-        return success_response({
+        return success_response(attach_source_policy({
             'cash_balance': round(cash_balance, 2),
             'cash_reserved': round(cash_reserved, 2),
             'cash_available': round(cash_available, 2),
@@ -497,7 +808,7 @@ def get_cash_status():
             'reserve_enabled': reserve_enabled,
             'open_puts': open_puts,
             'open_puts_count': len(open_puts)
-        })
+        }, build_account_source_policy('cash_status')))
         
     except Exception as e:
         logger.error(f"Error getting cash status: {str(e)}")
@@ -511,9 +822,13 @@ def get_vix_regime():
     try:
         regime = get_options_service()._get_vix_regime()
         
-        return success_response({
+        return success_response(attach_source_policy({
             'vix_regime': regime
-        })
+        }, build_research_source_policy(
+            'vix_regime',
+            regime,
+            fallback_sources_allowed=['openbb', 'yfinance'],
+        )))
     except Exception as e:
         logger.error(f"Error fetching VIX regime: {str(e)}")
         logger.error(traceback.format_exc())
@@ -607,39 +922,41 @@ def get_leakage_analytics():
         return error_response(str(e))
 
 
+def _get_evaluator_db():
+    """Resolve the app's OptionsDatabase from Flask config."""
+    from flask import current_app
+    db = current_app.config.get('database')
+    if db:
+        return db
+    from db.database import OptionsDatabase
+    from api.services.config import get_config as cfg
+    return OptionsDatabase(cfg().get('db_path'))
+
+
 @bp.route('/evaluator/stats', methods=['GET'])
 def evaluator_stats():
     """Return evaluator summary statistics for the dashboard.
 
-    Includes scheduler metadata, calibration summary, and feedback
-    bias information so the dashboard can show one coherent status payload.
+    Uses app DB via OptionsDatabase — all evaluator state now lives in options.db.
     """
     try:
-        from core.evaluator import get_summary_stats, get_recent_outcomes
-        from core.scheduler import get_scheduler_info
-        from core.calibrator import get_latest_calibration
-        from core.feedback_loop import get_feedback_summary
-
-        stats = get_summary_stats()
-        recent = get_recent_outcomes(days=30)
-        scheduler_info = get_scheduler_info()
-        latest_calibration = get_latest_calibration()
-        feedback_summary = get_feedback_summary()
+        db = _get_evaluator_db()
+        stats = db.get_evaluator_summary_stats()
+        recent = db.get_evaluator_recent_signals(limit=50)
+        scheduler_info = _get_scheduler_info(db)
+        latest_calibration = db.get_evaluator_calibration()
+        feedback_summary = db.get_evaluator_feedback_summary()
 
         calibration_data = None
         if latest_calibration:
+            weights = latest_calibration.get('weights', {})
             calibration_data = {
                 'cycle': latest_calibration.get('cycle'),
-                'loss': round(latest_calibration.get('loss', 0), 4) if latest_calibration.get('loss') else None,
+                'loss': latest_calibration.get('loss'),
+                'shadow_loss': latest_calibration.get('shadow_loss'),
                 'samples': latest_calibration.get('samples'),
-                'weights': {
-                    'iv_adjusted': latest_calibration.get('w_iv_adjusted'),
-                    'theta_delta': latest_calibration.get('w_theta_delta'),
-                    'liquidity': latest_calibration.get('w_liquidity'),
-                    'expected_value': latest_calibration.get('w_expected_value'),
-                    'upside_or_buffer': latest_calibration.get('w_upside_buffer'),
-                    'otm_fit': latest_calibration.get('w_otm_fit'),
-                },
+                'weights': weights,
+                'accepted': bool(latest_calibration.get('accepted')),
                 'created_at': latest_calibration.get('created_at'),
             }
 
@@ -663,15 +980,60 @@ def evaluator_stats():
         })
 
 
+def _get_scheduler_info(db):
+    """Get scheduler state. First tries the in-process scheduler, then DB."""
+    try:
+        from core.scheduler import get_scheduler_info as scheduler_process_info
+        proc_info = scheduler_process_info()
+        running = proc_info.get('running', False)
+        state_map = proc_info.get('state', {})
+    except Exception:
+        running = False
+        state_map = {}
+
+    if not state_map:
+        states = db.get_evaluator_scheduler_states()
+        for s in states:
+            state_map[s['name']] = {
+                'last_run': s.get('last_run', ''),
+                'last_status': s.get('last_status', ''),
+                'last_message': s.get('last_message', ''),
+            }
+    return {
+        'running': running,
+        'state': state_map,
+    }
+
+
 @bp.route('/evaluator/cron', methods=['POST'])
 def evaluator_cron():
     """
-    Trigger an evaluator cycle: check expired-but-unresolved recommendations
-    and log outcomes.  Intended to be called by an external cron/scheduler.
+    Trigger an evaluator cycle: check expired-but-unresolved signals
+    and log outcomes. Uses app DB.
     """
     try:
+        db = _get_evaluator_db()
         from core.evaluator import run_evaluation_cycle
-        result = run_evaluation_cycle()
+        from api.services.config import get_config as cfg
+
+        portfolio_service = None
+        try:
+            import api
+            portfolio_service = api.get_service('portfolio')
+        except Exception:
+            logger.warning("Portfolio service init failed for evaluation", exc_info=True)
+
+        result = run_evaluation_cycle(
+            db.evaluator,
+            portfolio_service=portfolio_service,
+            config=cfg().get('evaluator', {}),
+        )
+
+        db.evaluator.set_scheduler_state(
+            'evaluator',
+            'ok' if result.get('errors', 0) == 0 else 'partial',
+            f"Checked {result.get('checked', 0)}, resolved {result.get('resolved', 0)}, errors {result.get('errors', 0)}",
+        )
         return success_response(result)
     except Exception as e:
         logger.error(f"Evaluator cron cycle failed: {e}")
@@ -680,11 +1042,11 @@ def evaluator_cron():
 
 @bp.route('/feedback/biases', methods=['GET'])
 def feedback_biases():
-    """Return current factor bias multipliers from the feedback loop."""
+    """Return current factor bias multipliers from the feedback loop (app DB)."""
     try:
-        from core.feedback_loop import get_all_biases, get_feedback_summary
-        biases = get_all_biases()
-        summary = get_feedback_summary()
+        db = _get_evaluator_db()
+        biases = db.evaluator.get_feedback_biases()
+        summary = db.get_evaluator_feedback_summary()
         return success_response({
             'biases': biases,
             'summary': summary,
@@ -696,10 +1058,14 @@ def feedback_biases():
 
 @bp.route('/feedback/events', methods=['GET'])
 def feedback_events():
-    """Return recent feedback events."""
+    """Return recent feedback events from app DB."""
     try:
-        from core.feedback_loop import get_recent_events
-        events = get_recent_events(limit=50)
+        db = _get_evaluator_db()
+        with db.evaluator._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM evaluator_feedback_events ORDER BY id DESC LIMIT 50"
+            ).fetchall()
+            events = [dict(r) for r in rows]
         return success_response({'events': events})
     except Exception as e:
         logger.error(f"Error fetching feedback events: {e}")
@@ -708,10 +1074,22 @@ def feedback_events():
 
 @bp.route('/calibrator/run', methods=['POST'])
 def calibrator_run():
-    """Trigger a calibration cycle."""
+    """Trigger a calibration cycle using app DB."""
     try:
+        db = _get_evaluator_db()
         from core.calibrator import run_calibration_cycle
-        result = run_calibration_cycle()
+        from api.services.config import get_config as cfg
+
+        result = run_calibration_cycle(
+            db.evaluator,
+            config=cfg().get('evaluator', {}),
+        )
+
+        db.evaluator.set_scheduler_state(
+            'calibrator',
+            'ok' if result.get('success') else 'skipped',
+            result.get('message', str(result)),
+        )
         return success_response(result)
     except Exception as e:
         logger.error(f"Calibration cycle failed: {e}")
@@ -720,10 +1098,10 @@ def calibrator_run():
 
 @bp.route('/calibrator/history', methods=['GET'])
 def calibrator_history():
-    """Return calibration history."""
+    """Return calibration history from app DB."""
     try:
-        from core.calibrator import get_calibration_history
-        history = get_calibration_history(limit=20)
+        db = _get_evaluator_db()
+        history = db.get_evaluator_calibration_history(limit=20)
         return success_response({'history': history})
     except Exception as e:
         logger.error(f"Error fetching calibration history: {e}")

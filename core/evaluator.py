@@ -1,358 +1,198 @@
 """
-Evaluator — logs predicted vs actual performance of wheel recommendations.
+Evaluator — tracks surfaced signal outcomes and feeds feedback loop.
 
-Can be triggered on a schedule (cron) to compare ex-ante scoring metrics
-against ex-post outcomes:
-  - Was the option assigned or did it expire worthless?
-  - What was the actual annualized return?
-  - Did the price shock exceed stress-loss estimates?
-  - How accurate were the score, confidence, and risk-budget predictions?
+Uses the app's OptionsDatabase (options.db) instead of independent SQLite files.
+Does NOT record candidates during scoring — only final surfaced signals.
 
-Data is stored in a local SQLite table and can be queried by the
-dashboard, fed into weight calibration (step 9), or used in the
-feedback loop (step 10).
+Signal state machine:
+    surfaced -> observed_open -> resolved_valid / resolved_unknown / ignored
+
+Outcome types that are VALID for training:
+    expired_worthless, assigned, called_away, closed_profit, closed_loss,
+    rolled_profit, rolled_loss
+
+Outcome types that are NOT valid for training:
+    unknown, ignored, still_open, manual_unlinked
 """
 
-import json
-import sqlite3
 import logging
-import threading
-from datetime import datetime, timedelta
-from pathlib import Path
+import re
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Schema
-# ---------------------------------------------------------------------------
+# ── Helpers ──────────────────────────────────────────────────────────────
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS recommendation_outcomes (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- Identity
-    ticker          TEXT NOT NULL,
-    strike          REAL NOT NULL,
-    expiration      TEXT NOT NULL,          -- YYYYMMDD
-    option_type     TEXT NOT NULL,          -- PUT | CALL
-    dte             INTEGER NOT NULL,
-
-    -- Predicted (from WheelDecision at recommendation time)
-    predicted_score         REAL,
-    predicted_ann_return    REAL,
-    predicted_delta         REAL,
-    predicted_iv            REAL,
-    predicted_premium       REAL,
-    predicted_confidence    REAL,
-    predicted_stress_loss   REAL,
-    predicted_risk_budget   REAL,
-    predicted_macro_mult    REAL,
-
-    -- Score details for feedback loop (JSON)
-    score_details           TEXT,            -- JSON dict of factor contributions
-
-    -- Actual outcome (filled after expiration)
-    actual_outcome          TEXT,            -- 'expired_worthless' | 'assigned' | 'rolled' | 'closed_early' | 'unknown'
-    actual_premium_kept     REAL,            -- $ kept from the premium
-    actual_days_held        INTEGER,
-    actual_ann_return       REAL,
-    actual_peak_adverse_move REAL,           -- max adverse move during hold
-    actual_assignment_price  REAL,           -- if assigned, the effective price
-    actual_notes            TEXT,
-
-    -- Metadata
-    source                  TEXT,            -- 'moomoo' | 'yfinance'
-    strategy                TEXT,            -- 'csp' | 'covered_call'
-    generated_at            TEXT,            -- ISO timestamp when recommended
-    resolved_at             TEXT,            -- ISO timestamp when outcome recorded
-    score_rationale         TEXT,
-
-    UNIQUE(ticker, strike, expiration, option_type)
-);
-"""
-
-# ---------------------------------------------------------------------------
-# Storage
-# ---------------------------------------------------------------------------
-
-_db_lock = threading.Lock()
-_db_path: Optional[Path] = None
+_VALID_TRAINING_OUTCOMES = {
+    'expired_worthless', 'assigned', 'called_away',
+    'closed_profit', 'closed_loss', 'rolled_profit', 'rolled_loss',
+}
 
 
-def _get_db() -> sqlite3.Connection:
-    global _db_path
-    if _db_path is None:
-        data_dir = Path.home() / '.wheel' / 'evaluator'
-        data_dir.mkdir(parents=True, exist_ok=True)
-        _db_path = data_dir / 'outcomes.db'
-    conn = sqlite3.connect(str(_db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+def is_valid_training_outcome(outcome: str) -> bool:
+    return outcome in _VALID_TRAINING_OUTCOMES
 
 
-def init_db() -> None:
-    """Create the outcomes table if it does not exist."""
-    with _db_lock:
-        conn = _get_db()
+_OPTION_SYMBOL_RE = re.compile(r'^([A-Z]+?)\d{6,8}[CP]\d+$')
+
+
+def _extract_underlying(symbol) -> str:
+    """Extract the underlying ticker from a broker symbol.
+
+    Handles:
+        AAPL                        → AAPL
+        US.AAPL                     → AAPL
+        US.AAPL20250516P00150000    → AAPL
+        AAPL250516C00150000         → AAPL
+    """
+    if not symbol:
+        return ''
+    s = str(symbol).upper().replace('US.', '')
+    m = _OPTION_SYMBOL_RE.match(s)
+    if m:
+        return m.group(1)
+    return s
+
+
+def _normalize_exp(exp) -> str:
+    """Normalize any expiration format to YYYYMMDD."""
+    if exp is None:
+        return ''
+    if isinstance(exp, (int, float)):
+        exp = str(int(exp))
+    elif not isinstance(exp, str):
         try:
-            conn.executescript(SCHEMA_SQL)
-            conn.commit()
-            logger.info("Evaluator DB initialised at %s", _db_path)
-        finally:
-            conn.close()
+            if isinstance(exp, datetime):
+                return exp.strftime('%Y%m%d')
+            exp = str(exp)
+        except Exception:
+            return str(exp)
+    cleaned = exp.strip().replace('-', '').replace('/', '')
+    if cleaned.isdigit() and len(cleaned) == 8:
+        return cleaned
+    return exp
 
 
-# Defer DB initialisation: do not create/open on import.
-# Call init_db() explicitly before first use, or rely on lazy init
-# in record_recommendation and other public functions.
+# ── Public API ──────────────────────────────────────────────────────────
 
-
-# ---------------------------------------------------------------------------
-# Recording
-# ---------------------------------------------------------------------------
-
-def record_recommendation(
-    ticker: str,
-    strike: float,
-    expiration: str,
-    option_type: str,
-    dte: int,
-    decision,
-    source: str = 'moomoo',
-    strategy: str = 'csp',
-) -> bool:
+def record_surfaced_signals(
+    evaluator_repo,
+    signals: list[dict],
+    portfolio_context: dict,
+) -> list[str]:
     """
-    Record a recommendation's predicted metrics for later outcome tracking.
-    Stores score_details as JSON so the feedback loop can access factor
-    contributions when the outcome is resolved.
+    Record final surfaced signals. Returns list of recommendation_ids.
 
-    Returns True if inserted, False if already tracked (duplicate).
+    Only the top-ranked signals that are actually shown to the user
+    get recorded. This is called after signal selection, NOT during
+    candidate scoring.
     """
+    portfolio_hash = _compute_portfolio_hash_for_record(portfolio_context)
+    ids = []
+    for signal in signals:
+        signal['portfolio_hash'] = portfolio_hash
+        signal['full_payload'] = signal.get('full_payload', {})
+        try:
+            rid = evaluator_repo.record_signal(signal)
+            if rid:
+                ids.append(rid)
+        except Exception as e:
+            logger.warning("Failed to record signal %s: %s", signal.get('ticker'), e)
+    return ids
+
+
+def _compute_portfolio_hash_for_record(portfolio_context: dict) -> str:
+    """Lightweight portfolio hash for tracking."""
     try:
-        score_details_json = json.dumps(decision.score_details) if hasattr(decision, 'score_details') and decision.score_details else '{}'
-        with _db_lock:
-            conn = _get_db()
-            try:
-                conn.execute("""
-                    INSERT OR IGNORE INTO recommendation_outcomes
-                        (ticker, strike, expiration, option_type, dte,
-                         predicted_score, predicted_ann_return, predicted_delta,
-                         predicted_iv, predicted_premium, predicted_confidence,
-                         predicted_stress_loss, predicted_risk_budget,
-                         predicted_macro_mult,
-                         score_details,
-                         source, strategy, generated_at, score_rationale)
-                    VALUES (?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?,
-                            ?, ?,
-                            ?,
-                            ?,
-                            ?, ?, ?, ?)
-                """, (
-                    ticker, strike, expiration, option_type, dte,
-                    decision.contract_score,
-                    decision.annualized_return,
-                    decision.delta,
-                    decision.implied_volatility,
-                    decision.premium_per_contract,
-                    decision.confidence_score,
-                    decision.stress_loss,
-                    decision.risk_budget_used_pct,
-                    decision.macro_multiplier,
-                    score_details_json,
-                    source, strategy,
-                    datetime.now().isoformat(),
-                    decision.score_rationale,
-                ))
-                conn.commit()
-                return conn.total_changes > 0
-            finally:
-                conn.close()
-    except Exception as e:
-        logger.warning("Failed to record recommendation for %s: %s", ticker, e)
-        return False
+        positions = portfolio_context.get('positions', {})
+        cash = portfolio_context.get('cash_balance', 0)
+        parts = []
+        for symbol, pos in sorted(positions.items()):
+            qty = float(pos.get('position', 0) or 0)
+            parts.append(f"{symbol}:{qty}")
+        return str(hash("|".join(parts) + f"|CASH:{cash}"))
+    except Exception:
+        return "unknown"
 
 
-def resolve_outcome(
-    ticker: str,
-    strike: float,
-    expiration: str,
-    option_type: str,
-    outcome: str,
-    premium_kept: float = 0.0,
-    days_held: Optional[int] = None,
-    assignment_price: Optional[float] = None,
-    notes: str = '',
-) -> bool:
+def run_evaluation_cycle(
+    evaluator_repo,
+    portfolio_service=None,
+    config: Optional[dict] = None,
+) -> dict:
     """
-    Record the actual outcome of a previously-recommended trade.
+    Run one evaluation cycle:
+    1. Find signals past expiration that need resolution.
+    2. If portfolio_service is available, check actual broker state.
+    3. Otherwise mark as unknown (not training data).
+    4. Update scheduler state.
 
-    Reads stored score_details and passes them to the feedback loop
-    so factor contributions are updated with real outcome data.
-    Called by the cron evaluator after expiration.
+    Returns summary dict.
     """
-    try:
-        with _db_lock:
-            conn = _get_db()
-            try:
-                actual_ann = 0.0
-                row = conn.execute(
-                    "SELECT predicted_premium, dte, predicted_ann_return, predicted_score, score_details FROM recommendation_outcomes "
-                    "WHERE ticker=? AND strike=? AND expiration=? AND option_type=?",
-                    (ticker, strike, expiration, option_type)
-                ).fetchone()
-                score_details = {}
-                predicted_score = 0.0
-                if row:
-                    dte = row['dte'] or days_held or 0
-                    if dte > 0 and row['predicted_premium'] and row['predicted_premium'] > 0:
-                        actual_ann = (premium_kept / max(row['predicted_premium'], 0.01)) * (365 / dte) * 100
-                    predicted_score = row['predicted_score'] or 0
-                    sd_raw = row['score_details']
-                    if sd_raw:
-                        try:
-                            score_details = json.loads(sd_raw)
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+    if config is None:
+        config = {}
 
-                conn.execute("""
-                    UPDATE recommendation_outcomes SET
-                        actual_outcome=?,
-                        actual_premium_kept=?,
-                        actual_days_held=?,
-                        actual_ann_return=?,
-                        actual_assignment_price=?,
-                        actual_notes=?,
-                        resolved_at=?
-                    WHERE ticker=? AND strike=? AND expiration=? AND option_type=?
-                """, (
-                    outcome, premium_kept, days_held, actual_ann,
-                    assignment_price, notes, datetime.now().isoformat(),
-                    ticker, strike, expiration, option_type,
-                ))
-                conn.commit()
+    if not config.get('enabled', True):
+        return {'checked': 0, 'resolved': 0, 'skipped': 0, 'errors': 0,
+                'message': 'Evaluator disabled'}
 
-                # Feed into feedback loop with stored score_details
-                try:
-                    from core.feedback_loop import record_outcome_feedback
-                    record_outcome_feedback(
-                        ticker=ticker,
-                        score_details=score_details,
-                        total_score=predicted_score,
-                        actual_return=actual_ann,
-                        option_type=option_type,
-                    )
-                except Exception:
-                    pass
+    auto_resolve = config.get('auto_resolve', True)
+    if not auto_resolve:
+        return {'checked': 0, 'resolved': 0, 'skipped': 0, 'errors': 0,
+                'message': 'Auto-resolve disabled'}
 
-                return conn.total_changes > 0
-            finally:
-                conn.close()
-    except Exception as e:
-        logger.warning("Failed to resolve outcome for %s: %s", ticker, e)
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Queries
-# ---------------------------------------------------------------------------
-
-def get_pending_resolutions(limit: int = 50) -> list[dict]:
-    """Return recommendations past expiration that have not been resolved."""
-    today = datetime.now().strftime('%Y%m%d')
-    with _db_lock:
-        conn = _get_db()
-        try:
-            rows = conn.execute("""
-                SELECT * FROM recommendation_outcomes
-                WHERE expiration < ? AND actual_outcome IS NULL
-                ORDER BY expiration ASC
-                LIMIT ?
-            """, (today, limit)).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
-
-
-def get_recent_outcomes(days: int = 30) -> list[dict]:
-    """Return recently resolved outcomes for dashboard / calibration."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-    with _db_lock:
-        conn = _get_db()
-        try:
-            rows = conn.execute("""
-                SELECT * FROM recommendation_outcomes
-                WHERE resolved_at IS NOT NULL AND resolved_at > ?
-                ORDER BY resolved_at DESC
-                LIMIT 200
-            """, (cutoff,)).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
-
-
-def get_summary_stats() -> dict:
-    """Return aggregate calibration statistics."""
-    with _db_lock:
-        conn = _get_db()
-        try:
-            total = conn.execute("SELECT COUNT(*) as c FROM recommendation_outcomes").fetchone()['c']
-            resolved = conn.execute(
-                "SELECT COUNT(*) as c FROM recommendation_outcomes WHERE actual_outcome IS NOT NULL"
-            ).fetchone()['c']
-            expired = conn.execute(
-                "SELECT COUNT(*) as c FROM recommendation_outcomes WHERE actual_outcome='expired_worthless'"
-            ).fetchone()['c']
-            assigned = conn.execute(
-                "SELECT COUNT(*) as c FROM recommendation_outcomes WHERE actual_outcome='assigned'"
-            ).fetchone()['c']
-            return {
-                'total_recommendations': total,
-                'resolved': resolved,
-                'expired_worthless': expired,
-                'assigned': assigned,
-                'assignment_rate': round(assigned / max(resolved, 1) * 100, 1),
-                'expiry_rate': round(expired / max(resolved, 1) * 100, 1),
-            }
-        finally:
-            conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Cron integration stub
-# ---------------------------------------------------------------------------
-
-def run_evaluation_cycle() -> dict:
-    """
-    Called by cron / scheduler.  Finds expired-but-unresolved recommendations
-    and checks their current status via Moomoo.
-
-    Returns a summary dict with counts of resolved / skipped / errored items.
-    """
-    pending = get_pending_resolutions(limit=50)
+    pending = evaluator_repo.get_pending_resolution_signals(limit=50)
     if not pending:
-        return {'checked': 0, 'resolved': 0, 'skipped': 0, 'errors': 0}
+        return {'checked': 0, 'resolved': 0, 'skipped': 0, 'errors': 0,
+                'message': 'No pending signals'}
 
     resolved_count = 0
     skipped_count = 0
     error_count = 0
 
-    for rec in pending:
-        # TODO: check actual position status via Moomoo SDK
-        # For now, mark as resolved = 'unknown' with a note
-        ok = resolve_outcome(
-            ticker=rec['ticker'],
-            strike=rec['strike'],
-            expiration=rec['expiration'],
-            option_type=rec['option_type'],
-            outcome='unknown',
-            notes='Auto-resolved by evaluator cycle (no Moomoo check implemented)',
-        )
-        if ok:
-            resolved_count += 1
-        else:
+    for signal in pending:
+        try:
+            outcome, actual_return = _resolve_signal_outcome(
+                signal, portfolio_service
+            )
+            if outcome == 'unknown' and not _can_determine_outcome(signal, portfolio_service):
+                evaluator_repo.update_signal_status(
+                    signal['recommendation_id'],
+                    status='ignored',
+                    resolved_outcome='unknown',
+                    resolved_at=datetime.now().isoformat(),
+                )
+                skipped_count += 1
+                continue
+
+            if is_valid_training_outcome(outcome):
+                evaluator_repo.update_signal_status(
+                    signal['recommendation_id'],
+                    status='resolved_valid',
+                    resolved_outcome=outcome,
+                    actual_return=actual_return,
+                    resolved_at=datetime.now().isoformat(),
+                )
+                resolved_count += 1
+
+                # Feed into feedback loop
+                try:
+                    _feed_feedback(evaluator_repo, signal, outcome, actual_return, config)
+                except Exception as e:
+                    logger.warning("Feedback update failed for %s: %s",
+                                   signal['recommendation_id'], e)
+            else:
+                evaluator_repo.update_signal_status(
+                    signal['recommendation_id'],
+                    status='resolved_unknown',
+                    resolved_outcome=outcome or 'unknown',
+                    resolved_at=datetime.now().isoformat(),
+                )
+                skipped_count += 1
+        except Exception as e:
+            logger.error("Error resolving signal %s: %s",
+                         signal.get('recommendation_id', '?'), e)
             error_count += 1
 
     return {
@@ -363,18 +203,141 @@ def run_evaluation_cycle() -> dict:
     }
 
 
-# Deferred initialisation — do NOT call at import time so that importing
-# core.evaluator (or modules that import it, like recommendations.py) does
-# not create ~/.wheel/evaluator/outcomes.db until the first actual use.
-# Callers should use _ensure_init() or rely on lazy initialisation within
-# each public function.
+def _resolve_signal_outcome(signal: dict, portfolio_service) -> tuple:
+    """
+    Determine outcome for an expired signal.
 
-_init_done = False
+    If portfolio_service is available, check actual broker state.
+    Otherwise return ('unknown', 0.0) so it does NOT train the model.
+    Uses _extract_underlying() to handle both bare ticker (AAPL) and
+    full broker option symbol (US.AAPL20250516P00150000) matching.
+    """
+    if not portfolio_service:
+        return ('unknown', 0.0)
+
+    try:
+        ticker = signal['ticker'].upper()
+        option_type = signal['option_type']
+        strike = signal['strike']
+        expiration = _normalize_exp(signal.get('expiration', ''))
+
+        # Get current short option positions
+        positions = portfolio_service.get_positions('OPT') or []
+        matching = [
+            p for p in positions
+            if _extract_underlying(p.get('symbol', '')) == ticker
+            and p.get('option_type', '').upper() == option_type.upper()
+            and abs(float(p.get('strike', 0) or 0) - strike) < 0.01
+            and _normalize_exp(p.get('expiration', '')) == expiration
+        ]
+
+        if not matching:
+            # Option no longer exists in broker — likely expired or closed
+            stock_positions = portfolio_service.get_positions('STK') or []
+            stock_qty = 0
+            stock_found = False
+            for sp in stock_positions:
+                if _extract_underlying(sp.get('symbol', '')) == ticker:
+                    stock_found = True
+                    stock_qty = abs(float(sp.get('position', 0) or 0))
+                    break
+
+            if option_type == 'PUT':
+                if stock_found and stock_qty >= 100:
+                    return ('assigned', _estimate_assignment_return(signal))
+                return ('expired_worthless', signal.get('premium_per_contract', 0) or 0)
+            elif option_type == 'CALL':
+                if not stock_found or stock_qty == 0:
+                    return ('called_away', _estimate_called_away_return(signal))
+                if stock_qty < 100:
+                    return ('called_away', _estimate_called_away_return(signal))
+                return ('expired_worthless', signal.get('premium_per_contract', 0) or 0)
+            else:
+                return ('closed_profit', signal.get('premium_per_contract', 0) or 0)
+
+        # Position still exists
+        pos = matching[0]
+        pos_qty = abs(float(pos.get('position', 0) or 0))
+
+        if pos_qty <= 0:
+            return ('closed_profit', signal.get('premium_per_contract', 0) or 0)
+
+        return ('still_open', None)
+
+    except Exception as e:
+        logger.warning("Error resolving outcome for %s: %s",
+                       signal.get('ticker', '?'), e)
+        return ('unknown', 0.0)
 
 
-def _ensure_init() -> None:
-    """Lazy init: create the DB and schema on first actual use."""
-    global _init_done
-    if not _init_done:
-        init_db()
-        _init_done = True
+def _can_determine_outcome(signal: dict, portfolio_service) -> bool:
+    """Return True if the resolver can reasonably determine the outcome."""
+    return portfolio_service is not None
+
+
+def _estimate_assignment_return(signal: dict) -> float:
+    premium = float(signal.get('premium_per_contract', 0) or 0)
+    return premium  # Premium kept is the realized gain
+
+
+def _estimate_called_away_return(signal: dict) -> float:
+    premium = float(signal.get('premium_per_contract', 0) or 0)
+    return premium
+
+
+def _feed_feedback(evaluator_repo, signal: dict, outcome: str,
+                   actual_return: float, config: dict) -> None:
+    """Feed a resolved outcome into the feedback loop."""
+    if not is_valid_training_outcome(outcome):
+        return
+
+    feedback_enabled = config.get('feedback_enabled', False)
+    min_samples = config.get('feedback_min_valid_samples', 30)
+
+    if not feedback_enabled:
+        return
+
+    valid_count = evaluator_repo.get_valid_sample_count()
+    if valid_count < min_samples:
+        logger.info(
+            "Feedback inactive: %d valid samples < %d minimum",
+            valid_count, min_samples,
+        )
+        return
+
+    score_details = _parse_score_details(signal.get('score_details_json'))
+    if not score_details:
+        return
+
+    total_score = float(signal.get('score', 0) or 0)
+    if total_score <= 0:
+        return
+
+    for factor, val in score_details.items():
+        if not isinstance(val, (int, float)) or val <= 0:
+            continue
+        predicted_contrib = val / total_score if total_score > 0 else 0
+        if predicted_contrib <= 0.01:
+            continue
+
+        error = predicted_contrib - (actual_return / 100.0) if actual_return > 0 else predicted_contrib
+
+        evaluator_repo.save_feedback_event(
+            recommendation_id=signal.get('recommendation_id', ''),
+            ticker=signal.get('ticker', ''),
+            factor=factor,
+            predicted_contrib=round(predicted_contrib, 4),
+            actual_return=round(actual_return, 2),
+            error=round(error, 4),
+            outcome_type=outcome,
+        )
+
+
+def _parse_score_details(score_details_json) -> dict:
+    import json
+    if not score_details_json:
+        return {}
+    try:
+        return json.loads(score_details_json) if isinstance(score_details_json, str) else score_details_json
+    except (json.JSONDecodeError, TypeError):
+        return {}

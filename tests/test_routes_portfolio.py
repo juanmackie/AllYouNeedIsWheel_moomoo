@@ -50,6 +50,8 @@ class TestPortfolioRoutes(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
         self.assertIn('cash_balance', data)
+        self.assertEqual(data['source_policy']['mode'], 'broker_only')
+        self.assertEqual(data['source_policy']['source_of_truth'], 'opend')
 
     @patch('api.routes.portfolio.probe_opend_status')
     @patch('api.routes.portfolio.get_portfolio_service')
@@ -67,6 +69,8 @@ class TestPortfolioRoutes(unittest.TestCase):
         mock_get_ps.return_value = mock_ps
         response = self.client.get('/api/portfolio/positions')
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('X-Source-Policy'), 'broker_only')
+        self.assertEqual(response.headers.get('X-Source-Truth'), 'opend')
 
     @patch('api.routes.portfolio.probe_opend_status')
     @patch('api.routes.portfolio.get_portfolio_service')

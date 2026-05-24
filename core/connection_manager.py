@@ -46,6 +46,7 @@ from core.connection_constants import (
     _parse_option_code_metadata,
     _safe_float,
     _first_non_zero,
+    _normalize_iv,
 )
 from core.context_factory import create_contexts
 from core.ticker_utils import TickerCache, format_symbol
@@ -64,9 +65,28 @@ class MoomooConnection:
     # Class-level cache of connection instances to prevent multiple connections
     _instances = {}
     _instance_lock = threading.Lock()
+    _option_chain_gate = threading.BoundedSemaphore(1)
 
     def __new__(cls, host='127.0.0.1', port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None):
-        key = f"{host}:{port}:{readonly}:{account_id}:{portfolio_env}:{security_firm}"
+        cleaned_account_id = _clean_account_id(account_id)
+
+        if TrdEnv is not None:
+            default_portfolio_env = TrdEnv.SIMULATE if readonly else TrdEnv.REAL
+            normalized_portfolio_env = _normalize_trd_env(portfolio_env, default_portfolio_env)
+        else:
+            normalized_portfolio_env = str(portfolio_env).strip().upper() if portfolio_env else ('SIMULATE' if readonly else 'REAL')
+
+        if SecurityFirm is not None:
+            normalized_security_firm = _normalize_security_firm(
+                security_firm or os.environ.get('MOOMOO_SECURITY_FIRM'),
+                SecurityFirm.FUTUSECURITIES,
+            )
+        else:
+            normalized_security_firm = str(security_firm or os.environ.get('MOOMOO_SECURITY_FIRM') or '').strip().upper()
+
+        normalized_portfolio_env_key = getattr(normalized_portfolio_env, 'name', str(normalized_portfolio_env).strip().upper())
+        normalized_security_firm_key = getattr(normalized_security_firm, 'name', str(normalized_security_firm).strip().upper())
+        key = f"{host}:{port}:{readonly}:{cleaned_account_id}:{normalized_portfolio_env_key}:{normalized_security_firm_key}"
 
         with cls._instance_lock:
             if key not in cls._instances:
@@ -105,9 +125,9 @@ class MoomooConnection:
         self._initialized = True
 
         self._rate_limiter = RateLimiter(
-            max_requests_per_window=10,
+            max_requests_per_window=30,
             rate_limit_window=60,
-            burst_threshold=6,
+            burst_threshold=15,
             burst_window=10
         )
 
@@ -116,6 +136,10 @@ class MoomooConnection:
         self._option_chain_cache = {}
         self._cache_lock = threading.Lock()
         self._cache_ttl = 180
+
+        # Expiration lists are much cheaper to reuse than to re-fetch.
+        self._option_expiration_cache = {}
+        self._expiration_cache_ttl = 300
 
         self._pending_requests = {}
         self._pending_requests_lock = threading.Lock()
@@ -139,6 +163,21 @@ class MoomooConnection:
             self._option_chain_cache[cache_key] = (data, time.time())
             logger.debug(f"Cached option chain for {cache_key}")
 
+    def _get_cached_option_expirations(self, symbol):
+        with self._cache_lock:
+            if symbol in self._option_expiration_cache:
+                cached_data, timestamp = self._option_expiration_cache[symbol]
+                if time.time() - timestamp < self._expiration_cache_ttl:
+                    logger.debug(f"Using cached option expirations for {symbol}")
+                    return cached_data
+                del self._option_expiration_cache[symbol]
+        return None
+
+    def _cache_option_expirations(self, symbol, data):
+        with self._cache_lock:
+            self._option_expiration_cache[symbol] = (data, time.time())
+            logger.debug(f"Cached option expirations for {symbol}")
+
     @classmethod
     def get_connection_pool_stats(cls):
         with cls._instance_lock:
@@ -154,6 +193,18 @@ class MoomooConnection:
             return int(str(account_id))
         except (TypeError, ValueError):
             return account_id
+
+    def _acquire_option_chain_gate(self, request_key):
+        started_wait = time.time()
+        MoomooConnection._option_chain_gate.acquire()
+        wait_time = time.time() - started_wait
+        if wait_time > 0.1:
+            logger.info(
+                "Queued option-chain work for %.2fs to reduce OpenD contention (%s)",
+                wait_time,
+                request_key,
+            )
+        return wait_time
 
     def _get_available_accounts(self, refresh=False):
         if self.trd_ctx is None:
@@ -325,6 +376,10 @@ class MoomooConnection:
     def _get_cached_stock_price(self, symbol):
         return self._ticker_cache.get_cached_price(symbol)
 
+    def get_cached_stock_price(self, symbol):
+        """Public accessor for cached stock price — does not touch the rate limiter."""
+        return self._get_cached_stock_price(symbol)
+
     def _cache_stock_price(self, symbol, price):
         self._ticker_cache.cache_price(symbol, price)
 
@@ -365,10 +420,16 @@ class MoomooConnection:
     def get_option_expiration_dates(self, symbol):
         symbol = self._format_symbol(symbol)
         request_key = f"option_expirations:{symbol}"
-        event, is_new = self._get_or_create_pending_request(request_key)
-        if not is_new:
-            logger.debug(f"Waiting for pending request: {request_key}")
-            event.wait(timeout=90)
+
+        cached_result = self._get_cached_option_expirations(symbol)
+        if cached_result is not None:
+            return cached_result
+
+        pending_result = self._wait_for_pending_request(request_key)
+        if pending_result is not None:
+            cached_result = self._get_cached_option_expirations(symbol)
+            return cached_result if cached_result is not None else pending_result
+
         try:
             self._rate_limiter.check_rate_limit()
             if not self.is_connected():
@@ -378,6 +439,7 @@ class MoomooConnection:
                     return result
             ret, data = self.quote_ctx.get_option_expiration_date(code=symbol)
             result = (ret, data)
+            self._cache_option_expirations(symbol, result)
             self._complete_pending_request(request_key, result)
             return result
         except Exception as e:
@@ -458,18 +520,6 @@ class MoomooConnection:
                     start_date = f"{expiration[0:4]}-{expiration[4:6]}-{expiration[6:8]}"
                     end_date = start_date
 
-            ret, data = self.quote_ctx.get_option_chain(
-                code=symbol,
-                start=start_date,
-                end=end_date,
-                option_type=opt_type
-            )
-
-            if ret != RET_OK:
-                logger.error(f"Failed to get option chain for {symbol}: {data}")
-                self._complete_pending_request(request_key, None)
-                return None
-
             result = {
                 'symbol': symbol.split('.')[-1],
                 'expiration': expiration.replace('-', '') if expiration else '',
@@ -478,44 +528,60 @@ class MoomooConnection:
                 'options': []
             }
 
-            if data.empty:
-                self._cache_option_chain(symbol, expiration, right, result)
-                self._complete_pending_request(request_key, result)
-                return result
+            self._acquire_option_chain_gate(request_key)
+            try:
+                ret, data = self.quote_ctx.get_option_chain(
+                    code=symbol,
+                    start=start_date,
+                    end=end_date,
+                    option_type=opt_type
+                )
 
-            if target_strike:
-                data['strike_diff'] = (data['strike_price'] - float(target_strike)).abs()
-                data = data.sort_values('strike_diff').head(20)
+                if ret != RET_OK:
+                    logger.error(f"Failed to get option chain for {symbol}: {data}")
+                    self._complete_pending_request(request_key, None)
+                    return None
 
-            option_codes = data['code'].tolist()
-            if not option_codes:
-                self._cache_option_chain(symbol, expiration, right, result)
-                self._complete_pending_request(request_key, result)
-                return result
+                if data.empty:
+                    self._cache_option_chain(symbol, expiration, right, result)
+                    self._complete_pending_request(request_key, result)
+                    return result
 
-            ret, snap_data = self.quote_ctx.get_market_snapshot(option_codes)
-            if ret == RET_OK:
-                for _, row in snap_data.iterrows():
-                    opt_expiry = row.get('option_expiry_date', '') or row.get('strike_time', '')
-                    if opt_expiry:
-                        opt_expiry = opt_expiry.replace('-', '')
+                if target_strike:
+                    data['strike_diff'] = (data['strike_price'] - float(target_strike)).abs()
+                    data = data.sort_values('strike_diff').head(20)
 
-                    option_data = {
-                        'strike': float(row.get('option_strike_price', 0)),
-                        'expiration': opt_expiry,
-                        'option_type': 'CALL' if row.get('option_type') == 'CALL' else 'PUT',
-                        'bid': float(row.get('bid_price', 0)),
-                        'ask': float(row.get('ask_price', 0)),
-                        'last': float(row.get('last_price', 0)),
-                        'volume': int(row.get('volume', 0)),
-                        'open_interest': int(row.get('option_open_interest', row.get('open_interest', 0)) or 0),
-                        'implied_volatility': float(row.get('option_implied_volatility', 0)),
-                        'delta': float(row.get('option_delta', 0)),
-                        'gamma': float(row.get('option_gamma', 0)),
-                        'theta': float(row.get('option_theta', 0)),
-                        'vega': float(row.get('option_vega', 0))
-                    }
-                    result['options'].append(option_data)
+                option_codes = data['code'].tolist()
+                if not option_codes:
+                    self._cache_option_chain(symbol, expiration, right, result)
+                    self._complete_pending_request(request_key, result)
+                    return result
+
+                ret, snap_data = self.quote_ctx.get_market_snapshot(option_codes)
+                if ret == RET_OK:
+                    for _, row in snap_data.iterrows():
+                        opt_expiry = row.get('option_expiry_date', '') or row.get('strike_time', '')
+                        if opt_expiry:
+                            opt_expiry = opt_expiry.replace('-', '')
+
+                        option_data = {
+                            'strike': float(row.get('option_strike_price', 0)),
+                            'expiration': opt_expiry,
+                            'option_type': 'CALL' if row.get('option_type') == 'CALL' else 'PUT',
+                            'bid': float(row.get('bid_price', 0)),
+                            'ask': float(row.get('ask_price', 0)),
+                            'last': float(row.get('last_price', 0)),
+                            'volume': int(row.get('volume', 0)),
+                            'open_interest': int(row.get('option_open_interest', row.get('open_interest', 0)) or 0),
+                            'implied_volatility': _normalize_iv(row.get('option_implied_volatility', 0)),
+                            'delta': float(row.get('option_delta', 0)),
+                            'gamma': float(row.get('option_gamma', 0)),
+                            'theta': float(row.get('option_theta', 0)),
+                            'vega': float(row.get('option_vega', 0))
+                        }
+                        result['options'].append(option_data)
+            finally:
+                MoomooConnection._option_chain_gate.release()
 
             if not result['expiration'] and result['options']:
                 result['expiration'] = result['options'][0]['expiration']

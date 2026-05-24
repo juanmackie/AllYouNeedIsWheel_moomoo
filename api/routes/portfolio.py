@@ -4,6 +4,7 @@ Portfolio API routes
 
 from flask import Blueprint, request, jsonify, current_app
 from api.routes.utils import error_response
+from api.routes.source_policy import attach_source_policy, build_account_source_policy
 from api.services.macro_regime_service import get_macro_service
 from core.connection import probe_opend_status
 
@@ -105,7 +106,7 @@ def get_portfolio():
                 'error': str(macro_err)
             }
 
-        return jsonify(results)
+        return jsonify(attach_source_policy(results, build_account_source_policy('portfolio')))
     except Exception as e:
         return error_response(str(e), status_code=500)
 
@@ -134,7 +135,10 @@ def get_positions():
                 get_portfolio_service().last_error,
                 'Failed to load positions'
             )
-        return jsonify(results)
+        response = jsonify(results)
+        response.headers['X-Source-Policy'] = 'broker_only'
+        response.headers['X-Source-Truth'] = 'opend'
+        return response
     except Exception as e:
         return error_response(str(e), status_code=500)
 
@@ -195,7 +199,7 @@ def get_weekly_income():
                 return jsonify(payload), 503
             return jsonify(payload), 500
 
-        return jsonify(results), 200
+        return jsonify(attach_source_policy(results, build_account_source_policy('weekly_income'))), 200
     except Exception as e:
         return jsonify({
             'error': str(e),

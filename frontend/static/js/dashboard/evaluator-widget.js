@@ -82,9 +82,5 @@ function formatLastRun(state, name) {
     }
 }
 
-// Auto-load on DOM ready
-document.addEventListener('DOMContentLoaded', () => {
-    loadEvaluatorWidget();
-    // Refresh button
-    document.getElementById('refresh-evaluator-btn')?.addEventListener('click', loadEvaluatorWidget);
-});
+// Refresh button listener (auto-load moved to dashboard-init lazy diagnostics)
+document.getElementById('refresh-evaluator-btn')?.addEventListener('click', loadEvaluatorWidget);

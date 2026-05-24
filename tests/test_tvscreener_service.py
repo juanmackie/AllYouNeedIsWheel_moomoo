@@ -15,12 +15,12 @@ class TestTvscreenerServiceInit:
         service = TvscreenerService()
         assert service._initialized is False
         assert service._tvscreener is None
-        assert service._cache == {}
+        assert len(service._cache) == 0
 
     def test_cache_ttl(self):
         """Test that cache TTL is set correctly."""
         service = TvscreenerService()
-        assert service._cache_ttl == 300  # 5 minutes
+        assert service._cache.ttl == 300  # 5 minutes
 
 
 class TestTvscreenerServiceInitializedState:

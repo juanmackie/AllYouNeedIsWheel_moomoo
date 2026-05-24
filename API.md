@@ -461,7 +461,7 @@ Review opportunities in the dashboard and place trades manually in Moomoo.
 
 ### Get Earnings Status
 
-Check the background earnings updater status and cache statistics.
+Check the earnings updater status (runs under APScheduler every 6 hours) and cache statistics.
 
 **Endpoint:** `GET /api/earnings/status`
 
@@ -469,6 +469,10 @@ Check the background earnings updater status and cache statistics.
 ```json
 {
   "status": "running",
+  "scheduler": {
+    "running": true,
+    "state": {}
+  },
   "cache_stats": {
     "iv_cache_entries": 15,
     "earnings_cache_entries": 12,
@@ -479,8 +483,8 @@ Check the background earnings updater status and cache statistics.
 ```
 
 **Status Values:**
-- `running` — Background thread active
-- `stopped` — Background thread not running
+- `running` — APScheduler is running (earnings job scheduled every 6h)
+- `stopped` — APScheduler not active
 
 ### Refresh All Earnings
 
@@ -740,6 +744,11 @@ Get prefilled data for closing a position, used for rollover workflows.
 
 ## System Tasks
 
+> **Note:** The earnings updater no longer runs under `BackgroundTaskManager`.
+> It is now managed by the central APScheduler (see `core/scheduler.py`,
+> job `earnings_updater_6h`). Health-monitor and any other background tasks
+> registered here are unrelated to earnings.
+
 ### List Background Tasks
 
 Get the status of all registered background tasks.
@@ -749,14 +758,7 @@ Get the status of all registered background tasks.
 **Response:**
 ```json
 {
-  "tasks": [
-    {
-      "name": "earnings_updater",
-      "running": true,
-      "uptime_seconds": 3600,
-      "restart_count": 0
-    }
-  ]
+  "tasks": []
 }
 ```
 
@@ -770,7 +772,7 @@ Restart a specific background task by name.
 ```json
 {
   "success": true,
-  "task": "earnings_updater",
+  "task": "my_task",
   "message": "Task restarted"
 }
 ```
@@ -784,7 +786,7 @@ Get detailed status of a specific background task.
 **Response:**
 ```json
 {
-  "name": "earnings_updater",
+  "name": "my_task",
   "running": true,
   "uptime_seconds": 3600,
   "last_run": "2026-04-25T10:00:00Z",
