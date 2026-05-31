@@ -10,7 +10,6 @@ Checks for:
 
 import unittest
 import os
-import re
 
 
 # Replacement character and common mojibake patterns

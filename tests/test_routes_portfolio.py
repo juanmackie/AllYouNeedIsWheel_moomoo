@@ -17,7 +17,6 @@ class TestPortfolioRoutes(unittest.TestCase):
         self.app.config['TESTING'] = True
 
     def _mock_connection_available(self):
-        from api.routes.portfolio import get_portfolio_service
         mock_ps = MagicMock()
         mock_ps._ensure_connection.return_value = MagicMock()
         mock_ps.get_portfolio_summary.return_value = {
@@ -34,6 +33,12 @@ class TestPortfolioRoutes(unittest.TestCase):
         mock_probe.return_value = {'status': 'unavailable', 'message': 'Not connected'}
         response = self.client.get('/api/portfolio/')
         self.assertEqual(response.status_code, 503)
+        data = json.loads(response.data)
+        self.assertFalse(data['success'])
+        self.assertIn('error_code', data)
+        self.assertEqual(data['error_code'], 'opend_unavailable')
+        self.assertIn('opend_status', data)
+        self.assertEqual(data['opend_status']['status'], 'unavailable')
 
     @patch('api.routes.portfolio.probe_opend_status')
     @patch('api.routes.portfolio.get_portfolio_service')
@@ -56,9 +61,13 @@ class TestPortfolioRoutes(unittest.TestCase):
     @patch('api.routes.portfolio.probe_opend_status')
     @patch('api.routes.portfolio.get_portfolio_service')
     def test_get_positions_opend_unavailable(self, mock_get_ps, mock_probe):
-        mock_probe.return_value = {'status': 'unavailable'}
+        mock_probe.return_value = {'status': 'unavailable', 'message': 'Not connected'}
         response = self.client.get('/api/portfolio/positions')
         self.assertEqual(response.status_code, 503)
+        data = json.loads(response.data)
+        self.assertFalse(data['success'])
+        self.assertIn('error_code', data)
+        self.assertEqual(data['error_code'], 'opend_unavailable')
 
     @patch('api.routes.portfolio.probe_opend_status')
     @patch('api.routes.portfolio.get_portfolio_service')

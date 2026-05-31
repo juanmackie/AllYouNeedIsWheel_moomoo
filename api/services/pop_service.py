@@ -4,8 +4,6 @@ Enhanced PoP estimation with Delta-based and Monte Carlo methods.
 """
 
 import logging
-import random
-from typing import Dict, Any, Optional
 
 logger = logging.getLogger('api.services.pop')
 

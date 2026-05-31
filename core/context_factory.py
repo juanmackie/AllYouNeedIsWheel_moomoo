@@ -4,7 +4,6 @@ Extracted from core/connection.py for maintainability.
 """
 
 import socket
-import logging
 from moomoo import (
     OpenQuoteContext,
     OpenSecTradeContext,

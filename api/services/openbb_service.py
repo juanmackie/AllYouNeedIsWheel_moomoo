@@ -1,6 +1,5 @@
 """
-OpenBB Service Layer
-Lightweight SDK wrapper for OpenBB financial data enrichment.
+Optional enrichment service layer.
 Provides 4 methods used by the Wheel Strategy scoring pipeline:
 - get_unusual_options(ticker) - unusual options activity (sweeps/blocks)
 - get_technical_snapshot(ticker) - RSI, SMA, ATR
@@ -11,8 +10,9 @@ Provides 4 methods used by the Wheel Strategy scoring pipeline:
 import logging
 import time
 import threading
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 
+from api.services.utils import get_yfinance_ticker
 from core.ttl_cache import make_ttl_cache
 
 logger = logging.getLogger('api.services.openbb')
@@ -20,9 +20,9 @@ logger = logging.getLogger('api.services.openbb')
 
 class OpenBBService:
     """
-    Service for fetching enriched financial data from OpenBB.
+    Optional service for fetching enriched financial data.
     Lazy-initializes the SDK, caches results with per-type TTLs,
-    and degrades gracefully if OpenBB is unavailable.
+    and degrades gracefully if the optional enrichment package is unavailable or disabled.
     """
 
     def __init__(self):
@@ -323,10 +323,9 @@ class OpenBBService:
             
             # Fallback to yfinance
             try:
-                import yfinance as yf
                 import time
                 time.sleep(0.5)
-                vix_ticker = yf.Ticker("^VIX")
+                vix_ticker = get_yfinance_ticker("^VIX")
                 info = vix_ticker.info
                 if info and 'previousClose' in info:
                     current = float(info['previousClose'])

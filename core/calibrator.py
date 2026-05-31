@@ -4,17 +4,19 @@ Calibrator — automatic weight adjustment from historical outcomes.
 Stores calibration results in the app's options.db via EvaluatorRepository.
 The old independent SQLite files are no longer used.
 
-Calibration is a simple gradient-free optimiser that tweaks weights in small
-steps and keeps the combination that best predicts actual outcomes.
+Calibration uses scipy.optimize (L-BFGS-B) to find the weight combination
+that best predicts actual outcomes. A train/test split prevents overfitting.
 
 Scoring does NOT consume calibration weights automatically unless enabled
 via the 'calibrator_enabled' and 'calibrator_shadow_mode' feature flags.
 """
 
-import random
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Optional
+
+import numpy as np
+from scipy.optimize import minimize
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,34 @@ class ScoringWeights:
 
 DEFAULT_GROWTH_WEIGHTS = ScoringWeights()
 
+N_WEIGHTS = 6  # number of weight dimensions
+
+
+def _weights_to_array(w: ScoringWeights) -> np.ndarray:
+    """Flatten ScoringWeights to a 5-element array (last dim inferred as 1-sum)."""
+    arr = np.array([w.iv_adjusted, w.theta_delta, w.liquidity,
+                    w.expected_value, w.upside_or_buffer])
+    return arr
+
+
+def _array_to_weights(arr: np.ndarray) -> ScoringWeights:
+    """Rebuild ScoringWeights from 5-element array (6th = 1 - sum of 5)."""
+    sixth = 1.0 - float(np.sum(arr))
+    return ScoringWeights(
+        iv_adjusted=max(float(arr[0]), 0.0),
+        theta_delta=max(float(arr[1]), 0.0),
+        liquidity=max(float(arr[2]), 0.0),
+        expected_value=max(float(arr[3]), 0.0),
+        upside_or_buffer=max(float(arr[4]), 0.0),
+        otm_fit=max(sixth, 0.0),
+    )
+
+
+def _objective(arr: np.ndarray, outcomes: list[dict]) -> float:
+    """Objective for scipy.minimize: loss given flat weight array."""
+    w = _array_to_weights(arr)
+    return _compute_loss(w, outcomes)
+
 
 def run_calibration_cycle(
     evaluator_repo,
@@ -65,15 +95,14 @@ def run_calibration_cycle(
 
     1. Fetch resolved valid outcomes from evaluator_repo.
     2. Start from the default growth weights (or last calibration).
-    3. Try random perturbations and keep the best.
+    3. Optimize weights using scipy.optimize.minimize (L-BFGS-B) on a
+       training split (80% of data). Evaluate on test split (20%).
     4. Save the result. When calibrator_enabled=True, accepted=True is stored
        so downstream consumers can query accepted calibration weights.
        In shadow mode (calibrator_shadow_mode=True, calibrator_enabled=False),
        weights are stored as accepted=False for comparison only.
-    5. Calibration weights are NOT auto-applied to live scoring — that requires
-       explicit integration in the scorer (future work).
 
-    Returns a summary dict.
+    Returns a summary dict with train/test loss.
     """
     if config is None:
         config = {}
@@ -93,17 +122,27 @@ def run_calibration_cycle(
         outcomes = [o for o in outcomes if o.get('resolved_outcome') is not None]
 
     min_samples = config.get('calibrator_min_samples', 50)
-    if len(outcomes) < min_samples:
+    total_samples = len(outcomes)
+    if total_samples < min_samples:
         return {
             'success': False,
-            'message': f'Need >= {min_samples} resolved outcomes, got {len(outcomes)}',
-            'samples': len(outcomes),
+            'message': f'Need >= {min_samples} resolved outcomes, got {total_samples}',
+            'samples': total_samples,
         }
+
+    # Train/test split (80/20)
+    np.random.seed(42)
+    idx = np.random.permutation(total_samples)
+    split = int(total_samples * 0.8)
+    train_idx = idx[:split]
+    test_idx = idx[split:]
+    train_outcomes = [outcomes[i] for i in train_idx]
+    test_outcomes = [outcomes[i] for i in test_idx]
 
     # Starting weights — from last calibration or defaults
     last = evaluator_repo.get_latest_calibration()
     if last and last.get('weights'):
-        best = ScoringWeights(
+        start = ScoringWeights(
             iv_adjusted=last['weights'].get('iv_adjusted', 0.35),
             theta_delta=last['weights'].get('theta_delta', 0.15),
             liquidity=last['weights'].get('liquidity', 0.15),
@@ -112,39 +151,49 @@ def run_calibration_cycle(
             otm_fit=last['weights'].get('otm_fit', 0.10),
         )
     else:
-        best = ScoringWeights()
+        start = ScoringWeights()
 
-    best_loss = _compute_loss(best, outcomes)
+    x0 = _weights_to_array(start)
+    bounds = [(0.0, 1.0)] * (N_WEIGHTS - 1)
 
-    for i in range(iterations):
-        candidate = _perturb(best, step)
-        loss = _compute_loss(candidate, outcomes)
-        if loss < best_loss:
-            best = candidate
-            best_loss = loss
+    result = minimize(
+        _objective,
+        x0,
+        args=(train_outcomes,),
+        method='L-BFGS-B',
+        bounds=bounds,
+        options={'maxiter': iterations, 'ftol': 1e-6},
+    )
+
+    best = _array_to_weights(result.x)
+    best.normalise()
+    train_loss = result.fun if result.fun != float('inf') else _compute_loss(best, train_outcomes)
+    test_loss = _compute_loss(best, test_outcomes)
 
     cycle = evaluator_repo.get_next_calibration_cycle()
 
-    # Run shadow loss on current default weights for comparison
-    shadow_loss = _compute_loss(DEFAULT_GROWTH_WEIGHTS, outcomes)
+    # Shadow loss on default weights (test split for fair comparison)
+    shadow_loss = _compute_loss(DEFAULT_GROWTH_WEIGHTS, test_outcomes)
 
     evaluator_repo.save_calibration(
         cycle=cycle,
-        samples=len(outcomes),
-        loss=best_loss,
+        samples=len(train_outcomes),
+        loss=train_loss,
         weights=best.to_dict(),
         shadow_loss=shadow_loss,
         accepted=calibrator_enabled,
     )
 
     return {
-        'success': True,
+        'success': result.success,
         'cycle': cycle,
-        'samples': len(outcomes),
-        'loss': round(best_loss, 4),
+        'samples': len(train_outcomes),
+        'test_samples': len(test_outcomes),
+        'loss': round(train_loss, 4),
+        'test_loss': round(test_loss, 4),
         'shadow_loss': round(shadow_loss, 4),
         'weights': best.to_dict(),
-        'improvement': round(shadow_loss - best_loss, 4) if shadow_loss != float('inf') else None,
+        'improvement': round(shadow_loss - train_loss, 4) if shadow_loss != float('inf') else None,
     }
 
 
@@ -174,16 +223,3 @@ def _compute_loss(weights: ScoringWeights, outcomes: list[dict]) -> float:
         for p, a in scored
     ) / len(scored)
     return error
-
-
-def _perturb(weights: ScoringWeights, step: float = 0.03) -> ScoringWeights:
-    new = ScoringWeights(
-        iv_adjusted=weights.iv_adjusted + random.uniform(-step, step),
-        theta_delta=weights.theta_delta + random.uniform(-step, step),
-        liquidity=weights.liquidity + random.uniform(-step, step),
-        expected_value=weights.expected_value + random.uniform(-step, step),
-        upside_or_buffer=weights.upside_or_buffer + random.uniform(-step, step),
-        otm_fit=weights.otm_fit + random.uniform(-step, step),
-    )
-    new.normalise()
-    return new

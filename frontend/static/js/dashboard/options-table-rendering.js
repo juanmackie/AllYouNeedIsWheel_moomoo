@@ -2,6 +2,12 @@ import { state, getUnavailableTickerMessage, getRenderExpirationValue, formatExp
 import { calculatePremium, calculateEarningsSummary, updateEarningsSummary } from './options-table-calc.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 
+function sanitize(str) {
+    const el = document.createElement('div');
+    el.textContent = str;
+    return el.innerHTML;
+}
+
 export function showToast(type, title, message) {
     let toastContainer = document.getElementById('toast-container');
     if (!toastContainer) {
@@ -22,7 +28,7 @@ export function showToast(type, title, message) {
     toast.innerHTML = `
         <div class="d-flex">
             <div class="toast-body">
-                <strong>${title}</strong>: ${message}
+                <strong>${sanitize(title)}</strong>: ${sanitize(message)}
             </div>
             <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
         </div>
@@ -727,7 +733,7 @@ export function failProgressBanner(message) {
         <div class="d-flex align-items-center w-100" style="gap: 12px;">
             <i class="bi bi-exclamation-triangle-fill text-danger flex-shrink-0"></i>
             <div class="flex-grow-1">
-                <span class="fw-semibold small">${message}</span>
+                <span class="fw-semibold small">${sanitize(message)}</span>
             </div>
         </div>
     `;
@@ -760,7 +766,7 @@ export function showPanelLoading(containerId, message) {
     banner.style.cssText = 'gap: 10px;';
     banner.innerHTML = `
         <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
-        <span class="small fw-semibold flex-grow-1" id="${bannerId}-text">${message}</span>
+        <span class="small fw-semibold flex-grow-1" id="${bannerId}-text">${sanitize(message)}</span>
     `;
 
     // Insert at the top of the container (before any content/state elements)
@@ -791,7 +797,7 @@ export function finishPanelLoading(bannerId, doneMessage = 'Complete') {
     banner.style.cssText = 'gap: 10px;';
     banner.innerHTML = `
         <i class="bi bi-check-circle-fill text-success flex-shrink-0"></i>
-        <span class="small fw-semibold flex-grow-1">${doneMessage}</span>
+        <span class="small fw-semibold flex-grow-1">${sanitize(doneMessage)}</span>
     `;
     setTimeout(() => {
         banner.remove();
@@ -811,7 +817,7 @@ export function failPanelLoading(bannerId, errorMessage) {
     banner.style.cssText = 'gap: 10px;';
     banner.innerHTML = `
         <i class="bi bi-exclamation-triangle-fill text-danger flex-shrink-0"></i>
-        <span class="small fw-semibold flex-grow-1">${errorMessage}</span>
+        <span class="small fw-semibold flex-grow-1">${sanitize(errorMessage)}</span>
     `;
 }
 

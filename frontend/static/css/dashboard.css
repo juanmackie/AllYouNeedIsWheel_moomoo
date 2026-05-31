@@ -641,6 +641,14 @@
   line-height: 1.3;
 }
 
+.catalyst-card__social {
+  font-size: 0.65rem;
+  line-height: 1.3;
+  padding-top: 4px;
+  border-top: 1px solid var(--saas-border);
+  color: var(--saas-info);
+}
+
 /* Earnings volatility signals */
 .earnings-vol-grid {
   display: grid;

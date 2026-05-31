@@ -9,6 +9,99 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ── Named constants for score thresholds ─────────────────────────────────
+# Extract these from magic numbers throughout wheel_decision.py.
+
+# Spread / liquidity
+MAX_ACCEPTABLE_SPREAD_PCT = 60
+IDEAL_SPREAD_PCT = 12
+MIN_OPEN_INTEREST = 10
+MIN_VOLUME = 1
+IDEAL_OPEN_INTEREST = 500
+
+# Premium
+MIN_PREMIUM_PER_CONTRACT = 10
+MIN_MID_PRICE = 0.05
+
+# DTE
+CSP_MIN_DTE_DEFAULT = 30
+CSP_MAX_DTE_DEFAULT = 45
+CSP_PREFERRED_DTE_DEFAULT = 37
+
+# OTM
+CSP_DEFAULT_OTM_PCT = 10
+CSP_MIN_OTM_PCT = 5
+CSP_MAX_OTM_PCT = 15
+
+# Target values for scoring
+TARGET_ANNUALIZED_RETURN_CALL = 24
+TARGET_ANNUALIZED_RETURN_PUT = 18
+TARGET_IV_ADJUSTED = 50
+TARGET_CAPITAL_EFFICIENCY = 100
+TARGET_BUFFER_PCT = 10
+TARGET_BREAKEVEN_BUFFER = 8
+TARGET_THETA_DELTA_RATIO = 0.005
+TARGET_IF_CALLED_RETURN = 12
+
+# Score weights
+CALL_W_IV_ADJ = 0.30
+CALL_W_TDR = 0.15
+CALL_W_LIQ = 0.15
+CALL_W_EV = 0.10
+CALL_W_UPSIDE = 0.15
+CALL_W_OTM = 0.10
+CALL_W_EARNINGS = 0.05
+
+PUT_W_IV_ADJ = 0.30
+PUT_W_TDR = 0.15
+PUT_W_EV = 0.10
+PUT_W_LIQ = 0.15
+PUT_W_BUF = 0.10
+PUT_W_CE = 0.15
+PUT_W_EARNINGS = 0.05
+
+# Score adjustments
+IV_ENV_SCORE_MAX = 20
+IV_ENV_SCORE_MIN = -20
+EARNINGS_PENALTY_TODAY = -30
+EARNINGS_PENALTY_VERY_SOON = -15
+EARNINGS_PENALTY_SOON = -5
+
+# Max loss estimates
+CALL_MAX_LOSS_ESTIMATE_PCT = 0.05
+PUT_MAX_LOSS_ESTIMATE_PCT = 0.10
+
+# Cache TTLs
+PRICE_CACHE_TTL = 120
+FAILED_TICKER_TTL = 300
+OPTION_CHAIN_CACHE_TTL = 180
+EXPIRATION_CACHE_TTL = 300
+
+# Connection
+CONNECTION_IDLE_WARNING = 30  # seconds
+CONNECTION_IDLE_TIMEOUT = 300  # seconds
+STALE_QUOTE_THRESHOLD = 300  # seconds
+
+# Evaluator
+MIN_FEEDBACK_SAMPLES = 30
+MAX_FACTOR_SHIFT = 0.10
+CALIBRATOR_MIN_SAMPLES = 50
+CALIBRATOR_BLEND = 0.20
+
+# Scheduler
+SCHEDULER_LOCK_STALE_TIMEOUT = 300  # seconds (5 min)
+GENERATION_IN_FLIGHT_TIMEOUT = 180  # seconds (3 min)
+
+# Recommendation limits
+MAX_RECOMMENDATIONS = 10
+DEFAULT_RECOMMENDATIONS = 5
+
+# Capital efficiency
+ACCOUNT_VALUE_MIN = 1
+
+# Roll pressure
+ROLL_THETA_HIGH_THRESHOLD = 0.50  # daily theta decay ($) considered high
+
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
     return max(minimum, min(maximum, value))
@@ -104,7 +197,8 @@ def _compute_roll_pressure(decision) -> float:
     """
     Compute roll_pressure (0-100) for an open position.
 
-    Combines DTE remaining, % distance to strike, extrinsic value remaining.
+    Combines DTE remaining, % distance to strike, extrinsic value remaining,
+    and theta decay rate. Higher theta means higher time decay urgency.
     """
     dte_component = _clamp(1 - (decision.dte / 45)) * 100 if decision.dte >= 0 else 100
 
@@ -134,10 +228,21 @@ def _compute_roll_pressure(decision) -> float:
     else:
         extrinsic_component = 0
 
+    theta_abs = abs(decision.theta)
+    if theta_abs >= 1.0:
+        theta_component = 100
+    elif theta_abs >= ROLL_THETA_HIGH_THRESHOLD:
+        theta_component = 50 + _clamp((theta_abs - ROLL_THETA_HIGH_THRESHOLD) / 0.50) * 50
+    elif theta_abs > 0:
+        theta_component = _clamp(theta_abs / ROLL_THETA_HIGH_THRESHOLD) * 50
+    else:
+        theta_component = 0
+
     pressure = (
         dte_component * 0.35 +
         distance_component * 0.40 +
-        extrinsic_component * 0.25
+        extrinsic_component * 0.10 +
+        theta_component * 0.15
     )
     return round(_clamp(pressure / 100) * 100, 1)
 
@@ -182,6 +287,30 @@ def _compute_size_fit(decision, portfolio_context: dict) -> float:
         fit = _clamp(available_cash / decision.cash_required) * 100
 
     return round(fit, 1)
+
+
+def _compute_recommended_contracts(decision, portfolio_context: dict) -> int:
+    """
+    Compute recommended number of contracts based on account value,
+    risk allocation, and contract-specific constraints.
+
+    Aims for no more than 10% of account value per position for PUTs,
+    and all available shares for CALLs (subject to diversification).
+    """
+    account_value = max(float(portfolio_context.get('account_value', 0) or 0), ACCOUNT_VALUE_MIN)
+    total_positions = max(len(portfolio_context.get('positions', {})), 1)
+    max_contracts = max(decision.max_contracts, 1)
+
+    if decision.option_type == 'CALL':
+        return max_contracts
+
+    cash_required = max(decision.cash_required, 1)
+    position_target = account_value * 0.10
+    by_value = max(int(position_target / cash_required), 1)
+    by_available = max(decision.max_contracts, 1)
+
+    recommended = min(by_value, by_available)
+    return max(recommended, 1)
 
 
 def _compute_expected_move_buffer(decision) -> float:

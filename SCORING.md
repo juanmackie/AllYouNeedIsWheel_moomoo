@@ -15,6 +15,10 @@ The algorithm prioritizes:
 4. **Capital efficiency** for portfolio-level optimization
 5. **IV environment awareness** to avoid selling in poor conditions
 
+## Catalyst Watch Social Expansion
+
+`Catalyst Watch` can use Ape Wisdom to widen the scan universe before broker-side confirmation. That social momentum layer is intentionally separate from the core option-scoring model: it can nudge confirmed flow signals and add context, but it does not replace the scoring factors above.
+
 ## Scoring Components
 
 ### Phase 1: Risk-Adjusted Metrics
@@ -156,8 +160,7 @@ score = base_score * (1 + iv_env_adjustment / 100)
 ### Phase 3: VIX Market Regime Adaptation
 
 **VIX Regime Detection:**
-System fetches VIX from OpenBB (primary) or yfinance (fallback with `^VIX` ticker) with caching.
-- **Primary:** OpenBB SDK (`obb.equity.price.historical("VIX")`)
+System fetches VIX from free/public sources with yfinance (`^VIX` ticker) as the documented fallback and caches results to avoid rate limits.
 - **Fallback:** yfinance (`yf.Ticker("^VIX").info['previousClose']`)
 - **Cache:** 5-minute TTL to avoid rate limits
 
@@ -512,7 +515,7 @@ that under-predict get their weight increased.
 
 1. `core/evaluator.py` stores `score_details` (JSON) with each recommendation.
 2. When the outcome is resolved, `resolve_outcome()` reads the stored details
-   and calls `record_outcome_feedback()` in `core/feedback_loop.py`.
+   and writes the outcome feedback back through the evaluator repository.
 3. The feedback loop runs an online (single-pass) mean update per factor,
    then derives a bias multiplier (`<1.0` = over-predicts, `>1.0` = under-predicts).
 4. `get_adjusted_weights()` returns these multipliers, clamped to `[0.5, 2.0]`.
@@ -566,5 +569,5 @@ A compact card near the top of the dashboard shows:
 
 ---
 
-**Last Updated:** 2026-05-17
-**Version:** 2.1.0 (Phases 8-10: Evaluator, Feedback, Scheduler)
+**Last Updated:** 2026-05-31
+**Version:** 2.3.0 (Catalyst Watch Ape Wisdom expansion)

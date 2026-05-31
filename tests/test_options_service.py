@@ -32,6 +32,19 @@ class TestStripTickerPrefix(unittest.TestCase):
         self.assertEqual(result, '')
 
 
+class TestYFinanceTicker(unittest.TestCase):
+    """Test the yfinance ticker helper (session management removed — yfinance handles its own)."""
+
+    def test_get_yfinance_ticker_returns_ticker(self):
+        from api.services.utils import get_yfinance_ticker
+        from unittest.mock import patch
+
+        with patch('yfinance.Ticker') as mock_ticker:
+            result = get_yfinance_ticker('AAPL')
+        self.assertIs(result, mock_ticker.return_value)
+        mock_ticker.assert_called_once_with('AAPL')
+
+
 class TestGetEffectiveWatchlist(unittest.TestCase):
     """Test watchlist mode logic."""
 
@@ -133,6 +146,22 @@ class TestLazyServiceInitialization(unittest.TestCase):
         """_openbb_service should be None initially."""
         service = OptionsService()
         self.assertIsNone(service._openbb_service)
+
+    @patch('api.services.config.get_config')
+    @patch('api.services.openbb_service.get_openbb_service')
+    def test_openbb_service_disabled_by_default(self, mock_get_openbb_service, mock_get_config):
+        """OpenBB should stay disabled unless explicitly enabled in config."""
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            'openbb_enabled': False,
+        }.get(key, default)
+        mock_get_config.return_value = mock_config
+
+        service = OptionsService()
+        result = service._get_openbb_service()
+
+        self.assertIsNone(result)
+        mock_get_openbb_service.assert_not_called()
 
     def test_tvscreener_service_initially_none(self):
         """_tvscreener_service should be None initially."""

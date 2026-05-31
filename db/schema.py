@@ -1,8 +1,11 @@
-import sqlite3
 import traceback
 import logging
 
+from .sqlite_pool import pooled_connection
+
 logger = logging.getLogger('db.schema')
+
+SCHEMA_VERSION = 2
 
 
 def create_tables(conn):
@@ -130,6 +133,11 @@ def create_tables(conn):
     ''')
 
     cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_evaluator_signals_created_at
+        ON evaluator_signals(created_at)
+    ''')
+
+    cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_evaluator_signals_pos_key
         ON evaluator_signals(ticker, option_type, strike, expiration)
     ''')
@@ -142,6 +150,11 @@ def create_tables(conn):
             bias_multiplier REAL DEFAULT 1.0,
             last_updated    TEXT
         )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_evaluator_feedback_bias_factor
+        ON evaluator_feedback_bias(factor)
     ''')
 
     cursor.execute('''
@@ -180,37 +193,138 @@ def create_tables(conn):
         )
     ''')
 
+    # ── Wheel Scan Ledger (borrowed from Vibe-Trading run cards) ────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scan_ledger (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_type           TEXT NOT NULL,
+            timestamp           TEXT NOT NULL,
+            config_hash         TEXT NOT NULL,
+            portfolio_hash      TEXT NOT NULL,
+            scoring_version     TEXT NOT NULL DEFAULT '1.0',
+            data_sources_json   TEXT NOT NULL DEFAULT '[]',
+            warnings_json       TEXT NOT NULL DEFAULT '[]',
+            top_signals_json    TEXT NOT NULL DEFAULT '[]',
+            blocked_candidates_json TEXT NOT NULL DEFAULT '[]',
+            total_candidates    INTEGER DEFAULT 0,
+            passed_count        INTEGER DEFAULT 0,
+            blocked_count       INTEGER DEFAULT 0,
+            elapsed_seconds     REAL DEFAULT 0.0,
+            error_message       TEXT,
+            created_at          TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_scan_ledger_timestamp
+        ON scan_ledger(timestamp)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_scan_ledger_type_ts
+        ON scan_ledger(scan_type, timestamp)
+    ''')
+
+    # ── Wheel Playbook Hypotheses (borrowed from Vibe-Trading hypothesis registry) ──
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS playbook_hypotheses (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            hypothesis_id   TEXT NOT NULL UNIQUE,
+            title           TEXT NOT NULL,
+            description     TEXT NOT NULL,
+            category        TEXT NOT NULL DEFAULT 'general',
+            status          TEXT NOT NULL DEFAULT 'exploring',
+            tags_json       TEXT NOT NULL DEFAULT '[]',
+            notes           TEXT DEFAULT '',
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status
+        ON playbook_hypotheses(status)
+    ''')
+
 
 def migrate_database(db_path):
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with pooled_connection(db_path) as conn:
+            cursor = conn.cursor()
 
-        # Drop the orders table — execution subsystem has been removed
-        cursor.execute("DROP TABLE IF EXISTS orders")
-        logger.info("Migration: Dropped orders table (execution subsystem removed)")
+            current_version = cursor.execute('PRAGMA user_version').fetchone()[0]
+            if current_version >= SCHEMA_VERSION:
+                logger.info("Database schema already at version %s", current_version)
+                return
 
-        # --- Migration: Add richer earnings columns to earnings_calendar ---
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='earnings_calendar'")
-        if cursor.fetchone():
-            cursor.execute("PRAGMA table_info(earnings_calendar)")
-            earnings_cols = {row[1] for row in cursor.fetchall()}
+            if current_version < 1:
+                # Drop the orders table — execution subsystem has been removed
+                cursor.execute("DROP TABLE IF EXISTS orders")
+                logger.info("Migration: Dropped orders table (execution subsystem removed)")
 
-            for col, col_type in [
-                ('time_of_day', 'TEXT'),
-                ('fiscal_date_ending', 'TEXT'),
-                ('estimate', 'REAL'),
-                ('currency', 'TEXT'),
-                ('earnings_source', 'TEXT'),
-            ]:
-                if col not in earnings_cols:
-                    logger.info("Running migration: Adding %s to earnings_calendar", col)
-                    cursor.execute("ALTER TABLE earnings_calendar ADD COLUMN %s %s" % (col, col_type))
-                    logger.info("Migration completed: %s column added", col)
+                # --- Migration: Add richer earnings columns to earnings_calendar ---
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='earnings_calendar'")
+                if cursor.fetchone():
+                    cursor.execute("PRAGMA table_info(earnings_calendar)")
+                    earnings_cols = {row[1] for row in cursor.fetchall()}
 
-        conn.commit()
-        conn.close()
-        logger.info("Database migration completed successfully")
+                    for col, col_type in [
+                        ('time_of_day', 'TEXT'),
+                        ('fiscal_date_ending', 'TEXT'),
+                        ('estimate', 'REAL'),
+                        ('currency', 'TEXT'),
+                        ('earnings_source', 'TEXT'),
+                    ]:
+                        if col not in earnings_cols:
+                            logger.info("Running migration: Adding %s to earnings_calendar", col)
+                            cursor.execute("ALTER TABLE earnings_calendar ADD COLUMN %s %s" % (col, col_type))
+                            logger.info("Migration completed: %s column added", col)
+
+                cursor.execute('PRAGMA user_version = 1')
+                conn.commit()
+
+            if current_version < 2:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS scan_ledger (
+                        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                        scan_type           TEXT NOT NULL,
+                        timestamp           TEXT NOT NULL,
+                        config_hash         TEXT NOT NULL,
+                        portfolio_hash      TEXT NOT NULL,
+                        scoring_version     TEXT NOT NULL DEFAULT '1.0',
+                        data_sources_json   TEXT NOT NULL DEFAULT '[]',
+                        warnings_json       TEXT NOT NULL DEFAULT '[]',
+                        top_signals_json    TEXT NOT NULL DEFAULT '[]',
+                        blocked_candidates_json TEXT NOT NULL DEFAULT '[]',
+                        total_candidates    INTEGER DEFAULT 0,
+                        passed_count        INTEGER DEFAULT 0,
+                        blocked_count       INTEGER DEFAULT 0,
+                        elapsed_seconds     REAL DEFAULT 0.0,
+                        error_message       TEXT,
+                        created_at          TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_scan_ledger_timestamp ON scan_ledger(timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_scan_ledger_type_ts ON scan_ledger(scan_type, timestamp)")
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS playbook_hypotheses (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        hypothesis_id   TEXT NOT NULL UNIQUE,
+                        title           TEXT NOT NULL,
+                        description     TEXT NOT NULL,
+                        category        TEXT NOT NULL DEFAULT 'general',
+                        status          TEXT NOT NULL DEFAULT 'exploring',
+                        tags_json       TEXT NOT NULL DEFAULT '[]',
+                        notes           TEXT DEFAULT '',
+                        created_at      TEXT DEFAULT (datetime('now')),
+                        updated_at      TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status ON playbook_hypotheses(status)")
+                cursor.execute('PRAGMA user_version = 2')
+                conn.commit()
+
+            logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)
     except Exception as e:
         logger.error(f"Error during database migration: {str(e)}")
         logger.error(traceback.format_exc())

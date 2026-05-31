@@ -47,6 +47,7 @@ function setupDOM() {
         <span class="catalyst-card__earnings"></span>
         <span class="catalyst-card__rationale"></span>
         <span class="catalyst-card__blockers"></span>
+        <span class="catalyst-card__social d-none"></span>
       </div>
     </template>
   `;
@@ -282,5 +283,161 @@ describe('catalyst-watch', () => {
     const lastUpdatedEl = document.getElementById('catalyst-last-updated');
     expect(lastUpdatedEl.textContent).not.toContain('cached');
     expect(lastUpdatedEl.className).not.toContain('text-warning');
+  });
+
+  it('renders social note when signal has social context', async () => {
+    const { loadCatalystSignals } = await import('../../frontend/static/js/dashboard/catalyst-watch.js');
+
+    const mockResponse = {
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        enabled: true,
+        signals: [{
+          ticker: 'GME',
+          direction: 'BULLISH',
+          signal: 'GREEN',
+          label: 'High conviction',
+          score: 80,
+          premium_notional: 3_000_000,
+          fresh_volume_ratio: 12,
+          otm_pct: 8,
+          strike: 50,
+          cluster_expirations: ['20260718'],
+          is_hedged: false,
+          earnings_dte: null,
+          rationale: ['Social rising (200 mentions)'],
+          blockers: [],
+          social: {
+            source: 'apewisdom',
+            rank: 5,
+            rank_24h_ago: 20,
+            mentions: 200,
+            mentions_24h_ago: 40,
+            upvotes: 500,
+            momentum_score: 1200,
+          },
+        }],
+        count: 1,
+        generated_at: '2026-05-24T12:00:00',
+        served_from_cache: false,
+        cache_age_seconds: null,
+        fresh_attempted: true,
+        fresh_succeeded: true,
+        last_successful_generated_at: '2026-05-24T12:00:00',
+        scanned: 5,
+        elapsed_seconds: 2.3,
+      }),
+    };
+
+    fetchWithTimeout.mockResolvedValue(mockResponse);
+
+    await loadCatalystSignals();
+
+    const socialEl = document.querySelector('.catalyst-card__social');
+    expect(socialEl).toBeTruthy();
+    expect(socialEl.textContent).toContain('Social rising');
+    expect(socialEl.textContent).toContain('200 mentions');
+    expect(socialEl.textContent).toContain('rank #5');
+    expect(socialEl.textContent).toContain('↑15');
+  });
+
+  it('hides social note when signal has no social context', async () => {
+    const { loadCatalystSignals } = await import('../../frontend/static/js/dashboard/catalyst-watch.js');
+
+    const mockResponse = {
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        enabled: true,
+        signals: [{
+          ticker: 'AAPL',
+          direction: 'BULLISH',
+          signal: 'YELLOW',
+          label: 'Moderate',
+          score: 45,
+          premium_notional: 1_200_000,
+          fresh_volume_ratio: 6,
+          otm_pct: 3,
+          strike: 210,
+          cluster_expirations: ['20260620'],
+          is_hedged: false,
+          earnings_dte: null,
+          rationale: ['Premium flow'],
+          blockers: [],
+        }],
+        count: 1,
+        generated_at: '2026-05-24T12:00:00',
+        served_from_cache: false,
+        cache_age_seconds: null,
+        fresh_attempted: true,
+        fresh_succeeded: true,
+        last_successful_generated_at: '2026-05-24T12:00:00',
+        scanned: 3,
+        elapsed_seconds: 1.5,
+      }),
+    };
+
+    fetchWithTimeout.mockResolvedValue(mockResponse);
+
+    await loadCatalystSignals();
+
+    const socialEl = document.querySelector('.catalyst-card__social');
+    expect(socialEl).toBeTruthy();
+    expect(socialEl.classList.contains('d-none')).toBe(true);
+    expect(socialEl.textContent).toBe('');
+  });
+
+  it('shows rank trend arrow when rank improved over 24h', async () => {
+    const { loadCatalystSignals } = await import('../../frontend/static/js/dashboard/catalyst-watch.js');
+
+    const mockResponse = {
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        enabled: true,
+        signals: [{
+          ticker: 'TSLA',
+          direction: 'BEARISH',
+          signal: 'WATCH',
+          label: 'Low significance',
+          score: 25,
+          premium_notional: 500_000,
+          fresh_volume_ratio: 3,
+          otm_pct: 10,
+          strike: 180,
+          cluster_expirations: ['20260627'],
+          is_hedged: false,
+          earnings_dte: null,
+          rationale: [],
+          blockers: [],
+          social: {
+            source: 'apewisdom',
+            rank: 50,
+            rank_24h_ago: 30,
+            mentions: 80,
+            mentions_24h_ago: 80,
+            upvotes: 100,
+            momentum_score: 160,
+          },
+        }],
+        count: 1,
+        generated_at: '2026-05-24T12:00:00',
+        served_from_cache: false,
+        cache_age_seconds: null,
+        fresh_attempted: true,
+        fresh_succeeded: true,
+        last_successful_generated_at: '2026-05-24T12:00:00',
+        scanned: 2,
+        elapsed_seconds: 1.0,
+      }),
+    };
+
+    fetchWithTimeout.mockResolvedValue(mockResponse);
+
+    await loadCatalystSignals();
+
+    const socialEl = document.querySelector('.catalyst-card__social');
+    expect(socialEl.textContent).toContain('↓20');
   });
 });

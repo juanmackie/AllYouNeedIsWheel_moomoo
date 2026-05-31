@@ -133,7 +133,6 @@ class TestScoreRegression(unittest.TestCase):
         option, profile, portfolio, expected = get_earnings_today_scenario()
         stock_price = 100.0
         # Add earnings_info to kwargs
-        from api.services.iv_earnings_service import IVEarningsService
         earnings_info = {
             'earnings_date': datetime.now().strftime('%Y-%m-%d'),
             'days_to_earnings': 0,

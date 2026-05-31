@@ -108,6 +108,17 @@ async function loadDiagnosticsOnce() {
         console.error('Failed to load earnings-vol-signals:', err);
     });
 
+    import('./weekly-income.js').then(mod => {
+        mod.renderWeeklyIncome();
+        const refreshBtn = document.getElementById('refresh-filled-orders');
+        if (refreshBtn) {
+            refreshBtn.removeEventListener('click', mod.renderWeeklyIncome);
+            refreshBtn.addEventListener('click', () => mod.renderWeeklyIncome());
+        }
+    }).catch(err => {
+        console.error('Failed to load weekly-income:', err);
+    });
+
     import('./options-table.js').then(async mod => {
         await mod.loadTickers();
     }).catch(err => {
@@ -193,7 +204,8 @@ export async function loadPositionsCommandPanel() {
             const barColor = profit >= 50 ? 'bg-success' : profit >= 30 ? 'bg-warning' : 'bg-secondary';
             const expiry = pos.expiration || '';
             const expiryDisplay = expiry.length === 8 ? expiry.slice(0,4) + '-' + expiry.slice(4,6) + '-' + expiry.slice(6,8) : expiry;
-            return `<tr><td><strong>${pos.ticker}</strong></td><td><span class="badge ${pos.option_type === 'PUT' ? 'bg-danger' : 'bg-success'}">${pos.option_type}</span></td><td>$${(pos.strike || 0).toFixed(2)}</td><td class="small">${expiryDisplay}</td><td class="small">${renderEarningsBadge(daysToEarnings)}</td><td style="min-width:100px"><div class="progress" style="height:6px"><div class="progress-bar ${barColor}" style="width:${barWidth}%"></div></div><small class="${profit >= 50 ? 'text-success fw-bold' : 'text-muted'}">${profit.toFixed(0)}%</small></td><td><span class="badge ${statusClass}">${statusBadge}</span></td><td>${btnHtml}</td></tr>`;
+            const typeLabel = pos.option_type === 'PUT' ? 'Put' : 'Call';
+            return `<tr><td><strong>${pos.ticker}</strong></td><td><span class="badge ${pos.option_type === 'PUT' ? 'bg-danger' : 'bg-success'}" aria-label="${typeLabel}">${pos.option_type}</span></td><td>$${(pos.strike || 0).toFixed(2)}</td><td class="small">${expiryDisplay}</td><td class="small">${renderEarningsBadge(daysToEarnings)}</td><td style="min-width:100px"><div class="progress" style="height:6px" role="progressbar" aria-valuenow="${profit.toFixed(0)}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar ${barColor}" style="width:${barWidth}%"></div></div><small class="${profit >= 50 ? 'text-success fw-bold' : 'text-muted'}">${profit.toFixed(0)}% profit</small></td><td><span class="badge ${statusClass}">${statusBadge}</span></td><td>${btnHtml}</td></tr>`;
         }).join('');
         const refreshBtn = document.getElementById('refresh-positions-command');
         if (refreshBtn) refreshBtn.onclick = () => loadPositionsCommandPanel();

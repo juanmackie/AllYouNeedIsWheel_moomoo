@@ -3,7 +3,7 @@ Protocol/interfaces for OptionsService submodules.
 Each submodule gets only what it needs instead of the whole parent service.
 """
 
-from typing import Protocol, Dict, Any, Optional, List, runtime_checkable
+from typing import Protocol, Optional, List, runtime_checkable
 
 
 @runtime_checkable

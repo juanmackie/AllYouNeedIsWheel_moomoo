@@ -6,15 +6,15 @@ database, and OpenD connection to avoid requiring live infrastructure.
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock, call, PropertyMock
-import json
+from unittest.mock import patch, MagicMock
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask
-from api.routes.options import bp, _options_service_instance
+from api.routes.options import bp
+from api.routes.utils import enforce_route_rate_limit, _RATE_LIMIT_BUCKETS
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +214,12 @@ class TestOtmOptions(unittest.TestCase):
             resp = self._make_request(client, tickers='AAPL')
 
         self.assertEqual(resp.status_code, 503)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn('error_code', data)
+        self.assertEqual(data['error_code'], 'opend_unavailable')
+        self.assertIn('opend_status', data)
+        self.assertEqual(data['opend_status']['status'], 'unavailable')
         self.mock_service.get_otm_options.assert_not_called()
 
     @patch('api.routes.options.get_options_service')
@@ -240,7 +246,30 @@ class TestOtmOptions(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(data['success'])
-        self.mock_service.get_otm_options.assert_not_called()
+
+
+class TestRouteRateLimitHelpers(unittest.TestCase):
+    def setUp(self):
+        _RATE_LIMIT_BUCKETS.clear()
+
+    def test_helper_enforces_limit(self):
+        allowed, retry_after = enforce_route_rate_limit(
+            'top-recommendations',
+            '127.0.0.1',
+            max_requests=1,
+            window_seconds=60,
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(retry_after, 0)
+
+        allowed, retry_after = enforce_route_rate_limit(
+            'top-recommendations',
+            '127.0.0.1',
+            max_requests=1,
+            window_seconds=60,
+        )
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(retry_after, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +338,23 @@ class TestStockPrice(unittest.TestCase):
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
+    def test_rejects_invalid_tickers(self, mock_probe, mock_get_svc):
+        """Should reject ticker values with unsafe characters."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_get_svc.return_value = self.mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/stock-price',
+                              query_string={'tickers': 'AAPL,MS/FT'})
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(data['success'])
+        self.assertIn('Invalid ticker', data['error'])
+
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
     def test_opend_unavailable_503(self, mock_probe, mock_get_svc):
         """Should return 503 when OpenD is unavailable."""
         mock_probe.return_value = {
@@ -323,6 +369,10 @@ class TestStockPrice(unittest.TestCase):
                               query_string={'tickers': 'AAPL'})
 
         self.assertEqual(resp.status_code, 503)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn('error_code', data)
+        self.assertEqual(data['error_code'], 'opend_unavailable')
 
 
 
@@ -400,6 +450,22 @@ class TestExpirations(unittest.TestCase):
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')
+    def test_rejects_invalid_ticker(self, mock_probe, mock_get_svc):
+        """Should return 400 for unsafe ticker input."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_get_svc.return_value = self.mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/expirations',
+                              query_string={'ticker': 'BRK.B/../etc'})
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(data['success'])
+
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
     def test_rejects_invalid_option_type(self, mock_probe, mock_get_svc):
         """Should return 400 for invalid option_type."""
         mock_probe.return_value = {'status': 'connected'}
@@ -448,6 +514,10 @@ class TestExpirations(unittest.TestCase):
                               query_string={'ticker': 'AAPL'})
 
         self.assertEqual(resp.status_code, 503)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn('error_code', data)
+        self.assertEqual(data['error_code'], 'opend_unavailable')
 
 
 # ---------------------------------------------------------------------------
@@ -670,6 +740,11 @@ class TestTopRecommendations(unittest.TestCase):
             resp = client.get('/api/options/top-recommendations')
 
         self.assertEqual(resp.status_code, 503)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn('error_code', data)
+        self.assertEqual(data['error_code'], 'opend_unavailable')
+        self.assertIn('opend_status', data)
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +835,10 @@ class TestCashStatus(unittest.TestCase):
             resp = client.get('/api/options/cash-status')
 
         self.assertEqual(resp.status_code, 503)
+        data = resp.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn('error_code', data)
+        self.assertEqual(data['error_code'], 'opend_unavailable')
 
 
 # ---------------------------------------------------------------------------

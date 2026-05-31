@@ -11,7 +11,7 @@ Covers:
 import unittest
 from datetime import datetime, timedelta
 
-from core.wheel_decision import score_contract, WheelDecision
+from core.wheel_decision import score_contract
 from core.growth_mode import (
     compute_stress_loss,
     compute_risk_budget_used,
@@ -605,7 +605,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         a no_cash_fit skip diagnostic with an explicit reason.
         """
         ticker = 'SKIPME'
-        reason = f'No CSP strike fits buying power ($5000)'
+        reason = 'No CSP strike fits buying power ($5000)'
         diagnostic = {
             '_skip_diagnostic': True,
             'ticker': ticker,

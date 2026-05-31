@@ -13,12 +13,12 @@ Complete reference for all API endpoints in AllYouNeedIsWheel.
 - [System](#system)
 - [Portfolio](#portfolio)
 - [Options Analysis](#options-analysis)
+- [Catalyst Watch](#catalyst-watch)
 - [Orders (Retired)](#orders-retired)
 - [Earnings & IV Tracking](#earnings--iv-tracking)
 - [VIX Regime](#vix-regime)
 - [Macro Regime Detection](#macro-regime-detection)
 - [Analytics](#analytics)
-- [System Tasks](#system-tasks)
 - [LLM](#llm)
 - [Error Handling](#error-handling)
 - [Data Models](#data-models)
@@ -399,6 +399,69 @@ Get available expiration dates for a ticker.
 
 ---
 
+## Catalyst Watch
+
+### Get Catalyst Watch Signals
+
+Scan the watchlist for unusual options flow and optionally widen the scan with Ape Wisdom social momentum. Social momentum only expands the candidate set and annotates confirmed signals; it does not create signals on its own.
+
+**Endpoint:** `GET /api/options/catalyst-watch`
+
+**Query Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `limit` | integer | No | 6 | Max confirmed signals to return |
+| `refresh` | boolean | No | false | Force a fresh scan instead of the fast cache |
+| `min_premium_notional` | integer | No | config | Minimum premium notional threshold |
+| `min_volume` | integer | No | config | Minimum contract volume threshold |
+| `min_fresh_volume_ratio` | number | No | config | Minimum fresh volume / open interest ratio |
+| `max_scan_tickers` | integer | No | config | Base cap on scan universe size |
+| `max_expirations` | integer | No | config | Number of expirations to inspect per ticker |
+
+**Response:**
+```json
+{
+  "success": true,
+  "enabled": true,
+  "count": 1,
+  "generated_at": "2026-05-31T12:00:00",
+  "research_only": true,
+  "signals": [
+    {
+      "ticker": "GME",
+      "side": "CALL",
+      "score": 82.5,
+      "social": {
+        "source": "apewisdom",
+        "rank": 5,
+        "rank_24h_ago": 18,
+        "mentions": 200,
+        "mentions_24h_ago": 40,
+        "upvotes": 500,
+        "momentum_score": 1200
+      }
+    }
+  ],
+  "apewisdom": {
+    "enabled": true,
+    "candidates_fetched": 8,
+    "boost_tickers_applied": ["GME", "TSLA"]
+  },
+  "source_policy": {
+    "domain": "catalyst_watch",
+    "mode": "research_with_fallbacks",
+    "external_fallback_sources_used": ["apewisdom"]
+  }
+}
+```
+
+**Notes:**
+- `boost_tickers_applied` lists Ape Wisdom names that were appended to the scan universe
+- `social` appears only on confirmed signals that matched an Ape Wisdom ticker
+- `source_policy` discloses that Ape Wisdom was used when social context is present
+
+---
+
 ### Get Top Recommendations
 
 Retrieve the top-ranked option plays across all watchlist tickers. Uses multi-threaded scoring with caching.
@@ -742,62 +805,6 @@ Get prefilled data for closing a position, used for rollover workflows.
 
 ---
 
-## System Tasks
-
-> **Note:** The earnings updater no longer runs under `BackgroundTaskManager`.
-> It is now managed by the central APScheduler (see `core/scheduler.py`,
-> job `earnings_updater_6h`). Health-monitor and any other background tasks
-> registered here are unrelated to earnings.
-
-### List Background Tasks
-
-Get the status of all registered background tasks.
-
-**Endpoint:** `GET /api/system/tasks`
-
-**Response:**
-```json
-{
-  "tasks": []
-}
-```
-
-### Restart Background Task
-
-Restart a specific background task by name.
-
-**Endpoint:** `POST /api/system/tasks/<name>/restart`
-
-**Response:**
-```json
-{
-  "success": true,
-  "task": "my_task",
-  "message": "Task restarted"
-}
-```
-
-### Get Task Status
-
-Get detailed status of a specific background task.
-
-**Endpoint:** `GET /api/system/tasks/<name>/status`
-
-**Response:**
-```json
-{
-  "name": "my_task",
-  "running": true,
-  "uptime_seconds": 3600,
-  "last_run": "2026-04-25T10:00:00Z",
-  "next_run": "2026-04-25T16:00:00Z",
-  "restart_count": 0,
-  "last_error": null
-}
-```
-
----
-
 ## LLM
 
 ### Get LLM Suggestions
@@ -1099,14 +1106,16 @@ The API does not use API keys or tokens. Access control is through:
 
 ## Version History
 
-- **2.1** — Analytics, System Tasks, LLM endpoints; expanded Portfolio and Options endpoints
+- **2.3** â€” Catalyst Watch Ape Wisdom expansion, social context, and source-policy disclosure
+
+- **2.1** — Analytics and LLM endpoints; expanded Portfolio and Options endpoints
 - **2.0** — Phase 1-4: Risk-adjusted scoring, IV environment, earnings integration, macro regime
 - **1.0** — Initial release with basic portfolio and order management
 
 ---
 
-**Last Updated:** 2026-04-25
-**API Version:** 2.1
+**Last Updated:** 2026-05-31
+**API Version:** 2.3
 
 
 ## Technical Regime
@@ -1269,5 +1278,5 @@ Clears the technical regime cache.
 
 ---
 
-**Last Updated:** 2026-04-26
-**API Version:** 2.2 (Added earnings, risk, technical, pop endpoints)
+**Last Updated:** 2026-05-31
+**API Version:** 2.3 (Catalyst Watch social expansion and docs updates)

@@ -3,7 +3,7 @@ Tests for api/services/portfolio_service.py - PortfolioService class
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
 
 from api.services.config import get_config as _get_config

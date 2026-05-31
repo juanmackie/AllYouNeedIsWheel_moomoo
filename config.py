@@ -4,6 +4,13 @@ import logging
 
 logger = logging.getLogger('autotrader.config')
 
+
+def _parse_watchlist_env(raw_watchlist):
+    if not raw_watchlist:
+        return []
+    return [ticker.strip().upper() for ticker in raw_watchlist.split(',') if ticker.strip()]
+
+
 DEFAULT_CONNECTION_CONFIG = {
     'host': '127.0.0.1',
     'port': 11111,
@@ -23,11 +30,7 @@ DEFAULT_CONNECTION_CONFIG = {
         'min_volume': 1000000,
         'max_stocks': 50
     },
-    'watchlist': [
-        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'AMD',
-        'NFLX', 'UBER', 'SOFI', 'PLTR', 'BABA', 'DIS', 'BA', 'JPM',
-        'V', 'MA', 'KO', 'PEP', 'WMT', 'COST', 'HD', 'INTC', 'F'
-    ],
+    'watchlist': _parse_watchlist_env(os.environ.get('WATCHLIST')),
     'growth_mode': {
         'enabled': True,
         'objective': 'time_to_2x',
@@ -61,6 +64,13 @@ DEFAULT_CONNECTION_CONFIG = {
         'max_expirations': 1,
         'max_dte': 60,
         'max_scan_tickers': 2,
+        'apewisdom': {
+            'enabled': True,
+            'filter': 'all-stocks',
+            'max_boost_tickers': 8,
+            'min_mentions': 5,
+            'exclude_tickers': ['SPY', 'QQQ', 'VOO', 'VTI', 'VT', 'TQQQ', 'SQQQ'],
+        },
     },
     'evaluator': {
         'enabled': True,
@@ -118,7 +128,7 @@ def apply_env_overrides(config):
 
     watchlist_env = os.environ.get('WATCHLIST')
     if watchlist_env is not None and watchlist_env != '':
-        config['watchlist'] = [t.strip().upper() for t in watchlist_env.split(',') if t.strip()]
+        config['watchlist'] = _parse_watchlist_env(watchlist_env)
 
     # Safety validation: prevent accidental live trading without explicit confirmation
     if config.get('portfolio_env') == 'REAL' and not config.get('readonly', True):

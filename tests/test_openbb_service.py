@@ -1,14 +1,14 @@
 """
-Tests for api/services/openbb_service.py — OpenBB data enrichment wrapper.
+Tests for api/services/openbb_service.py — optional enrichment wrapper.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from datetime import datetime
 
 
 class TestOpenBBService(unittest.TestCase):
-    """OpenBB service initialization and caching."""
+    """Optional enrichment service initialization and caching."""
 
     def setUp(self):
         from api.services.openbb_service import OpenBBService

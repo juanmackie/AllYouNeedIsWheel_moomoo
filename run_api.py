@@ -9,7 +9,6 @@ import os
 import sys
 import platform
 import argparse
-import subprocess
 import shutil
 from dotenv import load_dotenv
 from core.logging_config import get_logger
@@ -45,39 +44,11 @@ def ensure_local_connection_config():
     except Exception as exc:
         logger.warning(f"Could not create {config_path} from example: {exc}")
 
-def check_and_install_dependencies():
-    """
-    Install all dependencies from requirements.txt.
-    Uses pip directly to handle version specifiers and transitive deps correctly.
-    """
-    logger.info("Checking dependencies...")
-
-    # Find requirements.txt file
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    requirements_path = os.path.join(script_dir, "requirements.txt")
-    if not os.path.exists(requirements_path):
-        logger.error(f"Could not find requirements.txt at {requirements_path}")
-        return
-
-    # Install all requirements in one pip call (same approach as start_local.ps1)
-    logger.info(f"Installing dependencies from {requirements_path}")
-    try:
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "-r", requirements_path, "--quiet"
-        ])
-        logger.info("Successfully installed all dependencies.")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to install dependencies: {str(e)}")
-        logger.error("Please manually install them with: pip install -r requirements.txt")
-
 def main():
     """
     Start the API server using appropriate WSGI server based on platform
     """
     try:
-        # Check and install required dependencies
-        check_and_install_dependencies()
-        
         # Parse command line arguments
         parser = argparse.ArgumentParser(description='Start the Auto-Trader API server')
         parser.add_argument('--realmoney', action='store_true', 

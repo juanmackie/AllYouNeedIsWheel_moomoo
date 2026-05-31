@@ -5,10 +5,10 @@ Provides a simple color-coded signal: bullish (green), bearish (red), neutral (g
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Optional
 
-from api.services.utils import clean_yfinance_ticker, validate_ticker
+from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker, validate_ticker
 from core.ttl_cache import make_ttl_cache
 
 logger = logging.getLogger('api.services.technical_regime')
@@ -85,7 +85,7 @@ class TechnicalRegimeService:
         try:
             # Fetch ~300 days to ensure we have enough data for 200-day EMA
             clean_ticker = clean_yfinance_ticker(ticker)
-            stock = yf.Ticker(clean_ticker)
+            stock = get_yfinance_ticker(clean_ticker)
             hist = stock.history(period='1y', interval='1d')
 
             if hist.empty or len(hist) < 200:
@@ -140,7 +140,7 @@ class TechnicalRegimeService:
 
         try:
             clean_ticker = clean_yfinance_ticker(ticker)
-            stock = yf.Ticker(clean_ticker)
+            stock = get_yfinance_ticker(clean_ticker)
             hist = stock.history(period='6mo', interval='1d')
 
             if hist.empty or len(hist) < period + 10:

@@ -1,8 +1,8 @@
-# AllYouNeedIsWheel (Moomoo Edition)
+﻿# AllYouNeedIsWheel (Moomoo Edition)
 
 A financial options signal desk for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and review signals through a local web dashboard.
 
-**Risk-Adjusted Scoring, IV Environment Analysis & Macro Regime Detection** — Intelligent option ranking with IV rank tracking, earnings warnings, dynamic expiration profiles, and FRED-powered macro economic context.
+**Risk-Adjusted Scoring, IV Environment Analysis & Macro Regime Detection** â€” Intelligent option ranking with IV rank tracking, earnings warnings, dynamic expiration profiles, and FRED-powered macro economic context.
 
 <img width="1680" alt="Dashboard screenshot" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
 <img width="1321" alt="Portfolio screenshot" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
@@ -14,39 +14,40 @@ A financial options signal desk for the "Wheel Strategy" powered by the [Moomoo 
 ## Features
 
 ### Core Features
-- **Portfolio Dashboard** — positions, cash balance, margin metrics, and weekly option income
-- **Wheel Strategy Focus** — cash-secured puts and covered calls with OTM analysis
-- **Options Rollover** — roll positions approaching strike price to later expirations
-- **Signal-Only Workflow** — review opportunities in-app, then place trades in your broker
-- **OpenD Connection Status** — the web UI shows real-time OpenD connection and login state
-- **Auto Launch** — optional one-click start that can open OpenD for you on Windows
-- **Dynamic Watchlist** — optional TradingView-powered stock screening for wheel strategy candidates
+- **Portfolio Dashboard** â€” positions, cash balance, margin metrics, and weekly option income
+- **Wheel Strategy Focus** â€” cash-secured puts and covered calls with OTM analysis
+- **Options Rollover** â€” roll positions approaching strike price to later expirations
+- **Signal-Only Workflow** â€” review opportunities in-app, then place trades in your broker
+- **OpenD Connection Status** â€” the web UI shows real-time OpenD connection and login state
+- **Auto Launch** â€” optional one-click start that can open OpenD for you on Windows
+- **Dynamic Watchlist** â€” optional TradingView-powered stock screening for wheel strategy candidates
+- **Catalyst Watch** â€” unusual options flow scans that can widen with Ape Wisdom social momentum, then confirm with broker data
 
 ### Intelligent Option Scoring (Phase 1 & 2)
-- **Risk-Adjusted Scoring** — IV-adjusted returns, theta/delta risk ratio, expected value calculations
-- **IV Environment Awareness** — 30-day rolling IV rank tracking with color-coded badges (🔴 low, 🟢 high)
-- **Dynamic Screening Profiles** — Auto-detects weekly/monthly/quarterly expirations with optimized parameters
-- **Earnings Integration** — Automatic earnings warnings with multi-source fallback and manual refresh UI
-- **APScheduler Earnings Job** — Earnings data refreshed every 6 hours via central APScheduler with one-shot initialization on startup
-- **Macro Regime Detection** — FRED-powered economic context (rates, credit stress, growth, inflation) influencing scores and recommendations
+- **Risk-Adjusted Scoring** â€” IV-adjusted returns, theta/delta risk ratio, expected value calculations
+- **IV Environment Awareness** â€” 30-day rolling IV rank tracking with color-coded badges (ðŸ”´ low, ðŸŸ¢ high)
+- **Dynamic Screening Profiles** â€” Auto-detects weekly/monthly/quarterly expirations with optimized parameters
+- **Earnings Integration** â€” Automatic earnings warnings with multi-source fallback and manual refresh UI
+- **APScheduler Earnings Job** â€” Earnings data refreshed every 6 hours via central APScheduler with one-shot initialization on startup
+- **Macro Regime Detection** â€” FRED-powered economic context (rates, credit stress, growth, inflation) influencing scores and recommendations
 
 ### Macro Regime Detection (Phase 3)
-- **Interest Rate Environment** — Detects rising/falling/stable rate regimes from Fed funds data
-- **Credit Stress Monitoring** — Tracks high-yield corporate bond spreads for market stress signals
-- **Economic Growth Regime** — Uses yield curve slope (10y-2y) to detect expansion/slowdown risks
-- **Inflation Trends** — Monitors CPI trends for inflation context
-- **Score Impact** — Macro multiplier (0.80x to 1.05x) adjusts all option scores based on economic conditions
-- **Dashboard Integration** — Real-time macro regime card with actionable strategy advice
+- **Interest Rate Environment** â€” Detects rising/falling/stable rate regimes from Fed funds data
+- **Credit Stress Monitoring** â€” Tracks high-yield corporate bond spreads for market stress signals
+- **Economic Growth Regime** â€” Uses yield curve slope (10y-2y) to detect expansion/slowdown risks
+- **Inflation Trends** â€” Monitors CPI trends for inflation context
+- **Score Impact** â€” Macro multiplier (0.80x to 1.05x) adjusts all option scores based on economic conditions
+- **Dashboard Integration** â€” Real-time macro regime card with actionable strategy advice
 
 ### Scoring Methodology
 
 The system uses a sophisticated multi-factor scoring algorithm to rank option plays:
 
 **Risk-Adjusted Metrics (Phase 1):**
-- **IV-Adjusted Return** — Annualized return normalized by implied volatility (filters low IV danger)
-- **Theta/Delta Ratio** — Daily income per unit of directional risk
-- **Expected Value** — Probability-weighted outcome accounting for win rate and loss magnitude
-- **Capital Efficiency** — CSP optimization based on capital usage vs account size
+- **IV-Adjusted Return** â€” Annualized return normalized by implied volatility (filters low IV danger)
+- **Theta/Delta Ratio** â€” Daily income per unit of directional risk
+- **Expected Value** â€” Probability-weighted outcome accounting for win rate and loss magnitude
+- **Capital Efficiency** â€” CSP optimization based on capital usage vs account size
 
 **Weight Distribution (Fixed):**
 - **CALLs:** IV-Adjusted (25%), Theta/Delta (20%), Liquidity (18%), Expected Value (15%), Upside (12%), OTM Fit (10%)
@@ -55,21 +56,21 @@ The system uses a sophisticated multi-factor scoring algorithm to rank option pl
 **IV Environment Impact (Phase 2):**
 | IV Rank | Score Impact | Status |
 |---------|--------------|--------|
-| < 20% | -20% penalty | 🔴 Extreme low - dangerous |
-| 20-30% | -10% penalty | 🟡 Low IV warning |
+| < 20% | -20% penalty | ðŸ”´ Extreme low - dangerous |
+| 20-30% | -10% penalty | ðŸŸ¡ Low IV warning |
 | 30-40% | -5% penalty | Slightly below average |
-| 40-60% | Neutral | ✓ Normal range |
+| 40-60% | Neutral | âœ“ Normal range |
 | 60-70% | +5% bonus | Slightly above average |
-| 70-80% | +10% bonus | 🟢 Good premium environment |
-| > 80% | +20% bonus | 🟢 Excellent IV |
+| 70-80% | +10% bonus | ðŸŸ¢ Good premium environment |
+| > 80% | +20% bonus | ðŸŸ¢ Excellent IV |
 
 **Earnings Impact (Phase 2):**
 | Days to Earnings | Score Impact | Warning |
 |------------------|--------------|---------|
-| Today | -30% | 🚨 EARNINGS TODAY |
-| 1-3 days | -15% | ⚠️ High assignment risk |
+| Today | -30% | ðŸš¨ EARNINGS TODAY |
+| 1-3 days | -15% | âš ï¸ High assignment risk |
 | 4-7 days | -5% | Caution advised |
-| > 7 days | No impact | — |
+| > 7 days | No impact | â€” |
 
 **Dynamic Profiles (Auto-Detected by DTE):**
 - **Weeklies (0-14 DTE):** Tighter delta targeting (0.16-0.22), higher liquidity weight (35%), lower premium threshold
@@ -157,9 +158,38 @@ To have the launcher open OpenD for you, edit `connection.json`:
 }
 ```
 
-- `auto_launch_opend` — set to `true` to start OpenD when you run the launcher
-- `opend_path` — path to `OpenD.exe` or `FutuOpenD.exe` on your machine
+- `auto_launch_opend` â€” set to `true` to start OpenD when you run the launcher
+- `opend_path` â€” path to `OpenD.exe` or `FutuOpenD.exe` on your machine
 - If `opend_path` is empty the launcher searches common install locations automatically
+
+## Catalyst Watch Social Expansion
+
+Catalyst Watch can widen its scan list with Ape Wisdom trending tickers before broker-side flow confirmation. This remains research-only and does not change the core options scoring model.
+
+```json
+{
+  "catalyst_flow": {
+    "enabled": true,
+    "min_premium_notional": 1000000,
+    "min_fresh_volume_ratio": 5,
+    "min_volume": 500,
+    "max_expirations": 1,
+    "max_dte": 60,
+    "max_scan_tickers": 2,
+    "apewisdom": {
+      "enabled": true,
+      "filter": "all-stocks",
+      "max_boost_tickers": 8,
+      "min_mentions": 5,
+      "exclude_tickers": ["SPY", "QQQ", "VOO", "VTI", "VT", "TQQQ", "SQQQ"]
+    }
+  }
+}
+```
+
+- `max_boost_tickers` caps how many social names can be added to the scan
+- `min_mentions` filters out one-off chatter
+- `exclude_tickers` keeps broad index funds out of the scan list
 
 ## OpenD Login
 
@@ -201,7 +231,9 @@ Live trading config. Not committed to version control.
 | `FRED_API_KEY` | No | FRED API key for macro regime detection (free: https://fred.stlouisfed.org/docs/api/api_key.html) |
   - *Uncomment the FRED_API_KEY line in your `.env` file after obtaining a free key* |
 | `FRED_ENABLED` | No | Enable/disable FRED integration (default: `true`) |
+| `OPENBB_ENABLED` | No | Enable/disable optional enrichment (default: `false`) |
 | `WATCHLIST_MODE` | No | Watchlist mode: `static`, `dynamic`, or `hybrid` (default: `hybrid`) |
+| `WATCHLIST` | No | Comma-separated static watchlist tickers used as the fallback/static list from `.env` |
 | `SCREENING_MIN_IV_RANK` | No | Min IV rank for dynamic screening (default: `30`) |
 | `SCREENING_MIN_VOLUME` | No | Min volume for dynamic screening (default: `1000000`) |
 | `SCREENING_MAX_STOCKS` | No | Max stocks for dynamic screening (default: `50`) |
@@ -223,16 +255,15 @@ The app exposes a full REST API for system status, portfolio data, options analy
 |---|---|
 | **System** | `GET /health`, `GET /api/system/opend-status` |
 | **Portfolio** | `GET /api/portfolio/`, `GET /api/portfolio/positions`, `GET /api/portfolio/weekly-income`, `GET /api/portfolio/roll-pressure`, `GET /api/portfolio/alerts` |
-| **Options** | `GET /api/options/otm`, `GET /api/options/stock-price`, `GET /api/options/expirations`, `GET /api/options/top-recommendations`, `GET /api/options/cash-status` |
+| **Options** | `GET /api/options/otm`, `GET /api/options/stock-price`, `GET /api/options/expirations`, `GET /api/options/catalyst-watch`, `GET /api/options/top-recommendations`, `GET /api/options/cash-status` |
 | **Orders** | Retired. Review signals in the dashboard and place trades in Moomoo manually. |
 | **Earnings & IV** | `GET /api/earnings/status`, `POST /api/earnings/refresh`, `GET /api/earnings/pending` |
 | **Macro Regime** | `GET /api/macro/regime`, `GET /api/macro/cache/status` |
 | **VIX Regime** | `GET /api/options/vix-regime` |
 | **Analytics** | `GET /api/options/analytics/lifecycle`, `GET /api/options/analytics/leakage`, `POST /api/options/prefilled-close` |
-| **System Tasks** | `GET /api/system/tasks`, `POST /api/system/tasks/<name>/restart`, `GET /api/system/tasks/<name>/status` |
 | **LLM** | `POST /api/llm/suggestions` |
 
-> 📖 **Full API reference with request/response examples:** see [API.md](API.md)
+> ðŸ“– **Full API reference with request/response examples:** see [API.md](API.md)
 
 ## Web Pages
 
@@ -248,16 +279,16 @@ The app exposes a full REST API for system status, portfolio data, options analy
 
 | Document | Purpose |
 |---|---|
-| [README.md](README.md) | This file — features, quick start, configuration, troubleshooting |
+| [README.md](README.md) | This file â€” features, quick start, configuration, troubleshooting |
+| [FREE_ONLY_REPO_SHORTLIST.md](FREE_ONLY_REPO_SHORTLIST.md) | Canonical free-only external repo shortlist and selection rules |
 | [API.md](API.md) | Complete API reference with request/response examples |
 | [SCORING.md](SCORING.md) | Detailed scoring algorithm, weights, and IV/earnings methodology |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
-| [frontend/templates/partials/README.md](frontend/templates/partials/README.md) | Template partials structure and usage |
 | [tests/README.md](tests/README.md) | Unit tests and smoke test checklist |
 
 ## Dynamic Watchlist (tvscreener Integration)
 
-**TradingView-Powered Stock Screening** — Automatically discover optimal wheel strategy candidates using free TradingView data.
+**TradingView-Powered Stock Screening** â€” Automatically discover optimal wheel strategy candidates using free TradingView data.
 
 ### Overview
 The dynamic watchlist feature uses [tvscreener](https://github.com/deepentropy/tvscreener) to screen stocks based on:
@@ -268,7 +299,7 @@ The dynamic watchlist feature uses [tvscreener](https://github.com/deepentropy/t
 ### Watchlist Modes
 | Mode | Description |
 |---|---|
-| `static` | Uses the static watchlist from config (default fallback) |
+| `static` | Uses the static watchlist from `WATCHLIST` (default fallback) |
 | `dynamic` | Uses TradingView screening exclusively |
 | `hybrid` | Combines dynamic screening + static watchlist (default) |
 
@@ -289,6 +320,7 @@ Edit `connection.json` or set environment variables:
 ### Environment Variables
 ```bash
 WATCHLIST_MODE=hybrid
+WATCHLIST=AAPL,MSFT,GOOGL,AMZN,TSLA,NVDA,META,AMD,NFLX,UBER,SOFI,PLTR,BABA,DIS,BA,JPM,V,MA,KO,PEP,WMT,COST,HD,INTC,F
 SCREENING_MIN_IV_RANK=30
 SCREENING_MIN_VOLUME=1000000
 SCREENING_MAX_STOCKS=50
@@ -302,68 +334,68 @@ SCREENING_MAX_STOCKS=50
 5. **Caching**: Results cached for 5 minutes to avoid rate limits
 
 ### Benefits
-- ✅ **No API key required** — tvscreener uses free TradingView data
-- ✅ **Automatic discovery** — find new opportunities automatically
-- ✅ **Graceful degradation** — always works, even if API fails
-- ✅ **Single-click start** — automatic installation via requirements.txt
+- âœ… **No API key required** â€” tvscreener uses free TradingView data
+- âœ… **Automatic discovery** â€” find new opportunities automatically
+- âœ… **Graceful degradation** â€” always works, even if API fails
+- âœ… **Single-click start** â€” automatic installation via requirements.txt
 
 ## Project Structure
 
 ```
 AllYouNeedIsWheel_moomoo/
-├── api/
-│   ├── routes/                  # Flask route modules (options, portfolio, system)
-│   └── services/
-│       ├── options_service.py   # Option scoring, screening, VIX regime
-│       ├── iv_earnings_service.py  # IV tracking, earnings (Yahoo Finance)
-│       ├── portfolio_service.py # Portfolio operations
-│       ├── openbb_service.py    # OpenBB integration (VIX, macro data)
-│       └── tvscreener_service.py   # TradingView stock screener
-├── core/
-│   ├── connection_manager.py    # Moomoo OpenD connection + singleton cache
-│   ├── connection_constants.py  # Connection utility functions
-│   ├── context_factory.py       # Context creation helpers
-│   ├── ticker_utils.py          # Ticker formatting and caching
-│   ├── rate_limiter.py          # Thread-safe rate limiting (virtual scheduling)
-│   ├── ttl_cache.py             # Shared TTL cache helper (cachetools + fallback)
-│   ├── scheduler.py             # APScheduler: evaluator, calibrator, earnings updater
-│   ├── background_manager.py    # Health monitor for background tasks
-│   ├── tasks.py                 # Background task factory functions
-│   ├── wheel_decision.py        # Scoring engine and decision logic
-│   ├── scoring_factors.py       # Pure scoring sub-functions
-│   ├── evaluator.py             # Signal outcome evaluation
-│   ├── calibrator.py            # Weight calibration via gradient-free optimisation
-│   ├── feedback_loop.py         # Bias adjustment from resolved outcomes
-│   ├── currency.py              # Currency conversion
-│   ├── logging_config.py        # Logging setup
-│   └── utils.py                 # Utility functions
-├── db/
-│   └── database.py              # SQLite: orders, iv_history, earnings_calendar
-├── frontend/
-│   ├── static/
-│   │   ├── css/                 # Stylesheets
-│   │   └── js/dashboard/        # Dashboard JS modules
-│   └── templates/
-│       ├── partials/             # Reusable Jinja2 components
-│       └── base.html
-├── tests/
-│   ├── test_rate_limiter.py
-│   ├── test_tvscreener_service.py
-│   └── README.md                # Smoke test checklist
-├── app.py                       # Flask app factory + background threads
-├── run_api.py                   # WSGI server launcher
-├── config.py                    # Config loader
-├── API.md                       # Complete API reference
-├── SCORING.md                   # Scoring algorithm documentation
-├── CHANGELOG.md                 # Version history
-├── start_local.cmd              # Windows one-click launcher
-├── start_local.ps1              # PowerShell launcher logic
-├── connection.json.example      # Example local config
-├── connection_docker.json       # Docker Compose config
-├── docker-compose.yml           # Optional containerized setup
-├── Dockerfile                   # Web app container image
-├── requirements.txt             # Python dependencies
-└── .env.example                 # Example env file
+â”œâ”€â”€ api/
+â”‚   â”œâ”€â”€ routes/                  # Flask route modules (options, portfolio, system)
+â”‚   â””â”€â”€ services/
+â”‚       â”œâ”€â”€ options_service.py   # Option scoring, screening, VIX regime
+â”‚       â”œâ”€â”€ iv_earnings_service.py  # IV tracking, earnings (Yahoo Finance)
+â”‚       â”œâ”€â”€ portfolio_service.py # Portfolio operations
+â”‚       â”œâ”€â”€ enrichment adapter      # optional and disabled by default
+â”‚       â””â”€â”€ tvscreener_service.py   # TradingView stock screener
+â”œâ”€â”€ core/
+â”‚   â”œâ”€â”€ connection_manager.py    # Moomoo OpenD connection + singleton cache
+â”‚   â”œâ”€â”€ connection_constants.py  # Connection utility functions
+â”‚   â”œâ”€â”€ context_factory.py       # Context creation helpers
+â”‚   â”œâ”€â”€ ticker_utils.py          # Ticker formatting and caching
+â”‚   â”œâ”€â”€ rate_limiter.py          # Thread-safe rate limiting (virtual scheduling)
+â”‚   â”œâ”€â”€ ttl_cache.py             # Shared TTL cache helper (cachetools + fallback)
+â”‚   â”œâ”€â”€ scheduler.py             # APScheduler: evaluator, calibrator, earnings updater
+â”‚   â”œâ”€â”€ background_manager.py    # Health monitor for background tasks
+â”‚   â”œâ”€â”€ rate_limiter.py          # Shared request throttling
+â”‚   â”œâ”€â”€ wheel_decision.py        # Scoring engine and decision logic
+â”‚   â”œâ”€â”€ scoring_factors.py       # Pure scoring sub-functions
+â”‚   â”œâ”€â”€ evaluator.py             # Signal outcome evaluation
+â”‚   â”œâ”€â”€ calibrator.py            # Weight calibration via gradient-free optimisation
+â”‚   â”œâ”€â”€ ttl_cache.py             # Shared TTL cache helper
+â”‚   â”œâ”€â”€ currency.py              # Currency conversion
+â”‚   â”œâ”€â”€ logging_config.py        # Logging setup
+â”‚   â””â”€â”€ utils.py                 # Utility functions
+â”œâ”€â”€ db/
+â”‚   â””â”€â”€ database.py              # SQLite: orders, iv_history, earnings_calendar
+â”œâ”€â”€ frontend/
+â”‚   â”œâ”€â”€ static/
+â”‚   â”‚   â”œâ”€â”€ css/                 # Stylesheets
+â”‚   â”‚   â””â”€â”€ js/dashboard/        # Dashboard JS modules
+â”‚   â””â”€â”€ templates/
+â”‚       â”œâ”€â”€ partials/             # Reusable Jinja2 components
+â”‚       â””â”€â”€ base.html
+â”œâ”€â”€ tests/
+â”‚   â”œâ”€â”€ test_rate_limiter.py
+â”‚   â”œâ”€â”€ test_tvscreener_service.py
+â”‚   â””â”€â”€ README.md                # Smoke test checklist
+â”œâ”€â”€ app.py                       # Flask app factory + background threads
+â”œâ”€â”€ run_api.py                   # WSGI server launcher
+â”œâ”€â”€ config.py                    # Config loader
+â”œâ”€â”€ API.md                       # Complete API reference
+â”œâ”€â”€ SCORING.md                   # Scoring algorithm documentation
+â”œâ”€â”€ CHANGELOG.md                 # Version history
+â”œâ”€â”€ start_local.cmd              # Windows one-click launcher
+â”œâ”€â”€ start_local.ps1              # PowerShell launcher logic
+â”œâ”€â”€ connection.json.example      # Example local config
+â”œâ”€â”€ connection_docker.json       # Docker Compose config
+â”œâ”€â”€ docker-compose.yml           # Optional containerized setup
+â”œâ”€â”€ Dockerfile                   # Web app container image
+â”œâ”€â”€ requirements.txt             # Python dependencies
+â””â”€â”€ .env.example                 # Example env file
 ```
 
 ## Database Schema
@@ -376,7 +408,7 @@ The application uses SQLite (`options.db`) with automatic migrations. Key tables
 | `iv_history` | IV data over time for 30-day rolling IV rank (purged after 45 days) |
 | `earnings_calendar` | Earnings dates from Yahoo Finance (refreshed every 6 hours) |
 
-Caching: in-memory — 4 hours (IV), 24 hours (earnings). See [SCORING.md](SCORING.md) for full schema.
+Caching: in-memory â€” 4 hours (IV), 24 hours (earnings). See [SCORING.md](SCORING.md) for full schema.
 
 ## Scoring Methodology
 
@@ -384,7 +416,7 @@ The system uses a multi-factor scoring algorithm (0-100) to rank option plays.
 
 **Core factors:** IV-adjusted return (25%), Theta/Delta risk ratio (20%), Expected Value (15-18%), Liquidity (15-18%), plus CALL/PUT-specific metrics.
 
-**IV Environment:** 30-day rolling IV rank applies -20% to +20% score adjustments, shown as color-coded badges (🔴 🟡 ⚫ 🟢).
+**IV Environment:** 30-day rolling IV rank applies -20% to +20% score adjustments, shown as color-coded badges (ðŸ”´ ðŸŸ¡ âš« ðŸŸ¢).
 
 **Earnings Impact:** Background thread fetches earnings dates (Yahoo Finance, no API key). Score penalties: -30% (today), -15% (1-3 days), -5% (4-7 days).
 
@@ -395,7 +427,7 @@ The system uses a multi-factor scoring algorithm (0-100) to rank option plays.
 | Monthlies | 15-45 | 0.20-0.30 | 18% |
 | Quarterlies | 46-90 | 0.25-0.35 | 15% |
 
-> 📖 **Full scoring algorithm, formulas, weights, and data models:** see [SCORING.md](SCORING.md)
+> ðŸ“– **Full scoring algorithm, formulas, weights, and data models:** see [SCORING.md](SCORING.md)
 
 ## Evaluator Loop & Feedback Calibration
 
@@ -425,10 +457,10 @@ ensures only one process schedules jobs under multi-worker deployments.
 top over/under-predicting factors, latest calibration result, and last run times.
 
 **Manual triggers:**
-- `POST /api/options/evaluator/cron` — Run evaluator cycle
-- `POST /api/options/calibrator/run` — Run calibration cycle
-- `GET /api/options/evaluator/stats` — Full status payload
-- `GET /api/options/feedback/biases` — Current bias multipliers
+- `POST /api/options/evaluator/cron` â€” Run evaluator cycle
+- `POST /api/options/calibrator/run` â€” Run calibration cycle
+- `GET /api/options/evaluator/stats` â€” Full status payload
+- `GET /api/options/feedback/biases` â€” Current bias multipliers
 
 ## Docker (Optional)
 
@@ -439,8 +471,8 @@ docker-compose up -d
 ```
 
 This starts:
-- `moomoo-opend` — OpenD gateway on port 11111
-- `all-you-need-is-wheel` — web app on port 8000
+- `moomoo-opend` â€” OpenD gateway on port 11111
+- `all-you-need-is-wheel` â€” web app on port 8000
 
 ## Troubleshooting
 
@@ -495,5 +527,5 @@ docker-compose logs opend
 
 ## Acknowledgments
 
-- [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html) — market data and trading API
-- [Flask](https://flask.palletsprojects.com/) — web framework
+- [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html) â€” market data and trading API
+- [Flask](https://flask.palletsprojects.com/) â€” web framework

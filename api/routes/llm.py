@@ -5,8 +5,7 @@ Single endpoint that gathers all trading data and returns AI-generated
 trade suggestions (opens, closes, rolls).
 """
 
-from flask import Blueprint, jsonify, request
-from api.routes.utils import error_response, success_response
+from flask import Blueprint, jsonify
 import logging
 import traceback
 

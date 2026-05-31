@@ -7,7 +7,6 @@ Orchestrates scoring by composing pure factor functions from scoring_factors.py.
 """
 
 import logging
-import traceback
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional
@@ -22,6 +21,11 @@ from core.scoring_factors import (
     _compute_profit_target_progress,
     _compute_size_fit,
     _compute_expected_move_buffer,
+    _compute_recommended_contracts,
+    CALL_W_IV_ADJ, CALL_W_TDR, CALL_W_LIQ, CALL_W_EV, CALL_W_UPSIDE, CALL_W_OTM, CALL_W_EARNINGS,
+    PUT_W_IV_ADJ, PUT_W_TDR, PUT_W_EV, PUT_W_LIQ, PUT_W_BUF, PUT_W_CE, PUT_W_EARNINGS,
+    CALL_MAX_LOSS_ESTIMATE_PCT, PUT_MAX_LOSS_ESTIMATE_PCT,
+    STALE_QUOTE_THRESHOLD, ACCOUNT_VALUE_MIN,
 )
 from core.connection_constants import _normalize_iv
 from core.growth_mode import (
@@ -110,6 +114,7 @@ class WheelDecision:
     # -- Size / portfolio fit -----------------------------------------------
     size_fit: float = 0.0              # 0-100: how well the contract fits the portfolio
     max_contracts: int = 0             # Max contracts allowed by shares/cash
+    recommended_contracts: int = 0     # Recommended contract quantity from sizing logic
     expected_move_buffer: float = 0.0  # Expected move range vs strike distance (%)
 
     # -- Roll / hold / close signals (open positions) -----------------------
@@ -266,7 +271,7 @@ def score_contract(
     macro_regime: dict | None = None,
     growth_profile: dict | None = None,
     evaluator_repo=None,
-) -> WheelDecision | None:
+) -> WheelDecision:
     """
     Score a single option contract and return a WheelDecision.
 
@@ -490,9 +495,9 @@ def score_contract(
     abs_delta = abs(delta)
     pop = 1 - abs_delta
     if option_type == 'CALL':
-        max_loss_estimate = stock_price * 100 * 0.05
+        max_loss_estimate = stock_price * 100 * CALL_MAX_LOSS_ESTIMATE_PCT
     else:
-        max_loss_estimate = strike * 100 * 0.10
+        max_loss_estimate = strike * 100 * PUT_MAX_LOSS_ESTIMATE_PCT
     expected_value = (pop * premium_per_contract) - ((1 - pop) * max_loss_estimate)
     decision.expected_value = round(expected_value, 2)
     decision.pop = round(pop, 4)
@@ -527,17 +532,21 @@ def score_contract(
         ) * 100
         decision.upside_score = _score_positive_metric(if_called_return, 12) * 100
 
+        # Earnings risk score from earnings_adjustment (e.g., -30 → 70, 0 → 100)
+        earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
+
         # CALL base score — growth-oriented weights (premium, capital efficiency, liquidity, theta decay)
         # Weights are multiplied by feedback bias factors so factors that
         # historically over-predict get reduced influence, and those that
         # under-predict get increased influence.
-        w_iv_adj = 0.35 * iv_adj_bias
-        w_tdr = 0.15 * theta_delta_bias
-        w_liq = 0.15 * liquidity_bias
-        w_ev = 0.10 * ev_bias
-        w_upside = 0.15 * upside_bias
-        w_otm = 0.10 * otm_bias
-        total_w = w_iv_adj + w_tdr + w_liq + w_ev + w_upside + w_otm
+        w_iv_adj = CALL_W_IV_ADJ * iv_adj_bias
+        w_tdr = CALL_W_TDR * theta_delta_bias
+        w_liq = CALL_W_LIQ * liquidity_bias
+        w_ev = CALL_W_EV * ev_bias
+        w_upside = CALL_W_UPSIDE * upside_bias
+        w_otm = CALL_W_OTM * otm_bias
+        w_earnings = CALL_W_EARNINGS
+        total_w = w_iv_adj + w_tdr + w_liq + w_ev + w_upside + w_otm + w_earnings
         if total_w > 0:
             w_iv_adj /= total_w
             w_tdr /= total_w
@@ -545,6 +554,7 @@ def score_contract(
             w_ev /= total_w
             w_upside /= total_w
             w_otm /= total_w
+            w_earnings /= total_w
 
         base_score = (
             decision.iv_adjusted_score * w_iv_adj +
@@ -552,11 +562,12 @@ def score_contract(
             decision.liquidity_score * w_liq +
             decision.ev_score * w_ev +
             decision.upside_score * w_upside +
-            decision.otm_score * w_otm
+            decision.otm_score * w_otm +
+            earnings_risk_score * w_earnings
         )
 
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
-        score = iv_adjusted_score_final * (1 + earnings_adjustment / 100)
+        score = iv_adjusted_score_final
         score *= (0.65 + (0.35 * cost_basis_score))
         score *= macro_multiplier
 
@@ -611,6 +622,7 @@ def score_contract(
         }
 
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
+        decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context)
 
     elif option_type == 'PUT':
         if stock_price <= 0 or strike >= stock_price:
@@ -650,6 +662,7 @@ def score_contract(
 
         capital_efficiency = 0.0
         ce_score = 0.0
+        account_value = max(account_value, 1)
         if account_value > 0 and cash_required > 0:
             capital_efficiency = annualized_return_raw / (cash_required / account_value)
             ce_score = _score_positive_metric(
@@ -671,17 +684,21 @@ def score_contract(
             breakeven_buffer_pct, max(10, 8)
         ) * 100
 
+        # Earnings risk score from earnings_adjustment (e.g., -30 → 70, 0 → 100)
+        earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
+
         # PUT base score — growth-oriented weights (premium, theta decay, EV, liquidity, buffer, capital efficiency)
         # Weights are multiplied by feedback bias factors so factors that
         # historically over-predict get reduced influence, and those that
         # under-predict get increased influence.
-        w_iv_adj = 0.35 * iv_adj_bias
-        w_tdr = 0.15 * theta_delta_bias
-        w_ev = 0.10 * ev_bias
-        w_liq = 0.15 * liquidity_bias
-        w_buf = 0.10 * buffer_bias
-        w_ce = 0.15 * ce_bias
-        total_w = w_iv_adj + w_tdr + w_ev + w_liq + w_buf + w_ce
+        w_iv_adj = PUT_W_IV_ADJ * iv_adj_bias
+        w_tdr = PUT_W_TDR * theta_delta_bias
+        w_ev = PUT_W_EV * ev_bias
+        w_liq = PUT_W_LIQ * liquidity_bias
+        w_buf = PUT_W_BUF * buffer_bias
+        w_ce = PUT_W_CE * ce_bias
+        w_earnings = PUT_W_EARNINGS
+        total_w = w_iv_adj + w_tdr + w_ev + w_liq + w_buf + w_ce + w_earnings
         if total_w > 0:
             w_iv_adj /= total_w
             w_tdr /= total_w
@@ -689,6 +706,7 @@ def score_contract(
             w_liq /= total_w
             w_buf /= total_w
             w_ce /= total_w
+            w_earnings /= total_w
 
         base_score = (
             decision.iv_adjusted_score * w_iv_adj +
@@ -696,11 +714,12 @@ def score_contract(
             decision.ev_score * w_ev +
             decision.liquidity_score * w_liq +
             decision.buffer_score * w_buf +
-            decision.ce_score * w_ce
+            decision.ce_score * w_ce +
+            earnings_risk_score * w_earnings
         )
 
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
-        score = iv_adjusted_score_final * (1 + earnings_adjustment / 100)
+        score = iv_adjusted_score_final
         score *= (0.75 + (0.25 * capital_fit))
         score *= macro_multiplier
 
@@ -751,106 +770,26 @@ def score_contract(
         }
 
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
+        decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context)
 
     else:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Unknown option type")
 
     # -- Growth-aware scoring (always-on) ----------------------------------
-    # Stress loss, risk budget, confidence, covered call intent, and target gap
-    # are always computed — there is no "income mode" alternative.
-    account_value = float(portfolio_context.get('account_value', 0) or 0)
-    cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
-    growth_obj = growth_profile or {}
-    max_drawdown_pct = float(growth_obj.get('max_drawdown_pct', 0.40))
-
-    # Stress loss
-    stress_loss = compute_stress_loss(
+    _apply_growth_scoring(
+        decision=decision,
+        portfolio_context=portfolio_context,
+        option=option,
         premium_per_contract=premium_per_contract,
-        abs_delta=abs(delta),
+        delta=delta,
         stock_price=stock_price,
         strike=strike,
         option_type=option_type,
-        num_contracts=max(decision.max_contracts, 1),
+        annualized_return_raw=annualized_return_raw,
+        from_yfinance=from_yfinance,
+        growth_profile=growth_profile,
+        ticker=ticker,
     )
-    decision.stress_loss = stress_loss
-
-    # Risk budget used
-    risk_budget = compute_risk_budget_used(
-        stress_loss=stress_loss,
-        account_value=max(account_value, cash_balance, 1),
-        max_drawdown_pct=max_drawdown_pct,
-    )
-    decision.risk_budget_used_pct = risk_budget
-
-    # Determine staleness from quote data
-    is_stale = False
-    quote_ts = option.get('quote_timestamp')
-    if quote_ts:
-        try:
-            ts = datetime.fromisoformat(quote_ts) if isinstance(quote_ts, str) else quote_ts
-            if (datetime.now() - ts).total_seconds() > 300:
-                is_stale = True
-        except (ValueError, TypeError):
-            pass
-    if from_yfinance:
-        is_stale = True
-
-    # Confidence score
-    decision.confidence_score = compute_confidence_score(
-        data_source=decision.price_source,
-        has_yfinance_fallback=option.get('from_yfinance', False),
-        is_stale=is_stale,
-        spread_pct=spread_pct,
-        open_interest=open_interest,
-    )
-
-    # Covered call intent
-    if option_type == 'CALL':
-        shares_owned = float(portfolio_context.get('positions', {}).get(ticker, {}).get('position', 0) or 0)
-        avg_cost = float(portfolio_context.get('positions', {}).get(ticker, {}).get('avg_cost', 0) or 0)
-        decision.covered_call_intent = classify_covered_call_intent(
-            strike=strike,
-            stock_price=stock_price,
-            premium_per_contract=premium_per_contract,
-            annualized_return=annualized_return_raw,
-            shares_owned=int(shares_owned),
-            avg_cost=avg_cost,
-        )
-
-        # Penalize low-premium covered calls on strong holdings
-        if decision.covered_call_intent == "upside-capping risk" and annualized_return_raw < 12:
-            decision.hard_blockers.append('Low-premium CC caps upside without meaningful 2x acceleration')
-        elif decision.covered_call_intent == "income" and annualized_return_raw < 6:
-            decision.warnings.append('Low premium relative to growth target')
-
-    # Growth score is contract_score now — no separate field.
-    # Target gap contribution (estimated)
-    income_per_month = premium_per_contract * 4  # rough monthly estimate
-    target_multiple = float(growth_obj.get('target_account_multiple', 2.0))
-    decision.remaining_gap_to_target = estimate_target_gap(
-        account_value=max(account_value, cash_balance, 1),
-        target_multiple=target_multiple,
-        current_premium_income=income_per_month,
-        projected_months=1,
-    )
-
-    # Score rationale (replaces growth_rationale)
-    rationale_parts = []
-    if decision.contract_score >= 70:
-        rationale_parts.append("Strong growth candidate")
-    elif decision.contract_score >= 50:
-        rationale_parts.append("Moderate growth contribution")
-    else:
-        rationale_parts.append("Limited growth impact")
-
-    if decision.risk_budget_used_pct > 0:
-        rationale_parts.append(f"Uses {decision.risk_budget_used_pct:.0f}% of drawdown budget")
-    if decision.covered_call_intent:
-        rationale_parts.append(f"CC intent: {decision.covered_call_intent}")
-    if decision.confidence_score < 60:
-        rationale_parts.append("Low confidence — verify data")
-
-    decision.score_rationale = " | ".join(rationale_parts) if rationale_parts else ""
 
     return decision
 
@@ -956,3 +895,117 @@ def score_existing_position(
         decision.warnings.append(f'Strike crossed ({abs(otm_pct):.1f}% ITM)')
 
     return decision
+
+
+# ---------------------------------------------------------------------------
+# Extracted helpers to reduce god-function size (Punchlist #14)
+# ---------------------------------------------------------------------------
+
+def _is_quote_stale(option: dict, from_yfinance: bool) -> bool:
+    """Determine if a quote is stale based on timestamp and data source."""
+    if from_yfinance:
+        return True
+    quote_ts = option.get('quote_timestamp')
+    if not quote_ts:
+        return False
+    try:
+        ts = datetime.fromisoformat(quote_ts) if isinstance(quote_ts, str) else quote_ts
+        return (datetime.now() - ts).total_seconds() > STALE_QUOTE_THRESHOLD
+    except (ValueError, TypeError):
+        return False
+
+
+def _apply_growth_scoring(
+    decision: WheelDecision,
+    portfolio_context: dict,
+    option: dict,
+    premium_per_contract: float,
+    delta: float,
+    stock_price: float,
+    strike: float,
+    option_type: str,
+    annualized_return_raw: float,
+    from_yfinance: bool,
+    growth_profile: dict | None = None,
+    ticker: str = '',
+) -> None:
+    """
+    Apply growth-aware scoring to a decision: stress loss, risk budget,
+    confidence score, covered call intent, and score rationale.
+    Always computed regardless of option type or profile.
+    Mutates decision in-place.
+    """
+    account_value = float(portfolio_context.get('account_value', 0) or 0)
+    cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
+    growth_obj = growth_profile or {}
+    max_drawdown_pct = float(growth_obj.get('max_drawdown_pct', 0.40))
+
+    stress_loss = compute_stress_loss(
+        premium_per_contract=premium_per_contract,
+        abs_delta=abs(delta),
+        stock_price=stock_price,
+        strike=strike,
+        option_type=option_type,
+        num_contracts=max(decision.max_contracts, 1),
+    )
+    decision.stress_loss = stress_loss
+
+    risk_budget = compute_risk_budget_used(
+        stress_loss=stress_loss,
+        account_value=max(account_value, cash_balance, ACCOUNT_VALUE_MIN),
+        max_drawdown_pct=max_drawdown_pct,
+    )
+    decision.risk_budget_used_pct = risk_budget
+
+    is_stale = _is_quote_stale(option, from_yfinance)
+
+    decision.confidence_score = compute_confidence_score(
+        data_source=decision.price_source,
+        has_yfinance_fallback=option.get('from_yfinance', False),
+        is_stale=is_stale,
+        spread_pct=option.get('spread_pct', 0),
+        open_interest=option.get('open_interest', 0),
+    )
+
+    if option_type == 'CALL':
+        shares_owned = float(portfolio_context.get('positions', {}).get(ticker, {}).get('position', 0) or 0)
+        avg_cost = float(portfolio_context.get('positions', {}).get(ticker, {}).get('avg_cost', 0) or 0)
+        decision.covered_call_intent = classify_covered_call_intent(
+            strike=strike,
+            stock_price=stock_price,
+            premium_per_contract=premium_per_contract,
+            annualized_return=annualized_return_raw,
+            shares_owned=int(shares_owned),
+            avg_cost=avg_cost,
+        )
+
+        if decision.covered_call_intent == "upside-capping risk" and annualized_return_raw < 12:
+            decision.hard_blockers.append('Low-premium CC caps upside without meaningful 2x acceleration')
+        elif decision.covered_call_intent == "income" and annualized_return_raw < 6:
+            decision.warnings.append('Low premium relative to growth target')
+
+    income_per_month = premium_per_contract * 4
+    target_multiple = float(growth_obj.get('target_account_multiple', 2.0))
+    decision.remaining_gap_to_target = estimate_target_gap(
+        account_value=max(account_value, cash_balance, ACCOUNT_VALUE_MIN),
+        target_multiple=target_multiple,
+        current_premium_income=income_per_month,
+        projected_months=1,
+    )
+
+    rationale_parts = []
+    if decision.contract_score >= 70:
+        rationale_parts.append("Strong growth candidate")
+    elif decision.contract_score >= 50:
+        rationale_parts.append("Moderate growth contribution")
+    else:
+        rationale_parts.append("Limited growth impact")
+
+    if decision.risk_budget_used_pct > 0:
+        rationale_parts.append(f"Uses {decision.risk_budget_used_pct:.0f}% of drawdown budget")
+    if decision.covered_call_intent:
+        rationale_parts.append(f"CC intent: {decision.covered_call_intent}")
+    if decision.confidence_score < 60:
+        rationale_parts.append("Low confidence — verify data")
+
+    decision.score_rationale = " | ".join(rationale_parts) if rationale_parts else ""

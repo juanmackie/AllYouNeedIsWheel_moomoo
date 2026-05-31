@@ -9,8 +9,8 @@ let lastUpdatedEl;
 let loadingBannerId = null;
 let listenersBound = false;
 let isLoading = false;
-const DEFAULT_AUTO_TIMEOUT_MS = 45000;
-const DEFAULT_MANUAL_TIMEOUT_MS = 30000;
+const DEFAULT_AUTO_TIMEOUT_MS = 60000;
+const DEFAULT_MANUAL_TIMEOUT_MS = 45000;
 
 function initElements() {
     contentEl = document.getElementById('catalyst-content');
@@ -121,6 +121,15 @@ function renderCard(signal) {
     const blockersEl = clone.querySelector('.catalyst-card__blockers');
     if (signal.blockers?.length) {
         blockersEl.textContent = signal.blockers.slice(0, 2).join(' • ');
+    }
+
+    const socialEl = clone.querySelector('.catalyst-card__social');
+    if (signal.social) {
+        const s = signal.social;
+        const rankDelta = (s.rank_24h_ago || 0) - s.rank;
+        const trend = rankDelta > 0 ? `↑${rankDelta}` : rankDelta < 0 ? `↓${Math.abs(rankDelta)}` : '→';
+        socialEl.textContent = `Social rising: ${s.mentions} mentions, rank #${s.rank} ${trend} 24h`;
+        socialEl.classList.remove('d-none');
     }
 
     return clone;

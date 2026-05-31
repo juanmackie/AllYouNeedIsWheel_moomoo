@@ -2,7 +2,6 @@
 Utility functions for the autotrader package
 """
 
-import os
 import logging
 from datetime import datetime, timedelta
 import math

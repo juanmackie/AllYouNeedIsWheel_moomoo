@@ -10,17 +10,13 @@ import unittest
 import sqlite3
 import tempfile
 import os
-import json
 import threading
-import time
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from db.database import OptionsDatabase
-from db.schema import create_tables, migrate_database
-from db.iv_repository import IVRepository
-from db.earnings_repository import EarningsRepository
+from db.schema import create_tables
 from db.trade_events_repository import TradeEventsRepository
+from db.sqlite_pool import close_connection_pool
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -36,6 +32,9 @@ class TestOptionsDatabase(unittest.TestCase):
         self.db = OptionsDatabase(self.db_path)
 
     def tearDown(self):
+        if hasattr(self, 'db') and self.db is not None:
+            self.db.close()
+        close_connection_pool(self.db_path)
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         os.rmdir(self.temp_dir)
@@ -53,6 +52,13 @@ class TestOptionsDatabase(unittest.TestCase):
         actual_tables = {row[0] for row in cursor.fetchall()}
         for table in expected_tables:
             self.assertIn(table, actual_tables, f"Missing table: {table}")
+
+        cursor.execute("PRAGMA user_version")
+        self.assertEqual(cursor.fetchone()[0], 1)
+
+        cursor.execute("PRAGMA index_list('evaluator_signals')")
+        evaluator_indexes = {row[1] for row in cursor.fetchall()}
+        self.assertIn('idx_evaluator_signals_created_at', evaluator_indexes)
 
         conn.close()
 
@@ -74,6 +80,27 @@ class TestOptionsDatabase(unittest.TestCase):
         latest = self.db.get_latest_iv('AAPL')
         self.assertIsNotNone(latest)
         self.assertEqual(latest['implied_volatility'], 0.30)
+
+    def test_connection_pool_reuses_connections(self):
+        """Repeated repository calls should reuse pooled SQLite connections."""
+        before = self.db.get_connection_pool_stats()
+
+        self.db.save_iv_data('AAPL', 0.30)
+        self.db.get_iv_history('AAPL')
+        self.db.save_earnings_date('AAPL', '2024-04-25', fetch_status='success')
+        self.db.get_earnings_date('AAPL')
+        self.db.save_trade_event({
+            'event_type': 'entry',
+            'ticker': 'AAPL',
+            'option_type': 'PUT',
+            'strike': 150.0,
+            'expiration': '20240419',
+        })
+        self.db.get_trade_events('AAPL')
+
+        after = self.db.get_connection_pool_stats()
+        self.assertGreaterEqual(after['created'], max(before['created'], 1))
+        self.assertGreaterEqual(after['pool_size'], 1)
 
     def test_purge_old_iv_data(self):
         """Test purging old IV data"""
@@ -217,6 +244,9 @@ class TestDatabaseEdgeCases(unittest.TestCase):
         self.db = OptionsDatabase(self.db_path)
 
     def tearDown(self):
+        if hasattr(self, 'db') and self.db is not None:
+            self.db.close()
+        close_connection_pool(self.db_path)
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         os.rmdir(self.temp_dir)
@@ -344,6 +374,9 @@ class TestEarningsRepository(unittest.TestCase):
         self.db = OptionsDatabase(self.db_path)
 
     def tearDown(self):
+        if hasattr(self, 'db') and self.db is not None:
+            self.db.close()
+        close_connection_pool(self.db_path)
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         os.rmdir(self.temp_dir)
@@ -424,6 +457,9 @@ class TestDatabaseMigrations(unittest.TestCase):
         self.db_path = os.path.join(self.temp_dir, 'test_migrations.db')
 
     def tearDown(self):
+        if hasattr(self, 'db') and self.db is not None:
+            self.db.close()
+        close_connection_pool(self.db_path)
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         os.rmdir(self.temp_dir)
@@ -433,6 +469,7 @@ class TestDatabaseMigrations(unittest.TestCase):
         db = OptionsDatabase()
         self.assertIsNotNone(db)
         self.assertTrue(str(db.db_path).endswith('options.db'))
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -448,6 +485,9 @@ class TestDatabaseConcurrency(unittest.TestCase):
         self.db = OptionsDatabase(self.db_path)
 
     def tearDown(self):
+        if hasattr(self, 'db') and self.db is not None:
+            self.db.close()
+        close_connection_pool(self.db_path)
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         os.rmdir(self.temp_dir)
@@ -458,6 +498,7 @@ class TestDatabaseConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def iv_writer(ticker):
+            local_db = None
             try:
                 local_db = OptionsDatabase(self.db_path)
                 for i in range(20):
@@ -465,13 +506,16 @@ class TestDatabaseConcurrency(unittest.TestCase):
             except Exception as e:
                 with lock:
                     errors.append(str(e))
+            finally:
+                if local_db is not None:
+                    local_db.close()
 
         threads = [threading.Thread(target=iv_writer, args=(f'TICK{t}',))
                    for t in range(5)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=10)
+            t.join()
 
         self.assertEqual(len(errors), 0, f"IV write errors: {errors}")
 
@@ -486,6 +530,7 @@ class TestDatabaseConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def earnings_writer(thread_id):
+            local_db = None
             try:
                 local_db = OptionsDatabase(self.db_path)
                 for _ in range(10):
@@ -497,13 +542,16 @@ class TestDatabaseConcurrency(unittest.TestCase):
             except Exception as e:
                 with lock:
                     errors.append(str(e))
+            finally:
+                if local_db is not None:
+                    local_db.close()
 
         threads = [threading.Thread(target=earnings_writer, args=(i,))
                    for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=10)
+            t.join()
 
         self.assertEqual(len(errors), 0, f"Earnings upsert errors: {errors}")
 
@@ -524,14 +572,19 @@ class TestDatabaseConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def purger():
+            local_db = None
             try:
                 local_db = OptionsDatabase(self.db_path)
                 local_db.purge_old_iv_data(days=0)
             except Exception as e:
                 with lock:
                     errors.append(str(e))
+            finally:
+                if local_db is not None:
+                    local_db.close()
 
         def writer():
+            local_db = None
             try:
                 local_db = OptionsDatabase(self.db_path)
                 for _ in range(20):
@@ -539,6 +592,9 @@ class TestDatabaseConcurrency(unittest.TestCase):
             except Exception as e:
                 with lock:
                     errors.append(str(e))
+            finally:
+                if local_db is not None:
+                    local_db.close()
 
         threads = [
             threading.Thread(target=purger),
@@ -549,11 +605,73 @@ class TestDatabaseConcurrency(unittest.TestCase):
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=15)
+            t.join()
 
         self.assertEqual(len(errors), 0, f"Purge+write errors: {errors}")
         final_count = len(self.db.get_iv_history('AAPL', days=365))
         self.assertGreaterEqual(final_count, 0)
+
+
+class TestEvaluatorRepositorySecurity(unittest.TestCase):
+    """Evaluator repository mutation helpers should stay parameterized."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_evaluator.db')
+        conn = sqlite3.connect(self.db_path)
+        create_tables(conn)
+        conn.close()
+        self.db = OptionsDatabase(self.db_path)
+        self.repo = self.db.evaluator
+
+    def tearDown(self):
+        if hasattr(self, 'db') and self.db is not None:
+            self.db.close()
+        close_connection_pool(self.db_path)
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def test_update_signal_status_round_trip(self):
+        recommendation_id = self.repo.record_signal({
+            'ticker': 'AAPL',
+            'option_type': 'PUT',
+            'strike': 150.0,
+            'expiration': '20240510',
+            'dte': 21,
+            'signal_type': 'csp',
+            'strategy': 'wheel',
+            'source': 'moomoo',
+            'rank': 1,
+            'score': 92.5,
+            'confidence': 98,
+            'annualized_return': 18.5,
+            'premium_per_contract': 250.0,
+            'delta': -0.24,
+            'iv': 0.31,
+            'cash_required': 15000.0,
+            'capital_at_risk': 15000.0,
+            'broker_buying_power': 20000.0,
+            'portfolio_hash': 'abc123',
+            'score_details': {'liquidity': 88},
+            'full_payload': {'ticker': 'AAPL'},
+        })
+
+        updated = self.repo.update_signal_status(
+            recommendation_id,
+            status='resolved',
+            resolved_outcome='closed_profit',
+            actual_return=12.5,
+            linked_position_key='AAPL:20240510:150P',
+            resolved_at='2026-05-24T10:00:00',
+        )
+
+        self.assertTrue(updated)
+        record = self.repo.get_signal_by_id(recommendation_id)
+        self.assertEqual(record['status'], 'resolved')
+        self.assertEqual(record['resolved_outcome'], 'closed_profit')
+        self.assertEqual(record['actual_return'], 12.5)
+        self.assertEqual(record['linked_position_key'], 'AAPL:20240510:150P')
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -572,6 +690,7 @@ class TestTradeEventsRepositoryDirect(unittest.TestCase):
         self.repo = TradeEventsRepository(self.db_path)
 
     def tearDown(self):
+        close_connection_pool(self.db_path)
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         os.rmdir(self.temp_dir)

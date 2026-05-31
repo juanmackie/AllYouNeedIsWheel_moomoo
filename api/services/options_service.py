@@ -4,7 +4,6 @@ Refactored from monolithic 1627-line file into focused modules.
 """
 
 import logging
-import traceback
 from api.services.options_data import OptionsDataService
 from api.services.watchlist_manager import WatchlistManager
 from api.services.recommendations import RecommendationEngine
@@ -65,21 +64,26 @@ class OptionsService:
         
     def _get_openbb_service(self):
         """
-        Lazy initialization of OpenBB service.
-        Returns the service if available, None otherwise.
+        Lazy initialization of optional enrichment service.
+        Returns the service if explicitly enabled and available, None otherwise.
         Uses a sentinel (False) to avoid repeated failed initialization attempts.
         """
+        if not self.config.get('openbb_enabled', False):
+            logger.debug("Optional enrichment disabled by config")
+            self._openbb_service = False
+            return None
+
         if self._openbb_service is None:
             try:
                 from api.services.openbb_service import get_openbb_service
                 self._openbb_service = get_openbb_service()
                 if self._openbb_service and self._openbb_service._ensure_initialized():
-                    logger.info("OpenBB service initialized successfully")
+                    logger.info("Optional enrichment service initialized successfully")
                 else:
-                    logger.debug("OpenBB service not available, skipping quality checks")
+                    logger.debug("Optional enrichment service not available, skipping quality checks")
                     self._openbb_service = False
             except Exception as e:
-                logger.debug(f"OpenBB service initialization failed: {e}, skipping quality checks")
+                logger.debug(f"Optional enrichment service initialization failed: {e}, skipping quality checks")
                 self._openbb_service = False
         return self._openbb_service if self._openbb_service else None
 

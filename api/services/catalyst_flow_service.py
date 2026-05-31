@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 
 from core.catalyst_flow_decision import classify_catalyst_flow
+from core.ticker_utils import canonical_underlying
 
 logger = logging.getLogger("api.services.catalyst_flow")
 
@@ -24,6 +25,7 @@ class CatalystFlowService:
         self._config_provider = config_provider
         self._watchlist_provider = watchlist_provider
         self.connection = None
+        self._apewisdom_service = None
 
     @property
     def config(self):
@@ -59,6 +61,14 @@ class CatalystFlowService:
         return manager.get_effective_watchlist(
             growth_mode_config=self.config.get("growth_mode", {})
         )
+
+    def _get_apewisdom_service(self):
+        if self._apewisdom_service is None:
+            from api.services.apewisdom_service import ApeWisdomService
+            self._apewisdom_service = ApeWisdomService(
+                config=self._get_catalyst_config().get("apewisdom", {})
+            )
+        return self._apewisdom_service
 
     def get_signals(
         self,
@@ -112,7 +122,29 @@ class CatalystFlowService:
         scan_limit = int(scan_config.get("max_scan_tickers", max(limit * 4, 25)))
         scan_tickers = watchlist[: max(1, min(len(watchlist), scan_limit))]
 
-        from moomoo import RET_OK
+        # -- Expand candidates with Ape Wisdom social momentum --#
+        aw_cfg = cfg.get("apewisdom", {})
+        aw_metadata = {"enabled": False, "candidates_fetched": 0, "boost_tickers_applied": []}
+        social_index: dict[str, dict] = {}
+        if aw_cfg.get("enabled", True):
+            try:
+                aw_svc = self._get_apewisdom_service()
+                aw_candidates = aw_svc.get_momentum_candidates()
+                aw_metadata["enabled"] = True
+                aw_metadata["candidates_fetched"] = len(aw_candidates)
+                seen = {canonical_underlying(t) for t in scan_tickers}
+                scan_cap = scan_limit + int(aw_cfg.get("max_boost_tickers", 8))
+                boost_tickers_applied = []
+                for c in aw_candidates:
+                    canon = canonical_underlying(c["ticker"])
+                    social_index[canon] = c
+                    if canon not in seen and len(scan_tickers) < scan_cap:
+                        scan_tickers.append(c["ticker"])
+                        seen.add(canon)
+                        boost_tickers_applied.append(c["ticker"])
+                aw_metadata["boost_tickers_applied"] = boost_tickers_applied
+            except Exception as exc:
+                logger.debug("ApeWisdom expansion failed (non-fatal): %s", exc)
 
         all_signals = []
         scanned = 0
@@ -145,6 +177,28 @@ class CatalystFlowService:
             if result:
                 all_signals.extend(result)
 
+        # -- Attach social context to confirmed signals --#
+        if social_index:
+            for item in all_signals:
+                canon = canonical_underlying(item.get("ticker", ""))
+                if canon in social_index:
+                    se = social_index[canon]
+                    item["social"] = {
+                        "source": "apewisdom",
+                        "rank": se.get("rank", 0),
+                        "rank_24h_ago": se.get("rank_24h_ago", 0),
+                        "mentions": se.get("mentions", 0),
+                        "mentions_24h_ago": se.get("mentions_24h_ago", 0),
+                        "upvotes": se.get("upvotes", 0),
+                        "momentum_score": se.get("momentum_score", 0),
+                    }
+                    # Light score boost — social data alone cannot create a signal
+                    if item.get("score", 0) >= 20:
+                        item["score"] = round(min(item["score"] * 1.05, 100), 1)
+                        item.setdefault("rationale", []).append(
+                            f"Social rising ({se.get('mentions', 0)} mentions)"
+                        )
+
         all_signals.sort(key=lambda s: s.get("score", 0), reverse=True)
         candidate_count = len(all_signals)
 
@@ -172,6 +226,7 @@ class CatalystFlowService:
                 "max_dte": scan_config.get("max_dte", 60),
                 "max_scan_tickers": scan_config.get("max_scan_tickers", max(limit * 4, 25)),
             },
+            "apewisdom": aw_metadata,
         }
 
     def _scan_ticker(self, conn, ticker, config):
@@ -321,10 +376,9 @@ class CatalystFlowService:
     def _get_fallback_price(self, ticker):
         """Get stock price from yfinance as fallback."""
         try:
-            import yfinance as yf
-            from api.services.utils import clean_yfinance_ticker
+            from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
             bare = clean_yfinance_ticker(ticker)
-            hist = yf.Ticker(bare).history(period="1d")
+            hist = get_yfinance_ticker(bare).history(period="1d")
             if not hist.empty:
                 return float(hist["Close"].iloc[-1])
         except Exception:

@@ -4,7 +4,7 @@ Earnings lock and locked tickers endpoints.
 """
 
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from api.routes.utils import error_response, success_response
 from api import get_service
 

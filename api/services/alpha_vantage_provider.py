@@ -5,7 +5,7 @@ import logging
 import time
 import threading
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 
 logger = logging.getLogger('api.services.alpha_vantage')
 

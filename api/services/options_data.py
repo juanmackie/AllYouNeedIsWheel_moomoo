@@ -4,15 +4,12 @@ Extracted from the monolithic options_service.py for maintainability.
 """
 
 import logging
-import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 from core.wheel_decision import score_contract
 from core.utils import get_closest_friday
-from db.database import OptionsDatabase
-from api.services.iv_earnings_service import IVEarningsService
-from api.services.utils import clean_yfinance_ticker
+from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
 from api.services.macro_regime_service import get_macro_service
 
 logger = logging.getLogger('api.services.options_data')
@@ -84,9 +81,8 @@ class OptionsDataService:
     def _get_yfinance_price(self, ticker):
         """Get stock price from yfinance as fallback when Moomoo lacks quote rights."""
         try:
-            import yfinance as yf
             bare_ticker = self._strip_ticker_prefix(ticker)
-            yf_ticker = yf.Ticker(bare_ticker)
+            yf_ticker = get_yfinance_ticker(bare_ticker)
             hist = yf_ticker.history(period="1d")
             if hist.empty:
                 logger.warning(f"yfinance: No price data for {bare_ticker}")
@@ -101,9 +97,8 @@ class OptionsDataService:
     def _get_yfinance_option_chain(self, ticker, expiration, option_type):
         """Get option chain from yfinance as fallback when Moomoo lacks quote rights."""
         try:
-            import yfinance as yf
             bare_ticker = self._strip_ticker_prefix(ticker)
-            yf_ticker = yf.Ticker(bare_ticker)
+            yf_ticker = get_yfinance_ticker(bare_ticker)
             exp_formatted = expiration.replace('-', '')
             if len(exp_formatted) == 8:
                 exp_yf = f"{exp_formatted[0:4]}-{exp_formatted[4:6]}-{exp_formatted[6:8]}"
@@ -177,10 +172,8 @@ class OptionsDataService:
     def _get_yfinance_expiration_dates(self, ticker, profile=None):
         """Return yfinance expirations filtered to the active DTE profile."""
         try:
-            import yfinance as yf
-
             bare_ticker = self._strip_ticker_prefix(ticker)
-            all_exps = yf.Ticker(bare_ticker).options
+            all_exps = get_yfinance_ticker(bare_ticker).options
             if not all_exps:
                 return []
 
@@ -427,7 +420,7 @@ class OptionsDataService:
                 try:
                     if min_dte <= dte <= max_dte:
                         filtered.append((normalized, dte))
-                except TypeError as te:
+                except TypeError:
                     logger.error(f"TypeError in DTE comparison: min_dte={min_dte}, dte={dte}, max_dte={max_dte}")
                     logger.error(f"  Types: min_dte={type(min_dte)}, dte={type(dte)}, max_dte={type(max_dte)}")
                     raise
@@ -663,7 +656,7 @@ class OptionsDataService:
                 else:
                     return {"error": "No expiration column returned by moomoo"}
 
-            from datetime import datetime, date
+            from datetime import date
             today = date.today()
 
             if option_type in ['CALL', 'PUT']:

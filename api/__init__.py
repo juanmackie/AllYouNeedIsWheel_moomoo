@@ -13,8 +13,11 @@ Services are lazily initialized after app creation to prevent circular import is
 """
 
 import os
+import sqlite3
+import time
+import uuid
 from datetime import datetime
-from flask import Flask, current_app
+from flask import Flask, current_app, request, jsonify, g
 from flask_cors import CORS
 from core.logging_config import get_logger
 from core.context_factory import probe_opend_status
@@ -90,9 +93,13 @@ def create_app(config=None):
                 static_folder='../frontend/static',
                 template_folder='../frontend/templates')
 
-    # Enable CORS
-    CORS(app)
-    logger.debug("CORS enabled for API")
+    # Enable CORS with configurable origins
+    allowed_origins = os.environ.get(
+        'CORS_ALLOWED_ORIGINS',
+        'http://localhost:8000,http://127.0.0.1:8000'
+    ).split(',')
+    CORS(app, origins=allowed_origins, supports_credentials=True)
+    logger.debug(f"CORS enabled for origins: {allowed_origins}")
 
     # Default configuration
     app.config.from_mapping(
@@ -112,11 +119,10 @@ def create_app(config=None):
     _register_services()
 
     # Register blueprints
-    from api.routes import portfolio, options, macro, system, llm
+    from api.routes import portfolio, options, macro, llm
     app.register_blueprint(portfolio.bp)
     app.register_blueprint(options.bp)
     app.register_blueprint(macro.bp)
-    app.register_blueprint(system.bp)
     app.register_blueprint(llm.bp)
 
     # Register new feature blueprints
@@ -130,7 +136,67 @@ def create_app(config=None):
     from api.routes import roll_pressure, alerts
     app.register_blueprint(roll_pressure.bp)
     app.register_blueprint(alerts.bp)
+
+    # Wheel Scan Ledger, Playbook, Options Lab, Risk Panel
+    from api.routes import ledger, playbook, options_lab, wheel_risk
+    app.register_blueprint(ledger.bp)
+    app.register_blueprint(playbook.bp)
+    app.register_blueprint(options_lab.bp)
+    app.register_blueprint(wheel_risk.bp)
     logger.info("Registered API blueprints")
+
+    # Authentication middleware
+    api_key = os.environ.get('API_KEY', '')
+    if api_key:
+        logger.info("API key authentication enabled")
+
+        @app.before_request
+        def check_auth():
+            g.request_started_at = time.time()
+            g.request_id = request.headers.get('X-Request-Id', str(uuid.uuid4()))
+            if request.method == 'OPTIONS':
+                return None
+            public_routes = ('/health', '/api/system/opend-status', '/static/')
+            if any(request.path.startswith(p) for p in public_routes):
+                return None
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header == f'Bearer {api_key}':
+                return None
+            return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+
+    @app.before_request
+    def log_request_start():
+        g.request_started_at = time.time()
+        g.request_id = request.headers.get('X-Request-Id', str(uuid.uuid4()))
+
+    @app.after_request
+    def log_request_end(response):
+        started_at = getattr(g, 'request_started_at', None)
+        elapsed_ms = int((time.time() - started_at) * 1000) if started_at else None
+        request_id = getattr(g, 'request_id', '')
+        if request.path.startswith('/static/'):
+            response.headers.setdefault('X-Request-Id', request_id)
+            return response
+
+        if elapsed_ms is None:
+            logger.info(
+                "request completed method=%s path=%s status=%s request_id=%s",
+                request.method,
+                request.path,
+                response.status_code,
+                request_id,
+            )
+        else:
+            logger.info(
+                "request completed method=%s path=%s status=%s duration_ms=%s request_id=%s",
+                request.method,
+                request.path,
+                response.status_code,
+                elapsed_ms,
+                request_id,
+            )
+        response.headers.setdefault('X-Request-Id', request_id)
+        return response
 
     @app.route('/health')
     def health_check():
@@ -148,9 +214,28 @@ def create_app(config=None):
         except Exception:
             tvscreener_status = 'error'
 
+        database_status = 'unknown'
+        try:
+            database = current_app.config.get('database')
+            if database is not None:
+                with sqlite3.connect(str(database.db_path)) as conn:
+                    conn.execute('SELECT 1')
+                database_status = 'available'
+            else:
+                database_status = 'unavailable'
+        except Exception:
+            database_status = 'error'
+
+        opend_status = probe_opend_status(
+            host=current_app.config.get('connection_config', {}).get('host', '127.0.0.1'),
+            port=current_app.config.get('connection_config', {}).get('port', 11111),
+        )
+
         return {
             'status': 'healthy',
             'tvscreener': tvscreener_status,
+            'database': database_status,
+            'opend': opend_status.get('status', 'unknown'),
             'timestamp': datetime.now().isoformat()
         }
 

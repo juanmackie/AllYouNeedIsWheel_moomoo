@@ -4,7 +4,6 @@ Extracted from the monolithic options_service.py for maintainability.
 """
 
 import logging
-from datetime import datetime
 
 logger = logging.getLogger('api.services.portfolio_context')
 

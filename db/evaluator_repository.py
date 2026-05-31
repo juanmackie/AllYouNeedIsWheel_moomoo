@@ -2,9 +2,11 @@ import json
 import sqlite3
 import uuid
 import logging
+from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
+
+from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger('db.evaluator')
 
@@ -13,11 +15,11 @@ class EvaluatorRepository:
     def __init__(self, db_path):
         self.db_path = db_path
 
+    @contextmanager
     def _connect(self):
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        with pooled_connection(self.db_path, row_factory=sqlite3.Row) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            yield conn
 
     # ── Signals ──────────────────────────────────────────────────────────
 
@@ -146,24 +148,30 @@ class EvaluatorRepository:
                              actual_return: float = None,
                              linked_position_key: str = None,
                              resolved_at: str = None) -> bool:
-        fields = ['status=?']
-        params = [status]
+        allowed_fields = []
+        params = []
+
+        if status is not None:
+            allowed_fields.append('status=?')
+            params.append(status)
         if resolved_outcome is not None:
-            fields.append('resolved_outcome=?')
+            allowed_fields.append('resolved_outcome=?')
             params.append(resolved_outcome)
         if actual_return is not None:
-            fields.append('actual_return=?')
+            allowed_fields.append('actual_return=?')
             params.append(actual_return)
         if linked_position_key is not None:
-            fields.append('linked_position_key=?')
+            allowed_fields.append('linked_position_key=?')
             params.append(linked_position_key)
         if resolved_at is not None:
-            fields.append('resolved_at=?')
+            allowed_fields.append('resolved_at=?')
             params.append(resolved_at)
+        if not allowed_fields:
+            return False
         params.append(recommendation_id)
         with self._connect() as conn:
             cur = conn.execute(
-                "UPDATE evaluator_signals SET {} WHERE recommendation_id=?".format(','.join(fields)),
+                f"UPDATE evaluator_signals SET {', '.join(allowed_fields)} WHERE recommendation_id=?",
                 params
             )
             conn.commit()
@@ -204,7 +212,7 @@ class EvaluatorRepository:
                 old_mult = existing['bias_multiplier']
                 correction = 1.0 - (new_mean * 2.0)
                 new_mult = old_mult * (1 - alpha) + correction * alpha
-                new_mult = max(0.5, min(2.0, new_mult))
+                new_mult = max(0.9, min(1.1, new_mult))
                 conn.execute("""
                     UPDATE evaluator_feedback_bias SET
                         mean_error=?, sample_count=?, bias_multiplier=?,
@@ -212,11 +220,12 @@ class EvaluatorRepository:
                     WHERE factor=?
                 """, (new_mean, new_count, new_mult, now, factor))
             else:
+                initial_mult = max(0.9, min(1.1, 1.0 - error * 2.0))
                 conn.execute("""
                     INSERT INTO evaluator_feedback_bias
                         (factor, mean_error, sample_count, bias_multiplier, last_updated)
                     VALUES (?, ?, 1, ?, ?)
-                """, (factor, error, 1.0 - error * 2.0, now))
+                """, (factor, error, initial_mult, now))
             conn.commit()
 
     def get_feedback_summary(self) -> dict:

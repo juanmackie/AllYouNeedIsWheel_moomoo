@@ -4,7 +4,7 @@ Exposes technical market regime detection (200 EMA + ADX) via REST API.
 """
 
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from api.routes.utils import error_response, success_response
 from api.services.technical_regime_service import get_technical_regime_service
 from api.services.utils import validate_ticker

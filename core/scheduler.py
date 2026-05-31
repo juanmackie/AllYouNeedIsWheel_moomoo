@@ -11,12 +11,11 @@ Schedule:
 One-click start: python run_api.py
 """
 
-import json
 import logging
 import os
-import socket
 import sqlite3
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -34,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 _LOCK_FILE = None
 _LOCK_FILE_PATH: Optional[Path] = None
+_DEFAULT_LOCK_STALE_TIMEOUT = int(os.environ.get('SCHEDULER_LOCK_STALE_TIMEOUT_SECONDS', '1800'))
+_DEFAULT_TIMEZONE = os.environ.get('SCHEDULER_TIMEZONE', 'Australia/Brisbane')
 
 
 def _lock_path() -> Path:
@@ -57,7 +58,7 @@ def _acquire_lock() -> bool:
         try:
             mtime = lock_path.stat().st_mtime
             age = (datetime.now() - datetime.fromtimestamp(mtime)).total_seconds()
-            if age > 300:
+            if age > _DEFAULT_LOCK_STALE_TIMEOUT:
                 logger.warning("Removing stale scheduler lock (age=%.0fs)", age)
                 lock_path.unlink(missing_ok=True)
                 return _acquire_lock()
@@ -144,6 +145,14 @@ def _collect_earnings_update_tickers():
         logger.debug("Could not collect watchlist tickers for earnings update: %s", e)
 
     return sorted(tickers)
+
+
+def _get_scheduler_timezone():
+    try:
+        return pytz.timezone(_DEFAULT_TIMEZONE)
+    except Exception:
+        logger.warning("Invalid SCHEDULER_TIMEZONE=%s, falling back to UTC", _DEFAULT_TIMEZONE)
+        return pytz.UTC
 
 
 def _run_earnings_updater_job(db=None) -> None:
@@ -385,7 +394,7 @@ def start_scheduler(db=None, app=None) -> bool:
             except Exception:
                 logger.warning("Could not resolve evaluator_repo from Flask app, will init on job run")
 
-        brisbane_tz = pytz.timezone("Australia/Brisbane")
+        scheduler_tz = _get_scheduler_timezone()
 
         _scheduler = BackgroundScheduler(
             job_defaults={
@@ -397,18 +406,18 @@ def start_scheduler(db=None, app=None) -> bool:
 
         _scheduler.add_job(
             _run_evaluator_job,
-            trigger=CronTrigger(hour=8, minute=0, timezone=brisbane_tz),
+            trigger=CronTrigger(hour=8, minute=0, timezone=scheduler_tz),
             id="evaluator_daily",
-            name="Evaluator (daily 8am Brisbane)",
+            name=f"Evaluator (daily 8am {scheduler_tz.zone})",
             kwargs={"db": db},
             replace_existing=True,
         )
 
         _scheduler.add_job(
             _run_calibrator_job,
-            trigger=CronTrigger(day_of_week="sun", hour=8, minute=15, timezone=brisbane_tz),
+            trigger=CronTrigger(day_of_week="sun", hour=8, minute=15, timezone=scheduler_tz),
             id="calibrator_weekly",
-            name="Calibrator (weekly Sun 8:15am Brisbane)",
+            name=f"Calibrator (weekly Sun 8:15am {scheduler_tz.zone})",
             kwargs={"db": db},
             replace_existing=True,
         )
@@ -442,3 +451,24 @@ def stop_scheduler() -> None:
         _scheduler_started = False
         _release_lock()
         logger.info("Scheduler stopped")
+
+
+def run_with_retry(fn, max_retries=3, retry_delay=300, name="job"):
+    """
+    Execute a function with retry logic.
+
+    If the function raises an exception, it will be retried up to max_retries
+    times with retry_delay seconds between attempts.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = fn()
+            return result
+        except Exception as e:
+            logger.warning(f"{name} failed (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                logger.info(f"Retrying {name} in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"{name} failed after {max_retries} attempts")
+                raise

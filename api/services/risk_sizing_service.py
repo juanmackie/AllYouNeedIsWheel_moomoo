@@ -11,7 +11,7 @@ Formula:
 import logging
 from typing import Dict, Any, List, Optional, TypedDict
 
-from api.services.utils import clean_yfinance_ticker, validate_ticker
+from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker, validate_ticker
 from core.ttl_cache import make_ttl_cache
 
 logger = logging.getLogger('api.services.risk_sizing')
@@ -87,7 +87,7 @@ class RiskSizingService:
 
         try:
             clean_ticker = clean_yfinance_ticker(ticker)
-            stock = yf.Ticker(clean_ticker)
+            stock = get_yfinance_ticker(clean_ticker)
             # Fetch 3x period to have enough data
             hist = stock.history(period='2mo', interval='1d')
 
@@ -184,7 +184,7 @@ class RiskSizingService:
         try:
             # Get current price
             clean_ticker = clean_yfinance_ticker(ticker)
-            stock = yf.Ticker(clean_ticker)
+            stock = get_yfinance_ticker(clean_ticker)
             hist = stock.history(period='5d', interval='1d')
             
             if hist.empty:

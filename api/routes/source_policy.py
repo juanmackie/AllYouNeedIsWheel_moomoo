@@ -4,7 +4,6 @@ Helpers for attaching data-source policy metadata to API payloads.
 
 from __future__ import annotations
 
-
 _EXTERNAL_SOURCE_ALIASES = {
     "yfinance": "yfinance",
     "yahoo": "yfinance",
@@ -12,6 +11,7 @@ _EXTERNAL_SOURCE_ALIASES = {
     "alpha vantage": "alpha_vantage",
     "alpha_vantage": "alpha_vantage",
     "alphavantage": "alpha_vantage",
+    "apewisdom": "apewisdom",
 }
 
 _BROKER_SOURCE_ALIASES = {
@@ -66,7 +66,7 @@ def detect_external_sources(payload):
                 lowered_key = str(key).lower()
                 if lowered_key == "from_yfinance" and bool(item):
                     sources.add("yfinance")
-                elif lowered_key.endswith("_source") or lowered_key == "data_source":
+                elif lowered_key.endswith("_source") or lowered_key in ("data_source", "source"):
                     normalized = _normalize_source(item)
                     if normalized is not None:
                         sources.add(normalized)

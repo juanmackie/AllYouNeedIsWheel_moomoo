@@ -4,12 +4,8 @@ numpy>=1.26.4
 cachetools>=5.3.0
 pydantic>=2.0.0
 python-dotenv>=1.1.0  # imported as `dotenv`
-loguru>=0.7.2
 pytz>=2024.1
 yfinance>=0.2.28
-
-# OpenBB SDK for financial data enrichment (free, no API keys needed)
-openbb>=4.0.0
 
 # FRED API for macro economic regime detection (free API key required)
 fredapi>=0.4.2

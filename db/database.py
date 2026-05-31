@@ -2,7 +2,7 @@
 Database module for SQLite logging of trades
 """
 
-import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 import logging
 
@@ -11,28 +11,53 @@ from .iv_repository import IVRepository
 from .earnings_repository import EarningsRepository
 from .trade_events_repository import TradeEventsRepository
 from .evaluator_repository import EvaluatorRepository
+from .sqlite_pool import (
+    pooled_connection,
+    get_connection_pool_stats,
+    register_pool_handle,
+    release_pool_handle,
+)
 
 logger = logging.getLogger('db.database')
 
 
 class OptionsDatabase:
     def __init__(self, db_name=None):
+        self._closed = False
         if db_name is None:
             self.db_path = Path(__file__).parent.parent / 'options.db'
         else:
             self.db_path = Path(db_name).resolve()
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        register_pool_handle(self.db_path)
 
-        conn = sqlite3.connect(str(self.db_path))
-        create_tables(conn)
-        conn.close()
+        with pooled_connection(self.db_path) as conn:
+            create_tables(conn)
+            conn.commit()
         migrate_database(self.db_path)
 
         self._iv = IVRepository(self.db_path)
         self._earnings = EarningsRepository(self.db_path)
         self._trade_events = TradeEventsRepository(self.db_path)
         self._evaluator = EvaluatorRepository(self.db_path)
+
+    @contextmanager
+    def transaction(self):
+        """Context manager for atomic multi-step database operations.
+
+        Usage:
+            with db.transaction():
+                db.save_iv_data(...)
+                db.save_earnings_date(...)
+        """
+        with pooled_connection(self.db_path) as conn:
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     # --- IV History ---
 
@@ -111,3 +136,18 @@ class OptionsDatabase:
 
     def get_evaluator_valid_sample_count(self) -> int:
         return self._evaluator.get_valid_sample_count()
+
+    def close(self):
+        if self._closed or not hasattr(self, 'db_path'):
+            return
+        release_pool_handle(self.db_path)
+        self._closed = True
+
+    def get_connection_pool_stats(self):
+        return get_connection_pool_stats(self.db_path)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

@@ -4,7 +4,7 @@ Tests for core/evaluator.py — signal outcome resolver and helpers.
 
 import unittest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from core.evaluator import (
     _resolve_signal_outcome,
     _normalize_exp,

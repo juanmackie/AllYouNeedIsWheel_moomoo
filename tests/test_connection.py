@@ -3,10 +3,9 @@ Tests for core/connection.py - MoomooConnection class and helper functions
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch, MagicMock
 import threading
 import time
-from datetime import datetime, timedelta
 import os
 import pandas as pd
 

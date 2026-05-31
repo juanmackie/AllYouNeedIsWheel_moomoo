@@ -7,15 +7,34 @@ import logging
 import time
 import pandas as pd
 from datetime import datetime
-from core.utils import get_closest_friday
 from core.wheel_decision import score_contract
 from core.ticker_utils import canonical_underlying
 from core.connection_constants import _normalize_iv
-from api.services.iv_earnings_service import IVEarningsService
-from api.services.utils import clean_yfinance_ticker
-from api.services.macro_regime_service import get_macro_service
+from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
 
 logger = logging.getLogger('api.services.recommendations')
+
+
+def _is_valid_external_option(option: dict, stock_price: float) -> bool:
+    """Return True when an external option payload has the minimum safe fields."""
+    try:
+        strike = float(option.get('strike', 0) or 0)
+        bid = float(option.get('bid', 0) or 0)
+        ask = float(option.get('ask', 0) or 0)
+        last = float(option.get('last', 0) or 0)
+        dte = int(option.get('dte', 0) or 0)
+    except (TypeError, ValueError):
+        return False
+
+    if strike <= 0 or stock_price <= 0 or dte <= 0:
+        return False
+    if bid < 0 or ask < 0 or last < 0:
+        return False
+    if bid <= 0 and ask <= 0 and last <= 0:
+        return False
+    if option.get('option_type') not in {'CALL', 'PUT'}:
+        return False
+    return True
 
 
 def _format_decision_to_candidate(
@@ -125,6 +144,21 @@ class RecommendationEngine:
     def _set_cached_watchlist_data(self, ticker, data):
         self._yfinance_cache[ticker] = {'data': data, 'timestamp': datetime.now()}
 
+    def _csp_target_strike_estimate(self, stock_price: float, portfolio_context: dict) -> float:
+        """Estimate the cash requirement for the default CSP target strike."""
+        growth_cfg = getattr(self, '_growth_screener_config', None)
+        sp = (growth_cfg.get('screener_profile', {}) or {}) if growth_cfg else {}
+        otm_pct = float(sp.get('csp_default_otm_pct', 10) or 10)
+        target_strike = stock_price * (1 - (otm_pct / 100))
+        return max(target_strike, 0.0)
+
+    def _can_afford_csp(self, stock_price: float, portfolio_context: dict) -> bool:
+        """Return True when the default CSP target strike fits buying power."""
+        cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', 0) or 0)
+        if cash_available_for_csp <= 0 or stock_price <= 0:
+            return False
+        return self._csp_target_strike_estimate(stock_price, portfolio_context) * 100 <= cash_available_for_csp
+
     def _fetch_watchlist_ticker_csp(self, ticker, portfolio_context):
         """
         Fetch CSP candidates for a watchlist ticker.
@@ -168,10 +202,12 @@ class RecommendationEngine:
             max_dte = sp.get('csp_max_dte', 45)
             pref_dte = sp.get('csp_preferred_dte', 37)
 
-            # Cash-fit prefilter: skip if even a deep OTM put exceeds buying power
-            min_strike_estimate = stock_price * 0.50
-            if min_strike_estimate * 100 > cash_available_for_csp:
-                logger.debug(f"Watchlist {ticker}: even deep OTM put (${min_strike_estimate:.2f}) exceeds buying power ${cash_available_for_csp:.2f}")
+            # Cash-fit prefilter: skip if the default target strike is still too expensive.
+            target_strike_estimate = self._csp_target_strike_estimate(stock_price, portfolio_context)
+            if not self._can_afford_csp(stock_price, portfolio_context):
+                logger.debug(
+                    f"Watchlist {ticker}: target CSP strike (${target_strike_estimate:.2f}) exceeds buying power ${cash_available_for_csp:.2f}"
+                )
                 return None
 
             from moomoo import RET_OK
@@ -204,7 +240,7 @@ class RecommendationEngine:
                 return None
 
             valid_expirations.sort(key=lambda x: abs(pref_dte - x[1]))
-            expirations_to_check = valid_expirations[:5]
+            expirations_to_check = valid_expirations[:1]
 
             from api.services.macro_regime_service import get_macro_service
             macro_regime = get_macro_service().get_macro_regime()
@@ -225,6 +261,8 @@ class RecommendationEngine:
                         continue
 
                     for opt in options:
+                        if not _is_valid_external_option(opt, stock_price):
+                            continue
                         strike = float(opt.get('strike', 0) or 0)
                         if strike >= stock_price or strike <= 0:
                             continue
@@ -319,8 +357,7 @@ class RecommendationEngine:
         Returns list of candidate dicts, a list with a skip diagnostic, or None on error.
         """
         try:
-            import yfinance as yf
-            yf_ticker = yf.Ticker(ticker)
+            yf_ticker = get_yfinance_ticker(ticker)
             hist = yf_ticker.history(period="1d")
             if hist.empty:
                 logger.warning(f"Watchlist {ticker}: yfinance history empty")
@@ -329,6 +366,17 @@ class RecommendationEngine:
 
             cash_available_for_csp = float(portfolio_context.get('cash_available_for_csp', 0) or 0)
             available_cash = float(portfolio_context.get('available_cash', 0) or 0)
+
+            target_strike_estimate = self._csp_target_strike_estimate(stock_price, portfolio_context)
+            if not self._can_afford_csp(stock_price, portfolio_context):
+                logger.debug(
+                    f"Watchlist {ticker}: target CSP strike (${target_strike_estimate:.2f}) exceeds buying power ${cash_available_for_csp:.2f}"
+                )
+                return [self._make_skip_diagnostic(
+                    ticker,
+                    'no_cash_fit',
+                    f'No CSP strike fits buying power (${cash_available_for_csp:.0f})'
+                )]
 
             opts = yf_ticker.options
             if not opts:
@@ -356,12 +404,8 @@ class RecommendationEngine:
                 logger.warning(f"Watchlist {ticker}: no expiration with DTE {min_dte}-{max_dte} found")
                 return [self._make_skip_diagnostic(ticker, 'no_valid_dte', f'No expiration with DTE {min_dte}-{max_dte} found')]
 
-            if cash_available_for_csp <= 0:
-                logger.warning(f"Watchlist {ticker}: no cash available for CSPs")
-                return [self._make_skip_diagnostic(ticker, 'no_cash', 'No CSP buying power available')]
-
             valid_expirations = sorted(valid_expirations, key=lambda e: abs(pref_dte - (datetime.strptime(e, '%Y-%m-%d') - today).days))
-            expirations_to_check = valid_expirations[:5]
+            expirations_to_check = valid_expirations[:1]
 
             candidates = []
             any_strike_fit_cash = False
@@ -413,6 +457,9 @@ class RecommendationEngine:
                             'open_interest': int(put_row['openInterest']) if not pd.isna(put_row['openInterest']) else 0,
                             'volume': int(put_row['volume']) if not pd.isna(put_row['volume']) else 0,
                         }
+
+                        if not _is_valid_external_option(contract, stock_price):
+                            continue
 
                         from core.greeks import enrich_option_with_greeks
                         enrich_option_with_greeks(contract, stock_price)
@@ -593,6 +640,8 @@ class RecommendationEngine:
         logger.info(f"Getting top {limit} signals")
         start_time = time.time()
 
+        from core.scan_ledger import ScanLedger, ScanLedgerEntry, compute_config_hash, compute_portfolio_hash, extract_data_sources
+
         try:
             # Growth mode is always-on — set growth profile from config
             growth_cfg = self.config.get('growth_mode', {}) if self.config else {}
@@ -615,6 +664,17 @@ class RecommendationEngine:
             conn = self._get_connection()
             logger.info(f"[TIMING] Get connection: {time.time() - conn_start:.2f}s")
             if not conn:
+                try:
+                    entry = ScanLedgerEntry(
+                        scan_type="recommendations",
+                        config_hash=compute_config_hash(self.config or {}),
+                        portfolio_hash="unknown",
+                        elapsed_seconds=time.time() - start_time,
+                        error_message="Failed to establish connection to moomoo",
+                    )
+                    ScanLedger(self.db).record(entry)
+                except Exception:
+                    logger.debug("Scan ledger write skipped (connection failure)", exc_info=True)
                 return {'error': 'Failed to establish connection to moomoo'}
 
             # Get portfolio context for positions and cash balance
@@ -644,6 +704,18 @@ class RecommendationEngine:
             logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers (after dedup)")
 
             if not positions and not effective_watchlist:
+                try:
+                    entry = ScanLedgerEntry(
+                        scan_type="recommendations",
+                        config_hash=compute_config_hash(self.config or {}),
+                        portfolio_hash=compute_portfolio_hash(portfolio_context),
+                        elapsed_seconds=time.time() - start_time,
+                        total_candidates=0, passed_count=0, blocked_count=0,
+                        data_sources=extract_data_sources(portfolio_context),
+                    )
+                    ScanLedger(self.db).record(entry)
+                except Exception:
+                    logger.debug("Scan ledger write skipped (empty scan)", exc_info=True)
                 return {
                     'success': True,
                     'count': 0,
@@ -896,6 +968,70 @@ class RecommendationEngine:
             except Exception as exc:
                 logger.debug("Catalyst flow warnings skipped: %s", exc)
 
+            # ── Underlying quality gate (free yfinance data) ──────────
+            try:
+                from api.services.underlying_quality import get_underlying_quality
+                unique_tickers = set()
+                for sig in formatted_signals + formatted_cc + formatted_csp:
+                    t = sig.get('ticker', '')
+                    if t:
+                        unique_tickers.add(t)
+                for b in blocked_signals:
+                    t = b.get('ticker', '')
+                    if t:
+                        unique_tickers.add(t)
+                quality_cache = {}
+                for t in unique_tickers:
+                    try:
+                        quality_cache[t] = get_underlying_quality(t)
+                    except Exception:
+                        quality_cache[t] = None
+                for sig in formatted_signals + formatted_cc + formatted_csp:
+                    t = sig.get('ticker', '')
+                    q = quality_cache.get(t)
+                    if q:
+                        sig['underlying_quality'] = q['grade']
+                        sig['underlying_score'] = q['score']
+                        sig['underlying_warnings'] = q.get('warnings', [])
+                for b in blocked_signals:
+                    t = b.get('ticker', '')
+                    q = quality_cache.get(t)
+                    if q:
+                        b['underlying_quality'] = q['grade']
+                        b['underlying_score'] = q['score']
+                        b['underlying_warnings'] = q.get('warnings', [])
+            except Exception as exc:
+                logger.debug("Underlying quality gate skipped: %s", exc)
+
+            # Record scan ledger entry (non-blocking)
+            try:
+                top_signals = [
+                    {'ticker': s.get('ticker'), 'option_type': s.get('option_type'),
+                     'strike': s.get('strike'), 'score': s.get('score'),
+                     'annualized_return': s.get('annualized_return')}
+                    for s in formatted_signals[:5]
+                ]
+                blocked_summary = [
+                    {'ticker': b.get('ticker'), 'reason': b.get('blocked_reason', b.get('reason', '')),
+                     'option_type': b.get('option_type', '')}
+                    for b in blocked_signals[:10]
+                ]
+                entry = ScanLedgerEntry(
+                    scan_type="recommendations",
+                    config_hash=compute_config_hash(self.config or {}),
+                    portfolio_hash=compute_portfolio_hash(portfolio_context),
+                    elapsed_seconds=time.time() - start_time,
+                    total_candidates=len(all_candidates),
+                    passed_count=len(formatted_signals),
+                    blocked_count=len(blocked_signals),
+                    data_sources=extract_data_sources(portfolio_context, formatted_signals),
+                    top_signals=top_signals,
+                    blocked_candidates=blocked_summary,
+                )
+                ScanLedger(self.db).record(entry)
+            except Exception:
+                logger.debug("Scan ledger write skipped", exc_info=True)
+
             # Record surfaced signals for the evaluator (non-blocking)
             try:
                 evaluator_cfg = self.config.get('evaluator', {})
@@ -940,6 +1076,17 @@ class RecommendationEngine:
 
         except Exception as e:
             logger.exception(f"Error getting top signals: {e}")
+            try:
+                entry = ScanLedgerEntry(
+                    scan_type="recommendations",
+                    config_hash=compute_config_hash(self.config or {}),
+                    portfolio_hash="unknown",
+                    elapsed_seconds=time.time() - start_time,
+                    error_message=str(e),
+                )
+                ScanLedger(self.db).record(entry)
+            except Exception:
+                logger.debug("Scan ledger write skipped (scan error)", exc_info=True)
             return {'error': str(e)}
 
 

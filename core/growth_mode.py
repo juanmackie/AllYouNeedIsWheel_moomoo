@@ -6,8 +6,6 @@ risk metrics regardless of mode.  No longer a toggleable "mode" — these
 are always computed for every recommendation.
 """
 
-import math
-from typing import Optional
 
 
 # ---------------------------------------------------------------------------

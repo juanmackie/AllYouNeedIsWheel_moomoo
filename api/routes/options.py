@@ -10,11 +10,16 @@ from api.routes.source_policy import (
     build_account_source_policy,
     build_research_source_policy,
 )
-from api.routes.utils import error_response, success_response
+from api.routes.utils import (
+    error_response,
+    success_response,
+    normalize_ticker_list,
+    enforce_route_rate_limit,
+    opend_unavailable_response,
+)
 import traceback
 import logging
 import time
-import json
 import datetime
 import threading
 
@@ -114,6 +119,69 @@ def _normalize_top_recommendations_payload(payload):
     normalized['count'] = len(normalized.get('signals', []))
     return normalized
 
+
+def _attach_top_recommendations_policy(payload):
+    return attach_source_policy(
+        payload,
+        build_research_source_policy(
+            'top_recommendations',
+            payload,
+            fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
+        ),
+    )
+
+
+def _build_top_recommendations_cache_response(payload, cache_metadata, cache_status):
+    response_payload = _normalize_top_recommendations_payload(payload)
+    response_payload['_cache'] = cache_metadata
+    response_payload = _attach_top_recommendations_policy(response_payload)
+    response = jsonify(response_payload)
+    response.headers['X-Cache-Status'] = cache_status
+    response.headers['X-Cache-Age'] = str(cache_metadata.get('cache_age_seconds', 0))
+    return response, 200
+
+
+def _build_top_recommendations_generating_response():
+    return jsonify(_attach_top_recommendations_policy({
+        'generating': True,
+        'count': 0,
+        'signals': [],
+        'message': 'Signals are being computed. Check back shortly.',
+    })), 202
+
+
+def _build_top_recommendations_timeout_response():
+    return jsonify(_attach_top_recommendations_policy({
+        'success': True,
+        'generating': False,
+        'generation_timed_out': True,
+        'count': 0,
+        'signals': [],
+        'blocked_signals': [],
+        'blocked_reason_counts': {},
+        'generated_at': datetime.datetime.now().isoformat(),
+        'message': 'Signal generation is taking too long. Broker option-chain calls may be stalled.',
+    })), 200
+
+
+def _build_top_recommendations_stale_response(stale_result, stale_metadata, extra_cache_fields=None):
+    stale_payload = _normalize_top_recommendations_payload(stale_result)
+    cache_payload = {
+        'cache_status': 'STALE_FALLBACK',
+        'cache_age_seconds': stale_metadata.get('cache_age_seconds', 0),
+        'portfolio_changed': stale_metadata.get('portfolio_changed', False),
+        'is_valid': True,
+        'background_refresh_failed': False,
+        'cached_at': stale_metadata.get('cached_at', ''),
+    }
+    if extra_cache_fields:
+        cache_payload.update(extra_cache_fields)
+    stale_payload['_cache'] = cache_payload
+    stale_payload = _attach_top_recommendations_policy(stale_payload)
+    response = jsonify(stale_payload)
+    response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
+    return response, 200
+
 def _ensure_opend_available():
     connection_config = current_app.config.get('connection_config', {})
     status = probe_opend_status(
@@ -123,8 +191,7 @@ def _ensure_opend_available():
     if status.get('status') == 'connected':
         return None
 
-    error_code = 'opend_login_required' if status.get('status') == 'login_required' else 'opend_unavailable'
-    return error_response(status.get('message', 'OpenD is unavailable.'), status_code=503)
+    return opend_unavailable_response(status)
 
 
 @bp.route('/connection-status', methods=['GET'])
@@ -164,6 +231,9 @@ def otm_options():
     unavailable_response = _ensure_opend_available()
     if unavailable_response:
         return unavailable_response
+    allowed, retry_after = enforce_route_rate_limit('otm', request.remote_addr or 'local', max_requests=60, window_seconds=60)
+    if not allowed:
+        return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
 
     # Get parameters from request
     ticker = request.args.get('tickers')
@@ -179,6 +249,16 @@ def otm_options():
     # Validate option_type if provided
     if option_type and option_type not in ['CALL', 'PUT']:
         return error_response(f"Invalid option_type: {option_type}. Must be 'CALL' or 'PUT'", status_code=400)
+
+    valid_tickers, invalid_tickers = normalize_ticker_list(ticker or '')
+    if invalid_tickers:
+        return error_response(
+            f"Invalid ticker(s): {', '.join(invalid_tickers)}",
+            status_code=400,
+        )
+    ticker = valid_tickers[0] if valid_tickers else ''
+    if not ticker:
+        return error_response("No valid ticker provided", status_code=400)
 
     if option_type == 'PUT':
         connection_config = current_app.config.get('connection_config', {})
@@ -221,6 +301,9 @@ def get_stock_price():
     unavailable_response = _ensure_opend_available()
     if unavailable_response:
         return unavailable_response
+    allowed, retry_after = enforce_route_rate_limit('stock-price', request.remote_addr or 'local', max_requests=60, window_seconds=60)
+    if not allowed:
+        return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
 
     # Get ticker(s) from request
     tickers_param = request.args.get('tickers', '')
@@ -228,7 +311,14 @@ def get_stock_price():
         return error_response("No tickers provided", status_code=400)
     
     # Split tickers on commas if multiple are provided
-    tickers = [t.strip() for t in tickers_param.split(',')]
+    tickers, invalid_tickers = normalize_ticker_list(tickers_param)
+    if invalid_tickers:
+        return error_response(
+            f"Invalid ticker(s): {', '.join(invalid_tickers)}",
+            status_code=400,
+        )
+    if not tickers:
+        return error_response("No valid tickers provided", status_code=400)
     
     # Get stock prices for the tickers
     prices = {}
@@ -260,10 +350,20 @@ def get_option_expirations():
         unavailable_response = _ensure_opend_available()
         if unavailable_response:
             return unavailable_response
+        allowed, retry_after = enforce_route_rate_limit('expirations', request.remote_addr or 'local', max_requests=60, window_seconds=60)
+        if not allowed:
+            return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
 
         ticker = request.args.get('ticker')
-        if not ticker:
+        valid_tickers, invalid_tickers = normalize_ticker_list(ticker or '')
+        if invalid_tickers:
+            return error_response(
+                f"Invalid ticker(s): {', '.join(invalid_tickers)}",
+                status_code=400,
+            )
+        if not valid_tickers:
             return error_response("No ticker provided", status_code=400)
+        ticker = valid_tickers[0]
         
         option_type = request.args.get('option_type')
         if option_type:
@@ -313,6 +413,9 @@ def get_top_recommendations():
         unavailable_response = _ensure_opend_available()
         if unavailable_response:
             return unavailable_response
+        allowed, retry_after = enforce_route_rate_limit('top-recommendations', request.remote_addr or 'local', max_requests=30, window_seconds=60)
+        if not allowed:
+            return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
         
         # Get limit parameter (default 5)
         limit = request.args.get('limit', 5)
@@ -344,32 +447,22 @@ def get_top_recommendations():
         # Check cache unless manual refresh requested
         if not manual_refresh:
             cached_result, cache_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
-            
-            if cached_result is not None:
-                cached_result = _normalize_top_recommendations_payload(cached_result)
-                # Cache hit - add metadata to response
-                cached_result['_cache'] = cache_metadata
 
-                logger.info(f"Cache {cache_metadata['cache_status']} for top-recommendations "
-                          f"(age={cache_metadata['cache_age_seconds']}s, "
-                          f"portfolio_changed={cache_metadata['portfolio_changed']})")
-                
-                # If stale, trigger background refresh
+            if cached_result is not None:
+                logger.info(
+                    f"Cache {cache_metadata['cache_status']} for top-recommendations "
+                    f"(age={cache_metadata['cache_age_seconds']}s, "
+                    f"portfolio_changed={cache_metadata['portfolio_changed']})"
+                )
+
                 if cache_metadata['cache_status'] == 'STALE':
                     _trigger_background_refresh(cache_key, limit, current_portfolio_hash)
-                
-                cached_result = attach_source_policy(
+
+                return _build_top_recommendations_cache_response(
                     cached_result,
-                    build_research_source_policy(
-                        'top_recommendations',
-                        cached_result,
-                        fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
-                    ),
+                    cache_metadata,
+                    cache_metadata['cache_status'],
                 )
-                response = jsonify(cached_result)
-                response.headers['X-Cache-Status'] = cache_metadata['cache_status']
-                response.headers['X-Cache-Age'] = str(cache_metadata['cache_age_seconds'])
-                return response, 200
         
         # Cache miss or manual refresh — generate in background instead of blocking
         logger.info(f"Generating fresh top recommendations in background (manual_refresh={manual_refresh})")
@@ -379,27 +472,8 @@ def get_top_recommendations():
         try:
             stale_result, stale_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
             if stale_result is not None and stale_metadata.get('cache_status') in ('STALE', 'HIT'):
-                stale_result = _normalize_top_recommendations_payload(stale_result)
-                stale_result['_cache'] = {
-                    'cache_status': 'STALE_FALLBACK',
-                    'cache_age_seconds': stale_metadata.get('cache_age_seconds', 0),
-                    'portfolio_changed': stale_metadata.get('portfolio_changed', False),
-                    'is_valid': True,
-                    'background_refresh_failed': False,
-                    'cached_at': stale_metadata.get('cached_at', ''),
-                }
                 logger.info("Returning stale cached signals while generating fresh data")
-                stale_result = attach_source_policy(
-                    stale_result,
-                    build_research_source_policy(
-                        'top_recommendations',
-                        stale_result,
-                        fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
-                    ),
-                )
-                response = jsonify(stale_result)
-                response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
-                return response, 200
+                return _build_top_recommendations_stale_response(stale_result, stale_metadata)
         except Exception:
             logger.warning("Stale cache fallback for top_recommendations failed", exc_info=True)
         # No stale data at all — return generating signal immediately
@@ -408,64 +482,28 @@ def get_top_recommendations():
                 "Top recommendations generation has been in flight for %.1fs; returning timeout diagnostic",
                 generation_age,
             )
-            return jsonify(attach_source_policy({
-                'success': True,
-                'generating': False,
-                'generation_timed_out': True,
-                'count': 0,
-                'signals': [],
-                'blocked_signals': [],
-                'blocked_reason_counts': {},
-                'generated_at': datetime.datetime.now().isoformat(),
-                'message': 'Signal generation is taking too long. Broker option-chain calls may be stalled.',
-            }, build_research_source_policy(
-                'top_recommendations',
-                {},
-                fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
-            ))), 200
+            return _build_top_recommendations_timeout_response()
 
-        generating_response = jsonify(attach_source_policy({
-            'generating': True,
-            'count': 0,
-            'signals': [],
-            'message': 'Signals are being computed. Check back shortly.',
-        }, build_research_source_policy(
-            'top_recommendations',
-            {},
-            fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
-        )))
         logger.info("No cache available — returning generating signal to frontend")
-        return generating_response, 202
+        return _build_top_recommendations_generating_response()
 
     except Exception as e:
         logger.error(f"Error getting top recommendations: {str(e)}")
         logger.error(traceback.format_exc())
         # Last resort: try to return any stale cache
         try:
-            stale_result, _ = recommendation_cache.get(cache_key, current_portfolio_hash)
+            stale_result, stale_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
             if stale_result is not None:
-                stale_result = _normalize_top_recommendations_payload(stale_result)
                 logger.warning("Returning stale cached signals as last-resort fallback")
-                stale_result['_cache'] = {
-                    'cache_status': 'STALE_FALLBACK',
-                    'cache_age_seconds': stale_result.get('_cache', {}).get('cache_age_seconds', 0),
-                    'portfolio_changed': False,
-                    'is_valid': True,
-                    'background_refresh_failed': True,
-                    'cached_at': stale_result.get('_cache', {}).get('cached_at', ''),
-                    'error': str(e)
-                }
-                stale_result = attach_source_policy(
+                response, status_code = _build_top_recommendations_stale_response(
                     stale_result,
-                    build_research_source_policy(
-                        'top_recommendations',
-                        stale_result,
-                        fallback_sources_allowed=['yfinance', 'openbb', 'alpha_vantage'],
-                    ),
+                    stale_metadata,
+                    {
+                        'background_refresh_failed': True,
+                        'error': str(e),
+                    },
                 )
-                response = jsonify(stale_result)
-                response.headers['X-Cache-Status'] = 'STALE_FALLBACK'
-                return response, 200
+                return response, status_code
         except Exception:
             logger.warning("Research stale cache fallback for top_recommendations failed", exc_info=True)
         return jsonify({"error": str(e)}), 500
@@ -474,6 +512,7 @@ def get_top_recommendations():
 _catalyst_watch_svc = None
 _catalyst_scan_lock = threading.Lock()
 _catalyst_cache: dict[str, tuple[dict, float]] = {}
+CATALYST_SYNC_WAIT_SECONDS = 25
 
 def _catalyst_cache_key(limit, min_pn, min_volume, min_fresh, max_scan_tickers, max_expirations):
     """Build deterministic cache key from query parameters."""
@@ -666,7 +705,7 @@ def catalyst_watch():
         # No cache for these params: run scan synchronously with generous timeout
         t = threading.Thread(target=_bg_scan, daemon=True)
         t.start()
-        t.join(timeout=45)
+        t.join(timeout=CATALYST_SYNC_WAIT_SECONDS)
 
         if ck in _catalyst_cache:
             cached_result, _ = _catalyst_cache[ck]

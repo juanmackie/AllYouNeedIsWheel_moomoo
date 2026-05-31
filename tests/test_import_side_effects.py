@@ -3,12 +3,11 @@ Smoke tests for import side effects.
 Verifies that importing modules does not trigger moomoo SDK side effects
 (e.g., file logging to C:\\Users\\...\\py_*.log).
 """
-import sys
 import os
-import tempfile
+import sys
+import importlib
 import unittest
 from unittest.mock import patch, MagicMock
-import shutil
 
 
 class TestCoreImport(unittest.TestCase):
@@ -18,16 +17,17 @@ class TestCoreImport(unittest.TestCase):
         """Importing core should not trigger moomoo SDK logging."""
         # Capture any file writes to the moomoo log directory
         moomoo_log_dir = os.path.expanduser('~/AppData/Roaming/com.moomoo.OpenD/Log')
-        
-        # Count log files before import
+
+        # Force a fresh import so the test actually exercises module import side effects.
+        for name in [module_name for module_name in list(sys.modules) if module_name == 'core' or module_name.startswith('core.')]:
+            sys.modules.pop(name, None)
+
         before = 0
         if os.path.exists(moomoo_log_dir):
             before = len([f for f in os.listdir(moomoo_log_dir) if f.startswith('py_')])
-        
-        # Import core (should use lazy loading for MoomooConnection)
-        import core
-        
-        # Count log files after import
+
+        importlib.import_module('core')
+
         after = 0
         if os.path.exists(moomoo_log_dir):
             after = len([f for f in os.listdir(moomoo_log_dir) if f.startswith('py_')])
@@ -49,7 +49,7 @@ class TestCoreImport(unittest.TestCase):
     def test_import_core_utils_no_moomoo(self):
         """Importing core.utils should not import moomoo."""
         # core.utils is pure - should not trigger moomoo import
-        from core import get_closest_friday, get_next_monthly_expiration
+        from core import get_closest_friday
         self.assertTrue(callable(get_closest_friday))
 
     def test_import_core_scoring_factors_no_moomoo(self):
@@ -74,17 +74,14 @@ class TestAPIImport(unittest.TestCase):
         """Importing service modules should not trigger moomoo SDK."""
         # These modules use lazy imports - patch core.connection instead
         with patch('core.connection.MoomooConnection', MagicMock()):
-            # Import inside patch context to avoid side effects
-            from api.services import portfolio_service
-            from api.services import options_data
-        
-        # If we got here without errors, imports succeeded
-        self.assertTrue(True)
+            module = importlib.import_module('api.services.options_service')
+
+        self.assertTrue(hasattr(module, 'OptionsService'))
 
     def test_import_wheel_decision_no_moomoo_side_effects(self):
         """Importing core.wheel_decision should not trigger moomoo SDK."""
         with patch('core.connection.MoomooConnection', MagicMock()):
-            from core.wheel_decision import score_contract, WheelDecision
+            from core.wheel_decision import score_contract
             self.assertTrue(callable(score_contract))
 
 

@@ -48,8 +48,10 @@ def _get_client():
 def build_advisor_context():
     """
     Gather portfolio, positions, opportunities, and macro context
-    into a structured dictionary for prompt construction.
+    into a structured dictionary for evidence-gated prompt construction.
     """
+    from core.evidence_gated_advisor import build_evidence_from_context
+
     context = {
         'portfolio': {},
         'positions': [],
@@ -105,7 +107,6 @@ def build_advisor_context():
             for p in (portfolio_svc.get_positions('STK') or [])
         }
 
-        # Minimal portfolio context for scorer
         macro = get_macro_service().get_macro_regime()
         pf_context = {
             'positions': positions_map,
@@ -128,7 +129,7 @@ def build_advisor_context():
             ticker = _bare_ticker(pos.get('symbol', ''))
             qty = int(pos.get('position', 0) or 0)
             if qty >= 0:
-                continue  # only short options matter
+                continue
 
             try:
                 from api import get_service
@@ -240,92 +241,14 @@ def build_advisor_context():
 
 
 def format_prompt(context):
-    """Convert the context dict into a readable prompt for the LLM."""
-    lines = []
-    pf = context['portfolio']
-    pos = context['positions']
-    opt = context['scored_positions']
-    opp = context['opportunities']
-    macro = context['macro']
-    vix = context['vix']
-
-    # Portfolio snapshot
-    lines.append("=== PORTFOLIO ===")
-    lines.append(f"USERS Current date/time: {context.get('current_datetime', 'N/A')}")
-    lines.append(f"Account value: ${pf.get('account_value', 0):,.2f}")
-    lines.append(f"Available cash: ${pf.get('available_cash', 0):,.2f}")
-
-    if pos:
-        lines.append("\nStock positions:")
-        for s in pos:
-            lines.append(
-                f"  {s['ticker']}: {s['shares']} shares "
-                f"@ ${s['avg_cost']:.2f} avg, "
-                f"current ${s['market_price']:.2f}"
-            )
-
-    # Open short options (scored)
-    if opt:
-        lines.append("\nOpen short options:")
-        for o in sorted(opt, key=lambda x: x['roll_pressure'], reverse=True):
-            lines.append(
-                f"  {o['ticker']} {o['option_type']} ${o['strike']:.1f} "
-                f"exp {o['expiration']} DTE={o['dte']} | "
-                f"stock=${o['stock_price']:.2f} OTM={o['otm_pct']:.1f}% | "
-                f"mid=${o['mid_price']:.2f} roll_pressure={o['roll_pressure']:.0f}% "
-                f"profit_progress={o['profit_target_progress']:.0f}%"
-            )
-            if o.get('warnings'):
-                for w in o['warnings']:
-                    lines.append(f"    ⚠ {w}")
-    else:
-        lines.append("\nNo open short options.")
-
-    # Opportunities
-    if opp:
-        lines.append("\n=== TOP OPPORTUNITIES ===")
-        for i, r in enumerate(opp):
-            lines.append(
-                f"  #{i+1} {r['ticker']} {r['option_type']} ${r['strike']:.1f} "
-                f"exp {r['expiration']} | "
-                f"premium=${r['premium_per_contract']:.2f} "
-                f"delta={r['delta']:.3f} "
-                f"DTE={r['dte']} "
-                f"ann_return={r['annualized_return']:.1f}% "
-                f"score={r['score']:.0f}"
-            )
-    else:
-        lines.append("\nNo top opportunities available.")
-
-    # Market context
-    lines.append("\n=== MARKET CONTEXT ===")
-    if vix:
-        lines.append(
-            f"VIX: {vix.get('vix', 'N/A')} "
-            f"({vix.get('regime', 'unknown')}) — "
-            f"{vix.get('description', '')}"
-        )
-    if macro:
-        lines.append(
-            f"Macro: rates {macro.get('rate_regime', 'unknown')}, "
-            f"credit stress {macro.get('credit_stress', 'unknown')}, "
-            f"growth {macro.get('growth_regime', 'unknown')}, "
-            f"inflation {macro.get('inflation_trend', 'unknown')}"
-        )
-        lines.append(f"Yield curve: {macro.get('yield_curve_slope', 'N/A')}")
-        lines.append(f"Summary: {macro.get('summary', 'N/A')}")
-        lines.append(f"Wheel advice: {macro.get('advice', 'N/A')}")
-
-    lines.append("\n---")
-    lines.append(
-        "Based on the data above, provide specific trade suggestions for: "
-        "OPENING new covered calls or CSPs, CLOSING positions that have reached "
-        "profit targets, and ROLLING positions under pressure. "
-        "For each suggestion, mention the ticker, strike, expiration, and rationale. "
-        "Keep the response concise and actionable."
-    )
-
-    return '\n'.join(lines)
+    """
+    Build an evidence-gated prompt for the LLM.
+    The LLM may ONLY reference evidence surfaced here.
+    If evidence is missing, answer 'unknown'.
+    """
+    from core.evidence_gated_advisor import build_evidence_from_context
+    evidence = build_evidence_from_context(context)
+    return evidence.to_prompt()
 
 
 def get_suggestions():
@@ -369,11 +292,14 @@ def get_suggestions():
 
     system_prompt = (
         "You are an expert options wheel strategy advisor. "
-        "Analyze the trading data below and give specific, actionable suggestions "
-        "for trade opens, closes, and rolls. Use a balanced risk stance: follow "
-        "standard wheel mechanics, close at 50% profit, roll at 21 DTE or when "
-        "strike is threatened. Be concise. Mention ticker, strike, expiration, "
-        "and brief rationale for each suggestion."
+        "You MUST follow these rules strictly:\n"
+        "1. You may ONLY reference evidence provided below in the [EVIDENCE] section.\n"
+        "2. If evidence for a category says 'unknown', answer 'unknown' — do NOT infer.\n"
+        "3. For each suggestion, cite the specific evidence that supports it.\n"
+        "4. Use a balanced risk stance: follow standard wheel mechanics, "
+        "close at 50% profit, roll at 21 DTE or when strike is threatened.\n"
+        "5. Be concise. Mention ticker, strike, expiration, and brief rationale.\n"
+        "6. Never mention data, news, or analysis that is not in the evidence block."
     )
 
     try:

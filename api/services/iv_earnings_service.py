@@ -1,16 +1,15 @@
 """
 IV Tracking and Earnings Service
 Manages implied volatility history and earnings calendar data
-Uses Alpha Vantage -> OpenBB -> yfinance provider chain
+Uses Alpha Vantage -> optional enrichment -> yfinance provider chain
 """
 
-import os
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
-import traceback
-from api.services.utils import clean_yfinance_ticker
+from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
 from api.services.alpha_vantage_provider import AlphaVantageEarningsProvider
 
 logger = logging.getLogger('api.services.iv_tracking')
@@ -167,7 +166,7 @@ class IVEarningsService:
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
         Fetch earnings date using provider chain:
-        Alpha Vantage -> OpenBB -> yfinance.
+        Alpha Vantage -> optional enrichment -> yfinance.
         """
         clean_ticker = self._strip_moomoo_prefix(ticker)
 
@@ -189,9 +188,9 @@ class IVEarningsService:
                             'error': None,
                         }
             except Exception as e:
-                logger.debug(f"Alpha Vantage earnings lookup failed for {clean_ticker}: {e}")
+                logger.warning(f"Alpha Vantage earnings lookup failed for {clean_ticker}: {e}")
 
-        # --- Provider 2: OpenBB ---
+        # --- Provider 2: optional enrichment ---
         try:
             from openbb import obb
             result = obb.equity.earnings.calendar(symbol=clean_ticker)
@@ -212,17 +211,16 @@ class IVEarningsService:
                             'fiscal_date_ending': None,
                             'estimate': None,
                             'currency': None,
-                            'earnings_source': 'OpenBB',
+                            'earnings_source': 'optional_enrichment',
                             'error': None,
                         }
         except Exception as e:
-            logger.debug(f"OpenBB earnings fetch failed for {clean_ticker}, falling back to yfinance: {e}")
+            logger.warning(f"Optional enrichment earnings fetch failed for {clean_ticker}, falling back to yfinance: {e}")
 
         # --- Provider 3: yfinance ---
         try:
-            import yfinance as yf
             time.sleep(1)
-            stock = yf.Ticker(clean_ticker)
+            stock = get_yfinance_ticker(clean_ticker)
 
             try:
                 earnings_df = stock.get_earnings_dates(limit=1)
@@ -247,7 +245,7 @@ class IVEarningsService:
                                         'error': None,
                                     }
             except Exception as e:
-                logger.debug(f"get_earnings_dates failed for {clean_ticker}: {e}")
+                logger.warning(f"get_earnings_dates failed for {clean_ticker}: {e}")
 
             try:
                 info = stock.info
@@ -270,7 +268,7 @@ class IVEarningsService:
                                 'error': None,
                             }
             except Exception as e:
-                logger.debug(f"stock.info earnings check failed for {clean_ticker}: {e}")
+                logger.warning(f"stock.info earnings check failed for {clean_ticker}: {e}")
         except Exception as e:
             logger.warning(f"yfinance fallback failed for {clean_ticker}: {e}")
 
@@ -282,7 +280,7 @@ class IVEarningsService:
             'estimate': None,
             'currency': None,
             'earnings_source': None,
-            'error': "No data from Alpha Vantage, OpenBB, or yfinance"
+            'error': "No data from Alpha Vantage, optional enrichment, or yfinance"
         }
 
     def update_earnings_data(self, ticker: str) -> bool:
@@ -495,20 +493,49 @@ class IVEarningsService:
         successful = 0
         failed = 0
         errors = []
-        
-        for ticker in tickers:
-            if self.update_earnings_data(ticker):
-                successful += 1
-            else:
-                failed += 1
-                errors.append(f"{ticker}: Failed to fetch earnings")
-        
-        logger.info(f"Batch earnings update complete: {successful} successful, {failed} failed")
-        
+
+        if not tickers:
+            return {
+                'successful': 0,
+                'failed': 0,
+                'errors': [],
+                'status': 'empty',
+            }
+
+        max_workers = min(8, max(1, len(tickers)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(self.update_earnings_data, ticker): ticker
+                for ticker in tickers
+            }
+            for future in as_completed(future_map):
+                ticker = future_map[future]
+                try:
+                    if future.result():
+                        successful += 1
+                    else:
+                        failed += 1
+                        errors.append(f"{ticker}: Failed to fetch earnings")
+                except Exception as e:
+                    failed += 1
+                    errors.append(f"{ticker}: {e}")
+
+        status = 'success' if failed == 0 else 'partial' if successful > 0 else 'failed'
+        if errors:
+            logger.warning(
+                "Batch earnings update completed with %d success, %d failures: %s",
+                successful,
+                failed,
+                errors[:5],
+            )
+        else:
+            logger.info(f"Batch earnings update complete: {successful} successful, {failed} failed")
+
         return {
             'successful': successful,
             'failed': failed,
-            'errors': errors
+            'errors': errors,
+            'status': status,
         }
     
     def purge_old_data(self):

@@ -113,6 +113,21 @@ class TestComputeRollPressure(unittest.TestCase):
         self.assertGreater(pressure, 50.0)
         self.assertLessEqual(pressure, 100.0)
 
+    def test_high_theta_increases_pressure(self):
+        """Test that theta decay increases roll pressure"""
+        base = WheelDecision(
+            option_type="PUT", dte=30, strike=95.0, stock_price=100.0,
+            mid_price=2.0, extrinsic_remaining=1.50, theta=-0.10,
+        )
+        high_theta = WheelDecision(
+            option_type="PUT", dte=30, strike=95.0, stock_price=100.0,
+            mid_price=2.0, extrinsic_remaining=1.50, theta=-0.80,
+        )
+        self.assertGreater(
+            _compute_roll_pressure(high_theta),
+            _compute_roll_pressure(base),
+        )
+
 
 class TestComputeProfitTargetProgress(unittest.TestCase):
     """Test _compute_profit_target_progress function"""
@@ -954,6 +969,94 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
             'liquidity_weight_multiplier': 1.0,
             'profile_type': 'monthly',
         }
+
+    def test_regression_earnings_lock_today(self):
+        """Earnings today must produce a warning regardless of score — regression guard."""
+        future_date = (datetime.now() + timedelta(days=21)).strftime('%Y%m%d')
+        opt = dict(self.base_option, expiration=future_date)
+        portfolio = {
+            'positions': {}, 'cash_balance': 50000.0, 'account_value': 100000.0,
+            'available_cash': 50000.0, 'cash_available_for_csp': 50000.0,
+            'broker_buying_power': 50000.0, 'short_puts': {},
+        }
+        result = score_contract(
+            ticker="AAPL",
+            option=opt,
+            stock_price=100.0,
+            profile=self.base_profile,
+            portfolio_context=portfolio,
+            earnings_info={'warning_level': 'today', 'days_to_earnings': 0},
+        )
+        self.assertIsNotNone(result)
+        self.assertIn('EARNINGS TODAY', ' '.join(result.warnings))
+
+    def test_regression_low_iv_still_scores(self):
+        """Low IV should warn but not hard-block a valid contract — regression guard."""
+        future_date = (datetime.now() + timedelta(days=30)).strftime('%Y%m%d')
+        opt = dict(self.base_option, expiration=future_date,
+                   implied_volatility=0.10)
+        portfolio = {
+            'positions': {}, 'cash_balance': 50000.0, 'account_value': 100000.0,
+            'available_cash': 50000.0, 'cash_available_for_csp': 50000.0,
+            'broker_buying_power': 50000.0, 'short_puts': {},
+        }
+        result = score_contract(
+            ticker="AAPL",
+            option=opt,
+            stock_price=100.0,
+            profile=self.base_profile,
+            portfolio_context=portfolio,
+            iv_rank=0.15, iv_status_str='low',
+        )
+        self.assertIsNotNone(result)
+        self.assertFalse(result.hard_blockers, "Low IV should not hard-block")
+        warning_text = ' '.join(result.warnings)
+        self.assertTrue('IV below average' in warning_text or 'IV' in warning_text)
+
+    def test_regression_stale_quote_yfinance_fallback(self):
+        """Stale quotes from yfinance must be flagged — regression guard."""
+        from core.wheel_decision import _is_quote_stale
+        stale = _is_quote_stale({'quote_timestamp': '2020-01-01T00:00:00'}, from_yfinance=False)
+        self.assertTrue(stale)
+        not_stale = _is_quote_stale({'quote_timestamp': datetime.now().isoformat()}, from_yfinance=False)
+        self.assertFalse(not_stale)
+        missing_ts = _is_quote_stale({}, from_yfinance=False)
+        self.assertFalse(missing_ts)
+        yfinance_always_stale = _is_quote_stale({}, from_yfinance=True)
+        self.assertTrue(yfinance_always_stale)
+
+    def test_regression_wide_spread_hard_blocks(self):
+        """Wide spread must hard-block with reason code — regression guard."""
+        future_date = (datetime.now() + timedelta(days=21)).strftime('%Y%m%d')
+        opt = dict(self.base_option, expiration=future_date,
+                   bid=0.3, ask=2.5)
+        portfolio = {
+            'positions': {}, 'cash_balance': 50000.0, 'account_value': 100000.0,
+            'available_cash': 50000.0, 'cash_available_for_csp': 50000.0,
+            'broker_buying_power': 50000.0, 'short_puts': {},
+        }
+        result = score_contract(
+            ticker="AAPL", option=opt, stock_price=100.0,
+            profile=self.base_profile, portfolio_context=portfolio,
+        )
+        self.assertTrue(result.hard_blockers)
+        self.assertIn('wide_spread', result.blocked_reason_codes)
+
+    def test_regression_insufficient_cash_hard_blocks(self):
+        """Insufficient cash must hard-block — regression guard."""
+        future_date = (datetime.now() + timedelta(days=21)).strftime('%Y%m%d')
+        opt = dict(self.base_option, expiration=future_date, strike=500.0)
+        portfolio = {
+            'positions': {}, 'cash_balance': 100.0, 'account_value': 100000.0,
+            'available_cash': 100.0, 'cash_available_for_csp': 100.0,
+            'broker_buying_power': 100.0, 'short_puts': {},
+        }
+        result = score_contract(
+            ticker="AAPL", option=opt, stock_price=550.0,
+            profile=self.base_profile, portfolio_context=portfolio,
+        )
+        self.assertTrue(result.hard_blockers)
+        self.assertTrue(any('Insufficient cash' in b for b in result.hard_blockers))
 
     def test_short_puts_reduce_csp_buying_power(self):
         """Existing short puts should reduce cash_available_for_csp, blocking new CSPs."""

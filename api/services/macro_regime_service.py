@@ -9,7 +9,7 @@ FRED API Key (free): https://fred.stlouisfed.org/docs/api/api_key.html
 import logging
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Dict, Any, TypedDict
 
 logger = logging.getLogger('api.services.macro_regime')

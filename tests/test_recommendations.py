@@ -8,6 +8,8 @@ import sys
 import os
 from datetime import datetime, timedelta
 
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -437,6 +439,23 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertNotIn('recommendations', result)
         self.assertNotIn('best_plays', result)
         self.assertNotIn('lanes', result)
+
+    def test_yfinance_csp_skips_chain_when_cash_cannot_support_target_strike(self):
+        """Low CSP buying power should bail out before option-chain fetches."""
+        engine = self._import_engine()
+        portfolio_context = dict(self.mock_portfolio_context)
+        portfolio_context['cash_available_for_csp'] = 100.0
+
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = pd.DataFrame({'Close': [200.0]})
+
+        with patch('api.services.recommendations.get_yfinance_ticker', return_value=mock_ticker):
+            result = engine._fetch_yfinance_csp_candidates('AAPL', portfolio_context)
+
+        self.assertEqual(len(result), 1)
+        self.assertTrue(result[0].get('_skip_diagnostic'))
+        self.assertEqual(result[0]['reason_code'], 'no_cash_fit')
+        mock_ticker.option_chain.assert_not_called()
 
 
 
@@ -1153,7 +1172,6 @@ class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
             self.mock_cash_calculator,
         )
 
-        from core.wheel_decision import WheelDecision, _create_failed_decision
 
         with patch.object(engine, '_fetch_watchlist_csp_moomoo') as mock_fetch:
             # Return a candidate that score_contract would normally block for no_bid

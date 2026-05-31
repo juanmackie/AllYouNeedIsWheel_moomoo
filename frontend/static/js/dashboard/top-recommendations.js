@@ -222,6 +222,19 @@ function createRecommendationCard(rec) {
     confidenceBadge.textContent = ci.label;
     confidenceBadge.classList.add(ci.class);
 
+    // Underlying quality badge
+    const qualityBadge = clone.querySelector('.underlying-quality-badge');
+    if (rec.underlying_quality && rec.underlying_quality !== 'unknown') {
+        const qualityClasses = { strong: 'bg-success', mixed: 'bg-info', weak: 'bg-danger' };
+        const qualityLabels = { strong: 'Strong underlying', mixed: 'Mixed underlying', weak: 'Weak underlying' };
+        qualityBadge.textContent = qualityLabels[rec.underlying_quality] || rec.underlying_quality;
+        qualityBadge.classList.add(qualityClasses[rec.underlying_quality] || 'bg-secondary');
+        qualityBadge.classList.remove('d-none');
+        if (rec.underlying_warnings && rec.underlying_warnings.length > 0 && rec.underlying_warnings[0] !== 'none') {
+            qualityBadge.title = rec.underlying_warnings.join(', ');
+        }
+    }
+
     // Data source + freshness
     const sourceEl = clone.querySelector('.signal-data-source');
     const sourceInfo = getDataSourceInfo(rec);
@@ -464,14 +477,15 @@ function showEmpty() {
 
 /**
  * Show error state
+ * @param {string} message - Optional custom error message
  */
-function showError() {
+function showError(message) {
     resetGeneratingRetryState();
     if (loadingBannerId) {
         failPanelLoading(loadingBannerId, 'Unable to load signals');
         loadingBannerId = null;
     }
-    StateModel.showError('top-recommendations-state', 'Unable to load signals.', () => loadTopRecommendations());
+    StateModel.showError('top-recommendations-state', message || 'Unable to load signals.', () => loadTopRecommendations());
     document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
@@ -766,6 +780,9 @@ export async function loadTopRecommendations(manualRefresh = false) {
             if (result.timedOut) {
                 console.warn('Top recommendations timed out — showing generating state');
                 showGenerating();
+            } else if (result.error_code && ['opend_unavailable', 'opend_login_required', 'real_account_unavailable'].includes(result.error_code)) {
+                console.warn('Top recommendations: OpenD unavailable:', result.error);
+                showError('OpenD unavailable — login required to view wheel signals.');
             } else {
                 console.error('Error loading top recommendations:', result.error);
                 showError();
@@ -775,7 +792,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
         
         // Backend is still generating — don't replace what's on screen
         if (result.generating) {
-            console.warn('Top recommendations: backend is generating fresh data');
+            console.debug('Top recommendations: backend is generating fresh data');
             showGenerating();
             return;
         }

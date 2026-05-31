@@ -85,7 +85,7 @@ export async function fetchTopRecommendations(limit = 3, manualRefresh = false) 
         const response = await fetchWithTimeout(url, {}, 30000);
         if (!response.ok) {
             const payload = await readJsonSafely(response);
-            if (isOpenDUnavailable(payload)) { setConnectionStatusFromPayload(payload); return { signals: [], count: 0, error: payload?.error || 'OpenD unavailable' }; }
+            if (isOpenDUnavailable(payload)) { setConnectionStatusFromPayload(payload); return { signals: [], count: 0, error: payload?.error || 'OpenD unavailable', error_code: payload?.error_code }; }
             throw new Error(payload?.error || `HTTP error ${response.status}`);
         }
         clearUnavailableStatus();

@@ -5,7 +5,7 @@ Exposes ATR-based position sizing via REST API.
 
 import logging
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from api.routes.utils import error_response, success_response
 from api.services.risk_sizing_service import get_risk_sizing_service
 

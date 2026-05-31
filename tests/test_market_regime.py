@@ -88,8 +88,22 @@ class TestMarketRegimeGetVixRegime(unittest.TestCase):
                 self.assertEqual(result['regime'], 'normal')
                 self.assertEqual(result['vix'], 20.0)
 
+    def test_openbb_disabled_skips_openbb_path(self):
+        self.regime.config['openbb_enabled'] = False
+        with patch.object(self.regime, '_get_openbb_service') as mock_get_openbb:
+            with patch('yfinance.Ticker') as mock_ticker:
+                mock_hist = MagicMock()
+                mock_hist.empty = False
+                mock_hist.__getitem__('Close').iloc.__getitem__.return_value = 21.0
+                mock_ticker.return_value.history.return_value = mock_hist
+
+                result = self.regime.get_vix_regime()
+
+                self.assertEqual(result['regime'], 'normal')
+                mock_get_openbb.assert_not_called()
+
     def test_cache_hit_returns_cached(self):
-        from datetime import datetime, timedelta
+        from datetime import datetime
         cached_entry = {
             'data': {'vix': 25.0, 'regime': 'normal', 'delta_adjustment': 0.0, 'exposure_multiplier': 1.0, 'description': 'test'},
             'timestamp': datetime.now()

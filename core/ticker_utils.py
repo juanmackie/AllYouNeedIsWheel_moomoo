@@ -5,7 +5,6 @@ Extracted from core/connection.py for maintainability.
 
 import time
 import threading
-import logging
 
 from core.logging_config import get_logger
 

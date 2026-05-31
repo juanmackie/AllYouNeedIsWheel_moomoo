@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.0] - 2026-05-31
+
+### Added
+- **Ape Wisdom Catalyst Expansion** â€” Catalyst Watch can now widen its scan universe with Ape Wisdom social momentum from `all-stocks`, then confirm candidates with broker-side options flow before surfacing signals.
+- **Social Context on Confirmed Signals** â€” Matching catalyst signals now include compact Ape Wisdom metadata (`rank`, `mentions`, `upvotes`, and momentum score) when social momentum was part of the scan.
+- **Catalyst Watch Docs** â€” README, API reference, scoring notes, test README, and local env examples now describe the social expansion path and its research-only guardrails.
+
+### Fixed
+- **Ape Wisdom Cache Lifetime** â€” The social client now stays attached to `CatalystFlowService`, so the 5-minute cache actually survives repeated route calls instead of resetting every request.
+- **Failure Semantics** â€” Ape Wisdom fetch failures no longer poison the cache with an empty result; future requests keep retrying normally.
+
+### Changed
+- **Social Boost Ordering** â€” Ape Wisdom context is attached and the light score bump is applied before the final sort, so boosted signals are ranked correctly.
+- **Config Cleanup** â€” Reverted an unrelated evaluator feedback flag flip while documenting the new `catalyst_flow.apewisdom` config block.
+
 ## [2.1.0] - 2026-05-24
 
 ### Added
@@ -29,10 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - **Shared TTL Cache Utility** — `core/ttl_cache.py` provides `make_ttl_cache(maxsize, ttl)`, wrapping `cachetools.TTLCache` with a built-in `OrderedDict` fallback so the rest of the codebase can use one-liner caches without duplicating expiry/eviction logic.
 - **Pydantic Request Validation** — `api/routes/risk.py` and `api/routes/pop.py` now define `BaseModel` schemas with `field_validator` normalizers (case-stripped tickers, type coercion, invalid-option-type rejection), replacing hand-parsed `request.args` and `request.get_json` calls.
-- **Test Coverage for Cache & Validation** — `test_routes_validation.py`, `test_risk_sizing.py`, `test_openbb_service.py`, `test_technical_regime.py`, `test_pop_service.py`.
+- **Test Coverage for Cache & Validation** — `test_routes_validation.py`, `test_risk_sizing.py`, `test_technical_regime.py`, `test_pop_service.py`.
 
 ### Changed
-- `openbb_service`, `risk_sizing_service`, `tvscreener_service`, `technical_regime_service` — Replaced hand-rolled timestamp-dict caches with `make_ttl_cache()` from `core/ttl_cache.py`. Each service now declares `maxsize` and `ttl` in its constructor, removing ~15 lines of repeated expiry plumbing per file.
+- optional enrichment, `risk_sizing_service`, `tvscreener_service`, `technical_regime_service` — Replaced hand-rolled timestamp-dict caches with `make_ttl_cache()` from `core/ttl_cache.py`. Each service now declares `maxsize` and `ttl` in its constructor, removing ~15 lines of repeated expiry plumbing per file.
 - `requirements.txt`, `pyproject.toml` — Added `cachetools>=5.3.0` and `pydantic>=2.0.0`.
 - `README.md` — Project structure updated.
 - `tests/README.md` — Test file table updated.
@@ -59,7 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **New Service Module:** `api/services/iv_earnings_service.py`
 
 ### Added - Phase 3: Macro Regime & VIX Detection
-- **VIX Market Regime** — Fetches VIX from OpenBB (primary) or yfinance (fallback), adjusts delta targets by regime
+- **VIX Market Regime** — Uses yfinance by default, with optional enrichment when explicitly enabled; adjusts delta targets by regime
 - **Macro Regime Detection** — FRED-powered economic context (rates, credit stress, growth, inflation) with score multiplier (0.80x–1.05x)
 - **New API Endpoints:** `/api/options/vix-regime`, `/api/macro/regime`, `/api/macro/cache/status`, `/api/macro/cache/clear`
 
@@ -74,7 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - **FRED API Key Configuration** — Added `FRED_API_KEY` to `.env.example` with setup instructions
-- **yfinance VIX Fallback** — VIX data fetched from yfinance (`^VIX`) when OpenBB fails
+- **yfinance VIX Fallback** — VIX data fetched from yfinance (`^VIX`) when optional enrichment is unavailable
 - **Thread Optimization** — Replaced CPU sleep loops with `threading.Event.wait()`
 - **Graceful Shutdown** — `atexit` handlers stop background threads cleanly
 - **Path Resolution** — Database path always resolves relative to project root
@@ -105,7 +120,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 - **Dependencies:** Added `yfinance>=0.2.28` to requirements.txt
-- **Error Logging:** OpenBB VIX failures now logged as DEBUG (not WARNING) for graceful degradation
+- **Error Logging:** Optional enrichment VIX failures now logged as DEBUG (not WARNING) for graceful degradation
 
 ---
 
@@ -169,4 +184,4 @@ This project follows [Semantic Versioning](https://semver.org/):
 - **MINOR** — New features, backward compatible
 - **PATCH** — Bug fixes, documentation updates
 
-Current version: **2.0.0** — Phases 1–4 complete (Risk-Adjusted Scoring, IV/Earnings, Macro Regime, Pipeline Restoration)
+Current version: **2.3.0** — Catalyst Watch Ape Wisdom expansion, social context, and docs updates

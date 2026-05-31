@@ -1,6 +1,17 @@
 #!/bin/bash
 set -e
 
+# Support Docker secrets as alternative to environment variables
+if [ -z "$MOOMOO_LOGIN" ] && [ -f "/run/secrets/moomoo_login" ]; then
+    MOOMOO_LOGIN=$(cat /run/secrets/moomoo_login)
+fi
+if [ -z "$MOOMOO_PASSWORD" ] && [ -f "/run/secrets/moomoo_password" ]; then
+    MOOMOO_PASSWORD=$(cat /run/secrets/moomoo_password)
+fi
+if [ -z "$MOOMOO_TRADING_PASSWORD" ] && [ -f "/run/secrets/moomoo_trading_password" ]; then
+    MOOMOO_TRADING_PASSWORD=$(cat /run/secrets/moomoo_trading_password)
+fi
+
 if [ -z "$MOOMOO_LOGIN" ] || [ -z "$MOOMOO_PASSWORD" ]; then
     echo "Missing MOOMOO_LOGIN or MOOMOO_PASSWORD."
     tail -f /dev/null

@@ -6,7 +6,6 @@ Provides intelligent caching for top recommendations with portfolio change detec
 import threading
 import time
 import hashlib
-import json
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 import logging

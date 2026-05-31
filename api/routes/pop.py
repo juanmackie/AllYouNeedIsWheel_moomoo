@@ -4,9 +4,9 @@ Probability of Profit API Routes
 
 import logging
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 from api.routes.utils import error_response, success_response
-from api.services.pop_service import get_pop, calculate_pop_delta
+from api.services.pop_service import get_pop
 
 logger = logging.getLogger(__name__)
 

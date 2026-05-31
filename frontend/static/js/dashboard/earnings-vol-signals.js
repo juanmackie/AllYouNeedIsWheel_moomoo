@@ -107,7 +107,6 @@ function renderCard(signal) {
 }
 
 function renderSignals(payload) {
-    // Finish the loading banner if active
     if (loadingBannerId) {
         if (payload.signals && payload.signals.length > 0) {
             finishPanelLoading(loadingBannerId, 'Signals loaded');
@@ -122,7 +121,16 @@ function renderSignals(payload) {
 
     if (!signals.length) {
         contentEl.classList.add('d-none');
-        StateModel.showEmpty('earnings-vol-state', 'No earnings-vol signals found for the current watchlist.');
+        let message = 'No earnings-vol signals found for the current watchlist.';
+        const scanned = payload.scanned || 0;
+        const errors = payload.errors || [];
+        if (scanned > 0 || errors.length > 0) {
+            const parts = [];
+            if (scanned > 0) parts.push(`Scanned ${scanned} ticker${scanned === 1 ? '' : 's'}`);
+            if (errors.length > 0) parts.push(`${errors.length} error${errors.length === 1 ? '' : 's'}: ${errors.join(', ')}`);
+            message += ` (${parts.join('; ')})`;
+        }
+        StateModel.showEmpty('earnings-vol-state', message);
         return;
     }
 

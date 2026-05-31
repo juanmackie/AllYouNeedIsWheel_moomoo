@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple, TypedDict
 from datetime import datetime
 
-from api.services.utils import clean_yfinance_ticker, validate_ticker
+from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker, validate_ticker
 
 logger = logging.getLogger('api.services.technical_indicators')
 
@@ -116,7 +116,7 @@ class TechnicalIndicatorsService:
         
         try:
             clean_ticker = clean_yfinance_ticker(ticker)
-            stock = yf.Ticker(clean_ticker)
+            stock = get_yfinance_ticker(clean_ticker)
             hist = stock.history(period=period, interval='1d')
             
             if hist.empty:

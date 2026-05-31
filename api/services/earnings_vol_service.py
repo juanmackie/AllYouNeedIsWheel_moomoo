@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Iterable
 
 from api.services.utils import clean_yfinance_ticker
+from api.services.utils import get_yfinance_ticker
 from core.earnings_vol_decision import EarningsVolSignal, classify_earnings_vol_signal
 
 logger = logging.getLogger("api.services.earnings_vol")
@@ -77,9 +78,7 @@ class EarningsVolSignalService:
         return signal
 
     def _build_signal(self, ticker: str) -> EarningsVolSignal:
-        import yfinance as yf
-
-        yf_ticker = yf.Ticker(ticker)
+        yf_ticker = get_yfinance_ticker(ticker)
         earnings_info = self._get_earnings_info(ticker)
         earnings_date = earnings_info.get("earnings_date")
         days_to_earnings = earnings_info.get("days_to_earnings")

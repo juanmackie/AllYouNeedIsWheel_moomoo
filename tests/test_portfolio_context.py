@@ -3,7 +3,7 @@ Tests for api/services/portfolio_context.py - PortfolioContext class
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, MagicMock
 
 
 class TestPortfolioContextInit(unittest.TestCase):

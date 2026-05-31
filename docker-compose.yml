@@ -1,5 +1,13 @@
 version: "3.8"
 
+secrets:
+  moomoo_login:
+    file: ./secrets/moomoo_login.txt
+  moomoo_password:
+    file: ./secrets/moomoo_password.txt
+  moomoo_trading_password:
+    file: ./secrets/moomoo_trading_password.txt
+
 services:
   opend:
     build:
@@ -12,6 +20,9 @@ services:
       - MOOMOO_PASSWORD=${MOOMOO_PASSWORD}
       - MOOMOO_LANG=${MOOMOO_LANG:-en}
       - MOOMOO_LOG_LEVEL=${MOOMOO_LOG_LEVEL:-info}
+    secrets:
+      - moomoo_login
+      - moomoo_password
     volumes:
       - wheel_data:/app/data
     healthcheck:
@@ -35,6 +46,8 @@ services:
       - CONNECTION_CONFIG=connection_docker.json
       - MOOMOO_TRADING_PASSWORD=${MOOMOO_TRADING_PASSWORD:-}
       - PORT=8000
+    secrets:
+      - moomoo_trading_password
     volumes:
       - wheel_data:/app/data
     depends_on:

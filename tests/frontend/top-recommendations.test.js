@@ -112,3 +112,119 @@ describe('top-recommendations empty state', () => {
     expect(message).not.toContain('Check back after');
   });
 });
+
+describe('top-recommendations OpenD-unavailable state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDOM();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('shows broker-unavailable message when response has error_code opend_unavailable', async () => {
+    const { loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      signals: [],
+      count: 0,
+      error: 'OpenD unavailable',
+      error_code: 'opend_unavailable',
+    });
+
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const errorCall = StateModel.showError.mock.calls.find(c => c[0] === 'top-recommendations-state');
+    expect(errorCall).toBeDefined();
+    expect(errorCall[1]).toContain('OpenD unavailable');
+  });
+
+  it('shows broker-unavailable message when response has error_code opend_login_required', async () => {
+    const { loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      signals: [],
+      count: 0,
+      error: 'Login required',
+      error_code: 'opend_login_required',
+    });
+
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const errorCall = StateModel.showError.mock.calls.find(c => c[0] === 'top-recommendations-state');
+    expect(errorCall).toBeDefined();
+    expect(errorCall[1]).toContain('OpenD unavailable');
+  });
+});
+
+describe('top-recommendations generating state', () => {
+  let consoleWarnSpy;
+  let consoleDebugSpy;
+  let cleanup;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDOM();
+    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+    consoleWarnSpy.mockRestore();
+    consoleDebugSpy.mockRestore();
+  });
+
+  it('shows generating notice without calling console.warn when backend is generating', async () => {
+    const { loadTopRecommendations, cleanupTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      success: true,
+      generating: true,
+      count: 0,
+      signals: [],
+    });
+
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const emptyCall = StateModel.showEmpty.mock.calls.find(c => c[0] === 'top-recommendations-state');
+    expect(emptyCall).toBeUndefined();
+
+    const generatingNotice = document.querySelector('[data-generating-notice="true"]');
+    expect(generatingNotice).toBeTruthy();
+    expect(generatingNotice.textContent).toContain('Fresh signals are being computed');
+
+    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(consoleWarnSpy).not.toHaveBeenCalled();
+  });
+});

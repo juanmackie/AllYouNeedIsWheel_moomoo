@@ -20,21 +20,29 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: pip
+        cache-dependency-path: requirements.txt
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest
+        pip install pytest pytest-cov
 
-    - name: Run tests
-      run: |
-        pytest tests/ -v
-
-    - name: Lint with ruff (narrow)
+    - name: Lint with ruff
       run: |
         pip install ruff
-        ruff check . --select=F --ignore=F811 --exit-zero
+        ruff check . --select=F
+
+    - name: Run tests with coverage
+      run: |
+        pytest tests/ -v --cov=. --cov-report=xml --cov-report=term-missing --cov-fail-under=50
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
 
   security:
     runs-on: ubuntu-latest
@@ -46,9 +54,7 @@ jobs:
       with:
         python-version: "3.11"
 
-    - name: Check for secrets in code
-      run: |
-        # Simple check for common patterns that might indicate secrets
-        if grep -r "api_key\|password\|secret" --include="*.py" --include="*.js" . | grep -v ".venv" | grep -v "__pycache__" | grep -v ".git"; then
-          echo "WARNING: Potential secrets found in code. Review carefully."
-        fi
+    - name: Scan for secrets
+      uses: gitleaks/gitleaks-action@v2
+      with:
+        args: detect --source . --redact --no-banner

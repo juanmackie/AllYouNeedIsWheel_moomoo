@@ -4,7 +4,6 @@ Tests for TechnicalRegimeService
 import unittest
 from unittest.mock import patch, MagicMock
 from api.services.technical_regime_service import TechnicalRegimeService
-from datetime import datetime, timedelta
 
 
 class TestTechnicalRegimeService(unittest.TestCase):
@@ -15,7 +14,6 @@ class TestTechnicalRegimeService(unittest.TestCase):
     def test_ema_regime_bullish(self):
         """Price > EMA*1.02 = bullish"""
         import pandas as pd
-        import numpy as np
         
         # Create data where recent prices are well above the EMA
         # Use 200 days at 100, then jump to 200 for the last 100 days
@@ -29,11 +27,11 @@ class TestTechnicalRegimeService(unittest.TestCase):
             'Volume': [1000000] * 300
         }, index=dates)
         
-        with patch('api.services.technical_regime_service.yf') as mock_yf:
+        with patch('api.services.technical_regime_service.get_yfinance_ticker') as mock_get_ticker:
             mock_ticker = MagicMock()
             mock_ticker.history.return_value = mock_hist
-            mock_yf.Ticker.return_value = mock_ticker
-            
+            mock_get_ticker.return_value = mock_ticker
+
             result = self.service.get_200_ema_regime('AAPL')
             self.assertEqual(result['regime'], 'bullish')
     

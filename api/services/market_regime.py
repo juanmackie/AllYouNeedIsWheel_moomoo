@@ -6,6 +6,8 @@ Extracted from the monolithic options_service.py for maintainability.
 import logging
 from datetime import datetime
 
+from api.services.utils import get_yfinance_ticker
+
 logger = logging.getLogger('api.services.market_regime')
 
 
@@ -21,6 +23,8 @@ class MarketRegime:
         self._vix_cache = None
         
     def _get_openbb_service(self):
+        if not self.config.get('openbb_enabled', False):
+            return None
         if self._openbb_service_provider:
             return self._openbb_service_provider._get_openbb_service()
         return None
@@ -28,7 +32,8 @@ class MarketRegime:
     def get_vix_regime(self):
         """
         Get current VIX market regime for adaptive delta targeting.
-        Uses OpenBB as primary source with yfinance fallback.
+        Uses yfinance as the default free source, with optional enrichment
+        only when explicitly enabled in config.
         
         Returns:
             dict: {
@@ -48,20 +53,20 @@ class MarketRegime:
         
         vix_value = None
         
-        try:
-            openbb = self._get_openbb_service()
-            if openbb:
-                vix_data = openbb.get_vix()
-                if vix_data and 'vix' in vix_data:
-                    vix_value = float(vix_data['vix'])
-                    logger.debug(f"VIX from OpenBB: {vix_value}")
-        except Exception as e:
-            logger.debug(f"OpenBB VIX fetch failed, trying yfinance: {e}")
+        if self.config.get('openbb_enabled', False):
+            try:
+                openbb = self._get_openbb_service()
+                if openbb:
+                    vix_data = openbb.get_vix()
+                    if vix_data and 'vix' in vix_data:
+                        vix_value = float(vix_data['vix'])
+                        logger.debug(f"VIX from optional enrichment: {vix_value}")
+            except Exception as e:
+                logger.debug(f"Optional enrichment VIX fetch failed, trying yfinance: {e}")
         
         if vix_value is None:
             try:
-                import yfinance as yf
-                vix_ticker = yf.Ticker('^VIX')
+                vix_ticker = get_yfinance_ticker('^VIX')
                 hist = vix_ticker.history(period='1d')
                 if not hist.empty:
                     vix_value = float(hist['Close'].iloc[-1])

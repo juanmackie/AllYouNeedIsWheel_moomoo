@@ -2,7 +2,6 @@
 Tests for rate_limiter module.
 """
 
-import time
 import threading
 import unittest
 from unittest.mock import patch

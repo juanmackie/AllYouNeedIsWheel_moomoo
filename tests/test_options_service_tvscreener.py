@@ -2,7 +2,6 @@
 Tests for OptionsService integration with TvscreenerService - Simplified
 """
 
-import pytest
 from unittest.mock import MagicMock
 from api.services.options_service import OptionsService
 

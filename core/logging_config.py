@@ -3,11 +3,8 @@ Centralized logging configuration module for the Auto-Trader application
 """
 
 import os
-import time
 import logging
 import glob
-import heapq
-from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
 # Base directory for logs

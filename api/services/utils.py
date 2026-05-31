@@ -3,9 +3,9 @@ Shared utilities for API services.
 
 Currently provides:
 - clean_yfinance_ticker(): Strip moomoo/exchange prefixes for yfinance compatibility.
+- get_yfinance_ticker(): Convenience wrapper that lets yfinance manage its own session.
 """
 
-import re
 import logging
 
 logger = logging.getLogger('api.services.utils')
@@ -92,3 +92,10 @@ def validate_ticker(ticker: str) -> bool:
         return False
 
     return True
+
+
+def get_yfinance_ticker(ticker: str):
+    """Create a yfinance Ticker. yfinance manages its own session (curl_cffi for modern versions)."""
+    import yfinance as yf
+
+    return yf.Ticker(ticker)

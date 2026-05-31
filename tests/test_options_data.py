@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pandas as pd
 
@@ -222,7 +222,7 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
 
         self.assertEqual(len(result['expirations']), 1)
         self.assertEqual(result['expirations'][0]['value'], yf_expiration.replace('-', ''))
-        mock_ticker.assert_called_once_with('UBER')
+        mock_ticker.assert_called_once_with('UBER', session=ANY)
 
 
 if __name__ == '__main__':

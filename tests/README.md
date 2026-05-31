@@ -15,9 +15,12 @@ pytest tests/
 | `test_rate_limiter.py` | Tests for `core/rate_limiter.py` — virtual scheduling, burst detection, thread safety (uses `FakeClock` — no real wall-clock waits) |
 | `test_tvscreener_service.py` | Tests for TradingView screener integration |
 | `test_options_service_tvscreener.py` | Tests for options service with tvscreener |
+| `test_apewisdom_service.py` | Ape Wisdom social momentum client, filtering, scoring, and cache behavior |
+| `test_catalyst_flow.py` | Catalyst Watch scan expansion, social context, and ranking behavior |
+| `test_catalyst_watch_route.py` | Catalyst Watch freshness metadata and Ape Wisdom source policy wiring |
 | `test_routes_validation.py` | Pydantic validation for risk sizing and PoP routes |
 | `test_risk_sizing.py` | Risk sizing service (ATR calculation, TTL cache behavior) |
-| `test_openbb_service.py` | OpenBB service (VIX fetch, macro data, TTL cache) |
+| Optional enrichment service | VIX fetch, macro data, TTL cache |
 | `test_technical_regime.py` | Technical regime service (EMA, ADX, TTL cache) |
 | `test_pop_service.py` | Probability-of-profit service (delta, Monte Carlo) |
 
@@ -54,6 +57,11 @@ Manual end-to-end checklist for verifying UI and pipeline functionality:
 - [ ] Cards load automatically with score/ranking
 - [ ] Signal cards show source, confidence, and warnings
 - [ ] Refresh button updates recommendations
+
+### Catalyst Watch
+- [ ] Catalyst Watch expands the scan list with Ape Wisdom names when enabled
+- [ ] Confirmed flow cards show a short social-rising note when Ape Wisdom is present
+- [ ] Disabling Ape Wisdom falls back to the watchlist-only scan path
 
 ### Rollover Signals
 - [ ] Roll pressure positions display correctly

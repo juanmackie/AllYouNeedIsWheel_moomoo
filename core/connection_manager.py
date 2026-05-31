@@ -3,15 +3,12 @@ MoomooConnection - connection lifecycle, order management, and portfolio retriev
 Extracted from core/connection.py for maintainability.
 """
 
-import logging
 import time
 import os
-import re
 import traceback
 import threading
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime
+from zoneinfo import ZoneInfo
 try:
     from moomoo import (
         OpenQuoteContext,
@@ -54,6 +51,16 @@ from core.ticker_utils import TickerCache, format_symbol
 logger = get_logger('autotrader.connection', 'moomoo')
 
 
+def _safe_str(value) -> str:
+    """Convert a value to a UTF-8-safe string for logging, replacing non-ASCII chars that crash cp1252 consoles."""
+    raw = str(value)
+    try:
+        raw.encode('cp1252')
+        return raw
+    except UnicodeEncodeError:
+        return raw.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+
+
 class MoomooConnection:
     """
     Class for managing connection to moomoo OpenD
@@ -66,6 +73,9 @@ class MoomooConnection:
     _instances = {}
     _instance_lock = threading.Lock()
     _option_chain_gate = threading.BoundedSemaphore(1)
+    _option_chain_rate_limiter = None
+    _option_chain_rate_lock = threading.Lock()
+    _market_timezone = ZoneInfo(os.environ.get('MARKET_TIMEZONE', 'America/New_York'))
 
     def __new__(cls, host='127.0.0.1', port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None):
         cleaned_account_id = _clean_account_id(account_id)
@@ -125,11 +135,21 @@ class MoomooConnection:
         self._initialized = True
 
         self._rate_limiter = RateLimiter(
-            max_requests_per_window=30,
+            max_requests_per_window=45,
             rate_limit_window=60,
-            burst_threshold=15,
+            burst_threshold=20,
             burst_window=10
         )
+        with MoomooConnection._option_chain_rate_lock:
+            if MoomooConnection._option_chain_rate_limiter is None:
+                oc_rl = RateLimiter(
+                    max_requests_per_window=10,
+                    rate_limit_window=30,
+                    burst_threshold=5,
+                    burst_window=30,
+                )
+                oc_rl._min_request_spacing = 3.0
+                MoomooConnection._option_chain_rate_limiter = oc_rl
 
         self._ticker_cache = TickerCache(price_ttl=120, failed_ttl=300)
 
@@ -151,7 +171,12 @@ class MoomooConnection:
         with self._cache_lock:
             if cache_key in self._option_chain_cache:
                 cached_data, timestamp = self._option_chain_cache[cache_key]
-                if time.time() - timestamp < self._cache_ttl:
+                cache_age = time.time() - timestamp
+                now_market = datetime.now(self._market_timezone)
+                market_close = now_market.replace(hour=16, minute=0, second=0, microsecond=0)
+                market_session_closed = now_market.weekday() < 5 and now_market >= market_close
+                cached_at_market = datetime.fromtimestamp(timestamp, self._market_timezone)
+                if cache_age < self._cache_ttl and not (market_session_closed and cached_at_market.date() == now_market.date() and cached_at_market < market_close):
                     logger.debug(f"Using cached option chain for {cache_key}")
                     return cached_data
                 del self._option_chain_cache[cache_key]
@@ -315,6 +340,16 @@ class MoomooConnection:
             self.trd_ctx = None
         self._connected = False
 
+    def health_check(self):
+        """
+        Perform a lightweight health check and reconnect if needed.
+        Returns True if connection is healthy after the check.
+        """
+        if self.is_connected():
+            return True
+        logger.warning("Connection health check failed, attempting reconnect")
+        return self.connect()
+
     def disconnect(self):
         with self._connection_lock:
             self._safe_disconnect()
@@ -329,10 +364,12 @@ class MoomooConnection:
             if ret == RET_OK:
                 self._last_activity = datetime.now()
                 return True
-            logger.debug(f"Connection check failed: {data}")
+            logger.debug(f"Connection health check failed: {data}")
+            self._connected = False
             return False
         except Exception as e:
             logger.debug(f"Connection health check failed: {e}")
+            self._connected = False
             return False
 
     def get_connection_info(self):
@@ -506,7 +543,7 @@ class MoomooConnection:
             return None
 
         try:
-            self._rate_limiter.check_rate_limit()
+            self._option_chain_rate_limiter.check_rate_limit()
             if not self.is_connected():
                 if not self.connect():
                     self._complete_pending_request(request_key, None)
@@ -538,7 +575,7 @@ class MoomooConnection:
                 )
 
                 if ret != RET_OK:
-                    logger.error(f"Failed to get option chain for {symbol}: {data}")
+                    logger.error(f"Failed to get option chain for {symbol}: {_safe_str(data)}")
                     self._complete_pending_request(request_key, None)
                     return None
 
@@ -590,7 +627,7 @@ class MoomooConnection:
             self._complete_pending_request(request_key, result)
             return result
         except Exception as e:
-            logger.error(f"Error retrieving option chain for {symbol}: {str(e)}")
+            logger.error(f"Error retrieving option chain for {symbol}: {_safe_str(e)}")
             logger.debug(traceback.format_exc())
             self._complete_pending_request(request_key, None)
             return None
