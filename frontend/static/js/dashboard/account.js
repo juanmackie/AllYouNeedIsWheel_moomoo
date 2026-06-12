@@ -16,6 +16,21 @@ function getOpenDStatus() {
 }
 
 
+function getUnavailablePositionsMessage() {
+    const status = getOpenDStatus();
+    if (!status) {
+        return 'OpenD is unavailable. Position data cannot be loaded.';
+    }
+    if (status.status === 'login_required') {
+        return 'OpenD login is required to load portfolio and position data.';
+    }
+    if (status.status === 'unavailable') {
+        return status.message || 'OpenD is unavailable. Position data cannot be loaded.';
+    }
+    return 'Position data is unavailable right now.';
+}
+
+
 function updateUnavailableAccountState() {
     accountData = null;
     positionsData = [];
@@ -53,8 +68,9 @@ function updateUnavailableAccountState() {
         positionsCountElement.textContent = '0';
     }
 
-    populateStockPositionsTable([]);
-    populateOptionPositionsTable([]);
+    const unavailableMessage = getUnavailablePositionsMessage();
+    populateStockPositionsTable([], unavailableMessage);
+    populateOptionPositionsTable([], unavailableMessage);
 }
 
 /**
@@ -185,7 +201,7 @@ function populatePositionsTable() {
  * Populate stock positions table
  * @param {Array} stockPositions - Array of stock positions
  */
-function populateStockPositionsTable(stockPositions) {
+function populateStockPositionsTable(stockPositions, emptyMessage = 'No stock positions found') {
     const stockTableBody = document.getElementById('stock-positions-table-body');
     if (!stockTableBody) return;
     
@@ -194,7 +210,7 @@ function populateStockPositionsTable(stockPositions) {
     
     if (stockPositions.length === 0) {
         const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = '<td colspan="6" class="text-center">No stock positions found</td>';
+        noDataRow.innerHTML = `<td colspan="6" class="text-center">${emptyMessage}</td>`;
         stockTableBody.appendChild(noDataRow);
         return;
     }
@@ -243,7 +259,7 @@ function populateStockPositionsTable(stockPositions) {
  * Populate option positions table
  * @param {Array} optionPositions - Array of option positions
  */
-function populateOptionPositionsTable(optionPositions) {
+function populateOptionPositionsTable(optionPositions, emptyMessage = 'No option positions found') {
     const optionTableBody = document.getElementById('option-positions-table-body');
     if (!optionTableBody) return;
     
@@ -252,7 +268,7 @@ function populateOptionPositionsTable(optionPositions) {
     
     if (optionPositions.length === 0) {
         const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = '<td colspan="9" class="text-center">No option positions found</td>';
+        noDataRow.innerHTML = `<td colspan="9" class="text-center">${emptyMessage}</td>`;
         optionTableBody.appendChild(noDataRow);
         return;
     }
@@ -397,6 +413,11 @@ async function loadPositionsTable() {
             document.getElementById('positions-count').textContent = positionsData.length || 0;
         }
         populatePositionsTable();
+    } else {
+        positionsData = [];
+        const unavailableMessage = getUnavailablePositionsMessage();
+        populateStockPositionsTable([], unavailableMessage);
+        populateOptionPositionsTable([], unavailableMessage);
     }
 }
 

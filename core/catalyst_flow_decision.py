@@ -51,6 +51,16 @@ def _mirror_strike(stock_price: float, otm_pct: float, side: str) -> float:
     return stock_price * (1 + otm_pct / 100)
 
 
+ACTION_BUCKETS = {
+    "CALL_RESEARCH": "Call Research",
+    "PUT_RESEARCH": "Put Research",
+    "CONFLICT_WATCH": "Conflict / Volatility Watch",
+    "SPECULATIVE_ONLY": "Speculative Only",
+    "REJECT": "Reject",
+    "WATCH": "Watch",
+}
+
+
 @dataclass
 class CatalystFlowSignal:
     ticker: str
@@ -69,6 +79,18 @@ class CatalystFlowSignal:
     blockers: list[str] = field(default_factory=list)
     research_only: bool = True
     earnings_dte: Optional[int] = None
+    action_bucket: str = "WATCH"
+    action_label: str = "Watch"
+    action_reason: str = ""
+    actionable: bool = False
+    volume: int = 0
+    open_interest: int = 0
+    bid: float = 0.0
+    ask: float = 0.0
+    spread: float = 0.0
+    implied_volatility: Optional[float] = None
+    delta: Optional[float] = None
+    expiry: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -124,6 +146,11 @@ def classify_catalyst_flow(
                 "fresh": 0.0,
                 "otm_pct": _otm_pct(strike, stock_price, side),
                 "expirations": set(),
+                "bid": 0.0,
+                "ask": 0.0,
+                "iv": None,
+                "delta": None,
+                "earliest_expiration": "",
             },
         )
         entry["volume"] += volume
@@ -133,6 +160,18 @@ def classify_catalyst_flow(
         entry["fresh"] = max(entry["fresh"], _fresh_ratio(volume, oi))
         if expiration:
             entry["expirations"].add(expiration)
+            if not entry["earliest_expiration"] or expiration < entry["earliest_expiration"]:
+                entry["earliest_expiration"] = expiration
+        if bid > entry["bid"]:
+            entry["bid"] = bid
+        if ask > entry["ask"]:
+            entry["ask"] = ask
+        iv_val = _first_number(opt, ("implied_volatility", "iv", "option_iv"), None)
+        if iv_val is not None and entry["iv"] is None:
+            entry["iv"] = iv_val
+        delta_val = _first_number(opt, ("delta", "option_delta"), None)
+        if delta_val is not None and entry["delta"] is None:
+            entry["delta"] = delta_val
 
     if not groups:
         return []
@@ -152,7 +191,6 @@ def classify_catalyst_flow(
             continue
 
         # -- Hedge detection: mirrored OTM strike on opposite side --#
-        mirror_side = "PUT" if side == "CALL" else "CALL"
         mirror_map = put_entries if side == "CALL" else call_entries
         target_mirror = _mirror_strike(stock_price, entry["otm_pct"], side)
         hedge_premium = 0.0
@@ -200,10 +238,28 @@ def classify_catalyst_flow(
         if is_hedged:
             blockers.append("Hedged position — lower directional conviction")
 
+        # -- Action bucket --#
+        if entry["otm_pct"] > 50:
+            action_bucket = "SPECULATIVE_ONLY"
+            action_label = "Speculative Only"
+            action_reason = f"OTM {entry['otm_pct']:.0f}% — lottery flow, not core signal"
+        elif is_hedged:
+            action_bucket = "WATCH"
+            action_label = "Watch"
+            action_reason = "Hedged position — directional conviction reduced"
+        elif score < 30:
+            action_bucket = "REJECT"
+            action_label = "Reject"
+            action_reason = f"Score {score:.0f} below threshold"
+        else:
+            action_bucket = f"{side}_RESEARCH"
+            action_label = ACTION_BUCKETS[f"{side}_RESEARCH"]
+            action_reason = "; ".join(rationale[:2]) if rationale else "Fresh flow detected"
+
         # -- Signal tier --#
         if score >= 65:
             signal_label = "GREEN"
-            label_text = "High conviction" if not is_hedged else "Moderate (hedged)"
+            label_text = "Priority lead" if not is_hedged else "Moderate (hedged)"
         elif score >= 40:
             signal_label = "YELLOW"
             label_text = "Moderate" if not is_hedged else "Low (hedged)"
@@ -228,6 +284,18 @@ def classify_catalyst_flow(
             blockers=blockers,
             research_only=True,
             earnings_dte=days_to_earnings,
+            action_bucket=action_bucket,
+            action_label=action_label,
+            action_reason=action_reason,
+            actionable=False,
+            volume=entry["volume"],
+            open_interest=entry["oi"],
+            bid=round(entry["bid"], 4),
+            ask=round(entry["ask"], 4),
+            spread=round(entry["ask"] - entry["bid"], 4) if entry["ask"] > 0 and entry["bid"] > 0 else 0.0,
+            implied_volatility=entry["iv"],
+            delta=entry["delta"],
+            expiry=entry["earliest_expiration"],
         )
 
         if score >= 20:

@@ -24,6 +24,13 @@ vi.mock('../../frontend/static/js/utils/formatters.js', () => ({
 
 import StateModel from '../../frontend/static/js/utils/state-model.js';
 
+afterEach(async () => {
+  const { cleanupTopRecommendations } = await import(
+    '../../frontend/static/js/dashboard/top-recommendations.js'
+  );
+  cleanupTopRecommendations?.();
+});
+
 function setupDOM() {
   document.body.innerHTML = `
     <div id="top-recommendations-container">
@@ -39,11 +46,15 @@ function setupDOM() {
     <div id="growth-mode-banner" class="d-none"></div>
     <div id="growth-mode-objective"></div>
     <div id="growth-mode-drawdown"></div>
+    <div id="growth-csp-profile-label" class="d-none">
+      <span id="growth-csp-profile-text"></span>
+    </div>
     <div id="top-recs-title"></div>
     <div id="top-recs-eyebrow"></div>
     <div id="top-recs-desc"></div>
     <template id="recommendation-card-template">
       <div class="recommendation-card">
+        <span class="rank-badge"></span>
         <span class="ticker-badge"></span>
         <span class="signal-type-badge"></span>
         <span class="option-type-badge"></span>
@@ -54,17 +65,39 @@ function setupDOM() {
         <span class="annualized-return"></span>
         <span class="score-badge"></span>
         <span class="confidence-badge"></span>
+        <span class="underlying-quality-badge"></span>
         <span class="signal-data-source"></span>
         <span class="recommendation-warnings"></span>
         <span class="otm-pct"></span>
         <span class="delta-value"></span>
         <span class="iv-rank"></span>
         <div class="macro-impact"></div>
-        <div class="csp-details d-none"></div>
-        <div class="cc-details d-none"></div>
-        <div class="score-drivers d-none"></div>
-        <div class="hard-blockers d-none"></div>
-        <div class="recommendation-details"></div>
+        <div class="csp-details d-none">
+          <span class="csp-cash-required"></span>
+          <span class="csp-cash-pct"></span>
+          <span class="csp-cash-remaining"></span>
+          <span class="csp-breakeven-buffer"></span>
+          <span class="csp-expected-move"></span>
+        </div>
+        <div class="cc-details d-none">
+          <span class="cc-if-called-return"></span>
+          <span class="cc-if-called-proceeds"></span>
+          <span class="cc-cost-basis-dist"></span>
+          <span class="cc-intent"></span>
+        </div>
+        <div class="score-drivers d-none">
+          <span class="score-drivers__positive"></span>
+          <span class="score-drivers__negative"></span>
+        </div>
+        <div class="hard-blockers d-none">
+          <span class="hard-blockers-list"></span>
+        </div>
+        <div class="recommendation-details">
+          <div class="recommendation-detail-row otm-row"></div>
+          <div class="recommendation-detail-row delta-row"></div>
+          <div class="recommendation-detail-row iv-row"></div>
+          <div class="recommendation-detail-row macro-row"></div>
+        </div>
         <div class="growth-mode-details d-none"></div>
       </div>
     </template>
@@ -102,6 +135,7 @@ describe('top-recommendations empty state', () => {
 
     await new Promise(r => setTimeout(r, 50));
 
+    expect(fetchTopRecommendations).toHaveBeenCalledWith(10, false);
     const emptyCall = StateModel.showEmpty.mock.calls.find(c => c[0] === 'top-recommendations-state');
     expect(emptyCall).toBeDefined();
     const message = emptyCall[1];
@@ -226,5 +260,179 @@ describe('top-recommendations generating state', () => {
 
     expect(consoleDebugSpy).toHaveBeenCalled();
     expect(consoleWarnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('top-recommendations unknown IV status', () => {
+  let consoleWarnSpy;
+  let consoleDebugSpy;
+  let cleanup;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDOM();
+    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+    consoleWarnSpy.mockRestore();
+    consoleDebugSpy.mockRestore();
+  });
+
+  it('shows "IV unavailable" when iv_status is unknown', async () => {
+    const { initializeTopRecommendations, cleanupTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      success: true,
+      count: 1,
+      signals: [
+        {
+          ticker: 'TEST',
+          option_type: 'PUT',
+          strike: 95.0,
+          expiration: '20260515',
+          dte: 21,
+          bid: 2.0,
+          ask: 2.10,
+          mid_price: 2.05,
+          annualized_return: 50.0,
+          score: 75.0,
+          iv_rank: 50,
+          iv_status: 'unknown',
+          otm_pct: 5.0,
+          delta: -0.25,
+        },
+      ],
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const cards = document.querySelectorAll('.recommendation-card');
+    expect(cards.length).toBe(1);
+
+    const ivRankEl = cards[0].querySelector('.iv-rank');
+    expect(ivRankEl.textContent).toBe('IV unavailable');
+    expect(ivRankEl.classList.contains('text-muted')).toBe(true);
+    expect(cards[0].querySelectorAll('.recommendation-detail-row').length).toBe(4);
+    expect(cards[0].querySelector('.csp-details')?.classList.contains('d-none')).toBe(false);
+    expect(cards[0].querySelector('.cc-details')?.classList.contains('d-none')).toBe(true);
+    expect(cards[0].querySelector('.score-drivers')?.classList.contains('d-none')).toBe(true);
+    expect(cards[0].querySelector('.hard-blockers')?.classList.contains('d-none')).toBe(true);
+  });
+});
+
+describe('top-recommendations source badges', () => {
+  let cleanup;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDOM();
+  });
+
+  afterEach(() => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  it('renders separate price, chain, and IV provenance badges', async () => {
+    const { initializeTopRecommendations, cleanupTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+    cleanupTopRecommendations();
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    const now = new Date().toISOString();
+    fetchTopRecommendations.mockResolvedValue({
+      success: true,
+      count: 1,
+      generated_at: now,
+      signals: [{
+        rank: 1,
+        ticker: 'AAPL',
+        option_type: 'PUT',
+        strike: 150,
+        expiration: '20260529',
+        dte: 21,
+        mid_price: 1.25,
+        premium_per_contract: 125,
+        score: 88,
+        annualized_return: 21,
+        iv_adjusted_return: 18,
+        otm_pct: 7.5,
+        delta: -0.18,
+        iv_rank: 52,
+        iv_status: 'normal',
+        warnings: [],
+        rationale: ['Strong'],
+        max_contracts: 1,
+        existing_position: 0,
+        profile_type: 'monthly',
+        stock_price: 162,
+        bid: 1.2,
+        ask: 1.3,
+        open_interest: 500,
+        volume: 100,
+        implied_volatility: 0.32,
+        score_details: {},
+        size_fit: 1,
+        expected_move_buffer: 0,
+        wheel_decision: {
+          quote_timestamp: now,
+          price_source: 'broker',
+          chain_source: 'yfinance',
+          iv_source: 'yfinance',
+        },
+        price_source: 'broker',
+        chain_source: 'yfinance',
+        iv_source: 'yfinance',
+        from_yfinance: true,
+        signal_type: 'csp',
+        strategy: 'wheel',
+        broker_feasible: true,
+        capital_required: 15000,
+        risk_budget_used: 0,
+        data_source: 'broker',
+        confidence: 74,
+        quote_quality: 'tradable',
+        blocked_reason_codes: [],
+        research_only: false,
+      }],
+      blocked_signals: [],
+    });
+
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const sourceEl = document.querySelector('.signal-data-source');
+    expect(sourceEl).toBeTruthy();
+    expect(sourceEl.textContent).toContain('Price: Moomoo');
+    expect(sourceEl.textContent).toContain('Chain: yfinance');
+    expect(sourceEl.textContent).toContain('IV: yfinance');
+    expect(sourceEl.querySelectorAll('.badge').length).toBeGreaterThanOrEqual(4);
   });
 });

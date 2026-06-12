@@ -1,24 +1,26 @@
 {% extends "base.html" %}
 
-{% block title %}Portfolio - All You Need Is Wheel{% endblock %}
+{% block title %}Portfolio - AYNIWHEEL{% endblock %}
 {% block body_class %}page-portfolio{% endblock %}
 
-{% block page_header %}
-<div class="page-header flex-grow-1">
-    <div class="page-header__inner">
-        <div>
-            <h1 class="page-header__title">Portfolio</h1>
-            <div class="page-header__meta">Positions, holdings, and account overview</div>
+{% block content %}
+<section class="ft-section" style="margin-top: 0;">
+    <div class="ft-section__head">
+        <div class="ft-section__head-left">
+            <span class="ft-section__num">PORTFOLIO</span>
+            <h2 class="ft-section__title">Positions &amp; holdings</h2>
         </div>
-        <div class="page-header__actions">
-            <button class="btn btn-outline-primary btn-sm" id="refresh-portfolio"><i class="bi bi-arrow-repeat"></i> Refresh</button>
-            <a class="btn btn-outline-primary btn-sm" href="/"><i class="bi bi-grid-1x2-fill"></i> Dashboard</a>
+        <div class="d-flex gap-2 align-items-center">
+            <button class="btn btn-outline-primary btn-sm" id="refresh-portfolio">Refresh</button>
+            <a class="btn btn-outline-primary btn-sm" href="/">Dashboard</a>
         </div>
     </div>
-</div>
-{% endblock %}
+    <p style="font-family: var(--ft-font-body); font-size: 14px; color: var(--ft-ink-soft); max-width: 720px; padding-bottom: 16px;">
+        Live share and option inventory with cost basis, current mark, market value, and unrealized P&amp;L.
+    </p>
+    <div style="height: 1px; background: var(--ft-rule);"></div>
+</section>
 
-{% block content %}
 {% include "partials/common/positions_table.html" %}
 {% endblock %}
 

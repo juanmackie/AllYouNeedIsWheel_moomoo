@@ -1,12 +1,10 @@
 import StateModel from '../utils/state-model.js';
 import { formatCurrency } from '../utils/formatters.js';
-import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
-import { fetchWithTimeout, readJsonSafely } from './api.js';
+import { fetchCatalystSignals } from './api-options.js';
 
 let contentEl;
 let stateEl;
 let lastUpdatedEl;
-let loadingBannerId = null;
 let listenersBound = false;
 let isLoading = false;
 const DEFAULT_AUTO_TIMEOUT_MS = 60000;
@@ -16,38 +14,6 @@ function initElements() {
     contentEl = document.getElementById('catalyst-content');
     stateEl = document.getElementById('catalyst-state');
     lastUpdatedEl = document.getElementById('catalyst-last-updated');
-}
-
-async function fetchCatalystSignals(manualRefresh = false, thresholds = null, timeoutMs = DEFAULT_MANUAL_TIMEOUT_MS) {
-    let url = `/api/options/catalyst-watch?limit=6`;
-    if (manualRefresh) url += '&refresh=true';
-    if (thresholds?.minPremiumNotional != null) {
-        url += `&min_premium_notional=${thresholds.minPremiumNotional}`;
-    }
-    if (thresholds?.minVolume != null) {
-        url += `&min_volume=${thresholds.minVolume}`;
-    }
-    if (thresholds?.minFreshVolumeRatio != null) {
-        url += `&min_fresh_volume_ratio=${thresholds.minFreshVolumeRatio}`;
-    }
-    if (thresholds?.maxScanTickers != null) {
-        url += `&max_scan_tickers=${thresholds.maxScanTickers}`;
-    }
-    if (thresholds?.maxExpirations != null) {
-        url += `&max_expirations=${thresholds.maxExpirations}`;
-    }
-    const response = await fetchWithTimeout(url, {
-        headers: {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0',
-        },
-    }, timeoutMs);
-    const payload = await readJsonSafely(response);
-    if (!response.ok || !payload?.success) {
-        throw new Error(payload?.error || `HTTP error ${response.status}`);
-    }
-    return payload;
 }
 
 function formatCompactDollar(value) {
@@ -65,10 +31,53 @@ function signalBadgeClass(signal) {
     return 'bg-secondary';
 }
 
+function actionBucketClass(bucket) {
+    if (bucket === 'CALL_RESEARCH') return 'text-success';
+    if (bucket === 'PUT_RESEARCH') return 'text-danger';
+    if (bucket === 'CONFLICT_WATCH') return 'text-warning';
+    if (bucket === 'SPECULATIVE_ONLY') return 'text-info';
+    if (bucket === 'REJECT') return 'text-secondary';
+    return 'text-muted';
+}
+
 function directionBadgeClass(direction) {
     if (direction === 'BULLISH') return 'bg-success';
     if (direction === 'BEARISH') return 'bg-danger';
     return 'bg-secondary';
+}
+
+function getOverlayBadgeInfo(signal) {
+    const overlay = signal.signal_overlay || {};
+    const fit = (signal.signal_overlay_fit || overlay.verdict || 'unknown').toLowerCase();
+    if (fit === 'unknown') return null;
+
+    const classes = {
+        supporting: 'bg-success',
+        confirming: 'bg-success',
+        neutral: 'bg-info',
+        caution: 'bg-warning text-dark',
+        conflict: 'bg-danger',
+    };
+    const labels = {
+        supporting: 'Overlay supports',
+        confirming: 'Overlay confirms',
+        neutral: 'Overlay neutral',
+        caution: 'Overlay caution',
+        conflict: 'Overlay conflict',
+    };
+    const summaryParts = [];
+    if (overlay.summary) summaryParts.push(overlay.summary);
+    if (overlay.capital?.summary) summaryParts.push(`capital: ${overlay.capital.summary}`);
+    if (overlay.technical?.summary) summaryParts.push(`technical: ${overlay.technical.summary}`);
+    if (overlay.derivatives?.summary) summaryParts.push(`derivatives: ${overlay.derivatives.summary}`);
+    const warnings = overlay.warnings || signal.signal_overlay_warnings || [];
+
+    return {
+        class: classes[fit] || 'bg-secondary',
+        label: labels[fit] || 'Overlay',
+        summary: summaryParts.slice(0, 2).join(' • '),
+        title: warnings.length > 0 ? warnings.join(' • ') : summaryParts.join(' • '),
+    };
 }
 
 function renderCard(signal) {
@@ -76,6 +85,21 @@ function renderCard(signal) {
     const clone = template.content.cloneNode(true);
 
     clone.querySelector('.catalyst-card__ticker').textContent = signal.ticker || 'N/A';
+
+    const actionEl = clone.querySelector('.catalyst-card__action');
+    if (signal.action_label) {
+        actionEl.textContent = signal.action_label;
+        actionEl.classList.add(actionBucketClass(signal.action_bucket));
+        if (signal.action_reason) {
+            actionEl.title = signal.action_reason;
+        }
+    }
+
+    const conflictEl = clone.querySelector('.catalyst-card__conflict-warning');
+    if (signal.action_bucket === 'CONFLICT_WATCH') {
+        conflictEl.textContent = signal.action_reason || 'Conflicting directional flow on same ticker';
+        conflictEl.classList.remove('d-none');
+    }
 
     const dirBadge = clone.querySelector('.catalyst-card__direction');
     dirBadge.textContent = signal.direction || 'NEUTRAL';
@@ -110,47 +134,46 @@ function renderCard(signal) {
     if (signal.earnings_dte != null && signal.earnings_dte >= 0) {
         earningsEl.textContent = `${signal.earnings_dte}d away`;
     } else {
-        earningsEl.textContent = 'No close earnings';
+        earningsEl.textContent = 'No earnings found in cached data';
     }
 
     const rationaleEl = clone.querySelector('.catalyst-card__rationale');
     if (signal.rationale?.length) {
-        rationaleEl.textContent = signal.rationale.slice(0, 3).join(' • ');
+        rationaleEl.textContent = signal.rationale.slice(0, 3).join(' \u2022 ');
     }
 
     const blockersEl = clone.querySelector('.catalyst-card__blockers');
     if (signal.blockers?.length) {
-        blockersEl.textContent = signal.blockers.slice(0, 2).join(' • ');
+        blockersEl.textContent = signal.blockers.slice(0, 2).join(' \u2022 ');
     }
 
     const socialEl = clone.querySelector('.catalyst-card__social');
     if (signal.social) {
         const s = signal.social;
         const rankDelta = (s.rank_24h_ago || 0) - s.rank;
-        const trend = rankDelta > 0 ? `↑${rankDelta}` : rankDelta < 0 ? `↓${Math.abs(rankDelta)}` : '→';
-        socialEl.textContent = `Social rising: ${s.mentions} mentions, rank #${s.rank} ${trend} 24h`;
+        const trend = rankDelta > 0 ? `\u2191${rankDelta}` : rankDelta < 0 ? `\u2193${Math.abs(rankDelta)}` : '\u2192';
+        socialEl.textContent = `Scan source: social momentum \u2014 ${s.mentions} mentions, rank #${s.rank} ${trend} 24h`;
         socialEl.classList.remove('d-none');
+    }
+
+    const overlayEl = clone.querySelector('.catalyst-card__overlay');
+    const overlayInfo = getOverlayBadgeInfo(signal);
+    if (overlayEl && overlayInfo) {
+        overlayEl.classList.remove('d-none');
+        overlayEl.innerHTML = `<span class="badge ${overlayInfo.class} me-1">${overlayInfo.label}</span><span>${overlayInfo.summary || 'Multi-dimensional signal overlay'}</span>`;
+        overlayEl.title = overlayInfo.title || overlayInfo.summary;
     }
 
     return clone;
 }
 
 function renderSignals(payload) {
-    if (loadingBannerId) {
-        if (payload.signals && payload.signals.length > 0) {
-            finishPanelLoading(loadingBannerId, 'Signals loaded');
-        } else {
-            finishPanelLoading(loadingBannerId, 'No signals found');
-        }
-        loadingBannerId = null;
-    }
-
     contentEl.innerHTML = '';
     const signals = payload.signals || [];
 
     if (payload.enabled === false) {
         contentEl.classList.add('d-none');
-        StateModel.showEmpty('catalyst-state', 'Catalyst Flow scanning is disabled in configuration.');
+        StateModel.showEmpty?.('catalyst-state', 'Catalyst Flow scanning is disabled in configuration.');
         return;
     }
 
@@ -184,7 +207,7 @@ function renderSignals(payload) {
             const md = t.max_dte ?? 'N/A';
             msg += ` Thresholds: ${pn} premium, ${fvr}x vol/OI, ${mv} vol, ${me} expiration(s), ${mst} ticker(s), ${md}d max. Try Refresh or lower thresholds.`;
         }
-        StateModel.showEmpty('catalyst-state', msg);
+        StateModel.showEmpty?.('catalyst-state', msg);
 
         if (lastUpdatedEl && payload.generated_at) {
             const date = new Date(payload.generated_at);
@@ -241,8 +264,7 @@ export async function loadCatalystSignals(manualRefresh = false, thresholds = nu
     if (isLoading) return;
     isLoading = true;
 
-    loadingBannerId = showPanelLoading('catalyst-watch-section', 'Scanning options flow for anomalies...');
-    StateModel.showEmpty('catalyst-state', 'Scanning options flow...');
+    StateModel.showLoading?.('catalyst-state', 'Scanning options flow for anomalies...');
 
     try {
         const timeoutMs = manualRefresh ? DEFAULT_MANUAL_TIMEOUT_MS : DEFAULT_AUTO_TIMEOUT_MS;
@@ -250,23 +272,14 @@ export async function loadCatalystSignals(manualRefresh = false, thresholds = nu
         renderSignals(payload);
     } catch (error) {
         console.error('Error loading catalyst signals:', error);
-        if (loadingBannerId) {
-            failPanelLoading(
-                loadingBannerId,
-                error?.message?.includes('Request timed out')
-                    ? 'Catalyst watch is slow right now'
-                    : 'Unable to load catalyst watch'
-            );
-            loadingBannerId = null;
-        }
         contentEl.classList.add('d-none');
         if (error?.message?.includes('Request timed out')) {
-            StateModel.showEmpty(
+            StateModel.showEmpty?.(
                 'catalyst-state',
                 'Catalyst scanning is taking longer than expected. The rest of the dashboard is still available; try Refresh when broker flow data catches up.'
             );
         } else {
-            StateModel.showError('catalyst-state', 'Unable to load catalyst watch.', () => loadCatalystSignals(true));
+            StateModel.showError?.('catalyst-state', 'Unable to load catalyst watch.', () => loadCatalystSignals(true));
         }
     } finally {
         isLoading = false;

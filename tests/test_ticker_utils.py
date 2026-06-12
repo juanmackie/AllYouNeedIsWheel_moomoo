@@ -4,7 +4,7 @@ Tests for core/ticker_utils.py — canonical_underlying helper
 
 import unittest
 
-from core.ticker_utils import canonical_underlying
+from core.ticker_utils import canonical_underlying, earnings_underlying_ticker
 
 
 class TestCanonicalUnderlying(unittest.TestCase):
@@ -57,6 +57,15 @@ class TestCanonicalUnderlying(unittest.TestCase):
 
     def test_moomoo_style_us_prefix(self):
         self.assertEqual(canonical_underlying('US.UBER'), 'UBER')
+
+    def test_earnings_underlying_strips_option_contract_suffix(self):
+        self.assertEqual(earnings_underlying_ticker('US.UBER260618C77000'), 'UBER')
+
+    def test_earnings_underlying_handles_class_shares(self):
+        self.assertEqual(earnings_underlying_ticker('US.BRK.B260117C300000'), 'BRK-B')
+
+    def test_earnings_underlying_trims_whitespace(self):
+        self.assertEqual(earnings_underlying_ticker('  US.AAPL  '), 'AAPL')
 
 
 if __name__ == '__main__':

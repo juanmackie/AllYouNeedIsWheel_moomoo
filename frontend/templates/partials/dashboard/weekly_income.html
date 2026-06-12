@@ -1,4 +1,4 @@
-<section class="app-section income-stage-section">
+<section class="app-section income-stage-section" id="weekly-income-section">
     <div class="app-section__header">
         <div>
             <span class="app-section__eyebrow">Friday book</span>
@@ -6,35 +6,33 @@
             <p>Short options expiring this Friday.</p>
         </div>
         <div class="app-section__actions">
-            <button id="refresh-filled-orders" class="btn btn-outline-primary btn-sm" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh filled orders and earnings data">
-                <i class="bi bi-arrow-clockwise"></i> Refresh
-            </button>
+            <button id="refresh-filled-orders" class="btn btn-outline-primary btn-sm" data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh filled orders and earnings data">Refresh</button>
         </div>
     </div>
 
     <div id="weekly-income-state"></div>
-    <div class="table-responsive">
-        <table class="table table-hover">
+    <div class="ft-table-wrap">
+        <table class="ft-table">
             <thead>
                 <tr>
                     <th>Symbol</th>
                     <th>Type</th>
-                    <th>Strike</th>
+                    <th class="ft-th-right">Strike</th>
                     <th>Expiration</th>
-                    <th>Avg Price</th>
-                    <th>Qty</th>
-                    <th>Total Income</th>
-                    <th>Notional</th>
+                    <th class="ft-th-right">Avg Price</th>
+                    <th class="ft-th-right">Qty</th>
+                    <th class="ft-th-right">Total Income</th>
+                    <th class="ft-th-right">Notional</th>
                 </tr>
             </thead>
             <tbody id="filled-orders-table">
                 <tr>
-                    <td colspan="8" class="text-center text-muted py-4">Loading short options expiring this Friday...</td>
+                    <td colspan="8" class="ft-td-center ft-td-mute" style="padding: 32px 0;">Loading short options expiring this Friday...</td>
                 </tr>
             </tbody>
             <tfoot class="income-stage-summary">
                 <tr id="weekly-earnings-summary">
-                    <td colspan="8">
+                    <td colspan="8" style="padding: 18px 0 0;">
                         <div class="income-stage-summary__grid">
                             <div>
                                 <span class="income-stage-summary__label">Weekly income</span>

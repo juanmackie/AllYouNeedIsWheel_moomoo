@@ -15,6 +15,7 @@ from db.database import OptionsDatabase
 from config import apply_env_overrides
 from api.services.iv_earnings_service import IVEarningsService
 from core.background_manager import BackgroundTaskManager
+from core.ticker_utils import earnings_underlying_ticker
 
 # Configure logging
 logger = get_logger('autotrader.app', 'api')
@@ -124,17 +125,17 @@ try:
 except Exception as e:
     logger.error(f"Failed to start health monitor: {e}")
 
-# Start evaluator/calibrator scheduler (daily evaluator, weekly calibration)
+# Start background scheduler (earnings updater)
 try:
     from core.scheduler import start_scheduler, stop_scheduler
     started = start_scheduler(db=app.config.get('database'), app=app)
     if started:
-        logger.info("Evaluator/calibrator scheduler started (this process owns the lock)")
+        logger.info("Background scheduler started (this process owns the lock)")
     else:
-        logger.info("Evaluator/calibrator scheduler skipped (another process owns the lock)")
+        logger.info("Background scheduler skipped (another process owns the lock)")
     atexit.register(stop_scheduler)
 except Exception as e:
-    logger.error(f"Failed to start evaluator/calibrator scheduler: {e}")
+    logger.error(f"Failed to start background scheduler: {e}")
 
 # Web routes
 @app.route('/')
@@ -223,7 +224,9 @@ def refresh_all_earnings():
 
     all_tickers = set()
     for p in positions:
-        all_tickers.add(p.get('symbol'))
+        normalized = earnings_underlying_ticker(str(p.get('symbol', '') or ''))
+        if normalized:
+            all_tickers.add(normalized)
 
     try:
         from api.services.watchlist_manager import WatchlistManager
@@ -231,11 +234,11 @@ def refresh_all_earnings():
         wm = WatchlistManager(connection_config)
         growth_mode = connection_config.get('growth_mode', {})
         watchlist_tickers = [
-            t.strip().upper()
+            earnings_underlying_ticker(t.strip())
             for t in wm.get_effective_watchlist(growth_mode_config=growth_mode)
             if t.strip()
         ]
-        all_tickers.update(watchlist_tickers)
+        all_tickers.update(t for t in watchlist_tickers if t)
     except Exception:
         logger.warning("Could not load watchlist tickers for earnings update", exc_info=True)
 

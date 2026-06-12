@@ -170,18 +170,14 @@ def fetch_yfinance_iv_for_chain(
         return yfinance_cache[cache_key]
 
     try:
-        import yfinance as yf
+        from api.services.utils import get_yfinance_option_chain
 
-        # Convert YYYYMMDD to YYYY-MM-DD
-        exp_formatted = f"{expiration[:4]}-{expiration[4:6]}-{expiration[6:8]}"
+        chain = get_yfinance_option_chain(ticker, expiration)
+        if not chain:
+            yfinance_cache[cache_key] = None
+            return None
 
-        yf_ticker = yf.Ticker(ticker)
-        chain = yf_ticker.option_chain(exp_formatted)
-
-        if option_type == 'C':
-            df = chain.calls
-        else:
-            df = chain.puts
+        df = chain["calls"] if option_type == 'C' else chain["puts"]
 
         if df is None or df.empty:
             yfinance_cache[cache_key] = None
@@ -202,3 +198,31 @@ def fetch_yfinance_iv_for_chain(
         logger.debug(f"yfinance fetch failed for {ticker} {expiration} {option_type}: {e}")
         yfinance_cache[cache_key] = None
         return None
+
+
+def prepare_option_for_scoring(option, ticker, stock_price, yfinance_iv_cache=None):
+    """
+    Enrich an option dict with IV normalization, yfinance IV fallback,
+    and Black-Scholes Greeks computation.
+
+    Modifies option in place. Returns (normalized_iv, delta_after_enrichment).
+    """
+    iv = _normalize_iv(option.get('implied_volatility', 0))
+    delta = float(option.get('delta', 0) or 0)
+
+    if iv <= 0 and yfinance_iv_cache is not None:
+        exp = str(option.get('expiration', ''))
+        opt_type = 'C' if str(option.get('option_type', '')).upper() == 'CALL' else 'P'
+        iv_map = fetch_yfinance_iv_for_chain(ticker, exp, opt_type, yfinance_iv_cache)
+        if iv_map:
+            strike = float(option.get('strike', 0))
+            iv = iv_map.get(strike, 0)
+            if iv > 0:
+                option['implied_volatility'] = iv
+                option['iv_source'] = 'yfinance'
+
+    if iv > 0 and abs(delta) < 0.001:
+        enrich_option_with_greeks(option, stock_price)
+        delta = float(option.get('delta', 0) or 0)
+
+    return iv, delta

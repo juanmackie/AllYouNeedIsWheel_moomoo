@@ -1068,16 +1068,18 @@ interface Position {
 
 ## Rate Limits
 
-The application has no explicit rate limiting, but:
+The application applies explicit, route-level throttles and shared provider budgets:
 
-1. **Moomoo API** — Subject to Moomoo's rate limits (not documented publicly)
-2. **Yahoo Finance** — Be polite; background thread adds 1-second delays between requests
-3. **Local SQLite** — Can handle hundreds of requests per second
+1. **Moomoo/OpenD** — Core connection methods use request limiting, short spacing, option-chain caching, and in-flight request coalescing.
+2. **Yahoo Finance** — Direct history/options/option-chain calls use a shared conservative limiter and TTL caches so dashboard bursts do not fan out into repeated upstream requests.
+3. **Route handling** — Client-facing option routes still enforce their own request limits on top of provider budgets.
+4. **Local SQLite** — Can handle hundreds of requests per second.
 
 **Best Practices:**
 - Cache results client-side when possible
 - Don't poll `/api/options/otm` more than once per minute
 - Use the dashboard refresh flow instead of polling for broker-side order state
+- Source-policy metadata is included in API responses so fallback data stays visibly labeled as enrichment rather than broker truth.
 
 ---
 

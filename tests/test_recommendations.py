@@ -12,6 +12,9 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+_overlay_map_patch = patch('api.services.recommendations.fetch_signal_overlay_map', return_value={})
+_overlay_map_patch.start()
+
 
 class TestRecommendationEngine(unittest.TestCase):
     """Test RecommendationEngine with fully mocked context."""
@@ -27,6 +30,9 @@ class TestRecommendationEngine(unittest.TestCase):
         self.mock_watchlist_manager = MagicMock()
         self.mock_options_data = MagicMock()
         self.mock_cash_calculator = MagicMock()
+        self.mock_iv_earnings.get_iv_environment_score.return_value = (0, 0.5, 'normal')
+        self.mock_iv_earnings.get_earnings_score_impact.return_value = (0, None)
+        self.mock_iv_earnings.get_earnings_info.return_value = {}
 
         self.mock_conn = MagicMock()
         self.mock_conn.get_stock_price.return_value = 150.0
@@ -220,6 +226,9 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.mock_watchlist_manager = MagicMock()
         self.mock_options_data = MagicMock()
         self.mock_cash_calculator = MagicMock()
+        self.mock_iv_earnings.get_iv_environment_score.return_value = (0, 0.5, 'normal')
+        self.mock_iv_earnings.get_earnings_score_impact.return_value = (0, None)
+        self.mock_iv_earnings.get_earnings_info.return_value = {}
 
         self.mock_conn = MagicMock()
         self.mock_conn.get_stock_price.return_value = 150.0
@@ -256,6 +265,157 @@ class TestRecommendationEngineSignals(unittest.TestCase):
                  'open_interest': 300, 'volume': 200, 'dte': 21},
             ],
         }
+
+    def test_format_recommendation_preserves_source_fields(self):
+        engine = self._import_engine()
+
+        rec = engine._format_recommendation({
+            'ticker': 'AAPL',
+            'option_type': 'PUT',
+            'strike': 150.0,
+            'expiration': '20260529',
+            'dte': 21,
+            'mid_price': 1.25,
+            'premium_per_contract': 125.0,
+            'score': 88.0,
+            'annualized_return': 21.0,
+            'iv_adjusted_return': 18.0,
+            'otm_pct': 7.5,
+            'delta': -0.18,
+            'iv_rank': 52.0,
+            'iv_status': 'normal',
+            'days_to_earnings': None,
+            'earnings_date': None,
+            'warnings': [],
+            'rationale': ['Strong'],
+            'max_contracts': 1,
+            'existing_position': 0,
+            'profile_type': 'monthly',
+            'stock_price': 162.0,
+            'bid': 1.20,
+            'ask': 1.30,
+            'open_interest': 500,
+            'volume': 100,
+            'implied_volatility': 0.32,
+            'score_details': {},
+            'size_fit': 1.0,
+            'expected_move_buffer': 0.0,
+            'wheel_decision': {
+                'price_source': 'broker',
+                'chain_source': 'yfinance',
+                'iv_source': 'yfinance',
+            },
+            'from_watchlist': True,
+            'held_position': False,
+            'cash_required': 15000,
+            'breakeven': 148.75,
+            'breakeven_buffer_pct': 1.5,
+            'macro_multiplier': 1.0,
+            'score_rationale': 'Balanced',
+            'remaining_gap_to_target': 0,
+            'risk_budget_used_pct': 0,
+            'stress_loss': 0,
+            'confidence_score': 72,
+            'covered_call_intent': '',
+            'signal_type': 'csp',
+            'strategy': 'wheel',
+            'broker_feasible': True,
+            'capital_required': 15000,
+            'risk_budget_used': 0,
+            'data_source': 'broker',
+            'confidence': 72,
+            'price_source': 'broker',
+            'chain_source': 'yfinance',
+            'iv_source': 'yfinance',
+            'from_yfinance': True,
+            'quote_quality': 'tradable',
+            'blocked_reason_codes': [],
+            'research_only': False,
+        }, rank=1)
+
+        self.assertEqual(rec['price_source'], 'broker')
+        self.assertEqual(rec['chain_source'], 'yfinance')
+        self.assertEqual(rec['iv_source'], 'yfinance')
+        self.assertTrue(rec['from_yfinance'])
+
+    def test_get_top_recommendations_blocks_low_confidence_yfinance_candidates(self):
+        engine = self._import_engine()
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ['AAPL']
+        self.mock_options_data._process_ticker_for_otm.return_value = {'calls': [], 'puts': []}
+
+        low_conf_candidate = {
+            'ticker': 'AAPL',
+            'option_type': 'PUT',
+            'strike': 150.0,
+            'expiration': '20260529',
+            'dte': 21,
+            'mid_price': 1.25,
+            'premium_per_contract': 125.0,
+            'score': 88.0,
+            'annualized_return': 21.0,
+            'iv_adjusted_return': 18.0,
+            'otm_pct': 7.5,
+            'delta': -0.18,
+            'iv_rank': 52.0,
+            'iv_status': 'normal',
+            'days_to_earnings': None,
+            'earnings_date': None,
+            'warnings': [],
+            'rationale': ['Fallback'],
+            'max_contracts': 1,
+            'existing_position': 0,
+            'profile_type': 'monthly',
+            'stock_price': 162.0,
+            'bid': 1.20,
+            'ask': 1.30,
+            'open_interest': 500,
+            'volume': 100,
+            'implied_volatility': 0.32,
+            'score_details': {},
+            'size_fit': 1.0,
+            'expected_move_buffer': 0.0,
+            'wheel_decision': {
+                'contract_score': 88.0,
+                'confidence_score': 65,
+                'price_source': 'yfinance',
+                'chain_source': 'yfinance',
+                'iv_source': 'yfinance',
+            },
+            'from_watchlist': True,
+            'held_position': False,
+            'cash_required': 15000,
+            'breakeven': 148.75,
+            'breakeven_buffer_pct': 1.5,
+            'macro_multiplier': 1.0,
+            'score_rationale': 'Fallback',
+            'remaining_gap_to_target': 0,
+            'risk_budget_used_pct': 0,
+            'stress_loss': 0,
+            'confidence_score': 65,
+            'covered_call_intent': '',
+            'signal_type': 'csp',
+            'strategy': 'wheel',
+            'broker_feasible': True,
+            'capital_required': 15000,
+            'risk_budget_used': 0,
+            'data_source': 'yfinance',
+            'confidence': 65,
+            'price_source': 'yfinance',
+            'chain_source': 'yfinance',
+            'iv_source': 'yfinance',
+            'from_yfinance': True,
+            'quote_quality': 'tradable',
+            'blocked_reason_codes': [],
+            'research_only': False,
+        }
+
+        with patch.object(engine, '_fetch_watchlist_ticker_csp', return_value=[low_conf_candidate]):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['count'], 0)
+        self.assertEqual(result['blocked_reason_counts'].get('data_quality_blocked'), 1)
+        self.assertTrue(any(item.get('reason_code') == 'data_quality_blocked' for item in result['blocked_signals']))
 
     def _import_engine(self):
         from api.services.recommendations import RecommendationEngine
@@ -456,6 +616,25 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertTrue(result[0].get('_skip_diagnostic'))
         self.assertEqual(result[0]['reason_code'], 'no_cash_fit')
         mock_ticker.option_chain.assert_not_called()
+
+    def test_get_top_recommendations_skips_watchlist_csp_scan_when_buying_power_too_low(self):
+        """Low buying power should short-circuit the CSP watchlist lane."""
+        engine = self._import_engine()
+        self.mock_portfolio_context['positions'] = {}
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = [
+            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'
+        ]
+        self.mock_portfolio_context['cash_available_for_csp'] = 1210.19
+
+        result = engine.get_top_recommendations(limit=5)
+
+        self.mock_conn.get_stock_price.assert_not_called()
+        self.mock_options_data._process_ticker_for_otm.assert_not_called()
+        self.assertEqual(result.get('count'), 0)
+        self.assertEqual(result.get('signals', []), [])
+        self.assertEqual(len(result.get('blocked_signals', [])), 1)
+        self.assertEqual(result['blocked_signals'][0]['reason_code'], 'watchlist_csp_skipped_low_buying_power')
+        self.assertEqual(result['blocked_signals'][0]['ticker_count'], 5)
 
 
 
@@ -1276,7 +1455,7 @@ class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
         self.assertEqual(wd.get('iv_rank'), 0.65)
 
     def test_cash_prefilter_skips_ticker_when_unaffordable(self):
-        """_fetch_watchlist_csp_moomoo returns None when even minimum strike exceeds buying power."""
+        """_fetch_watchlist_csp_moomoo returns no_cash_fit diagnostic when no strike fits buying power."""
         self.mock_iv_earnings.get_iv_environment_score.return_value = (0, 0.5, 'neutral')
 
         from api.services.recommendations import RecommendationEngine
@@ -1292,17 +1471,223 @@ class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
             self.mock_cash_calculator,
         )
 
-        # Set very low buying power: $200 -> even $5 stock * 50% * 100 = $250 > $200
+        # Set very low buying power: $200 -> even deep OTM put on $5 stock needs $250
         portfolio = dict(self.mock_portfolio_context,
                          cash_available_for_csp=200.0,
                          available_cash=200.0,
                          broker_buying_power=200.0)
 
+        # Mock cached stock price to return None so it falls through to live price check
+        self.mock_conn.get_cached_stock_price.return_value = None
+
         result = engine._fetch_watchlist_csp_moomoo('CHEAP', portfolio)
 
-        # Should return None due to cash prefilter (no option chain fetch attempted)
-        self.assertIsNone(result)
+        # Should return a skip diagnostic with no_cash_fit reason
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        self.assertTrue(result[0].get('_skip_diagnostic'))
+        self.assertEqual(result[0]['reason_code'], 'no_cash_fit')
+        self.assertIn('No CSP strike fits buying power', result[0]['reason_text'])
         self.mock_conn.get_option_expiration_dates.assert_not_called()
+
+
+class TestCSPCashFit(unittest.TestCase):
+    """Test CSP cash-fit: a ticker where 15% OTM fits but 10% does not."""
+
+    def setUp(self):
+        self.mock_connection_provider = MagicMock()
+        self.mock_config_provider = MagicMock()
+        self.mock_config_provider.config = {'cash_reserve_enabled': True}
+        self.mock_db = MagicMock()
+        self.mock_iv_earnings = MagicMock()
+        self.mock_portfolio_context_provider = MagicMock()
+        self.mock_portfolio_service_provider = MagicMock()
+        self.mock_watchlist_manager = MagicMock()
+        self.mock_options_data = MagicMock()
+        self.mock_cash_calculator = MagicMock()
+
+        self.mock_conn = MagicMock()
+        self.mock_conn.get_stock_price.return_value = 100.0
+        self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
+
+        self.mock_watchlist_manager.get_screening_profile.return_value = {
+            'min_mid_price': 0.05,
+            'max_spread_pct': 60,
+            'min_premium_per_contract': 5,
+            'min_open_interest': 10,
+            'min_volume': 1,
+            'target_iv_adjusted': 50,
+            'target_theta_delta_ratio': 0.005,
+            'preferred_dte': 37,
+            'target_delta': 0.30,
+            'delta_tolerance': 0.12,
+            'ideal_open_interest': 500,
+            'ideal_volume': 100,
+            'ideal_spread_pct': 12,
+            'liquidity_weight_multiplier': 1.0,
+            'profile_type': 'monthly',
+            'min_dte': 30,
+            'max_dte': 45,
+            'min_otm_pct': 5,
+            'max_otm_pct': 15,
+        }
+
+    def _import_engine(self):
+        from api.services.recommendations import RecommendationEngine
+        engine = RecommendationEngine(
+            self.mock_connection_provider,
+            self.mock_config_provider,
+            self.mock_db,
+            self.mock_iv_earnings,
+            self.mock_portfolio_context_provider,
+            self.mock_portfolio_service_provider,
+            self.mock_watchlist_manager,
+            self.mock_options_data,
+            self.mock_cash_calculator,
+        )
+        engine._growth_screener_config = {
+            'screener_profile': {
+                'csp_default_otm_pct': 10,
+                'csp_min_otm_pct': 5,
+                'csp_max_otm_pct': 15,
+                'csp_min_dte': 30,
+                'csp_max_dte': 45,
+                'csp_preferred_dte': 37,
+            }
+        }
+        return engine
+
+    def test_has_any_affordable_otm_strike_10pct_not_fit_but_15pct_fits(self):
+        """10% OTM strike ($90) needs $9000 but only $8500 available, but 15% OTM ($85) needs $8500."""
+        engine = self._import_engine()
+        portfolio = {
+            'cash_available_for_csp': 8500.0,
+            'broker_buying_power': 8500.0,
+        }
+        # Stock at $100: 10% OTM = $90 strike (needs $9000), 15% OTM = $85 strike (needs $8500)
+        result = engine._has_any_affordable_otm_strike(100.0, portfolio)
+        self.assertTrue(result)
+
+    def test_no_affordable_otm_strike_at_all(self):
+        """Even 15% OTM strike exceeds buying power."""
+        engine = self._import_engine()
+        portfolio = {
+            'cash_available_for_csp': 5000.0,
+            'broker_buying_power': 5000.0,
+        }
+        # Stock at $100: 15% OTM = $85 strike (needs $8500 > $5000)
+        result = engine._has_any_affordable_otm_strike(100.0, portfolio)
+        self.assertFalse(result)
+
+    def test_find_affordable_csp_strike_returns_highest_affordable(self):
+        """Should return the highest strike that fits buying power."""
+        engine = self._import_engine()
+        portfolio = {
+            'cash_available_for_csp': 8500.0,
+            'broker_buying_power': 8500.0,
+        }
+        strikes = [80.0, 85.0, 88.0, 90.0, 95.0]
+        result = engine._find_affordable_csp_strike(100.0, portfolio, strikes)
+        self.assertEqual(result[0], 85.0)
+
+    def test_watchlist_csp_scoring_applies_earnings_and_vix_context(self):
+        """Headline CSP scoring should apply earnings risk and pass VIX into profile selection."""
+        engine = self._import_engine()
+        self.mock_iv_earnings.get_earnings_score_impact.return_value = (-30, 'earnings soon')
+        self.mock_iv_earnings.get_earnings_info.return_value = {
+            'earnings_date': '2026-07-15',
+            'days_to_earnings': 5,
+            'warning_level': 'soon',
+        }
+        expiration = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+        contract = {
+            'strike': 90.0,
+            'expiration': expiration,
+            'option_type': 'PUT',
+            'bid': 2.0,
+            'ask': 2.10,
+            'last': 2.05,
+            'dte': 37,
+            'implied_volatility': 0.35,
+            'open_interest': 500,
+            'volume': 200,
+            'delta': -0.30,
+            'theta': -0.06,
+            'gamma': 0.04,
+            'vega': 0.15,
+        }
+        portfolio = {
+            'positions': {},
+            'cash_balance': 50000.0,
+            'available_cash': 50000.0,
+            'broker_buying_power': 50000.0,
+            'cash_available_for_csp': 50000.0,
+            'account_value': 100000.0,
+            'vix_regime': {'regime': 'fear', 'vix': 32, 'delta_adjustment': -0.03},
+        }
+
+        decision = engine._score_csp_contract(contract, 'AAPL', 100.0, 37, portfolio, {})
+
+        self.assertFalse(decision.hard_blockers)
+        self.assertEqual(decision.earnings_adjustment, -30)
+        self.assertEqual(decision.earnings_date, '2026-07-15')
+        self.assertEqual(decision.days_to_earnings, 5)
+        self.assertEqual(decision.vix_regime, 'fear')
+        self.mock_watchlist_manager.get_screening_profile.assert_called_with(
+            'PUT',
+            dte=37,
+            vix_regime=portfolio['vix_regime'],
+            growth_mode_config=engine._growth_screener_config,
+        )
+
+    def test_watchlist_csp_scoring_blocks_missing_iv(self):
+        """Headline CSP scoring should not rank contracts that still lack IV after enrichment."""
+        engine = self._import_engine()
+        expiration = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+        contract = {
+            'strike': 90.0,
+            'expiration': expiration,
+            'option_type': 'PUT',
+            'bid': 2.0,
+            'ask': 2.10,
+            'last': 2.05,
+            'dte': 37,
+            'implied_volatility': 0,
+            'open_interest': 500,
+            'volume': 200,
+            'delta': -0.30,
+        }
+
+        decision = engine._score_csp_contract(
+            contract,
+            'AAPL',
+            100.0,
+            37,
+            {'cash_available_for_csp': 50000.0, 'broker_buying_power': 50000.0},
+            {},
+        )
+
+        self.assertTrue(decision.hard_blockers)
+        self.assertIn('missing_iv', decision.blocked_reason_codes)
+
+    def test_yfinance_csp_returns_no_cash_fit_when_no_strike_fits(self):
+        """yfinance path returns no_cash_fit diagnostic when no OTM strike fits."""
+        engine = self._import_engine()
+        portfolio = {
+            'cash_available_for_csp': 5000.0,
+            'available_cash': 5000.0,
+            'broker_buying_power': 5000.0,
+        }
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = pd.DataFrame({'Close': [100.0]})
+
+        with patch('api.services.recommendations.get_yfinance_ticker', return_value=mock_ticker):
+            result = engine._fetch_yfinance_csp_candidates('EXPENSIVE', portfolio)
+
+        self.assertEqual(len(result), 1)
+        self.assertTrue(result[0].get('_skip_diagnostic'))
+        self.assertEqual(result[0]['reason_code'], 'no_cash_fit')
+        mock_ticker.option_chain.assert_not_called()
 
 
 if __name__ == '__main__':

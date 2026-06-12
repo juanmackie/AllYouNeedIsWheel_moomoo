@@ -9,8 +9,9 @@ import logging
 import time
 from datetime import datetime
 
-from core.catalyst_flow_decision import classify_catalyst_flow
+from core.catalyst_flow_decision import ACTION_BUCKETS, classify_catalyst_flow
 from core.ticker_utils import canonical_underlying
+from api.services.signal_overlay_service import apply_signal_overlay, fetch_signal_overlay_map
 
 logger = logging.getLogger("api.services.catalyst_flow")
 
@@ -43,9 +44,11 @@ class CatalystFlowService:
         host = str(self.config.get("host", "127.0.0.1"))
         port = int(self.config.get("port", 11111))
         self.connection = MoomooConnection(
-            host=host, port=port,
-            readonly=True,
+            host=host,
+            port=port,
+            readonly=bool(self.config.get("readonly", True)),
             account_id=self.config.get("account_id"),
+            portfolio_env=self.config.get("portfolio_env"),
             security_firm=self.config.get("security_firm"),
         )
         if self.connection.connect():
@@ -192,18 +195,92 @@ class CatalystFlowService:
                         "upvotes": se.get("upvotes", 0),
                         "momentum_score": se.get("momentum_score", 0),
                     }
-                    # Light score boost — social data alone cannot create a signal
-                    if item.get("score", 0) >= 20:
-                        item["score"] = round(min(item["score"] * 1.05, 100), 1)
-                        item.setdefault("rationale", []).append(
-                            f"Social rising ({se.get('mentions', 0)} mentions)"
-                        )
+                    item.setdefault("rationale", []).append(
+                        f"Scan source: social momentum ({se.get('mentions', 0)} mentions)"
+                    )
+
+        # -- Ticker-level conflict detection --#
+        # Group by canonical underlying, then check for meaningful opposite sides.
+        # Meaningful = not REJECT, not SPECULATIVE_ONLY, score >= 30.
+        MEANINGFUL_BUCKETS = {"CALL_RESEARCH", "PUT_RESEARCH"}
+        ticker_sides: dict[str, dict[str, list]] = {}
+        for item in all_signals:
+            canon = canonical_underlying(item.get("ticker", ""))
+            side = item.get("side", "")
+            ticker_sides.setdefault(canon, {}).setdefault(side, []).append(item)
+
+        # Snapshot meaningful sides per canonical ticker before any mutation.
+        ticker_meaningful: dict[str, set[str]] = {}
+        for canon, sides in ticker_sides.items():
+            meaningful = set()
+            for side_key, side_signals in sides.items():
+                for s in side_signals:
+                    if s.get("action_bucket") in MEANINGFUL_BUCKETS:
+                        meaningful.add(side_key)
+                        break
+            ticker_meaningful[canon] = meaningful
+
+        for item in all_signals:
+            canon = canonical_underlying(item.get("ticker", ""))
+            sides = ticker_sides.get(canon, {})
+            meaningful = ticker_meaningful.get(canon, set())
+            if len(sides) <= 1 or len(meaningful) <= 1:
+                continue
+
+            # Both sides have meaningful signals — check dominance
+            call_top = max(
+                (s.get("score", 0) for s in sides.get("CALL", [])),
+                default=0,
+            )
+            put_top = max(
+                (s.get("score", 0) for s in sides.get("PUT", [])),
+                default=0,
+            )
+            dominant = max(call_top, put_top)
+            recessive = min(call_top, put_top)
+            is_dominant = dominant >= recessive * 1.5 and dominant >= 50
+
+            bucket = item.get("action_bucket")
+            if is_dominant and bucket in MEANINGFUL_BUCKETS:
+                dominant_side = "CALL" if call_top >= put_top else "PUT"
+                if item.get("side") == dominant_side:
+                    continue  # dominant side keeps its bucket
+                else:
+                    item["action_bucket"] = "WATCH"
+                    item["action_label"] = ACTION_BUCKETS["WATCH"]
+                    item["action_reason"] = (
+                        f"Opposing {item.get('side', '').lower()} flow exists but "
+                        f"{dominant_side.lower()} dominates on {canon}"
+                    )
+            elif bucket in MEANINGFUL_BUCKETS:
+                item["action_bucket"] = "CONFLICT_WATCH"
+                item["action_label"] = ACTION_BUCKETS["CONFLICT_WATCH"]
+                item["action_reason"] = (
+                    f"Both bullish and bearish flow on {canon} — "
+                    "conflicting signals, watch only"
+                )
+                item["blockers"] = list(set(
+                    item.get("blockers", []) + ["Conflicting directional flow on same ticker"]
+                ))
+
+        # Attach the shared overlay after catalyst classification so the
+        # card can show capital/technical/derivatives context without
+        # mutating the underlying flow score.
+        try:
+            overlay_tickers = []
+            seen_overlay_tickers = set()
+            for item in all_signals:
+                ticker = canonical_underlying(item.get("ticker", ""))
+                if ticker and ticker not in seen_overlay_tickers:
+                    seen_overlay_tickers.add(ticker)
+                    overlay_tickers.append(ticker)
+            overlay_map = fetch_signal_overlay_map(overlay_tickers)
+            all_signals = [apply_signal_overlay(item, overlay_map.get(canonical_underlying(item.get("ticker", "")), {})) for item in all_signals]
+        except Exception as exc:
+            logger.debug("Catalyst overlay attachment skipped: %s", exc)
 
         all_signals.sort(key=lambda s: s.get("score", 0), reverse=True)
         candidate_count = len(all_signals)
-
-        # Record surfaced signals to evaluator for tracking
-        self._record_signals(all_signals[:limit])
 
         return {
             "success": True,
@@ -322,6 +399,30 @@ class CatalystFlowService:
             normalized_signals.append(item)
         return normalized_signals
 
+    def get_ticker_warnings(self, ticker: str) -> list[str]:
+        """Return defensive warnings from shared cache only — never triggers broker calls.
+
+        Only warns for clean directional signals (CALL_RESEARCH / PUT_RESEARCH).
+        Conflict, speculative, rejected, and watch signals do not generate
+        lane-specific warnings.
+        """
+        CLEAN_BUCKETS = {"CALL_RESEARCH", "PUT_RESEARCH"}
+        cached = CatalystFlowService._shared_cache.get(ticker)
+        if not cached or not cached.get("signals"):
+            return []
+        if time.time() - cached.get("ts", 0) > CatalystFlowService._shared_cache_ttl:
+            return []
+        warnings = []
+        for sig in cached["signals"]:
+            if sig.get("action_bucket") not in CLEAN_BUCKETS:
+                continue
+            side = sig.get("side")
+            if side == "CALL" and not sig.get("is_hedged"):
+                warnings.append("Bullish call flow detected \u2014 upside cap risk for covered calls")
+            elif side == "PUT" and not sig.get("is_hedged"):
+                warnings.append("Bearish put flow detected \u2014 tail risk for CSPs")
+        return warnings
+
     def _record_signals(self, signals: list[dict]):
         """Record surfaced catalyst signals to evaluator for outcome tracking."""
         try:
@@ -347,8 +448,8 @@ class CatalystFlowService:
                     "confidence": sig.get("score", 0),
                     "annualized_return": None,
                     "premium_per_contract": None,
-                    "delta": None,
-                    "implied_volatility": None,
+                    "delta": sig.get("delta"),
+                    "implied_volatility": sig.get("implied_volatility"),
                     "capital_required": None,
                     "wheel_decision": {},
                     "score_details": sig,
@@ -356,22 +457,6 @@ class CatalystFlowService:
             db.evaluator.record_surfaced_signals(formatted, source="catalyst_watch")
         except Exception as exc:
             logger.debug("Failed to record catalyst signals to evaluator: %s", exc)
-
-    def get_ticker_warnings(self, ticker: str) -> list[str]:
-        """Return defensive warnings from shared cache only — never triggers broker calls."""
-        cached = CatalystFlowService._shared_cache.get(ticker)
-        if not cached or not cached.get("signals"):
-            return []
-        if time.time() - cached.get("ts", 0) > CatalystFlowService._shared_cache_ttl:
-            return []
-        warnings = []
-        for sig in cached["signals"]:
-            side = sig.get("side")
-            if side == "CALL" and not sig.get("is_hedged"):
-                warnings.append("Bullish call flow detected \u2014 upside cap risk for covered calls")
-            elif side == "PUT" and not sig.get("is_hedged"):
-                warnings.append("Bearish put flow detected \u2014 tail risk for CSPs")
-        return warnings
 
     def _get_fallback_price(self, ticker):
         """Get stock price from yfinance as fallback."""

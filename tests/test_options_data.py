@@ -80,6 +80,176 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
 
     @patch('api.services.options_data.get_macro_service')
     @patch('api.services.options_data.score_contract')
+    def test_build_candidate_preserves_yfinance_provenance(self, mock_score, mock_macro):
+        service = self._make_service()
+        mock_macro.return_value.get_macro_regime.return_value = {}
+
+        decision = MagicMock()
+        decision.ticker = 'AAPL'
+        decision.option_type = 'PUT'
+        decision.expiration = '20260529'
+        decision.strike = 282.5
+        decision.hard_blockers = []
+        decision.confidence_score = 82
+        decision.contract_score = 77.0
+        decision.price_source = 'broker'
+        decision.chain_source = 'yfinance'
+        decision.iv_source = 'yfinance'
+        decision.quote_quality = 'tradable'
+        decision.blocked_reason_codes = []
+        decision.mid_price = 0.45
+        decision.premium_per_contract = 45.0
+        decision.bid = 0.40
+        decision.ask = 0.50
+        decision.last = 0.45
+        decision.delta = -0.12
+        decision.gamma = 0.02
+        decision.theta = -0.04
+        decision.vega = 0.10
+        decision.annualized_return = 17.5
+        decision.iv_adjusted_return = 15.0
+        decision.otm_pct = 6.0
+        decision.iv_rank = 58.0
+        decision.iv_status = 'normal'
+        decision.iv_env_adjustment = 0
+        decision.profile_type = 'monthly'
+        decision.vix_regime = 'normal'
+        decision.vix_level = 18.0
+        decision.macro_multiplier = 1.0
+        decision.macro_regime = 'neutral'
+        decision.macro_credit_stress = 'stable'
+        decision.macro_summary = ''
+        decision.macro_advice = ''
+        decision.earnings_date = None
+        decision.days_to_earnings = None
+        decision.earnings_adjustment = 0
+        decision.size_fit = 1.0
+        decision.expected_move_buffer = 0.0
+        decision.wheel_decision = {}
+        decision.score_details = {}
+        decision.rationale = ['Good candidate']
+        decision.warnings = []
+        decision.breakeven = 281.0
+        decision.breakeven_buffer_pct = 1.0
+        decision.cash_required = 28250.0
+        mock_score.return_value = decision
+
+        result = service._build_candidate(
+            ticker='AAPL',
+            option={
+                'strike': 282.5,
+                'expiration': '20260529',
+                'option_type': 'PUT',
+                'bid': 0.40,
+                'ask': 0.50,
+                'last': 0.45,
+                'implied_volatility': 0.3,
+                'from_yfinance': True,
+                'price_source': 'broker',
+                'chain_source': 'yfinance',
+                'iv_source': 'yfinance',
+            },
+            stock_price=300.23,
+            desired_otm=6,
+            profile={},
+            portfolio_context={
+                'cash_balance': 12699.31,
+                'available_cash': 12699.31,
+                'cash_available_for_csp': 12699.31,
+            },
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['price_source'], 'broker')
+        self.assertEqual(result['chain_source'], 'yfinance')
+        self.assertEqual(result['iv_source'], 'yfinance')
+        self.assertTrue(result['from_yfinance'])
+
+    @patch('api.services.options_data.get_macro_service')
+    @patch('api.services.options_data.score_contract')
+    def test_build_candidate_blocks_low_confidence_yfinance_fallback(self, mock_score, mock_macro):
+        service = self._make_service()
+        mock_macro.return_value.get_macro_regime.return_value = {}
+
+        decision = MagicMock()
+        decision.ticker = 'AAPL'
+        decision.option_type = 'PUT'
+        decision.expiration = '20260529'
+        decision.strike = 282.5
+        decision.hard_blockers = []
+        decision.confidence_score = 65
+        decision.contract_score = 77.0
+        decision.price_source = 'yfinance'
+        decision.chain_source = 'yfinance'
+        decision.iv_source = 'yfinance'
+        decision.quote_quality = 'tradable'
+        decision.blocked_reason_codes = []
+        decision.mid_price = 0.45
+        decision.premium_per_contract = 45.0
+        decision.bid = 0.40
+        decision.ask = 0.50
+        decision.last = 0.45
+        decision.delta = -0.12
+        decision.gamma = 0.02
+        decision.theta = -0.04
+        decision.vega = 0.10
+        decision.annualized_return = 17.5
+        decision.iv_adjusted_return = 15.0
+        decision.otm_pct = 6.0
+        decision.iv_rank = 58.0
+        decision.iv_status = 'normal'
+        decision.iv_env_adjustment = 0
+        decision.profile_type = 'monthly'
+        decision.vix_regime = 'normal'
+        decision.vix_level = 18.0
+        decision.macro_multiplier = 1.0
+        decision.macro_regime = 'neutral'
+        decision.macro_credit_stress = 'stable'
+        decision.macro_summary = ''
+        decision.macro_advice = ''
+        decision.earnings_date = None
+        decision.days_to_earnings = None
+        decision.earnings_adjustment = 0
+        decision.size_fit = 1.0
+        decision.expected_move_buffer = 0.0
+        decision.wheel_decision = {}
+        decision.score_details = {}
+        decision.rationale = ['Fallback data']
+        decision.warnings = []
+        decision.breakeven = 281.0
+        decision.breakeven_buffer_pct = 1.0
+        decision.cash_required = 28250.0
+        mock_score.return_value = decision
+
+        result = service._build_candidate(
+            ticker='AAPL',
+            option={
+                'strike': 282.5,
+                'expiration': '20260529',
+                'option_type': 'PUT',
+                'bid': 0.40,
+                'ask': 0.50,
+                'last': 0.45,
+                'implied_volatility': 0.3,
+                'from_yfinance': True,
+                'price_source': 'yfinance',
+                'chain_source': 'yfinance',
+                'iv_source': 'yfinance',
+            },
+            stock_price=300.23,
+            desired_otm=6,
+            profile={},
+            portfolio_context={
+                'cash_balance': 12699.31,
+                'available_cash': 12699.31,
+                'cash_available_for_csp': 12699.31,
+            },
+        )
+
+        self.assertIsNone(result)
+
+    @patch('api.services.options_data.get_macro_service')
+    @patch('api.services.options_data.score_contract')
     def test_direct_candidate_scoring_uses_growth_profile_from_toggle(self, mock_score, mock_macro):
         service = self._make_service({
             'cash_reserve_enabled': True,

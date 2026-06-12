@@ -23,7 +23,7 @@ The algorithm prioritizes:
 
 ### Phase 1: Risk-Adjusted Metrics
 
-#### 1. IV-Adjusted Return (25% weight)
+#### 1. IV-Adjusted Return (CALL raw weight 30%, PUT raw weight 30%)
 
 **Purpose:** Filter out dangerous "picking up pennies" scenarios where high premiums in low IV environments don't compensate for the risk.
 
@@ -33,6 +33,8 @@ annualized_return = (premium_per_contract / (stock_price * 100)) * (365 / dte) *
 iv_adjusted_return = annualized_return / max(implied_volatility, 0.05)
 iv_adjusted_score = clamp(iv_adjusted_return / target_iv_adjusted, 0, 1)
 ```
+
+Contracts with missing IV after enrichment are hard-blocked before scoring. The `max(implied_volatility, 0.05)` floor only protects against very low-but-present IV values; it is not used to reward absent IV.
 
 **Target Values:**
 - Default target: 50
@@ -48,7 +50,7 @@ iv_adjusted_score = clamp(iv_adjusted_return / target_iv_adjusted, 0, 1)
 - IV-Adjusted: 12.17 / 0.20 = 60.85
 - Score: min(60.85 / 50, 1.0) = 1.0 (100%)
 
-#### 2. Theta/Delta Risk Ratio (20% weight)
+#### 2. Theta/Delta Risk Ratio (CALL raw weight 15%, PUT raw weight 15%)
 
 **Purpose:** Measure daily income per unit of directional risk. Higher theta relative to delta = better income for less directional exposure.
 
@@ -65,7 +67,7 @@ tdr_score = clamp(theta_delta_ratio / target_theta_delta_ratio, 0, 1)
 - Ratio of 0.003 = 60% score (good)
 - Ratio of 0.001 = 20% score (poor)
 
-#### 3. Expected Value (15-18% weight)
+#### 3. Expected Value (CALL raw weight 10%, PUT raw weight 10%)
 
 **Purpose:** Account for both probability of profit and magnitude of potential losses.
 
@@ -74,11 +76,11 @@ tdr_score = clamp(theta_delta_ratio / target_theta_delta_ratio, 0, 1)
 PoP = 1 - abs(delta)  # Probability of Profit (delta approximation)
 
 if CALL:
-    max_loss_estimate = stock_price * 100 * 0.05  # 5% drop assumption
+    expected_value = premium_per_contract  # assignment/profit-taking is not charged as a loss
 else:  # PUT
     max_loss_estimate = strike * 100 * 0.10     # 10% assignment drop
+    expected_value = (PoP * premium_per_contract) - ((1 - PoP) * max_loss_estimate)
 
-expected_value = (PoP * premium_per_contract) - ((1 - PoP) * max_loss_estimate)
 ev_score = clamp(expected_value / premium_per_contract, 0, 1)
 ```
 
@@ -90,11 +92,10 @@ ev_score = clamp(expected_value / premium_per_contract, 0, 1)
 - Premium: $150
 - Delta: 0.20 (CALL)
 - PoP: 80%
-- Max loss estimate: $750 (5% of $150 stock × 100)
-- Expected value: (0.8 × 150) - (0.2 × 750) = 120 - 150 = -$30
-- Score: clamp(-30 / 150, 0, 1) = 0 (poor expected value)
+- Expected value: $150
+- Score: clamp(150 / 150, 0, 1) = 1.0 (covered call premium is retained)
 
-#### 4. Liquidity Score (15-18% weight)
+#### 4. Liquidity Score (CALL raw weight 15%, PUT raw weight 15%)
 
 **Purpose:** Ensure the play can be entered/exited without excessive slippage.
 
@@ -235,7 +236,7 @@ Strike below cost basis significantly reduces score (protects against locking in
 
 #### PUT-Specific (Cash-Secured Puts)
 
-**Breakeven Buffer (12% weight):**
+**Breakeven Buffer (raw weight 10%):**
 ```
 breakeven = strike - mid_price
 buffer_pct = ((stock_price - breakeven) / stock_price) * 100
@@ -243,7 +244,7 @@ buffer_score = clamp(buffer_pct / target_buffer, 0, 1)
 ```
 Target: Same as desired OTM percentage
 
-**Capital Efficiency (10% weight):**
+**Capital Efficiency (raw weight 15%):**
 ```
 capital_efficiency = annualized_return / (cash_required / account_value)
 ce_score = clamp(capital_efficiency / target_capital_eff, 0, 1)
@@ -252,11 +253,20 @@ Target: 100
 
 Prioritizes CSPs that use less total capital percentage (allows more diversification).
 
+**Delta Fit (raw weight 10%):**
+```
+delta_score = score_proximity(abs(delta), target_delta, delta_tolerance)
+```
+
+The CSP lane advertises a target delta, so delta fit participates directly in the PUT composite. Missing delta/Greeks after enrichment are hard-blocked before scoring.
+
 **Cash Fit (Multiplier):**
 ```
 capital_fit = clamp(cash_balance / cash_required, 0, 1)
 final_score = score * (0.75 + 0.25 * capital_fit)
 ```
+
+PUT sizing sets `max_contracts = floor(broker_buying_power / cash_required)` and then recommends the smaller of that maximum and the 10%-of-account position target.
 
 ## Dynamic Screening Profiles
 
@@ -329,38 +339,41 @@ else:
 ```python
 # Base Phase 1 score
 base_score = (
-    iv_adjusted_score * 0.25 +
-    tdr_score * 0.20 +
-    liquidity_score * 0.18 +
-    ev_score * 0.15 +
-    upside_score * 0.12 +
-    otm_score * 0.10
-) * 100
+    iv_adjusted_score * 0.30 +
+    tdr_score * 0.15 +
+    liquidity_score * 0.15 +
+    ev_score * 0.10 +
+    upside_score * 0.15 +
+    otm_score * 0.10 +
+    earnings_risk_score * 0.05
+)
 
 # Phase 2 adjustments
 iv_adjusted = base_score * (1 + iv_env_adjustment / 100)  # -20 to +20
-earnings_adjusted = iv_adjusted * (1 + earnings_adjustment / 100)  # -30 to 0
-final_score = earnings_adjusted * (0.65 + 0.35 * cost_basis_score)
+final_score = clamp((iv_adjusted * macro_multiplier * (0.65 + 0.35 * cost_basis_score)) / 100, 0, 1) * 100
 ```
 
 ### PUT Example
 
 ```python
-# Base Phase 1 score
+# Base score. Raw weights are normalized before use because they sum to 110.
 base_score = (
-    iv_adjusted_score * 0.25 +
-    tdr_score * 0.20 +
-    ev_score * 0.18 +
+    iv_adjusted_score * 0.30 +
+    tdr_score * 0.15 +
+    ev_score * 0.10 +
     liquidity_score * 0.15 +
-    buffer_score * 0.12 +
-    ce_score * 0.10
-) * 100
+    buffer_score * 0.10 +
+    ce_score * 0.15 +
+    earnings_risk_score * 0.05 +
+    delta_score * 0.10
+)
 
 # Phase 2 adjustments (same as CALL)
 iv_adjusted = base_score * (1 + iv_env_adjustment / 100)
-earnings_adjusted = iv_adjusted * (1 + earnings_adjustment / 100)
-final_score = earnings_adjusted * (0.75 + 0.25 * capital_fit)
+final_score = clamp((iv_adjusted * macro_multiplier * (0.75 + 0.25 * capital_fit)) / 100, 0, 1) * 100
 ```
+
+Scores are capped at 100 after IV, macro, and fit multipliers.
 
 ## Score Interpretation
 
@@ -504,68 +517,6 @@ Potential scoring improvements:
 - CBOE BuyWrite Index (BXM) — Benchmark for systematic covered calls
 - CBOE PutWrite Index (PUT) — Benchmark for systematic CSPs
 
-## Feedback Loop & Bias Correction
-
-When a recommendation resolves (expired worthless, assigned, or closed early),
-the feedback loop compares each scoring factor's contribution against the actual
-outcome. Factors that consistently over-predict get their weight reduced; factors
-that under-predict get their weight increased.
-
-### How it works
-
-1. `core/evaluator.py` stores `score_details` (JSON) with each recommendation.
-2. When the outcome is resolved, `resolve_outcome()` reads the stored details
-   and writes the outcome feedback back through the evaluator repository.
-3. The feedback loop runs an online (single-pass) mean update per factor,
-   then derives a bias multiplier (`<1.0` = over-predicts, `>1.0` = under-predicts).
-4. `get_adjusted_weights()` returns these multipliers, clamped to `[0.5, 2.0]`.
-5. `score_contract()` in `wheel_decision.py` fetches adjusted weights at the
-   start of each scoring pass and applies them before computing CALL/PUT base scores.
-
-### Bias multipliers
-
-| Factor | Effect |
-|--------|--------|
-| `bias_multiplier < 1.0` | Over-predicts → weight reduced
-| `bias_multiplier > 1.0` | Under-predicts → weight increased
-| `bias_multiplier = 1.0` | Neutral (no bias history)
-
-Biases are persisted in `~/.wheel/evaluator/feedback.db`.
-
-### Visualising bias
-
-The dashboard evaluator widget shows current over-predicting and under-predicting
-factors with their multiplier values.
-
-## Scheduler
-
-An in-process APScheduler runs two jobs, gated by a host-level lock so only one
-process schedules under multi-worker launches:
-
-| Job | Schedule | Timezone |
-|-----|----------|----------|
-| Evaluator cycle | Daily at 8:00 AM | Australia/Brisbane |
-| Calibration cycle | Weekly Sunday at 8:15 AM | Australia/Brisbane |
-
-State (last run, last status, last message) is persisted in
-`~/.wheel/evaluator/scheduler_state.db`.
-
-### Manual triggers
-
-- `POST /api/options/evaluator/cron` — Trigger evaluator cycle
-- `POST /api/options/calibrator/run` — Trigger calibration cycle
-- `GET /api/options/evaluator/stats` — Full status (stats + scheduler + calibration)
-- `GET /api/options/feedback/biases` — Current bias multipliers
-- `GET /api/options/calibrator/history` — Calibration history
-
-## Evaluator Dashboard Widget
-
-A compact card near the top of the dashboard shows:
-- Tracked / resolved recommendation counts
-- Assignment rate vs expiry rate
-- Top over-predicting and under-predicting factors
-- Latest calibration cycle info (loss, samples, weights)
-- Last evaluator and calibrator run times
 
 ---
 

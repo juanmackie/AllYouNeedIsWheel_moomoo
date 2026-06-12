@@ -34,8 +34,10 @@ function resetElements() {
 }
 
 function row(position) {
-  const typeLabel = position.option_type === 'P' ? 'Put' : 'Call';
-  const typeClass = position.option_type === 'P' ? 'text-danger' : 'text-success';
+  const isPut = ['P', 'PUT'].includes(position.option_type);
+  const isCall = ['C', 'CALL'].includes(position.option_type);
+  const typeLabel = isPut ? 'Put' : isCall ? 'Call' : position.option_type || '—';
+  const typeClass = isPut ? 'text-danger' : isCall ? 'text-success' : '';
   const strike = position.strike != null ? `$${Number(position.strike).toFixed(2)}` : '—';
   const expiration = position.expiration
     ? `${position.expiration.slice(0, 4)}-${position.expiration.slice(4, 6)}-${position.expiration.slice(6, 8)}`
@@ -64,7 +66,7 @@ function updateSummary(positions) {
   const totalIncome = positions.reduce((s, p) => s + (p.income || 0), 0);
   const totalQty = positions.reduce((s, p) => s + Math.abs(p.position || 0), 0);
   const putNotional = positions
-    .filter(p => p.option_type === 'P')
+    .filter(p => ['P', 'PUT'].includes(p.option_type))
     .reduce((s, p) => s + (p.strike || 0) * 100 * Math.abs(p.position || 0), 0);
   const avgPremium = totalQty > 0 ? totalIncome / totalQty : 0;
 

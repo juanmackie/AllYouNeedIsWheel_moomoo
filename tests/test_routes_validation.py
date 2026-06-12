@@ -9,6 +9,7 @@ from flask import Flask
 
 from api.routes.pop import bp as pop_bp
 from api.routes.risk import bp as risk_bp
+from api.routes.signals import bp as signals_bp
 
 
 def _make_app():
@@ -16,6 +17,7 @@ def _make_app():
     app.config['TESTING'] = True
     app.register_blueprint(risk_bp)
     app.register_blueprint(pop_bp)
+    app.register_blueprint(signals_bp)
     return app
 
 
@@ -122,6 +124,43 @@ class TestPopRouteValidation(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(resp.get_json()['success'])
         mock_get_pop.assert_not_called()
+
+
+class TestSignalOverlayRouteValidation(unittest.TestCase):
+    def test_overlay_route_normalizes_query_params(self):
+        service = MagicMock()
+        service.get_overlays.return_value = {
+            'generated_at': '2026-06-04T12:00:00',
+            'count': 1,
+            'source_available': True,
+            'overlays': {'AAPL': {'ticker': 'AAPL', 'verdict': 'confirming'}},
+            'errors': [],
+            'invalid_tickers': [],
+            'elapsed_seconds': 0.1,
+        }
+
+        with patch('api.get_service', return_value=service):
+            app = _make_app()
+            with app.test_client() as client:
+                resp = client.get(
+                    '/api/signals/overlay',
+                    query_string={'ticker': ' aapl ', 'refresh': 'true'},
+                )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertTrue(payload['success'])
+        service.get_overlays.assert_called_once_with(['AAPL'], refresh=True)
+
+    def test_overlay_route_rejects_missing_ticker(self):
+        with patch('api.get_service') as mock_get_service:
+            app = _make_app()
+            with app.test_client() as client:
+                resp = client.get('/api/signals/overlay')
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json()['success'])
+        mock_get_service.assert_not_called()
 
 
 if __name__ == '__main__':

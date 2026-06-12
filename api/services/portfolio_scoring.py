@@ -7,6 +7,8 @@ the roll-pressure and alerts endpoints.
 
 from datetime import datetime
 
+from core.position_utils import parse_moomoo_symbol, parse_position_qty
+
 from core.logging_config import get_logger
 logger = get_logger('api.services.portfolio_scoring', 'api')
 
@@ -22,7 +24,7 @@ def build_portfolio_context(option_positions, portfolio_service):
 
     positions_map = {}
     for pos in option_positions:
-        ticker = str(pos.get('symbol', '') or '').replace('US.', '')
+        ticker = parse_moomoo_symbol(pos.get('symbol', ''))
         positions_map[ticker] = pos
 
     portfolio_context = {
@@ -35,8 +37,8 @@ def build_portfolio_context(option_positions, portfolio_service):
     }
 
     for pos in option_positions:
-        ticker = str(pos.get('symbol', '') or '').replace('US.', '')
-        pos_qty = int(pos.get('position', 0) or 0)
+        ticker = parse_moomoo_symbol(pos.get('symbol', ''))
+        pos_qty = parse_position_qty(pos.get('position', 0))
         opt_type = str(pos.get('option_type', '') or '').upper()
         if pos_qty < 0:
             if opt_type == 'CALL':
@@ -51,7 +53,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
     from core.wheel_decision import score_existing_position
     from api.services.macro_regime_service import get_macro_service
 
-    ticker = str(pos.get('symbol', '') or '').replace('US.', '')
+    ticker = parse_moomoo_symbol(pos.get('symbol', ''))
     option_type = str(pos.get('option_type', '') or '').upper()
     strike = float(pos.get('strike', 0) or 0)
     expiration = str(pos.get('expiration', '') or '')

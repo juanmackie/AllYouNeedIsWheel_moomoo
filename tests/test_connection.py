@@ -577,6 +577,23 @@ class TestMoomooConnectionExpirationCaching(unittest.TestCase):
         pd.testing.assert_frame_equal(result[1], pending_result[1])
         conn.quote_ctx.get_option_expiration_date.assert_not_called()
 
+    def test_pending_request_result_is_reusable_across_waiters(self):
+        conn = MoomooConnection()
+        conn._pending_result_ttl_seconds = 60
+
+        request_key = 'stock_price:US.AAPL'
+        entry, is_new = conn._get_or_create_pending_request(request_key)
+        self.assertTrue(is_new)
+
+        expected = 123.45
+        conn._complete_pending_request(request_key, expected)
+
+        first = conn._wait_for_pending_request(request_key)
+        second = conn._wait_for_pending_request(request_key)
+
+        self.assertEqual(first, expected)
+        self.assertEqual(second, expected)
+
 
 class TestMoomooConnectionLifecycle(unittest.TestCase):
     """Test connection lifecycle: reconnect, unlock, disconnect edge cases"""
@@ -684,6 +701,64 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
 
         self.assertIsNotNone(result)
         acquire_gate.assert_called_once()
+
+    def test_get_option_chain_coalesces_duplicate_inflight_requests(self):
+        conn = self._make_connected_conn()
+        conn._option_chain_rate_limiter.check_rate_limit = MagicMock()
+
+        entered = threading.Event()
+        release = threading.Event()
+        call_count = 0
+        errors = []
+        results = []
+
+        mock_chain_df = pd.DataFrame({'code': ['US.AAPL230616C00150000'], 'strike_price': [150.0]})
+        mock_snap_df = pd.DataFrame([{
+            'option_expiry_date': '2023-06-16',
+            'option_type': 'CALL',
+            'option_strike_price': 150.0,
+            'bid_price': 1.0,
+            'ask_price': 1.2,
+            'last_price': 1.1,
+            'volume': 10,
+            'option_open_interest': 100,
+            'option_implied_volatility': 0.25,
+            'option_delta': 0.2,
+            'option_gamma': 0.01,
+            'option_theta': -0.02,
+            'option_vega': 0.03,
+        }])
+
+        def chain_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            entered.set()
+            release.wait(timeout=2)
+            return (RET_OK, mock_chain_df)
+
+        self.mock_quote_ctx.get_option_chain.side_effect = chain_side_effect
+        self.mock_quote_ctx.get_market_snapshot.return_value = (RET_OK, mock_snap_df)
+
+        def worker():
+            try:
+                results.append(conn.get_option_chain('US.AAPL', '20230616', 'C'))
+            except Exception as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=worker)
+        second = threading.Thread(target=worker)
+        first.start()
+        self.assertTrue(entered.wait(timeout=2))
+        second.start()
+        time.sleep(0.1)
+        release.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertFalse(errors)
+        self.assertEqual(call_count, 1)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result and result.get('options') for result in results))
 
     def test_get_option_chain_fails(self):
         conn = self._make_connected_conn()

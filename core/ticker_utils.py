@@ -3,12 +3,15 @@ Ticker formatting and normalization utilities for moomoo.
 Extracted from core/connection.py for maintainability.
 """
 
+import re
 import time
 import threading
 
 from core.logging_config import get_logger
 
 logger = get_logger('autotrader.connection', 'moomoo')
+
+_OPTION_CODE_RE = re.compile(r'^(?P<underlying>[A-Z0-9-]+)(?P<expiry>\d{6})(?P<right>[CP])(?P<strike>\d+)$')
 
 
 class TickerCache:
@@ -98,4 +101,29 @@ def canonical_underlying(ticker):
             s = parts[1]
     s = s.replace('.', '-')
     s = s.replace('/', '-').replace('$', '-')
+    return s
+
+
+def earnings_underlying_ticker(ticker):
+    """
+    Normalize any supported ticker-like input to the underlying stock symbol.
+
+    This is stricter than canonical_underlying() because earnings lookups should
+    never receive full option contract codes.
+    """
+    if not ticker or not isinstance(ticker, str):
+        return ticker or ''
+
+    raw = ticker.strip()
+    if not raw:
+        return ''
+
+    s = canonical_underlying(raw).strip().upper()
+    if not s:
+        return ''
+
+    match = _OPTION_CODE_RE.match(s)
+    if match:
+        return match.group('underlying')
+
     return s

@@ -159,6 +159,33 @@ class TestScoreRegression(unittest.TestCase):
         # Delta should have been computed (non-zero)
         self.assertGreater(abs(result.delta), 0.001)
 
+    def test_missing_iv_blocks_contract(self):
+        """Missing IV should not receive inflated IV-adjusted and EV scores."""
+        profile = _get_base_profile()
+        portfolio = _get_csp_portfolio(cash=50000)
+        option = _make_option(strike=95, bid=2.0, ask=2.10, oi=500, vol=200, delta=-0.25, iv=0)
+        option['expiration'] = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+
+        result = score_contract('AAPL', option, 100.0, profile, portfolio)
+
+        self.assertTrue(result.hard_blockers)
+        self.assertIn('missing_iv', result.blocked_reason_codes)
+
+    def test_put_sizing_can_exceed_one_contract_under_risk_cap(self):
+        """PUT max_contracts should reflect available buying power before 10% sizing cap."""
+        profile = _get_base_profile()
+        portfolio = _get_csp_portfolio(cash=100000)
+        portfolio['broker_buying_power'] = 100000.0
+        portfolio['account_value'] = 100000.0
+        option = _make_option(strike=50, bid=1.0, ask=1.10, oi=500, vol=200, delta=-0.25, iv=0.30)
+        option['expiration'] = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+
+        result = score_contract('AAPL', option, 60.0, profile, portfolio)
+
+        self.assertFalse(result.hard_blockers)
+        self.assertEqual(result.max_contracts, 20)
+        self.assertEqual(result.recommended_contracts, 2)
+
     def test_yfinance_fallback_warns(self):
         """yfinance fallback should warn about data source."""
         option, profile, portfolio, expected = get_yfinance_fallback_scenario()
@@ -170,6 +197,24 @@ class TestScoreRegression(unittest.TestCase):
         self.assertIsNotNone(result)
         warning_text = ' '.join(result.warnings).lower()
         self.assertIn('yfinance', warning_text)
+
+    def test_unknown_iv_status_returns_neutral_scoring(self):
+        """Unknown IV status (0 IV) should not crash and produce neutral score."""
+        profile = _get_base_profile()
+        portfolio = _get_csp_portfolio(cash=20000)
+        option = _make_option(strike=95, bid=2.0, ask=2.10, oi=500, vol=200, delta=-0.25, iv=0.30)
+        option['expiration'] = (datetime.now() + timedelta(days=37)).strftime('%Y%m%d')
+
+        result = score_contract(
+            'AAPL', option, 100.0, profile, portfolio,
+            iv_env_adjustment=0, iv_status_str='unknown', iv_rank=0.5,
+        )
+        self.assertIsNotNone(result)
+        self.assertGreater(result.contract_score, 0)
+        self.assertFalse(result.hard_blockers)
+        # iv_environment sub-score should reflect neutral position (0 adjustment)
+        iv_env_score = result.score_details.get('iv_environment', 50)
+        self.assertAlmostEqual(iv_env_score, 50.0, places=0)
 
 
 class TestScoreRankOrder(unittest.TestCase):

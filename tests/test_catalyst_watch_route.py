@@ -3,6 +3,11 @@
 from api.routes.options import _add_freshness_metadata, _catalyst_empty_response, CATALYST_SYNC_WAIT_SECONDS
 from api.routes.source_policy import build_research_source_policy, detect_external_sources
 
+from unittest.mock import patch
+
+_overlay_map_patch = patch('api.services.catalyst_flow_service.fetch_signal_overlay_map', return_value={})
+_overlay_map_patch.start()
+
 
 def test_catalyst_empty_response_marks_scan_pending_and_preserves_thresholds():
     payload = _catalyst_empty_response(thresholds={
@@ -160,7 +165,6 @@ def test_catalyst_service_result_includes_apewisdom_metadata():
                 "max_scan_tickers": 2,
                 "apewisdom": {"enabled": False},
             },
-            "evaluator": {"enabled": False},
             "watchlist": [],
             "watchlist_mode": "static",
         }

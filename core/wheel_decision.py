@@ -23,7 +23,7 @@ from core.scoring_factors import (
     _compute_expected_move_buffer,
     _compute_recommended_contracts,
     CALL_W_IV_ADJ, CALL_W_TDR, CALL_W_LIQ, CALL_W_EV, CALL_W_UPSIDE, CALL_W_OTM, CALL_W_EARNINGS,
-    PUT_W_IV_ADJ, PUT_W_TDR, PUT_W_EV, PUT_W_LIQ, PUT_W_BUF, PUT_W_CE, PUT_W_EARNINGS,
+    PUT_W_IV_ADJ, PUT_W_TDR, PUT_W_EV, PUT_W_LIQ, PUT_W_BUF, PUT_W_CE, PUT_W_EARNINGS, PUT_W_DELTA,
     CALL_MAX_LOSS_ESTIMATE_PCT, PUT_MAX_LOSS_ESTIMATE_PCT,
     STALE_QUOTE_THRESHOLD, ACCOUNT_VALUE_MIN,
 )
@@ -233,6 +233,15 @@ def _coerce_optional_float(value):
         return None
 
 
+def _normalize_source_value(value: object, fallback: str) -> str:
+    """Return a normalized source label with a fallback when the value is missing."""
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            return cleaned
+    return fallback
+
+
 # ---------------------------------------------------------------------------
 # Re-exports for backward compatibility
 # ---------------------------------------------------------------------------
@@ -270,7 +279,6 @@ def score_contract(
     earnings_info: dict | None = None,
     macro_regime: dict | None = None,
     growth_profile: dict | None = None,
-    evaluator_repo=None,
 ) -> WheelDecision:
     """
     Score a single option contract and return a WheelDecision.
@@ -369,6 +377,25 @@ def score_contract(
         # Re-read delta after enrichment
         delta = float(option.get('delta', 0) or 0)
 
+    if implied_volatility <= 0:
+        return _create_failed_decision(
+            ticker,
+            option_type,
+            strike,
+            expiration,
+            "Missing implied volatility after enrichment",
+            ['missing_iv'],
+        )
+    if abs(delta) < 0.001:
+        return _create_failed_decision(
+            ticker,
+            option_type,
+            strike,
+            expiration,
+            "Missing delta/Greeks after enrichment",
+            ['missing_greeks'],
+        )
+
     # -- Portfolio context ---------------------------------------------------
     position = portfolio_context.get('positions', {}).get(ticker, {})
     shares_owned = float(position.get('position', 0) or 0)
@@ -382,7 +409,18 @@ def score_contract(
     vix_regime = portfolio_context.get('vix_regime')
 
     # -- Check for yfinance fallback data (TODO 2.2) -----------------------
-    from_yfinance = option.get('from_yfinance', False)
+    price_source = _normalize_source_value(option.get('price_source'), '')
+    chain_source = _normalize_source_value(option.get('chain_source'), '')
+    iv_source = _normalize_source_value(option.get('iv_source'), '')
+    from_yfinance = bool(
+        option.get('from_yfinance', False)
+        or price_source.lower() == 'yfinance'
+        or chain_source.lower() == 'yfinance'
+        or iv_source.lower() == 'yfinance'
+    )
+    price_source = _normalize_source_value(price_source, 'yfinance' if from_yfinance else 'broker')
+    chain_source = _normalize_source_value(chain_source, 'yfinance' if from_yfinance else 'broker')
+    iv_source = _normalize_source_value(iv_source, 'yfinance' if from_yfinance else 'broker')
 
     # -- Build decision -----------------------------------------------------
     decision = WheelDecision(
@@ -422,10 +460,10 @@ def score_contract(
         macro_advice=macro_regime.get('advice', ''),
         profile_type=profile.get('profile_type', 'monthly'),
         # Data provenance (TODO 2.1)
-        price_source='yfinance' if from_yfinance else 'broker',
-        chain_source='yfinance' if from_yfinance else 'broker',
+        price_source=price_source,
+        chain_source=chain_source,
         greeks_source=('broker' if abs(delta) > 0.001 else 'Black-Scholes computed'),
-        iv_source=('yfinance' if from_yfinance else 'broker'),
+        iv_source=iv_source,
         macro_source=macro_regime.get('source', 'FRED/cache/disabled'),
         quote_timestamp=datetime.now().isoformat(),
         generated_at=datetime.now().isoformat(),
@@ -434,35 +472,6 @@ def score_contract(
     # Add yfinance warning if applicable (TODO 2.2)
     if from_yfinance:
         decision.warnings.append('Data from yfinance (not Moomoo) - verify before trading')
-
-    # -- Fetch feedback-adjusted weights -------------------------------------
-    # Apply bias multipliers from EvaluatorRepository so the recommendation
-    # reflects historical over/under-prediction patterns.
-    # Disabled by default; enable via config evaluator.feedback_enabled.
-    factor_biases = {}
-    try:
-        if evaluator_repo is not None:
-            factor_biases = evaluator_repo.get_adjusted_weights({
-                'iv_adjusted': 1.0,
-                'theta_delta': 1.0,
-                'liquidity': 1.0,
-                'expected_value': 1.0,
-                'upside': 1.0,
-                'otm_fit': 1.0,
-                'buffer': 1.0,
-                'capital_efficiency': 1.0,
-            })
-    except Exception:
-        factor_biases = {}
-
-    iv_adj_bias = factor_biases.get('iv_adjusted', 1.0)
-    theta_delta_bias = factor_biases.get('theta_delta', 1.0)
-    liquidity_bias = factor_biases.get('liquidity', 1.0)
-    ev_bias = factor_biases.get('expected_value', 1.0)
-    upside_bias = factor_biases.get('upside', 1.0)
-    otm_bias = factor_biases.get('otm_fit', 1.0)
-    buffer_bias = factor_biases.get('buffer', 1.0)
-    ce_bias = factor_biases.get('capital_efficiency', 1.0)
 
     # -- IV-adjusted return -------------------------------------------------
     # PUT return denominator uses strike * 100 (secured cash).
@@ -495,10 +504,13 @@ def score_contract(
     abs_delta = abs(delta)
     pop = 1 - abs_delta
     if option_type == 'CALL':
-        max_loss_estimate = stock_price * 100 * CALL_MAX_LOSS_ESTIMATE_PCT
+        max_loss_estimate = 0
     else:
         max_loss_estimate = strike * 100 * PUT_MAX_LOSS_ESTIMATE_PCT
-    expected_value = (pop * premium_per_contract) - ((1 - pop) * max_loss_estimate)
+    if option_type == 'CALL':
+        expected_value = premium_per_contract
+    else:
+        expected_value = (pop * premium_per_contract) - ((1 - pop) * max_loss_estimate)
     decision.expected_value = round(expected_value, 2)
     decision.pop = round(pop, 4)
     decision.ev_score = _clamp(expected_value / max(premium_per_contract, 0.01)) * 100
@@ -536,15 +548,12 @@ def score_contract(
         earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
 
         # CALL base score — growth-oriented weights (premium, capital efficiency, liquidity, theta decay)
-        # Weights are multiplied by feedback bias factors so factors that
-        # historically over-predict get reduced influence, and those that
-        # under-predict get increased influence.
-        w_iv_adj = CALL_W_IV_ADJ * iv_adj_bias
-        w_tdr = CALL_W_TDR * theta_delta_bias
-        w_liq = CALL_W_LIQ * liquidity_bias
-        w_ev = CALL_W_EV * ev_bias
-        w_upside = CALL_W_UPSIDE * upside_bias
-        w_otm = CALL_W_OTM * otm_bias
+        w_iv_adj = CALL_W_IV_ADJ
+        w_tdr = CALL_W_TDR
+        w_liq = CALL_W_LIQ
+        w_ev = CALL_W_EV
+        w_upside = CALL_W_UPSIDE
+        w_otm = CALL_W_OTM
         w_earnings = CALL_W_EARNINGS
         total_w = w_iv_adj + w_tdr + w_liq + w_ev + w_upside + w_otm + w_earnings
         if total_w > 0:
@@ -571,7 +580,7 @@ def score_contract(
         score *= (0.65 + (0.35 * cost_basis_score))
         score *= macro_multiplier
 
-        decision.contract_score = round(score, 2)
+        decision.contract_score = round(_clamp(score / 100) * 100, 2)
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
 
         # Warnings
@@ -673,7 +682,7 @@ def score_contract(
         decision.breakeven = round(breakeven, 2)
         decision.breakeven_buffer_pct = round(breakeven_buffer_pct, 2)
         decision.cash_required = round(cash_required, 2)
-        decision.max_contracts = 1
+        decision.max_contracts = max(int(broker_buying_power // cash_required), 0)
         decision.capital_fit = round(capital_fit * 100, 1)
         decision.ce_score = round(ce_score, 1)
         decision.capital_efficiency = round(capital_efficiency, 1)
@@ -688,17 +697,15 @@ def score_contract(
         earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
 
         # PUT base score — growth-oriented weights (premium, theta decay, EV, liquidity, buffer, capital efficiency)
-        # Weights are multiplied by feedback bias factors so factors that
-        # historically over-predict get reduced influence, and those that
-        # under-predict get increased influence.
-        w_iv_adj = PUT_W_IV_ADJ * iv_adj_bias
-        w_tdr = PUT_W_TDR * theta_delta_bias
-        w_ev = PUT_W_EV * ev_bias
-        w_liq = PUT_W_LIQ * liquidity_bias
-        w_buf = PUT_W_BUF * buffer_bias
-        w_ce = PUT_W_CE * ce_bias
+        w_iv_adj = PUT_W_IV_ADJ
+        w_tdr = PUT_W_TDR
+        w_ev = PUT_W_EV
+        w_liq = PUT_W_LIQ
+        w_buf = PUT_W_BUF
+        w_ce = PUT_W_CE
         w_earnings = PUT_W_EARNINGS
-        total_w = w_iv_adj + w_tdr + w_ev + w_liq + w_buf + w_ce + w_earnings
+        w_delta = PUT_W_DELTA
+        total_w = w_iv_adj + w_tdr + w_ev + w_liq + w_buf + w_ce + w_earnings + w_delta
         if total_w > 0:
             w_iv_adj /= total_w
             w_tdr /= total_w
@@ -707,6 +714,7 @@ def score_contract(
             w_buf /= total_w
             w_ce /= total_w
             w_earnings /= total_w
+            w_delta /= total_w
 
         base_score = (
             decision.iv_adjusted_score * w_iv_adj +
@@ -715,7 +723,8 @@ def score_contract(
             decision.liquidity_score * w_liq +
             decision.buffer_score * w_buf +
             decision.ce_score * w_ce +
-            earnings_risk_score * w_earnings
+            earnings_risk_score * w_earnings +
+            decision.delta_score * w_delta
         )
 
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
@@ -723,7 +732,7 @@ def score_contract(
         score *= (0.75 + (0.25 * capital_fit))
         score *= macro_multiplier
 
-        decision.contract_score = round(score, 2)
+        decision.contract_score = round(_clamp(score / 100) * 100, 2)
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
 
         # Warnings
@@ -946,7 +955,7 @@ def _apply_growth_scoring(
         stock_price=stock_price,
         strike=strike,
         option_type=option_type,
-        num_contracts=max(decision.max_contracts, 1),
+        num_contracts=max(decision.recommended_contracts or decision.max_contracts, 1),
     )
     decision.stress_loss = stress_loss
 
@@ -961,10 +970,12 @@ def _apply_growth_scoring(
 
     decision.confidence_score = compute_confidence_score(
         data_source=decision.price_source,
-        has_yfinance_fallback=option.get('from_yfinance', False),
+        has_yfinance_fallback=from_yfinance,
         is_stale=is_stale,
         spread_pct=option.get('spread_pct', 0),
         open_interest=option.get('open_interest', 0),
+        has_iv=decision.implied_volatility > 0,
+        has_greeks=abs(decision.delta) > 0.001,
     )
 
     if option_type == 'CALL':

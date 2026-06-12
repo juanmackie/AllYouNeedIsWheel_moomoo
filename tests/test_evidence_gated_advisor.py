@@ -48,14 +48,14 @@ class TestWheelAdvisorEvidence(unittest.TestCase):
     def test_all_blocks_returns_ten(self):
         evidence = WheelAdvisorEvidence()
         blocks = evidence.all_blocks()
-        self.assertEqual(len(blocks), 10)
+        self.assertEqual(len(blocks), 11)
 
     def test_all_blocks_categories(self):
         evidence = WheelAdvisorEvidence()
         categories = [b.category for b in evidence.all_blocks()]
         expected = [
             "portfolio", "positions", "opportunities",
-            "macro", "vix", "iv", "earnings", "technical",
+            "signal_overlays", "macro", "vix", "iv", "earnings", "technical",
             "playbook", "scan",
         ]
         self.assertEqual(categories, expected)
@@ -187,6 +187,29 @@ class TestBuildEvidenceFromContext(unittest.TestCase):
         evidence = build_evidence_from_context({"opportunities": []})
         self.assertFalse(evidence.opportunities.available)
         self.assertEqual(evidence.opportunities.content, "")
+
+    def test_signal_overlay_evidence(self):
+        context = {
+            "signal_overlays": [
+                {
+                    "ticker": "AAPL",
+                    "fit": "caution",
+                    "warnings": ["Overlay is bearish for a CSP"],
+                    "overlay": {
+                        "verdict": "conflict",
+                        "bias": "bearish",
+                        "summary": "capital outflow skew",
+                        "capital": {"summary": "capital outflow skew"},
+                        "technical": {"summary": "price below 20d mean"},
+                        "derivatives": {"summary": "put skew 1.20 PCR"},
+                    },
+                }
+            ],
+        }
+        evidence = build_evidence_from_context(context)
+        self.assertIn("AAPL", evidence.signal_overlays.content)
+        self.assertIn("conflict", evidence.signal_overlays.content)
+        self.assertIn("capital outflow skew", evidence.signal_overlays.content)
 
     def test_macro_evidence(self):
         context = {

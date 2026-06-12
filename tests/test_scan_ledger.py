@@ -272,6 +272,45 @@ class TestScanLedgerWritesFromRecommendations(unittest.TestCase):
         self.assertEqual(entry.passed_count, 1)
         self.assertEqual(entry.blocked_count, 9)
 
+    def test_blocked_candidate_with_reason_code(self):
+        """Blocked candidates should store reason_code for diagnostics."""
+        from core.scan_ledger import ScanLedgerEntry
+
+        entry = ScanLedgerEntry(
+            scan_type="recommendations",
+            blocked_candidates=[
+                {"ticker": "CHEAP", "_skip_diagnostic": True, "reason_code": "no_cash_fit",
+                 "reason_text": "No CSP strike fits buying power ($200)"},
+                {"ticker": "ILLIQ", "_skip_diagnostic": True, "reason_code": "low_liquidity",
+                 "reason_text": "Open interest below threshold"},
+            ],
+            total_candidates=10,
+            passed_count=0,
+            blocked_count=2,
+        )
+        blocked_dict = {b['ticker']: b for b in entry.blocked_candidates}
+        self.assertEqual(blocked_dict['CHEAP']['reason_code'], 'no_cash_fit')
+        self.assertEqual(blocked_dict['ILLIQ']['reason_code'], 'low_liquidity')
+        self.assertIn('No CSP strike fits buying power', blocked_dict['CHEAP']['reason_text'])
+
+    def test_blocked_candidate_to_dict_roundtrip_preserves_reason_code(self):
+        """to_dict preserves reason_code in blocked_candidates for downstream display."""
+        from core.scan_ledger import ScanLedgerEntry
+
+        entry = ScanLedgerEntry(
+            scan_type="recommendations",
+            blocked_candidates=[
+                {"ticker": "CHEAP", "_skip_diagnostic": True, "reason_code": "no_cash_fit",
+                 "reason_text": "No CSP strike fits buying power ($200)"},
+            ],
+            total_candidates=5,
+            passed_count=0,
+            blocked_count=1,
+        )
+        d = entry.to_dict()
+        self.assertEqual(d['blocked_candidates'][0]['reason_code'], 'no_cash_fit')
+        self.assertEqual(d['blocked_candidates'][0]['reason_text'], 'No CSP strike fits buying power ($200)')
+
 
 class TestScanLedgerIntegrationWrite(unittest.TestCase):
     """Integration test: verify a real ledger record call writes one row."""

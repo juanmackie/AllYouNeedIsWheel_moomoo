@@ -73,6 +73,8 @@ def compute_confidence_score(
     is_stale: bool,
     spread_pct: float,
     open_interest: int,
+    has_iv: bool = True,
+    has_greeks: bool = True,
 ) -> float:
     """
     Score how much we trust this data (0-100).
@@ -87,6 +89,10 @@ def compute_confidence_score(
         score -= min((spread_pct - 30) * 0.5, 20.0)
     if open_interest < 50:
         score -= 15.0
+    if not has_iv:
+        score -= 30.0
+    if not has_greeks:
+        score -= 20.0
     return round(max(score, 0.0), 2)
 
 

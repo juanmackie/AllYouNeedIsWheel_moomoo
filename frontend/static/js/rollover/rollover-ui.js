@@ -4,7 +4,7 @@ import { formatCurrency } from '../utils/formatters.js';
 import { loadOptionPositions, loadPendingOrders, fetchRolloverSuggestions } from './rollover-api.js';
 import { fetchOptionExpirations } from '../dashboard/api.js';
 
-function populateOptionsTable(options) {
+function populateOptionsTable(options, emptyMessage = 'No option positions found') {
     const tableBody = document.getElementById('option-positions-table-body');
     if (!tableBody) return;
 
@@ -12,7 +12,7 @@ function populateOptionsTable(options) {
 
     if (options.length === 0) {
         const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = '<td colspan="12" class="text-center">No option positions found</td>';
+        noDataRow.innerHTML = `<td colspan="12" class="text-center">${emptyMessage}</td>`;
         tableBody.appendChild(noDataRow);
         return;
     }
@@ -186,16 +186,16 @@ function populateRolloverSuggestionsTable(suggestions) {
     });
 
     if (suggestions.length > 1) {
-        const executeAllRow = document.createElement('tr');
-        executeAllRow.className = 'bg-body-tertiary';
-        executeAllRow.innerHTML = `
+        const reviewAllRow = document.createElement('tr');
+        reviewAllRow.className = 'bg-body-tertiary';
+        reviewAllRow.innerHTML = `
             <td colspan="11" class="text-center">
-                <button id="execute-rollover-btn" class="btn btn-primary mt-2">
+                <button id="review-rollover-btn" class="btn btn-primary mt-2">
                     <i class="bi bi-check2-all"></i> Review Rollover with First Option
                 </button>
             </td>
         `;
-        tableBody.appendChild(executeAllRow);
+        tableBody.appendChild(reviewAllRow);
     }
 
     initializeRolloverTooltips();
@@ -456,8 +456,8 @@ async function initializeRollover() {
         const suggestionsTable = document.getElementById('rollover-suggestions-table-body');
         if (suggestionsTable) {
             suggestionsTable.addEventListener('click', (event) => {
-                const executeBtn = event.target.closest('#execute-rollover-btn');
-                if (executeBtn) {
+                const reviewBtn = event.target.closest('#review-rollover-btn');
+                if (reviewBtn) {
                     // Show confirmation modal for rolling with first suggestion
                     const modalEl = document.getElementById('confirmRollModal');
                     if (modalEl) {

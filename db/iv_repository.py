@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import logging
 
 from .sqlite_pool import pooled_connection
+from core.connection_constants import _normalize_iv
 
 logger = logging.getLogger('db.iv_history')
 
@@ -17,12 +18,13 @@ class IVRepository:
                 cursor = conn.cursor()
 
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                normalized_iv = _normalize_iv(implied_volatility)
 
                 cursor.execute('''
                     INSERT INTO iv_history
                     (ticker, timestamp, implied_volatility, stock_price, option_type, expiration, dte)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (ticker, timestamp, implied_volatility, stock_price, option_type, expiration, dte))
+                ''', (ticker, timestamp, normalized_iv, stock_price, option_type, expiration, dte))
 
                 conn.commit()
                 return True
@@ -44,7 +46,13 @@ class IVRepository:
                 ''', (ticker, cutoff_date))
 
                 rows = cursor.fetchall()
-                return [dict(row) for row in rows]
+                results = []
+                for row in rows:
+                    d = dict(row)
+                    if 'implied_volatility' in d:
+                        d['implied_volatility'] = _normalize_iv(d['implied_volatility'])
+                    results.append(d)
+                return results
         except Exception as e:
             logger.error(f"Error getting IV history for {ticker}: {str(e)}")
             return []
@@ -62,7 +70,12 @@ class IVRepository:
                 ''', (ticker,))
 
                 row = cursor.fetchone()
-                return dict(row) if row else None
+                if row:
+                    d = dict(row)
+                    if 'implied_volatility' in d:
+                        d['implied_volatility'] = _normalize_iv(d['implied_volatility'])
+                    return d
+                return None
         except Exception as e:
             logger.error(f"Error getting latest IV for {ticker}: {str(e)}")
             return None

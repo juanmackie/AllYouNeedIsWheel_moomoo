@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 - **Social Boost Ordering** â€” Ape Wisdom context is attached and the light score bump is applied before the final sort, so boosted signals are ranked correctly.
-- **Config Cleanup** â€” Reverted an unrelated evaluator feedback flag flip while documenting the new `catalyst_flow.apewisdom` config block.
+- **Config Cleanup** â€” Reverted an unrelated flag flip while documenting the new `catalyst_flow.apewisdom` config block.
 
 ## [2.1.0] - 2026-05-24
 

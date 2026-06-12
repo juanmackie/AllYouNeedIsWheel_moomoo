@@ -42,6 +42,7 @@ class WheelAdvisorEvidence:
     portfolio: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="portfolio", label="Portfolio"))
     positions: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="positions", label="Open Positions"))
     opportunities: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="opportunities", label="Top Opportunities"))
+    signal_overlays: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="signal_overlays", label="Multi-Dimensional Signal Overlay"))
     macro: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="macro", label="Macro Regime"))
     vix: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="vix", label="VIX Regime"))
     iv_environment: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="iv", label="IV Environment"))
@@ -53,7 +54,7 @@ class WheelAdvisorEvidence:
     def all_blocks(self) -> list[EvidenceBlock]:
         return [
             self.portfolio, self.positions, self.opportunities,
-            self.macro, self.vix, self.iv_environment,
+            self.signal_overlays, self.macro, self.vix, self.iv_environment,
             self.earnings, self.technical,
             self.playbook_hypotheses, self.scan_ledger,
         ]
@@ -125,16 +126,67 @@ def build_evidence_from_context(context: dict) -> WheelAdvisorEvidence:
     if opp:
         lines = []
         for i, r in enumerate(opp[:5]):
+            overlay = r.get("signal_overlay") or {}
+            overlay_bits = []
+            if overlay:
+                overlay_bits.append(f"overlay={overlay.get('verdict', 'unknown')} {overlay.get('summary', '')}".strip())
+                capital = overlay.get("capital", {}) or {}
+                technical = overlay.get("technical", {}) or {}
+                derivatives = overlay.get("derivatives", {}) or {}
+                if capital.get("summary"):
+                    overlay_bits.append(f"capital={capital.get('summary')}")
+                if technical.get("summary"):
+                    overlay_bits.append(f"technical={technical.get('summary')}")
+                if derivatives.get("summary"):
+                    overlay_bits.append(f"derivatives={derivatives.get('summary')}")
+                if r.get("signal_overlay_fit") and r.get("signal_overlay_fit") != "unknown":
+                    overlay_bits.append(f"fit={r.get('signal_overlay_fit')}")
             lines.append(
                 f"#{i+1} {r['ticker']} {r['option_type']} ${r['strike']:.1f} "
                 f"exp {r['expiration']} premium=${r['premium_per_contract']:.2f} "
                 f"delta={r['delta']:.3f} DTE={r['dte']} "
                 f"ann_return={r['annualized_return']:.1f}% score={r['score']:.0f}"
+                + (f" | {' | '.join(overlay_bits)}" if overlay_bits else "")
             )
         evidence.opportunities = EvidenceBlock(
             category="opportunities", label="Top Opportunities",
             content="\n".join(lines), source="wheel_scorer",
             available=True, fetched_at=datetime.now().isoformat(),
+        )
+
+    signal_overlays = context.get("signal_overlays", [])
+    if signal_overlays:
+        lines = []
+        for item in signal_overlays[:5]:
+            overlay = item.get("overlay") or {}
+            capital = overlay.get("capital", {}) or {}
+            technical = overlay.get("technical", {}) or {}
+            derivatives = overlay.get("derivatives", {}) or {}
+            parts = [
+                f"{item.get('ticker', 'UNKNOWN')}",
+                f"verdict={overlay.get('verdict', 'unknown')}",
+                f"bias={overlay.get('bias', 'unknown')}",
+            ]
+            if overlay.get("summary"):
+                parts.append(f"summary={overlay.get('summary')}")
+            if capital.get("summary"):
+                parts.append(f"capital={capital.get('summary')}")
+            if technical.get("summary"):
+                parts.append(f"technical={technical.get('summary')}")
+            if derivatives.get("summary"):
+                parts.append(f"derivatives={derivatives.get('summary')}")
+            if item.get("fit") and item.get("fit") != "unknown":
+                parts.append(f"fit={item.get('fit')}")
+            if item.get("warnings"):
+                parts.append(f"warnings={'; '.join(item.get('warnings', []))}")
+            lines.append(" | ".join(parts))
+        evidence.signal_overlays = EvidenceBlock(
+            category="signal_overlays",
+            label="Multi-Dimensional Signal Overlay",
+            content="\n".join(lines),
+            source="moomoo",
+            available=True,
+            fetched_at=datetime.now().isoformat(),
         )
 
     macro = context.get("macro", {})

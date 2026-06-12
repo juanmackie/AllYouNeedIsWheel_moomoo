@@ -1,24 +1,20 @@
-<!-- ATR Risk Sizing Detail Modal -->
 <div class="modal fade" id="sizing-modal" tabindex="-1" aria-labelledby="sizingModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="sizingModalLabel">
-                    <i class="bi bi-calculator"></i> ATR Risk Sizing Calculator
-                </h5>
+                <h5 class="modal-title" id="sizingModalLabel">ATR Risk Sizing Calculator</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <div class="row g-3">
-                    <!-- Left: Calculator -->
                     <div class="col-md-6">
-                        <h6 class="text-muted mb-3">Position Size Calculator</h6>
-                        
+                        <h6 class="ft-eyebrow" style="padding-bottom: 12px;">Position Size Calculator</h6>
+
                         <div class="mb-3">
                             <label for="sizing-ticker" class="form-label small">Ticker</label>
                             <input type="text" class="form-control" id="sizing-ticker" readonly>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="sizing-account-value" class="form-label small">Account Value</label>
                             <div class="input-group">
@@ -26,7 +22,7 @@
                                 <input type="number" class="form-control" id="sizing-account-value" value="45000">
                             </div>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="sizing-risk-pct" class="form-label small">Risk Percentage: <span id="risk-pct-display">1%</span></label>
                             <input type="range" class="form-range" id="sizing-risk-pct" min="0.5" max="3" step="0.1" value="1">
@@ -35,7 +31,7 @@
                                 <span>3%</span>
                             </div>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="sizing-atr-period" class="form-label small">ATR Period: <span id="atr-period-display">14</span></label>
                             <input type="range" class="form-range" id="sizing-atr-period" min="10" max="20" step="1" value="14">
@@ -44,16 +40,13 @@
                                 <span>20</span>
                             </div>
                         </div>
-                        
-                        <button class="btn btn-primary w-100" id="sizing-calculate-btn">
-                            <i class="bi bi-calculator"></i> Calculate
-                        </button>
+
+                        <button class="btn btn-primary w-100" id="sizing-calculate-btn">Calculate</button>
                     </div>
-                    
-                    <!-- Right: Results -->
+
                     <div class="col-md-6">
-                        <h6 class="text-muted mb-3">Results</h6>
-                        
+                        <h6 class="ft-eyebrow" style="padding-bottom: 12px;">Results</h6>
+
                         <div class="card bg-light mb-3">
                             <div class="card-body">
                                 <div class="d-flex justify-content-between mb-2">
@@ -79,14 +72,13 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="alert alert-info" role="alert">
                             <small>
-                                <i class="bi bi-info-circle"></i>
                                 <strong>How it works:</strong><br>
-                                A 1-ATR adverse move will cost exactly 1% of your account value. 
-                                The max contracts is calculated so that: 
-                                <code>ATR × 100 × contracts ≤ account_value × risk_pct</code>
+                                A 1-ATR adverse move will cost exactly 1% of your account value.
+                                The max contracts is calculated so that:
+                                <code>ATR &times; 100 &times; contracts &le; account_value &times; risk_pct</code>
                             </small>
                         </div>
                     </div>
@@ -94,25 +86,21 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="sizing-apply-btn">
-                    <i class="bi bi-check-lg"></i> Apply to Order
-                </button>
+                <button type="button" class="btn btn-primary" id="sizing-apply-btn">Apply to Order</button>
             </div>
         </div>
     </div>
 </div>
 
 <script>
-// Sizing Modal Logic
 let sizingModal = null;
 
 function initSizingModal() {
     const modalEl = document.getElementById('sizing-modal');
     if (!modalEl) return;
-    
+
     sizingModal = new bootstrap.Modal(modalEl);
-    
-    // Risk pct slider
+
     const riskPctSlider = document.getElementById('sizing-risk-pct');
     const riskPctDisplay = document.getElementById('risk-pct-display');
     if (riskPctSlider && riskPctDisplay) {
@@ -120,8 +108,7 @@ function initSizingModal() {
             riskPctDisplay.textContent = `${e.target.value}%`;
         });
     }
-    
-    // ATR period slider
+
     const atrPeriodSlider = document.getElementById('sizing-atr-period');
     const atrPeriodDisplay = document.getElementById('atr-period-display');
     if (atrPeriodSlider && atrPeriodDisplay) {
@@ -129,8 +116,7 @@ function initSizingModal() {
             atrPeriodDisplay.textContent = e.target.value;
         });
     }
-    
-    // Calculate button
+
     const calcBtn = document.getElementById('sizing-calculate-btn');
     if (calcBtn) {
         calcBtn.addEventListener('click', calculateSizing);
@@ -139,14 +125,13 @@ function initSizingModal() {
 
 async function openSizingModal(ticker, accountValue = 45000) {
     if (!sizingModal) initSizingModal();
-    
+
     document.getElementById('sizing-ticker').value = ticker;
     document.getElementById('sizing-account-value').value = accountValue;
     document.getElementById('result-account-value').textContent = `$${accountValue.toLocaleString()}`;
-    
-    // Trigger calculation
+
     await calculateSizing();
-    
+
     sizingModal.show();
 }
 
@@ -155,33 +140,31 @@ async function calculateSizing() {
     const accountValue = parseFloat(document.getElementById('sizing-account-value').value) || 45000;
     const riskPct = parseFloat(document.getElementById('sizing-risk-pct').value) / 100;
     const atrPeriod = parseInt(document.getElementById('sizing-atr-period').value) || 14;
-    
+
     try {
         const response = await fetch(
             `/api/risk/sizing?ticker=${ticker}&account_value=${accountValue}&risk_pct=${riskPct}&atr_period=${atrPeriod}`
         );
-        
+
         if (!response.ok) {
             console.error('Failed to calculate sizing');
             return;
         }
-        
+
         const data = await response.json();
         if (!data.success) {
             console.error('Sizing error:', data.error);
             return;
         }
-        
+
         const result = data.data;
-        
-        // Update results
+
         document.getElementById('result-account-value').textContent = `$${accountValue.toLocaleString()}`;
         document.getElementById('result-risk-amount').textContent = `$${result.risk_amount.toLocaleString()}`;
         document.getElementById('result-atr').textContent = `$${result.atr.toFixed(2)}`;
         document.getElementById('result-risk-per-contract').textContent = `$${result.risk_per_contract.toFixed(2)}`;
         document.getElementById('result-max-contracts').textContent = result.max_contracts;
-        
-        // Color code
+
         const maxContractsEl = document.getElementById('result-max-contracts');
         if (result.max_contracts > 5) {
             maxContractsEl.className = 'fs-4 fw-bold text-success';
@@ -190,13 +173,12 @@ async function calculateSizing() {
         } else {
             maxContractsEl.className = 'fs-4 fw-bold text-danger';
         }
-        
+
     } catch (error) {
         console.error('Error calculating sizing:', error);
     }
 }
 
-// Initialize on DOM load
 document.addEventListener('DOMContentLoaded', () => {
     initSizingModal();
 });

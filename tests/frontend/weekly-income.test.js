@@ -165,4 +165,56 @@ describe('weekly-income rendering', () => {
     expect(tbody.querySelectorAll('tr').length).toBe(1);
     expect(tbody.textContent).toContain('No short options');
   });
+
+  it('recognizes PUT option_type and calculates put notional', async () => {
+    fetchWeeklyOptionIncome.mockResolvedValue({
+      positions: [
+        { symbol: 'AAPL', option_type: 'PUT', strike: 180.0, expiration: '20260515', position: -2, avg_cost: 8.0, income: 80.0 },
+      ],
+      total_income: 80.0,
+      positions_count: 1,
+      this_friday: '20260515',
+    });
+    isOpenDUnavailable.mockReturnValue(false);
+
+    const { renderWeeklyIncome } = await import(
+      '../../frontend/static/js/dashboard/weekly-income.js'
+    );
+
+    await renderWeeklyIncome();
+
+    const tbody = document.getElementById('filled-orders-table');
+    const rows = tbody.querySelectorAll('tr');
+    expect(rows.length).toBe(1);
+    expect(rows[0].textContent).toContain('AAPL');
+    expect(rows[0].textContent).toContain('Put');
+
+    // Notional = strike * abs(position) * 100 = 180 * 2 * 100 = 36000
+    const notionalEl = document.getElementById('weekly-notional-value');
+    expect(notionalEl.textContent).toContain('36000');
+  });
+
+  it('recognizes CALL option_type', async () => {
+    fetchWeeklyOptionIncome.mockResolvedValue({
+      positions: [
+        { symbol: 'MSFT', option_type: 'CALL', strike: 400.0, expiration: '20260515', position: -1, avg_cost: 5.0, income: 50.0 },
+      ],
+      total_income: 50.0,
+      positions_count: 1,
+      this_friday: '20260515',
+    });
+    isOpenDUnavailable.mockReturnValue(false);
+
+    const { renderWeeklyIncome } = await import(
+      '../../frontend/static/js/dashboard/weekly-income.js'
+    );
+
+    await renderWeeklyIncome();
+
+    const tbody = document.getElementById('filled-orders-table');
+    const rows = tbody.querySelectorAll('tr');
+    expect(rows.length).toBe(1);
+    expect(rows[0].textContent).toContain('MSFT');
+    expect(rows[0].textContent).toContain('Call');
+  });
 });

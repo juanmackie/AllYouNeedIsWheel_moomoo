@@ -1,136 +1,123 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - All You Need Is Wheel{% endblock %}
+{% block title %}Dashboard - AYNIWHEEL{% endblock %}
 {% block body_class %}page-dashboard{% endblock %}
 
-{% block page_header %}
-<div class="page-header flex-grow-1">
-    <div class="page-header__inner">
-        <div>
-            <h1 class="page-header__title">Dashboard</h1>
-            <div class="page-header__meta">{{ config.get('APP_ENV', 'live') }} &middot; Wheel strategy</div>
-        </div>
-        <div class="page-header__actions">
-        </div>
-    </div>
-</div>
-{% endblock %}
-
 {% block content %}
-{# ── Primary signal surface ── #}
 {% include "partials/dashboard/account_summary.html" %}
 {% include "partials/dashboard/top_recommendations.html" %}
 
-{# ── Research & Diagnostics (collapsible) ── #}
-<details class="mt-4" id="research-diagnostics">
-  <summary class="fw-semibold text-muted small py-2" style="cursor:pointer;user-select:none;">
-    <i class="bi bi-gear me-1"></i> Research &amp; Diagnostics
-    <span class="text-muted fw-normal">— scanner, weekly income, VIX, macro, evaluator</span>
-  </summary>
-
-  <div class="mt-3">
+<section class="ft-section" id="macro-context-section">
+    <div class="ft-section__head">
+        <div class="ft-section__head-left">
+            <span class="ft-section__num">03 &middot; REGIME</span>
+            <h2 class="ft-section__title">Macro context</h2>
+        </div>
+    </div>
     <div class="row g-2 mb-3">
-      <div class="col-md-6">
-        <div class="summary-panel summary-panel--vix p-3 h-100">
-          <div class="d-flex align-items-center justify-content-between mb-2">
-            <span class="small text-muted">VIX</span>
-            <span id="vix-badge" class="badge">LOADING</span>
-          </div>
-          <div class="d-flex align-items-end gap-2">
-            <h3 class="mb-0 fs-4 fw-bold" id="vix-level">--</h3>
-            <small class="text-muted" id="vix-date"></small>
-          </div>
-          <p id="vix-description" class="small text-muted mt-1 mb-1"></p>
-          <div class="small text-muted">
-            <span>Delta Adj: <span id="vix-delta-adj" class="fw-semibold">--</span></span>
-            <span class="ms-2">Exposure: <span id="vix-exposure" class="fw-semibold">--</span></span>
-          </div>
+        <div class="col-md-6">
+            <div class="summary-panel summary-panel--vix p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <span class="ft-eyebrow">VIX</span>
+                    <span id="vix-badge" class="badge">LOADING</span>
+                </div>
+                <div class="d-flex align-items-end gap-2">
+                    <h3 class="mb-0 fs-4 fw-bold" id="vix-level">--</h3>
+                    <small class="text-muted" id="vix-date"></small>
+                </div>
+                <p id="vix-description" class="small text-muted mt-1 mb-1"></p>
+                <div class="small text-muted">
+                    <span>Delta Adj: <span id="vix-delta-adj" class="fw-semibold">--</span></span>
+                    <span class="ms-2">Exposure: <span id="vix-exposure" class="fw-semibold">--</span></span>
+                </div>
+            </div>
         </div>
-      </div>
-      <div class="col-md-6">
-        <div class="summary-panel summary-panel--macro p-3 h-100">
-          <div class="d-flex align-items-center justify-content-between mb-2">
-            <span class="small text-muted">Macro</span>
-            <small id="macro-advice-text">Loading...</small>
-          </div>
-          <div class="macro-metrics-grid">
-            <div class="macro-metric">
-              <span class="text-muted small">Rates</span>
-              <h4 id="macro-rates">--</h4>
-              <span class="badge" id="macro-rates-badge">--</span>
+        <div class="col-md-6">
+            <div class="summary-panel summary-panel--macro p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <span class="ft-eyebrow">Macro</span>
+                    <small id="macro-advice-text">Loading...</small>
+                </div>
+                <div class="macro-metrics-grid">
+                    <div class="macro-metric">
+                        <span class="text-muted small">Rates</span>
+                        <h4 id="macro-rates">--</h4>
+                        <span class="badge" id="macro-rates-badge">--</span>
+                    </div>
+                    <div class="macro-metric">
+                        <span class="text-muted small">Credit</span>
+                        <h4 id="macro-credit">--</h4>
+                        <span class="badge" id="macro-credit-badge">--</span>
+                    </div>
+                    <div class="macro-metric">
+                        <span class="text-muted small">Growth</span>
+                        <h4 id="macro-growth">--</h4>
+                        <span class="badge" id="macro-growth-badge">--</span>
+                    </div>
+                    <div class="macro-metric">
+                        <span class="text-muted small">Inflation</span>
+                        <h4 id="macro-inflation">--</h4>
+                        <span class="badge" id="macro-inflation-badge">--</span>
+                    </div>
+                </div>
+                <div class="small text-muted mt-1">
+                    Yield curve: <span id="macro-yield-curve">--</span>
+                </div>
             </div>
-            <div class="macro-metric">
-              <span class="text-muted small">Credit</span>
-              <h4 id="macro-credit">--</h4>
-              <span class="badge" id="macro-credit-badge">--</span>
-            </div>
-            <div class="macro-metric">
-              <span class="text-muted small">Growth</span>
-              <h4 id="macro-growth">--</h4>
-              <span class="badge" id="macro-growth-badge">--</span>
-            </div>
-            <div class="macro-metric">
-              <span class="text-muted small">Inflation</span>
-              <h4 id="macro-inflation">--</h4>
-              <span class="badge" id="macro-inflation-badge">--</span>
-            </div>
-          </div>
-          <div class="small text-muted mt-1">
-            Yield curve: <span id="macro-yield-curve">--</span>
-          </div>
         </div>
-      </div>
     </div>
+</section>
 
-    {% include "partials/dashboard/weekly_income.html" %}
-    {% include "partials/dashboard/catalyst_watch.html" %}
-    {% include "partials/dashboard/earnings_vol_signals.html" %}
-    {% include "partials/dashboard/options_table.html" %}
-    {% include "partials/components/sizing_modal.html" %}
-    {% include "partials/dashboard/evaluator_widget.html" %}
-  </div>
+{% include "partials/dashboard/weekly_income.html" %}
+{% include "partials/dashboard/catalyst_watch.html" %}
+{% include "partials/dashboard/earnings_vol_signals.html" %}
+{% include "partials/dashboard/options_table.html" %}
 
-  {% with 
+{% with
     modal_id="confirmCloseModal",
-    title="Close Position",
-    body="Are you sure you want to close this position? This will create an order to buy back the option.",
-    confirm_button_text="Close Position",
+    title="Review Position",
+    body="Review this position signal before taking any action in your broker.",
+    confirm_button_text="Review Position",
     confirm_button_class="btn-warning"
-  %}
+%}
     {% include "partials/components/confirm_modal.html" %}
-  {% endwith %}
+{% endwith %}
 
-  {% set llm_enabled = config.get('LLM_ENABLED', 'false')|string in ('true', '1', 'yes', 'y', 'on') %}
-  {% if llm_enabled %}
-  <section id="llm-advisor-section" class="mt-3" data-llm-enabled="true">
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0 fs-6 fw-semibold">AI Trade Advisor</h5>
-        <button id="llm-generate-btn" class="btn btn-primary btn-sm" disabled>
-          <span class="spinner-border spinner-border-sm d-none" id="llm-spinner" role="status"></span>
-          Generate Suggestions
-        </button>
-      </div>
-      <div class="card-body">
-        <div id="llm-status" class="text-muted small">Ready. Click "Generate Suggestions" to get AI-powered trade advice.</div>
-        <div id="llm-result" class="d-none mt-3">
-          <div class="alert alert-info" role="alert">
-            <div id="llm-result-text" class="llm-markdown"></div>
-          </div>
-          <small class="text-muted" id="llm-result-meta"></small>
+{% set llm_enabled = config.get('LLM_ENABLED', 'false')|string in ('true', '1', 'yes', 'y', 'on') %}
+{% if llm_enabled %}
+<section class="ft-section" id="llm-advisor-section" data-llm-enabled="true">
+    <div class="ft-section__head">
+        <div class="ft-section__head-left">
+            <span class="ft-section__num">08 &middot; ADVISOR</span>
+            <h2 class="ft-section__title">AI Trade Advisor</h2>
         </div>
-        <div id="llm-error" class="d-none mt-3">
-          <div class="alert alert-warning" role="alert" id="llm-error-text"></div>
-        </div>
-      </div>
     </div>
-  </section>
-  {% endif %}
-</details>
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0 fs-6 fw-semibold">Generate suggestions</h5>
+            <button id="llm-generate-btn" class="btn btn-primary btn-sm" disabled>
+                <span class="spinner-border spinner-border-sm d-none" id="llm-spinner" role="status"></span>
+                Generate Suggestions
+            </button>
+        </div>
+        <div class="card-body">
+            <div id="llm-status" class="text-muted small">Ready. Click "Generate Suggestions" to get AI-powered trade advice.</div>
+            <div id="llm-result" class="d-none mt-3">
+                <div class="alert alert-info" role="alert">
+                    <div id="llm-result-text" class="llm-markdown"></div>
+                </div>
+                <small class="text-muted" id="llm-result-meta"></small>
+            </div>
+            <div id="llm-error" class="d-none mt-3">
+                <div class="alert alert-warning" role="alert" id="llm-error-text"></div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script type="module" src="{{ url_for('static', filename='js/utils/sparklines.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/dashboard/dashboard.js') }}"></script>
-<script type="module" src="{{ url_for('static', filename='js/dashboard/evaluator-widget.js') }}"></script>
 {% endblock %}

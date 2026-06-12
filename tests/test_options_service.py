@@ -183,5 +183,41 @@ class TestLazyServiceInitialization(unittest.TestCase):
         mock_get_service.assert_called_once()  # Only called once due to caching
 
 
+class TestOptionsServiceConnectionConfig(unittest.TestCase):
+    def test_ensure_connection_propagates_portfolio_env(self):
+        with patch('api.services.config.get_config') as mock_get_config, \
+             patch('core.connection.MoomooConnection') as mock_moomoo, \
+             patch('db.database.OptionsDatabase') as mock_options_db:
+            mock_config = MagicMock()
+            mock_config.get.side_effect = lambda key, default=None: {
+                'host': '127.0.0.1',
+                'port': 11111,
+                'readonly': True,
+                'portfolio_env': 'REAL',
+                'security_firm': 'FUTUAU',
+                'db_path': ':memory:',
+            }.get(key, default)
+            mock_get_config.return_value = mock_config
+
+            fresh = MagicMock()
+            fresh.is_connected.return_value = True
+            fresh.connect.return_value = True
+            mock_moomoo.return_value = fresh
+            mock_options_db.return_value = MagicMock()
+
+            service = OptionsService()
+            result = service._ensure_connection()
+
+            self.assertIs(result, fresh)
+            mock_moomoo.assert_called_once_with(
+                host='127.0.0.1',
+                port=11111,
+                readonly=True,
+                account_id=None,
+                portfolio_env='REAL',
+                security_firm='FUTUAU',
+            )
+
+
 if __name__ == '__main__':
     unittest.main()

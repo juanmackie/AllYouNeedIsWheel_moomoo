@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=1280, initial-scale=1" />
+  <title>AYNIWHEEL - FT Redesign - 2026-06-06</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+  />
+  <style>
+    :root {
+      --paper: #fff1e5;
+      --ink: #0a0a0a;
+      --ink-soft: rgba(10, 10, 10, 0.72);
+      --ink-mute: rgba(10, 10, 10, 0.48);
+      --ink-faint: rgba(10, 10, 10, 0.32);
+      --rule: rgba(10, 10, 10, 0.88);
+      --rule-soft: rgba(10, 10, 10, 0.16);
+      --rule-softer: rgba(10, 10, 10, 0.08);
+      --signal: #0e7c3a;
+      --signal-soft: rgba(14, 124, 58, 0.10);
+      --warn: #b8763a;
+      --warn-soft: rgba(184, 118, 58, 0.12);
+      --down: #b23a3a;
+      --down-soft: rgba(178, 58, 58, 0.10);
+      --font-display: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+      --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "JetBrains Mono", "IBM Plex Mono", "SF Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #1a1a1a;
+      font-family: var(--font-body);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body {
+      min-height: 100vh;
+      padding: 32px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+    .stage {
+      font-family: var(--font-body);
+      color: var(--ink);
+      background: var(--paper);
+      width: 1280px;
+      min-height: 900px;
+      padding: 0;
+    }
+    .stage * {
+      font-variant-numeric: tabular-nums;
+    }
+    a { color: inherit; text-decoration: none; }
+    button { font-family: inherit; }
+    ::selection { background: var(--ink); color: var(--paper); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useMemo, useEffect } = React;
+
+    /* ===========================================================
+       1. PALETTE
+       =========================================================== */
+    const FT = {
+      paper: "#FFF1E5",
+      ink: "#0A0A0A",
+      inkSoft: "rgba(10,10,10,0.72)",
+      inkMute: "rgba(10,10,10,0.48)",
+      inkFaint: "rgba(10,10,10,0.32)",
+      rule: "rgba(10,10,10,0.88)",
+      ruleSoft: "rgba(10,10,10,0.16)",
+      ruleSofter: "rgba(10,10,10,0.08)",
+      signal: "#0E7C3A",
+      signalSoft: "rgba(14,124,58,0.10)",
+      warn: "#B8763A",
+      warnSoft: "rgba(184,118,58,0.12)",
+      down: "#B23A3A",
+      downSoft: "rgba(178,58,58,0.10)",
+      fontDisplay: '"Source Serif 4", "Source Serif Pro", Georgia, serif',
+      fontBody: '"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      fontMono: '"JetBrains Mono", "IBM Plex Mono", "SF Mono", monospace',
+    };
+
+    // Pre-built CSS string fragments
+    const R1 = "1px solid " + FT.rule;
+    const RS = "1px solid " + FT.ruleSoft;
+    const RSF = "1px solid " + FT.ruleSofter;
+
+    /* ===========================================================
+       2. SHARED ATOMS
+       =========================================================== */
+    const Rule = ({ weight, color, style }) => (
+      React.createElement("div", { style: { height: weight || 1, background: color || FT.rule, width: "100%", ...(style || {}) } })
+    );
+
+    const SoftRule = ({ style }) => (
+      React.createElement("div", { style: { height: 1, background: FT.ruleSoft, width: "100%", ...(style || {}) } })
+    );
+
+    const Mono = ({ children, size, weight, color, style }) => (
+      React.createElement("span", {
+        style: {
+          fontFamily: FT.fontMono,
+          fontSize: size || 12,
+          fontWeight: weight || 400,
+          color: color || FT.ink,
+          letterSpacing: "0.01em",
+          ...(style || {}),
+        }
+      }, children)
+    );
+
+    const Eyebrow = ({ children, color }) => (
+      React.createElement(Mono, {
+        size: 10, weight: 600, color: color || FT.inkMute,
+        style: { textTransform: "uppercase", letterSpacing: "0.12em" }
+      }, children)
+    );
+
+    const SectionHeader = ({ num, title, caption, action }) => (
+      React.createElement("div", { style: { marginTop: 48, marginBottom: 0 } },
+        React.createElement("div", {
+          style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", paddingBottom: 14 }
+        },
+          React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 16 } },
+            React.createElement(Mono, { size: 11, color: FT.inkMute, style: { letterSpacing: "0.16em" } }, num),
+            React.createElement("h2", {
+              style: {
+                margin: 0,
+                fontFamily: FT.fontDisplay,
+                fontWeight: 600,
+                fontSize: 30,
+                lineHeight: 1.1,
+                letterSpacing: "-0.015em",
+                color: FT.ink,
+              }
+            }, title)
+          ),
+          action || null
+        ),
+        caption ? React.createElement("p", {
+          style: {
+            margin: 0,
+            fontFamily: FT.fontBody,
+            fontSize: 14,
+            lineHeight: 1.5,
+            color: FT.inkSoft,
+            maxWidth: 720,
+            paddingBottom: 16,
+          }
+        }, caption) : null,
+        React.createElement(Rule, null)
+      )
+    );
+
+    const Metric = ({ label, value, sub, accent }) => (
+      React.createElement("div", { style: { padding: "20px 24px 22px 0", borderRight: RS } },
+        React.createElement("div", { style: { paddingBottom: 8 } }, React.createElement(Eyebrow, null, label)),
+        React.createElement("div", {
+          style: {
+            fontFamily: FT.fontDisplay,
+            fontWeight: 600,
+            fontSize: 30,
+            lineHeight: 1.1,
+            letterSpacing: "-0.02em",
+            color: accent || FT.ink,
+            fontVariantNumeric: "tabular-nums",
+          }
+        }, value),
+        sub ? React.createElement("div", {
+          style: { paddingTop: 6, fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute, lineHeight: 1.4 }
+        }, sub) : null
+      )
+    );
+
+    const ScoreBar = ({ label, weight, score }) => {
+      const max = 20;
+      const filled = Math.round((score / 100) * max);
+      const empty = max - filled;
+      return (
+        React.createElement("div", {
+          style: {
+            display: "grid",
+            gridTemplateColumns: "120px 36px 1fr 40px",
+            alignItems: "center",
+            gap: 14,
+            padding: "5px 0",
+            fontFamily: FT.fontMono,
+            fontSize: 13,
+          }
+        },
+          React.createElement(Mono, { size: 11, color: FT.inkMute, style: { textTransform: "uppercase", letterSpacing: "0.1em" } }, label),
+          React.createElement(Mono, { size: 11, color: FT.inkFaint, style: { textAlign: "right" } }, weight + "%"),
+          React.createElement("div", { style: { display: "flex", alignItems: "center" } },
+            React.createElement("span", { style: { color: FT.ink, fontSize: 14, lineHeight: 1, whiteSpace: "pre" } }, "\u2501".repeat(filled)),
+            React.createElement("span", { style: { color: FT.ruleSoft, fontSize: 14, lineHeight: 1, whiteSpace: "pre" } }, "\u2500".repeat(empty))
+          ),
+          React.createElement(Mono, {
+            size: 13, weight: 600,
+            color: score >= 80 ? FT.signal : score >= 60 ? FT.ink : FT.warn,
+            style: { textAlign: "right" }
+          }, score)
+        )
+      );
+    };
+
+    const Ticker = ({ children, size }) => (
+      React.createElement("span", {
+        style: {
+          fontFamily: FT.fontMono, fontWeight: 600,
+          fontSize: size || 13, letterSpacing: "0.02em", color: FT.ink,
+        }
+      }, children)
+    );
+
+    const Pill = ({ children, tone }) => {
+      const tones = {
+        neutral: { bg: "transparent", color: FT.inkSoft, border: FT.ruleSoft },
+        signal: { bg: FT.signalSoft, color: FT.signal, border: FT.signal },
+        warn: { bg: FT.warnSoft, color: FT.warn, border: FT.warn },
+        down: { bg: FT.downSoft, color: FT.down, border: FT.down },
+      };
+      const t = tones[tone || "neutral"];
+      return (
+        React.createElement("span", {
+          style: {
+            display: "inline-block",
+            padding: "2px 8px",
+            fontFamily: FT.fontMono,
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            background: t.bg, color: t.color, border: "1px solid " + t.border,
+          }
+        }, children)
+      );
+    };
+
+    /* ===========================================================
+       3. MASTHEAD + NAV
+       =========================================================== */
+    const Masthead = ({ page, onPage }) => {
+      const nav = [
+        { id: "dashboard", label: "Dashboard" },
+        { id: "portfolio", label: "Portfolio" },
+        { id: "rollover", label: "Rollover" },
+      ];
+      return (
+        React.createElement("header", { style: { borderBottom: "2px solid " + FT.ink } },
+          React.createElement("div", {
+            style: {
+              display: "grid",
+              gridTemplateColumns: "1fr auto 1fr",
+              alignItems: "center",
+              padding: "20px 48px 14px",
+              gap: 24,
+            }
+          },
+            React.createElement(Mono, { size: 11, color: FT.inkMute, style: { letterSpacing: "0.16em", textTransform: "uppercase" } },
+              "Sat 06 Jun 2026 \u00B7 14:32 ET"
+            ),
+            React.createElement("div", {
+              style: {
+                fontFamily: FT.fontDisplay, fontWeight: 700, fontSize: 32,
+                letterSpacing: "0.08em", color: FT.ink, textAlign: "center",
+              }
+            }, "AYNIWHEEL"),
+            React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 16 } },
+              React.createElement(Mono, { size: 11, color: FT.inkMute, style: { letterSpacing: "0.16em", textTransform: "uppercase" } },
+                "Nasdaq \u00B7 Cash Open"
+              ),
+              React.createElement("span", { style: { display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: FT.signal } })
+            )
+          ),
+          React.createElement(SoftRule, null),
+          React.createElement("div", {
+            style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 48px" }
+          },
+            React.createElement(Mono, { size: 10, color: FT.inkMute, style: { letterSpacing: "0.18em", textTransform: "uppercase" } },
+              "The Wheel \u00B7 Cash-secured puts & covered calls \u00B7 Moomoo OpenD"
+            ),
+            React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { letterSpacing: "0.18em", textTransform: "uppercase" } },
+              "v2.0 \u00B7 live"
+            )
+          ),
+          React.createElement(Rule, null),
+          React.createElement("nav", { style: { display: "flex", padding: "0 48px" } },
+            nav.map(function(n) {
+              const active = page === n.id;
+              return (
+                React.createElement("button", {
+                  key: n.id,
+                  onClick: function() { onPage(n.id); },
+                  style: {
+                    fontFamily: FT.fontBody, fontWeight: 500, fontSize: 14,
+                    letterSpacing: "0.04em",
+                    color: active ? FT.ink : FT.inkMute,
+                    background: "transparent", border: "none",
+                    padding: "14px 28px 14px 0", marginRight: 28,
+                    cursor: "pointer",
+                    borderBottom: active ? "2px solid " + FT.ink : "2px solid transparent",
+                    marginBottom: -1,
+                    transition: "color 120ms ease",
+                  },
+                  onMouseEnter: function(e) { e.currentTarget.style.color = FT.ink; },
+                  onMouseLeave: function(e) { e.currentTarget.style.color = active ? FT.ink : FT.inkMute; },
+                }, n.label)
+              );
+            })
+          ),
+          React.createElement(Rule, null)
+        )
+      );
+    };
+
+    /* ===========================================================
+       4. DATA
+       =========================================================== */
+    const DATA = {
+      account: {
+        total: 187420.55,
+        cash: 42118.20,
+        bp: 84236.40,
+        margin: "2.23x",
+        marginPct: 44.8,
+        goal2x: 12.4,
+      },
+      income: {
+        weekly: 312.40,
+        weeklyExpiring: 4,
+        openShort: 1842.20,
+        openShortContracts: 7,
+      },
+      macro: {
+        rates: { label: "Stable", tone: "neutral" },
+        credit: { label: "Calm", tone: "signal" },
+        growth: { label: "Slowing", tone: "warn" },
+        inflation: { label: "Easing", tone: "signal" },
+        vix: 14.82,
+        vixRegime: "Low",
+        yieldCurve: -0.18,
+      },
+      topSignal: {
+        rank: 1,
+        ticker: "AAPL",
+        type: "Cash-Secured Put",
+        strike: 185.0,
+        underlying: 198.42,
+        dte: 21,
+        expiration: "2026-06-27",
+        premium: 2.18,
+        annReturn: 24.1,
+        score: 84,
+        drivers: [
+          { label: "IV-Adj", weight: 25, score: 92 },
+          { label: "Th/Delta", weight: 20, score: 74 },
+          { label: "Liquid.", weight: 18, score: 88 },
+          { label: "Exp.Val", weight: 15, score: 81 },
+          { label: "OTM-Fit", weight: 12, score: 95 },
+          { label: "Upside", weight: 10, score: 69 },
+        ],
+        csp: {
+          cashRequired: 18500.0,
+          pctCash: 43.9,
+          breakeven: 182.82,
+          expectedMove: 5.4,
+        },
+        note: "0.8 sigma OTM at 21 DTE, IV rank 38 (neutral), earnings 42d out.",
+      },
+      watchlist: [
+        { rank: 2, ticker: "MSFT", type: "Cash-Secured Put", strike: 405, dte: 28, ann: 18.6, score: 79, tone: "neutral" },
+        { rank: 3, ticker: "NVDA", type: "Covered Call", strike: 1080, dte: 14, ann: 21.3, score: 76, tone: "neutral" },
+        { rank: 4, ticker: "TSLA", type: "Cash-Secured Put", strike: 215, dte: 35, ann: 28.4, score: 74, tone: "warn" },
+        { rank: 5, ticker: "AMD", type: "Cash-Secured Put", strike: 145, dte: 21, ann: 22.1, score: 71, tone: "neutral" },
+      ],
+      holdings: [
+        { ticker: "AAPL", qty: 150, cost: 174.82, last: 198.42, value: 29763, dayChg: 1.18, gainPct: 13.5 },
+        { ticker: "MSFT", qty: 60, cost: 388.40, last: 418.16, value: 25090, dayChg: 0.62, gainPct: 7.7 },
+        { ticker: "NVDA", qty: 30, cost: 922.10, last: 1058.40, value: 31752, dayChg: 2.91, gainPct: 14.8 },
+      ],
+      openPuts: [
+        { id: "p1", ticker: "AAPL", strike: 180, expiry: "2026-06-13", dte: 7, qty: 5, credit: 1.42, underlying: 198.42, otm: 9.3, status: "safe" },
+        { id: "p2", ticker: "MSFT", strike: 400, expiry: "2026-06-20", dte: 14, qty: 3, credit: 3.18, underlying: 418.16, otm: 4.4, status: "safe" },
+        { id: "p3", ticker: "TSLA", strike: 240, expiry: "2026-06-27", dte: 21, qty: 4, credit: 4.85, underlying: 251.30, otm: 4.5, status: "safe" },
+      ],
+      openCalls: [
+        { id: "c1", ticker: "AAPL", strike: 210, expiry: "2026-06-20", dte: 14, qty: 5, credit: 1.78, underlying: 198.42, otm: -5.8, status: "itm" },
+        { id: "c2", ticker: "MSFT", strike: 440, expiry: "2026-07-18", dte: 42, qty: 3, credit: 4.92, underlying: 418.16, otm: 5.2, status: "safe" },
+      ],
+      closed: [
+        { ticker: "SPY", type: "Put", strike: 540, expiry: "2026-05-30", credit: 1.18, closed: "expired", pnl: 590.00 },
+        { ticker: "QQQ", type: "Call", strike: 470, expiry: "2026-05-23", credit: 1.92, closed: "expired", pnl: 960.00 },
+        { ticker: "AMD", type: "Put", strike: 150, expiry: "2026-05-16", credit: 2.04, closed: "rolled", pnl: 306.00 },
+        { ticker: "IWM", type: "Put", strike: 210, expiry: "2026-05-09", credit: 1.36, closed: "expired", pnl: 680.00 },
+        { ticker: "META", type: "Call", strike: 480, expiry: "2026-04-25", credit: 2.85, closed: "bought-back", pnl: -142.50 },
+      ],
+      rollPositions: [
+        {
+          id: "r1", ticker: "AAPL", type: "Cash-Secured Put",
+          current: { strike: 180, expiry: "2026-06-13", dte: 7, credit: 1.42, underlying: 198.42, otm: 9.3 },
+          status: "watch",
+          rationale: "7 DTE, 9.3% OTM. Safe to hold. Roll only if 0.5 sigma breach.",
+          roll: null,
+        },
+        {
+          id: "r2", ticker: "NVDA", type: "Covered Call",
+          current: { strike: 1080, expiry: "2026-06-20", dte: 14, credit: 1.92, underlying: 1058.40, otm: -2.0 },
+          status: "urgent",
+          rationale: "Underlying 2% ITM at 14 DTE. Assignment likely. Roll up and out to defer.",
+          roll: {
+            newStrike: 1140, newExpiry: "2026-07-18", newDte: 42,
+            newCredit: 8.20, estDebit: 4.10, netCredit: 4.10, annReturn: 18.2,
+          },
+        },
+        {
+          id: "r3", ticker: "TSLA", type: "Cash-Secured Put",
+          current: { strike: 240, expiry: "2026-06-27", dte: 21, credit: 4.85, underlying: 251.30, otm: 4.5 },
+          status: "watch",
+          rationale: "21 DTE, 4.5% OTM, but 1.4 sigma from strike. Earnings 18d out -- risk skew.",
+          roll: null,
+        },
+        {
+          id: "r4", ticker: "MSFT", type: "Covered Call",
+          current: { strike: 440, expiry: "2026-07-18", dte: 42, credit: 4.92, underlying: 418.16, otm: 5.2 },
+          status: "safe",
+          rationale: "42 DTE, 5.2% OTM, IV rank 32. Hold. Reassess at 28 DTE.",
+          roll: null,
+        },
+      ],
+    };
+
+    /* ===========================================================
+       5. DASHBOARD
+       =========================================================== */
+    function Dashboard() {
+      const a = DATA.account;
+      const i = DATA.income;
+      const m = DATA.macro;
+      const s = DATA.topSignal;
+      const fmtUsd = function(n) {
+        return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+      };
+      const fmtUsdShort = function(n) {
+        return n >= 1000
+          ? "$" + (n / 1000).toFixed(1) + "k"
+          : n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 });
+      };
+      const subCash = "Cash " + fmtUsdShort(a.cash) + " \u00B7 Stocks " + fmtUsdShort(a.total - a.cash);
+      const subReserved = "Reserved " + fmtUsdShort(a.bp * 0.42) + " on open puts";
+      const subGoal = React.createElement("span", null,
+        "Target ",
+        React.createElement("strong", { style: { color: FT.ink } }, "$374,841"),
+        " \u00B7 18mo avg"
+      );
+
+      return (
+        React.createElement("div", { style: { padding: "0 48px 64px" } },
+          React.createElement(SectionHeader, {
+            num: "01 \u00B7 CAPITAL",
+            title: "Position & income, as of last sync",
+            caption: "Capital and weekly income shown against the 2x goal. Buying power reflects 50% margin requirement on naked puts."
+          }),
+          React.createElement("div", {
+            style: { display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr", borderBottom: RS }
+          },
+            React.createElement(Metric, { label: "Total Value", value: fmtUsd(a.total), sub: subCash, accent: FT.ink }),
+            React.createElement(Metric, { label: "Buying Power", value: fmtUsd(a.bp), sub: subReserved }),
+            React.createElement(Metric, {
+              label: "Margin Used", value: a.margin,
+              sub: React.createElement("div", { style: { paddingTop: 4 } },
+                React.createElement("div", { style: { height: 3, background: FT.ruleSoft, position: "relative" } },
+                  React.createElement("div", { style: { position: "absolute", left: 0, top: 0, height: "100%", width: a.marginPct + "%", background: FT.ink } })
+                )
+              )
+            })
+          ),
+          React.createElement("div", {
+            style: { display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", borderBottom: RS }
+          },
+            React.createElement(Metric, { label: "Weekly Premium", value: fmtUsd(i.weekly), sub: i.weeklyExpiring + " positions expiring Fri 06/12", accent: FT.signal }),
+            React.createElement(Metric, { label: "Open Short Premium", value: fmtUsd(i.openShort), sub: i.openShortContracts + " contracts open" }),
+            React.createElement(Metric, { label: "2x Goal Progress", value: a.goal2x.toFixed(1) + "%", sub: subGoal })
+          ),
+
+          // Top signal
+          React.createElement(SectionHeader, {
+            num: "02 \u00B7 TOP SIGNAL",
+            title: s.ticker + " \u00B7 " + s.type,
+            caption: "Rank " + s.rank + " by IV-adjusted return and buying-power fit. Underlying $" + s.underlying + " (last). Strike " + s.strike + " is 0.8 sigma OTM at 21 DTE."
+          }),
+          React.createElement("div", {
+            style: { display: "grid", gridTemplateColumns: "1.1fr 1.6fr", borderBottom: R1, borderTop: R1 }
+          },
+            // Left: the big number
+            React.createElement("div", { style: { padding: "32px 24px 32px 0", borderRight: RS } },
+              React.createElement(Eyebrow, null, "The Number"),
+              React.createElement("div", {
+                style: {
+                  fontFamily: FT.fontDisplay, fontWeight: 700, fontSize: 96,
+                  lineHeight: 0.95, letterSpacing: "-0.04em", color: FT.ink, paddingTop: 16,
+                }
+              },
+                s.score,
+                React.createElement("span", { style: { fontSize: 32, color: FT.inkMute, fontWeight: 600 } }, "/100")
+              ),
+              React.createElement("div", { style: { paddingTop: 8 } },
+                React.createElement(Mono, { size: 11, color: FT.inkMute, style: { textTransform: "uppercase", letterSpacing: "0.12em" } },
+                  "Score \u00B7 IV-adjusted, capital-fit"
+                )
+              ),
+              React.createElement("div", { style: { paddingTop: 32, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 } },
+                React.createElement("div", null,
+                  React.createElement(Eyebrow, null, "Premium"),
+                  React.createElement("div", { style: { fontFamily: FT.fontDisplay, fontSize: 28, fontWeight: 600, paddingTop: 6, color: FT.signal } },
+                    "$" + s.premium.toFixed(2)
+                  ),
+                  React.createElement("div", { style: { paddingTop: 2 } }, React.createElement(Mono, { size: 11, color: FT.inkMute }, "per contract"))
+                ),
+                React.createElement("div", null,
+                  React.createElement(Eyebrow, null, "Ann. Return"),
+                  React.createElement("div", { style: { fontFamily: FT.fontDisplay, fontSize: 28, fontWeight: 600, paddingTop: 6 } },
+                    s.annReturn.toFixed(1) + "%"
+                  ),
+                  React.createElement("div", { style: { paddingTop: 2 } }, React.createElement(Mono, { size: 11, color: FT.inkMute }, "on capital secured"))
+                )
+              )
+            ),
+            // Right: score decomposition
+            React.createElement("div", { style: { padding: "28px 0 28px 32px" } },
+              React.createElement("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", paddingBottom: 18 } },
+                React.createElement(Eyebrow, null, "Score Decomposition"),
+                React.createElement(Mono, { size: 11, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.12em" } },
+                  "Weight \u00D7 Output"
+                )
+              ),
+              React.createElement("div", null,
+                s.drivers.map(function(d) {
+                  return React.createElement(ScoreBar, { key: d.label, label: d.label, weight: d.weight, score: d.score });
+                })
+              ),
+              React.createElement(SoftRule, { style: { margin: "18px 0" } }),
+              React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 18, paddingTop: 4 } },
+                React.createElement("div", null,
+                  React.createElement(Eyebrow, null, "Cash Req."),
+                  React.createElement("div", { style: { fontFamily: FT.fontMono, fontWeight: 600, fontSize: 14, paddingTop: 6 } },
+                    fmtUsdShort(s.csp.cashRequired)
+                  )
+                ),
+                React.createElement("div", null,
+                  React.createElement(Eyebrow, null, "% Cash"),
+                  React.createElement("div", { style: { fontFamily: FT.fontMono, fontWeight: 600, fontSize: 14, paddingTop: 6 } },
+                    s.csp.pctCash.toFixed(1) + "%"
+                  )
+                ),
+                React.createElement("div", null,
+                  React.createElement(Eyebrow, null, "Breakeven"),
+                  React.createElement("div", { style: { fontFamily: FT.fontMono, fontWeight: 600, fontSize: 14, paddingTop: 6 } },
+                    "$" + s.csp.breakeven.toFixed(2)
+                  )
+                ),
+                React.createElement("div", null,
+                  React.createElement(Eyebrow, null, "Exp. Move"),
+                  React.createElement("div", { style: { fontFamily: FT.fontMono, fontWeight: 600, fontSize: 14, paddingTop: 6 } },
+                    "\u00B1$" + s.csp.expectedMove.toFixed(1)
+                  )
+                )
+              ),
+              React.createElement("div", { style: { paddingTop: 20, fontFamily: FT.fontBody, fontSize: 13, color: FT.inkSoft, lineHeight: 1.55, maxWidth: 540 } },
+                s.note
+              )
+            )
+          ),
+
+          // Watchlist
+          React.createElement(SectionHeader, {
+            num: "03 \u00B7 WATCHLIST",
+            title: "Other qualifying signals",
+            caption: "Ranked by score. Filtered to contracts you can sell with current buying power.",
+            action: React.createElement(Pill, { tone: "neutral" }, "5 candidates")
+          }),
+          React.createElement("table", {
+            style: { width: "100%", borderCollapse: "collapse", fontFamily: FT.fontBody, fontSize: 14 }
+          },
+            React.createElement("thead", null,
+              React.createElement("tr", null,
+                ["#", "Ticker", "Type", "Strike", "DTE", "Ann.", "Score", "Status"].map(function(h, i) {
+                  const align = i === 0 ? "left" : (i === 7 ? "right" : (i === 3 || i === 4 || i === 5 || i === 6 ? "right" : "left"));
+                  return React.createElement("th", {
+                    key: h,
+                    style: {
+                      textAlign: align,
+                      padding: "12px 12px 12px 0",
+                      borderBottom: R1,
+                      fontFamily: FT.fontMono, fontSize: 10, fontWeight: 600,
+                      letterSpacing: "0.14em", textTransform: "uppercase", color: FT.inkMute,
+                    }
+                  }, h);
+                })
+              )
+            ),
+            React.createElement("tbody", null,
+              DATA.watchlist.map(function(w) {
+                return React.createElement("tr", { key: w.ticker },
+                  React.createElement("td", { style: { padding: "16px 12px 16px 0", borderBottom: RS, color: FT.inkMute, fontFamily: FT.fontMono, fontSize: 12 } },
+                    String(w.rank).padStart(2, "0")
+                  ),
+                  React.createElement("td", { style: { padding: "16px 12px 16px 0", borderBottom: RS } },
+                    React.createElement(Ticker, { size: 14 }, w.ticker)
+                  ),
+                  React.createElement("td", { style: { padding: "16px 12px 16px 0", borderBottom: RS, color: FT.inkSoft } }, w.type),
+                  React.createElement("td", { style: { padding: "16px 12px 16px 0", borderBottom: RS, textAlign: "right", fontFamily: FT.fontMono } },
+                    "$" + w.strike
+                  ),
+                  React.createElement("td", { style: { padding: "16px 12px 16px 0", borderBottom: RS, textAlign: "right", fontFamily: FT.fontMono, color: FT.inkSoft } },
+                    w.dte + "d"
+                  ),
+                  React.createElement("td", { style: { padding: "16px 12px 16px 0", borderBottom: RS, textAlign: "right", fontFamily: FT.fontMono, fontWeight: 500 } },
+                    w.ann.toFixed(1) + "%"
+                  ),
+                  React.createElement("td", { style: { padding: "16px 12px 16px 0", borderBottom: RS, textAlign: "right", fontFamily: FT.fontMono, fontWeight: 600, color: w.score >= 80 ? FT.signal : FT.ink } },
+                    w.score
+                  ),
+                  React.createElement("td", { style: { padding: "16px 0 16px 0", borderBottom: RS, textAlign: "right" } },
+                    w.tone === "warn" ? React.createElement(Pill, { tone: "warn" }, "Earnings 11d") : React.createElement(Pill, { tone: "neutral" }, "Clear")
+                  )
+                );
+              })
+            )
+          ),
+
+          // Macro
+          React.createElement(SectionHeader, {
+            num: "04 \u00B7 MACRO",
+            title: "Regime context",
+            caption: "FRED-fed macro context adjusts all option scores by 0.80x-1.05x. Current multiplier 0.98x (neutral)."
+          }),
+          React.createElement("div", {
+            style: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", borderTop: R1, borderBottom: R1 }
+          },
+            [
+              { l: "Rates", v: m.rates.label, t: m.rates.tone },
+              { l: "Credit", v: m.credit.label, t: m.credit.tone },
+              { l: "Growth", v: m.growth.label, t: m.growth.tone },
+              { l: "Inflation", v: m.inflation.label, t: m.inflation.tone },
+              { l: "VIX", v: m.vix.toFixed(2) + " \u00B7 " + m.vixRegime, t: m.vix < 20 ? "signal" : "warn" },
+            ].map(function(cell, i) {
+              return React.createElement("div", {
+                key: cell.l,
+                style: { padding: "20px 16px", borderRight: i < 4 ? RS : "none" }
+              },
+                React.createElement(Eyebrow, null, cell.l),
+                React.createElement("div", {
+                  style: {
+                    paddingTop: 8, fontFamily: FT.fontDisplay, fontWeight: 600, fontSize: 22, lineHeight: 1.1,
+                    color: cell.t === "signal" ? FT.signal : (cell.t === "warn" ? FT.warn : FT.ink),
+                  }
+                }, cell.v)
+              );
+            })
+          ),
+          React.createElement("div", { style: { paddingTop: 12 } },
+            React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.14em" } },
+              "Yield curve (10y - 2y) " + (m.yieldCurve > 0 ? "+" : "") + m.yieldCurve.toFixed(2) + "bp \u00B7 Inverted 18mo \u00B7 Recession signal softening"
+            )
+          ),
+
+          // Colophon
+          React.createElement("div", { style: { paddingTop: 64 } },
+            React.createElement(SoftRule, null),
+            React.createElement("div", {
+              style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0" }
+            },
+              React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.16em" } },
+                "Signals ranked 2026-06-06 14:32 ET \u00B7 IV data stale 02:14"
+              ),
+              React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.16em" } },
+                "Moomoo OpenD \u00B7 v2.0 \u00B7 signal-only, not advice"
+              )
+            )
+          )
+        )
+      );
+    }
+
+    /* ===========================================================
+       6. PORTFOLIO
+       =========================================================== */
+    function cellStyle(align, kind, color, weight) {
+      return {
+        padding: "16px 0 16px 24px",
+        borderBottom: RS,
+        textAlign: align,
+        fontFamily: kind === "mono" ? FT.fontMono : FT.fontBody,
+        color: color || FT.ink,
+        fontWeight: weight || 400,
+      };
+    }
+
+    function Portfolio() {
+      const fmtUsd = function(n) {
+        return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+      };
+      const fmtUsdShort = function(n) {
+        return n >= 1000 ? "$" + (n / 1000).toFixed(1) + "k" : "$" + n.toFixed(0);
+      };
+      const totalHoldings = DATA.holdings.reduce(function(s, h) { return s + h.value; }, 0);
+      const totalPutsValue = DATA.openPuts.reduce(function(s, p) { return s + p.strike * 100 * p.qty; }, 0);
+      const closedTotal = DATA.closed.reduce(function(s, c) { return s + c.pnl; }, 0);
+
+      return (
+        React.createElement("div", { style: { padding: "0 48px 64px" } },
+          // Holdings
+          React.createElement(SectionHeader, {
+            num: "01 \u00B7 HOLDINGS",
+            title: "Long stock positions",
+            caption: "Cost basis reflects buy price only. Day change is last reported from Moomoo."
+          }),
+          React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: FT.fontBody, fontSize: 14 } },
+            React.createElement("thead", null,
+              React.createElement("tr", null,
+                ["Ticker", "Qty", "Cost", "Last", "Value", "Day", "Gain", ""].map(function(h, i) {
+                  return React.createElement("th", {
+                    key: h,
+                    style: {
+                      textAlign: i === 0 ? "left" : "right",
+                      padding: "12px 0 12px 24px",
+                      borderBottom: R1,
+                      fontFamily: FT.fontMono, fontSize: 10, fontWeight: 600,
+                      letterSpacing: "0.14em", textTransform: "uppercase", color: FT.inkMute,
+                    }
+                  }, h);
+                })
+              )
+            ),
+            React.createElement("tbody", null,
+              DATA.holdings.map(function(h) {
+                return React.createElement("tr", { key: h.ticker },
+                  React.createElement("td", { style: { padding: "16px 0 16px 0", borderBottom: RS } },
+                    React.createElement(Ticker, { size: 14 }, h.ticker)
+                  ),
+                  React.createElement("td", cellStyle("right", "mono"), h.qty),
+                  React.createElement("td", cellStyle("right", "mono", FT.inkMute), "$" + h.cost.toFixed(2)),
+                  React.createElement("td", cellStyle("right", "mono"), "$" + h.last.toFixed(2)),
+                  React.createElement("td", cellStyle("right", "mono", FT.ink, 600), fmtUsdShort(h.value)),
+                  React.createElement("td", cellStyle("right", "mono", h.dayChg >= 0 ? FT.signal : FT.down),
+                    (h.dayChg >= 0 ? "+" : "") + h.dayChg.toFixed(2) + "%"
+                  ),
+                  React.createElement("td", cellStyle("right", "mono", h.gainPct >= 0 ? FT.signal : FT.down, 600),
+                    "+" + h.gainPct.toFixed(1) + "%"
+                  ),
+                  React.createElement("td", { style: { padding: "16px 0 16px 24px", borderBottom: RS } }, "")
+                );
+              })
+            ),
+            React.createElement("tfoot", null,
+              React.createElement("tr", null,
+                React.createElement("td", { colSpan: 8, style: { padding: "16px 0 0 0" } },
+                  React.createElement("div", { style: { display: "flex", justifyContent: "space-between", paddingTop: 12 } },
+                    React.createElement(Eyebrow, null, "Total holdings"),
+                    React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 14, fontWeight: 600 } }, fmtUsd(totalHoldings))
+                  )
+                )
+              )
+            )
+          ),
+
+          // Open Puts
+          React.createElement(SectionHeader, {
+            num: "02 \u00B7 OPEN SHORT PUTS",
+            title: "Cash-secured puts sold",
+            caption: "Strike price reserved as collateral (strike \u00D7 100 \u00D7 qty). OTM% is from current underlying."
+          }),
+          React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: FT.fontBody, fontSize: 14 } },
+            React.createElement("thead", null,
+              React.createElement("tr", null,
+                ["Ticker", "Strike", "Expiry", "DTE", "Qty", "Credit", "Underlying", "OTM", "Status"].map(function(h, i) {
+                  return React.createElement("th", {
+                    key: h,
+                    style: {
+                      textAlign: i === 0 ? "left" : "right",
+                      padding: "12px 0 12px 24px",
+                      borderBottom: R1,
+                      fontFamily: FT.fontMono, fontSize: 10, fontWeight: 600,
+                      letterSpacing: "0.14em", textTransform: "uppercase", color: FT.inkMute,
+                    }
+                  }, h);
+                })
+              )
+            ),
+            React.createElement("tbody", null,
+              DATA.openPuts.map(function(p) {
+                return React.createElement("tr", { key: p.id },
+                  React.createElement("td", { style: { padding: "16px 0 16px 0", borderBottom: RS } },
+                    React.createElement(Ticker, null, p.ticker)
+                  ),
+                  React.createElement("td", cellStyle("right", "mono", FT.ink, 600), "$" + p.strike),
+                  React.createElement("td", cellStyle("right", "mono", FT.inkMute), p.expiry.slice(5)),
+                  React.createElement("td", cellStyle("right", "mono", p.dte <= 7 ? FT.warn : FT.ink), p.dte + "d"),
+                  React.createElement("td", cellStyle("right", "mono"), p.qty),
+                  React.createElement("td", cellStyle("right", "mono", FT.signal), "+$" + p.credit.toFixed(2)),
+                  React.createElement("td", cellStyle("right", "mono", FT.inkMute), "$" + p.underlying.toFixed(2)),
+                  React.createElement("td", cellStyle("right", "mono", p.otm < 3 ? FT.warn : FT.ink), p.otm.toFixed(1) + "%"),
+                  React.createElement("td", { style: { padding: "16px 0 16px 24px", borderBottom: RS, textAlign: "right" } },
+                    React.createElement(Pill, { tone: p.status === "safe" ? "signal" : "warn" }, p.status === "safe" ? "Clear" : "Watch")
+                  )
+                );
+              })
+            ),
+            React.createElement("tfoot", null,
+              React.createElement("tr", null,
+                React.createElement("td", { colSpan: 9, style: { padding: "16px 0 0 0" } },
+                  React.createElement("div", { style: { display: "flex", justifyContent: "space-between", paddingTop: 12 } },
+                    React.createElement(Eyebrow, null, "Reserved as collateral"),
+                    React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 14, fontWeight: 600 } }, fmtUsd(totalPutsValue))
+                  )
+                )
+              )
+            )
+          ),
+
+          // Open Calls
+          React.createElement(SectionHeader, {
+            num: "03 \u00B7 OPEN COVERED CALLS",
+            title: "Calls sold against held shares",
+            caption: "Negative OTM% means the call is ITM (assignment likely). See Rollover for action."
+          }),
+          React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: FT.fontBody, fontSize: 14 } },
+            React.createElement("thead", null,
+              React.createElement("tr", null,
+                ["Ticker", "Strike", "Expiry", "DTE", "Qty", "Credit", "Underlying", "OTM", "Status"].map(function(h, i) {
+                  return React.createElement("th", {
+                    key: h,
+                    style: {
+                      textAlign: i === 0 ? "left" : "right",
+                      padding: "12px 0 12px 24px",
+                      borderBottom: R1,
+                      fontFamily: FT.fontMono, fontSize: 10, fontWeight: 600,
+                      letterSpacing: "0.14em", textTransform: "uppercase", color: FT.inkMute,
+                    }
+                  }, h);
+                })
+              )
+            ),
+            React.createElement("tbody", null,
+              DATA.openCalls.map(function(c) {
+                return React.createElement("tr", { key: c.id },
+                  React.createElement("td", { style: { padding: "16px 0 16px 0", borderBottom: RS } },
+                    React.createElement(Ticker, null, c.ticker)
+                  ),
+                  React.createElement("td", cellStyle("right", "mono", FT.ink, 600), "$" + c.strike),
+                  React.createElement("td", cellStyle("right", "mono", FT.inkMute), c.expiry.slice(5)),
+                  React.createElement("td", cellStyle("right", "mono", c.dte <= 14 ? FT.warn : FT.ink), c.dte + "d"),
+                  React.createElement("td", cellStyle("right", "mono"), c.qty),
+                  React.createElement("td", cellStyle("right", "mono", FT.signal), "+$" + c.credit.toFixed(2)),
+                  React.createElement("td", cellStyle("right", "mono", FT.inkMute), "$" + c.underlying.toFixed(2)),
+                  React.createElement("td", cellStyle("right", "mono", c.otm < 0 ? FT.down : FT.ink),
+                    (c.otm >= 0 ? "+" : "") + c.otm.toFixed(1) + "%"
+                  ),
+                  React.createElement("td", { style: { padding: "16px 0 16px 24px", borderBottom: RS, textAlign: "right" } },
+                    React.createElement(Pill, { tone: c.status === "itm" ? "warn" : "signal" }, c.status === "itm" ? "ITM" : "Clear")
+                  )
+                );
+              })
+            )
+          ),
+
+          // Closed
+          React.createElement(SectionHeader, {
+            num: "04 \u00B7 CLOSED \u00B7 LAST 30 DAYS",
+            title: "Realized P&L",
+            caption: "Premium net of buy-backs. Negative rows are managed losses (rolled or bought back early)."
+          }),
+          React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: FT.fontBody, fontSize: 14 } },
+            React.createElement("thead", null,
+              React.createElement("tr", null,
+                ["Ticker", "Type", "Strike", "Expiry", "Credit", "Closed", "P&L"].map(function(h, i) {
+                  return React.createElement("th", {
+                    key: h,
+                    style: {
+                      textAlign: i === 0 ? "left" : "right",
+                      padding: "12px 0 12px 24px",
+                      borderBottom: R1,
+                      fontFamily: FT.fontMono, fontSize: 10, fontWeight: 600,
+                      letterSpacing: "0.14em", textTransform: "uppercase", color: FT.inkMute,
+                    }
+                  }, h);
+                })
+              )
+            ),
+            React.createElement("tbody", null,
+              DATA.closed.map(function(c, i) {
+                return React.createElement("tr", { key: i },
+                  React.createElement("td", { style: { padding: "16px 0 16px 0", borderBottom: RS } },
+                    React.createElement(Ticker, null, c.ticker)
+                  ),
+                  React.createElement("td", cellStyle("right", "mono", FT.inkMute), c.type),
+                  React.createElement("td", cellStyle("right", "mono"), "$" + c.strike),
+                  React.createElement("td", cellStyle("right", "mono", FT.inkMute), c.expiry.slice(5)),
+                  React.createElement("td", cellStyle("right", "mono", FT.signal), "+$" + c.credit.toFixed(2)),
+                  React.createElement("td", { style: { padding: "16px 0 16px 24px", borderBottom: RS, textAlign: "right" } },
+                    React.createElement(Pill, { tone: c.closed === "bought-back" ? "down" : "neutral" }, c.closed)
+                  ),
+                  React.createElement("td", cellStyle("right", "mono", c.pnl >= 0 ? FT.signal : FT.down, 600),
+                    (c.pnl >= 0 ? "+" : "-") + "$" + Math.abs(c.pnl).toFixed(2)
+                  )
+                );
+              })
+            ),
+            React.createElement("tfoot", null,
+              React.createElement("tr", null,
+                React.createElement("td", { colSpan: 7, style: { padding: "16px 0 0 0" } },
+                  React.createElement("div", { style: { display: "flex", justifyContent: "space-between", paddingTop: 12 } },
+                    React.createElement(Eyebrow, null, "30-day realized"),
+                    React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 14, fontWeight: 600, color: FT.signal } },
+                      "+$" + closedTotal.toFixed(2)
+                    )
+                  )
+                )
+              )
+            )
+          ),
+
+          React.createElement("div", { style: { paddingTop: 64 } },
+            React.createElement(SoftRule, null),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "14px 0" } },
+              React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.16em" } },
+                "Positions synced 2026-06-06 14:32 ET"
+              ),
+              React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.16em" } },
+                "All values shown pre-tax"
+              )
+            )
+          )
+        )
+      );
+    }
+
+    /* ===========================================================
+       7. ROLLOVER
+       =========================================================== */
+    function Rollover() {
+      const tone = {
+        urgent: { label: "Roll now", tone: "warn" },
+        watch: { label: "Hold \u00B7 monitor", tone: "neutral" },
+        safe: { label: "Hold", tone: "signal" },
+      };
+      const urgentCount = DATA.rollPositions.filter(function(p) { return p.status === "urgent"; }).length;
+      const watchCount = DATA.rollPositions.filter(function(p) { return p.status === "watch"; }).length;
+
+      function Row(props) {
+        const p = props.p;
+        const t = tone[p.status];
+        return (
+          React.createElement("div", {
+            style: { display: "grid", gridTemplateColumns: "1.4fr 1.4fr 1.4fr 2.2fr", borderTop: RS, borderBottom: RS }
+          },
+            // Identity
+            React.createElement("div", { style: { padding: "20px 24px 20px 0", borderRight: RS } },
+              React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, paddingBottom: 8 } },
+                React.createElement(Ticker, { size: 16 }, p.ticker),
+                React.createElement(Pill, { tone: t.tone }, t.label)
+              ),
+              React.createElement("div", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute, lineHeight: 1.5 } },
+                p.type
+              )
+            ),
+            // Current
+            React.createElement("div", { style: { padding: "20px 24px", borderRight: RS } },
+              React.createElement(Eyebrow, null, "Current"),
+              React.createElement("div", { style: { paddingTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 } },
+                React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "Strike"),
+                React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right", fontWeight: 600 } }, "$" + p.current.strike),
+                React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "Expiry"),
+                React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right" } }, p.current.expiry.slice(5)),
+                React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "DTE"),
+                React.createElement("span", {
+                  style: {
+                    fontFamily: FT.fontMono, fontSize: 13, textAlign: "right",
+                    color: p.current.dte <= 7 ? FT.warn : FT.ink, fontWeight: 600,
+                  }
+                }, p.current.dte + "d"),
+                React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "Credit"),
+                React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right", color: FT.signal } }, "+$" + p.current.credit.toFixed(2)),
+                React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "OTM"),
+                React.createElement("span", {
+                  style: {
+                    fontFamily: FT.fontMono, fontSize: 13, textAlign: "right",
+                    color: p.current.otm < 0 ? FT.down : (p.current.otm < 3 ? FT.warn : FT.ink),
+                  }
+                }, (p.current.otm >= 0 ? "+" : "") + p.current.otm.toFixed(1) + "%")
+              )
+            ),
+            // Suggested
+            React.createElement("div", {
+              style: {
+                padding: "20px 24px", borderRight: RS,
+                background: p.roll ? "rgba(14,124,58,0.04)" : "transparent",
+              }
+            },
+              React.createElement(Eyebrow, { color: p.roll ? FT.signal : FT.inkMute }, "Suggested"),
+              p.roll ? (
+                React.createElement("div", { style: { paddingTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 } },
+                  React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "New Strike"),
+                  React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right", fontWeight: 600 } }, "$" + p.roll.newStrike),
+                  React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "New Expiry"),
+                  React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right" } }, p.roll.newExpiry.slice(5)),
+                  React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "New DTE"),
+                  React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right" } }, p.roll.newDte + "d"),
+                  React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "Debit"),
+                  React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right", color: FT.down } }, "-$" + p.roll.estDebit.toFixed(2)),
+                  React.createElement("span", { style: { fontFamily: FT.fontBody, fontSize: 12, color: FT.inkMute } }, "Net Credit"),
+                  React.createElement("span", { style: { fontFamily: FT.fontMono, fontSize: 13, textAlign: "right", color: FT.signal, fontWeight: 600 } }, "+$" + p.roll.netCredit.toFixed(2))
+                )
+              ) : (
+                React.createElement("div", {
+                  style: { paddingTop: 14, fontFamily: FT.fontBody, fontSize: 13, color: FT.inkMute, lineHeight: 1.5, fontStyle: "italic" }
+                }, "No roll recommended. Hold current position.")
+              )
+            ),
+            // Why
+            React.createElement("div", { style: { padding: "20px 0 20px 24px" } },
+              React.createElement(Eyebrow, null, "Why"),
+              React.createElement("p", {
+                style: { margin: 0, paddingTop: 8, fontFamily: FT.fontBody, fontSize: 13, color: FT.inkSoft, lineHeight: 1.55, maxWidth: 460 }
+              }, p.rationale)
+            )
+          )
+        );
+      }
+
+      return (
+        React.createElement("div", { style: { padding: "0 48px 64px" } },
+          React.createElement(SectionHeader, {
+            num: "01 \u00B7 AT-RISK",
+            title: "Positions needing attention",
+            caption: (urgentCount + watchCount) + " of " + DATA.rollPositions.length + " positions reviewed. " + urgentCount + " urgent (roll within 24h), " + watchCount + " on watch."
+          }),
+          React.createElement("div", { style: { marginTop: 24 } },
+            DATA.rollPositions.map(function(p) {
+              return React.createElement(Row, { key: p.id, p: p });
+            })
+          ),
+
+          React.createElement(SectionHeader, {
+            num: "02 \u00B7 PLAYBOOK",
+            title: "How rolls are scored",
+            caption: "Rolls are suggested only when the net credit (new - close cost) keeps annualized return above 12% AND moves DTE out by at least 14 days."
+          }),
+          React.createElement("div", {
+            style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", borderTop: R1, borderBottom: R1 }
+          },
+            [
+              { l: "Threshold", v: "12% min", s: "Net ann. return" },
+              { l: "Time Ext.", v: "+14d", s: "Minimum DTE push-out" },
+              { l: "Strike Lift", v: "0.5 sigma", s: "Min OTM distance gain" },
+            ].map(function(c, i) {
+              return React.createElement("div", {
+                key: c.l,
+                style: {
+                  padding: "24px 24px 24px 0",
+                  borderRight: i < 2 ? RS : "none",
+                  paddingRight: i < 2 ? 24 : 0,
+                }
+              },
+                React.createElement(Eyebrow, null, c.l),
+                React.createElement("div", {
+                  style: {
+                    paddingTop: 8, fontFamily: FT.fontDisplay, fontWeight: 600,
+                    fontSize: 36, lineHeight: 1, letterSpacing: "-0.02em",
+                  }
+                }, c.v),
+                React.createElement("div", { style: { paddingTop: 6 } }, React.createElement(Mono, { size: 11, color: FT.inkMute }, c.s))
+              );
+            })
+          ),
+
+          React.createElement("div", { style: { paddingTop: 64 } },
+            React.createElement(SoftRule, null),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "14px 0" } },
+              React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.16em" } },
+                "Roll recommendations refreshed 2026-06-06 14:32 ET"
+              ),
+              React.createElement(Mono, { size: 10, color: FT.inkFaint, style: { textTransform: "uppercase", letterSpacing: "0.16em" } },
+                "Review only -- orders placed in your broker"
+              )
+            )
+          )
+        )
+      );
+    }
+
+    /* ===========================================================
+       8. APP ROOT
+       =========================================================== */
+    function App() {
+      const [page, setPage] = useState("dashboard");
+      return (
+        React.createElement("div", { className: "stage", style: { width: 1280 } },
+          React.createElement(Masthead, { page: page, onPage: setPage }),
+          page === "dashboard" ? React.createElement(Dashboard, null) : null,
+          page === "portfolio" ? React.createElement(Portfolio, null) : null,
+          page === "rollover" ? React.createElement(Rollover, null) : null
+        )
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App, null));
+  </script>
+</body>
+</html>

@@ -8,8 +8,14 @@ import time
 from datetime import datetime
 import pandas as pd
 from core.wheel_decision import score_contract
+from core.growth_mode import should_block_for_data_quality
 from core.utils import get_closest_friday
-from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
+from api.services.utils import (
+    clean_yfinance_ticker,
+    get_yfinance_history,
+    get_yfinance_options,
+    get_yfinance_option_chain,
+)
 from api.services.macro_regime_service import get_macro_service
 
 logger = logging.getLogger('api.services.options_data')
@@ -32,6 +38,31 @@ def _parse_expiration_date(expiration):
         return datetime.strptime(normalized, '%Y%m%d').date()
     except ValueError:
         return None
+
+
+def _annotate_chain_sources(chain, price_source='broker', chain_source='broker', iv_source='broker', from_yfinance=False):
+    """Attach provenance metadata to a chain payload and each option row."""
+    if not chain:
+        return chain
+
+    annotated = dict(chain)
+    annotated['price_source'] = price_source
+    annotated['chain_source'] = chain_source
+    annotated['iv_source'] = iv_source
+    annotated['from_yfinance'] = from_yfinance
+    annotated['data_source'] = price_source if price_source else chain_source
+
+    options = []
+    for opt in chain.get('options', []) or []:
+        item = dict(opt)
+        item['price_source'] = price_source
+        item['chain_source'] = chain_source
+        item['iv_source'] = iv_source
+        item['from_yfinance'] = from_yfinance
+        item['data_source'] = price_source if price_source else chain_source
+        options.append(item)
+    annotated['options'] = options
+    return annotated
 
 
 class OptionsDataService:
@@ -81,14 +112,12 @@ class OptionsDataService:
     def _get_yfinance_price(self, ticker):
         """Get stock price from yfinance as fallback when Moomoo lacks quote rights."""
         try:
-            bare_ticker = self._strip_ticker_prefix(ticker)
-            yf_ticker = get_yfinance_ticker(bare_ticker)
-            hist = yf_ticker.history(period="1d")
-            if hist.empty:
-                logger.warning(f"yfinance: No price data for {bare_ticker}")
+            hist = get_yfinance_history(ticker, period="1d")
+            if hist is None or hist.empty:
+                logger.warning(f"yfinance: No price data for {self._strip_ticker_prefix(ticker)}")
                 return None
             price = float(hist['Close'].iloc[-1])
-            logger.debug(f"yfinance: Got price {price} for {bare_ticker}")
+            logger.debug(f"yfinance: Got price {price} for {self._strip_ticker_prefix(ticker)}")
             return price
         except Exception as e:
             logger.warning(f"yfinance: Failed to get price for {ticker}: {e}")
@@ -98,14 +127,13 @@ class OptionsDataService:
         """Get option chain from yfinance as fallback when Moomoo lacks quote rights."""
         try:
             bare_ticker = self._strip_ticker_prefix(ticker)
-            yf_ticker = get_yfinance_ticker(bare_ticker)
             exp_formatted = expiration.replace('-', '')
             if len(exp_formatted) == 8:
                 exp_yf = f"{exp_formatted[0:4]}-{exp_formatted[4:6]}-{exp_formatted[6:8]}"
             else:
                 exp_yf = expiration
 
-            all_exps = yf_ticker.options
+            all_exps = get_yfinance_options(bare_ticker)
             if not all_exps:
                 return None
 
@@ -128,13 +156,12 @@ class OptionsDataService:
                 if not target_exp:
                     target_exp = all_exps[0]
 
-            chain = yf_ticker.option_chain(target_exp)
-            if option_type == 'C':
-                df = chain.calls
-            else:
-                df = chain.puts
+            chain = get_yfinance_option_chain(bare_ticker, target_exp)
+            if not chain:
+                return None
+            df = chain['calls'] if option_type == 'C' else chain['puts']
 
-            if df.empty:
+            if df is None or df.empty:
                 return None
 
             options = []
@@ -163,6 +190,13 @@ class OptionsDataService:
                 'right': option_type,
                 'options': options
             }
+            result = _annotate_chain_sources(
+                result,
+                price_source='yfinance',
+                chain_source='yfinance',
+                iv_source='yfinance',
+                from_yfinance=True,
+            )
             logger.debug(f"yfinance: Got {len(options)} options for {ticker} {expiration} {option_type}")
             return result
         except Exception as e:
@@ -173,7 +207,7 @@ class OptionsDataService:
         """Return yfinance expirations filtered to the active DTE profile."""
         try:
             bare_ticker = self._strip_ticker_prefix(ticker)
-            all_exps = get_yfinance_ticker(bare_ticker).options
+            all_exps = get_yfinance_options(bare_ticker)
             if not all_exps:
                 return []
 
@@ -232,29 +266,10 @@ class OptionsDataService:
         macro_regime = get_macro_service().get_macro_regime()
 
         # -- Enrich option with yfinance IV and computed BS Greeks --------------
-        iv = float(option.get('implied_volatility', 0) or 0)
-        delta = float(option.get('delta', 0) or 0)
-
-        # If IV is 0, try yfinance fallback
-        if iv <= 0:
-            from core.greeks import fetch_yfinance_iv_for_chain
-            exp = str(option.get('expiration', ''))
-            opt_type = 'C' if str(option.get('option_type', '')).upper() == 'CALL' else 'P'
-            iv_map = fetch_yfinance_iv_for_chain(ticker, exp, opt_type, self._yfinance_iv_cache)
-            if iv_map:
-                strike = float(option.get('strike', 0))
-                iv = iv_map.get(strike, 0)
-                if iv > 0:
-                    option['implied_volatility'] = iv
-
-        # If IV is available but Greeks are 0, compute BS Greeks
-        if iv > 0 and abs(delta) < 0.001:
-            from core.greeks import enrich_option_with_greeks
-            option['delta'] = 0  # Reset so enrich function sees need to compute
-            enrich_option_with_greeks(option, stock_price)
+        from core.greeks import prepare_option_for_scoring
+        iv, _ = prepare_option_for_scoring(option, ticker, stock_price, self._yfinance_iv_cache)
 
         # -- Update IV context with enriched IV --------------------------------
-        iv = float(option.get('implied_volatility', 0) or 0)
         if iv > 0:
             iv_env_adjustment, iv_rank, iv_status = self.iv_earnings_service.get_iv_environment_score(
                 ticker, iv
@@ -290,6 +305,29 @@ class OptionsDataService:
             )
             return None
 
+        from_yfinance = bool(
+            option.get('from_yfinance')
+            or decision.price_source == 'yfinance'
+            or decision.chain_source == 'yfinance'
+            or decision.iv_source == 'yfinance'
+        )
+        blocked, reason = should_block_for_data_quality(
+            confidence_score=getattr(decision, 'confidence_score', 100) or 0,
+            has_blockers=bool(decision.hard_blockers),
+            is_from_yfinance=from_yfinance,
+            price_source=getattr(decision, 'price_source', 'broker'),
+        )
+        if blocked:
+            logger.debug(
+                "Filtered %s %s %s %s due to data quality gate: %s",
+                decision.ticker,
+                decision.option_type,
+                decision.expiration,
+                decision.strike,
+                reason,
+            )
+            return None
+
         # Convert WheelDecision back to legacy dict format for API compatibility
         candidate = {
             'symbol': decision.ticker + decision.expiration + ('C' if decision.option_type == 'CALL' else 'P') + str(int(decision.strike)),
@@ -317,6 +355,7 @@ class OptionsDataService:
             'hard_blockers': decision.hard_blockers,  # TODO 1.1
             'quote_quality': decision.quote_quality,
             'blocked_reason_codes': decision.blocked_reason_codes,
+            'avg_cost': float(portfolio_context.get('positions', {}).get(ticker, {}).get('avg_cost', 0) or 0),
             'otm_pct': decision.otm_pct,
             'annualized_return': decision.annualized_return,
             'return_on_underlying': decision.return_on_underlying,  # TODO 1.2
@@ -349,6 +388,7 @@ class OptionsDataService:
             'macro_source': decision.macro_source,
             'quote_timestamp': decision.quote_timestamp,
             'generated_at': decision.generated_at,
+            'from_yfinance': from_yfinance,
         }
 
         # Add CALL/PUT specific fields
@@ -480,19 +520,25 @@ class OptionsDataService:
         }
 
         try:
+            stock_price_source = 'broker'
             stock_price = conn.get_stock_price(ticker)
             if stock_price is None or stock_price <= 0:
                 logger.debug(f"Moomoo returned no/invalid price for {ticker}, trying yfinance fallback")
                 stock_price = self._get_yfinance_price(ticker)
+                if stock_price is not None and stock_price > 0:
+                    stock_price_source = 'yfinance'
             if stock_price is None or stock_price <= 0:
                 position = portfolio_context.get('positions', {}).get(ticker, {})
                 stock_price = float(position.get('market_price', 0) or position.get('avg_cost', 0) or 0)
+                if stock_price > 0:
+                    stock_price_source = 'portfolio fallback'
             if stock_price is None or stock_price <= 0:
                 result['error'] = 'Unable to obtain valid stock price from any source'
                 return result
 
             position = portfolio_context.get('positions', {}).get(ticker, {})
             result['stock_price'] = stock_price
+            result['stock_price_source'] = stock_price_source
             result['position'] = float(position.get('position', 0) or 0)
             result['avg_cost'] = float(position.get('avg_cost', 0) or 0)
 
@@ -502,6 +548,7 @@ class OptionsDataService:
             for side in sides:
                 profile = self._screening_profile_provider.get_screening_profile(
                     side,
+                    vix_regime=portfolio_context.get('vix_regime'),
                     growth_mode_config=self._get_config().get('growth_mode', {})
                 )
                 logger.debug(f"Processing {ticker} {side} with profile: min_dte={profile.get('min_dte')}, max_dte={profile.get('max_dte')}, preferred_dte={profile.get('preferred_dte')}")
@@ -518,11 +565,25 @@ class OptionsDataService:
                             target_strike=target_strike
                         )
                         if chain and chain.get('options'):
+                            chain = _annotate_chain_sources(
+                                chain,
+                                price_source=stock_price_source,
+                                chain_source='broker',
+                                iv_source='broker',
+                                from_yfinance=False,
+                            )
                             options_chains.append(chain)
                         else:
                             logger.debug(f"Moomoo returned no options for {ticker} {expiry} {side}, trying yfinance fallback")
                             yf_chain = self._get_yfinance_option_chain(ticker, expiry, 'C' if side == 'CALL' else 'P')
                             if yf_chain and yf_chain.get('options'):
+                                yf_chain = _annotate_chain_sources(
+                                    yf_chain,
+                                    price_source=stock_price_source,
+                                    chain_source='yfinance',
+                                    iv_source='yfinance',
+                                    from_yfinance=True,
+                                )
                                 options_chains.append(yf_chain)
                     except Exception as chain_exc:
                         logger.exception(f"Error getting option chain for {ticker} {expiry} {side}: {chain_exc}")
@@ -560,7 +621,18 @@ class OptionsDataService:
             for chain in options_chains:
                 chain_type = str(chain.get('right', '') or '').upper()
                 option_side = 'CALL' if chain_type == 'C' else 'PUT'
-                grouped_options[option_side].extend(chain.get('options', []))
+                chain_sources = {
+                    'price_source': chain.get('price_source', 'broker'),
+                    'chain_source': chain.get('chain_source', 'broker'),
+                    'iv_source': chain.get('iv_source', 'broker'),
+                    'from_yfinance': bool(chain.get('from_yfinance', False)),
+                    'data_source': chain.get('data_source', chain.get('price_source', 'broker')),
+                }
+                for option in chain.get('options', []):
+                    annotated = dict(option)
+                    for key, value in chain_sources.items():
+                        annotated.setdefault(key, value)
+                    grouped_options[option_side].append(annotated)
 
             for side in ['CALL', 'PUT']:
                 if option_type and option_type != side:
@@ -568,6 +640,7 @@ class OptionsDataService:
 
                 profile = self._screening_profile_provider.get_screening_profile(
                     side,
+                    vix_regime=portfolio_context.get('vix_regime'),
                     growth_mode_config=self._get_config().get('growth_mode', {})
                 )
                 candidates = []

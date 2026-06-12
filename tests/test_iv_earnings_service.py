@@ -35,8 +35,23 @@ class TestIVEarningsService(unittest.TestCase):
 
     def test_iv_rank_returns_neutral_without_db(self):
         self.service.db = None
-        rank = self.service._calculate_iv_rank('AAPL', 0.30)
+        rank, status = self.service._calculate_iv_rank('AAPL', 0.30)
         self.assertEqual(rank, 0.5)
+        self.assertEqual(status, 'normal')
+
+    def test_iv_rank_unknown_when_zero_iv(self):
+        """Zero IV should return unknown status."""
+        self.service.db = MagicMock()
+        rank, status = self.service._calculate_iv_rank('AAPL', 0.0)
+        self.assertEqual(rank, 0.5)
+        self.assertEqual(status, 'unknown')
+
+    def test_iv_rank_unknown_when_negative_iv(self):
+        """Negative IV should return unknown status."""
+        self.service.db = MagicMock()
+        rank, status = self.service._calculate_iv_rank('AAPL', -0.1)
+        self.assertEqual(rank, 0.5)
+        self.assertEqual(status, 'unknown')
 
     def test_iv_rank_with_historical_data(self):
         mock_db = MagicMock()
@@ -48,8 +63,9 @@ class TestIVEarningsService(unittest.TestCase):
             {'implied_volatility': 0.40},
         ]
         self.service.db = mock_db
-        rank = self.service._calculate_iv_rank('AAPL', 0.30)
+        rank, status = self.service._calculate_iv_rank('AAPL', 0.30)
         self.assertAlmostEqual(rank, 0.5, places=2)
+        self.assertEqual(status, 'normal')
 
     def test_get_iv_environment_score_extreme_low(self):
         self.service.db.get_iv_history.return_value = [
@@ -61,11 +77,18 @@ class TestIVEarningsService(unittest.TestCase):
 
     def test_get_iv_environment_score_extreme_high(self):
         self.service._iv_cache['TEST'] = {
-            'iv': 0.80, 'iv_rank': 0.85, 'timestamp': datetime.now()
+            'iv': 0.80, 'iv_rank': 0.85, 'timestamp': datetime.now(), 'iv_status': 'normal'
         }
         score, rank, status = self.service.get_iv_environment_score('TEST', 0.80)
         self.assertEqual(status, 'extreme_high')
         self.assertEqual(score, 20)
+
+    def test_get_iv_environment_score_zero_iv_returns_unknown(self):
+        """Zero IV should return unknown status with neutral score."""
+        score, rank, status = self.service.get_iv_environment_score('NOIV', 0.0)
+        self.assertEqual(status, 'unknown')
+        self.assertEqual(score, 0)
+        self.assertEqual(rank, 0.5)
 
     def test_record_iv_data_calls_db(self):
         mock_db = MagicMock()
@@ -87,6 +110,58 @@ class TestIVEarningsService(unittest.TestCase):
             result = self.service._strip_moomoo_prefix('US.AAPL')
             self.assertEqual(result, 'AAPL')
             mock_clean.assert_called_once_with('US.AAPL')
+
+    def test_fetch_earnings_date_normalizes_option_contract_symbol(self):
+        self.service._alpha_vantage.api_key = ''
+        mock_ticker = MagicMock()
+        mock_ticker.get_earnings_dates.return_value = None
+        mock_ticker.info = {}
+
+        with (
+            patch.object(self.service, '_is_openbb_enabled', return_value=False),
+            patch('api.services.iv_earnings_service.get_yfinance_ticker', return_value=mock_ticker) as mock_get_ticker,
+            patch('api.services.iv_earnings_service.time.sleep', return_value=None),
+        ):
+            result = self.service.fetch_earnings_date('US.AAPL260618C77000')
+
+        self.assertFalse(result['success'])
+        mock_get_ticker.assert_called_once_with('AAPL')
+
+    def test_batch_update_earnings_normalizes_and_dedupes_inputs(self):
+        with patch.object(self.service, 'update_earnings_data', return_value=True) as mock_update:
+            result = self.service.batch_update_earnings([
+                'US.AAPL260618C77000',
+                'AAPL',
+                'US.MSFT260621P450000',
+                'MSFT',
+                '',
+                None,
+            ])
+
+        self.assertEqual(result['successful'], 2)
+        self.assertEqual(result['failed'], 0)
+        self.assertEqual(mock_update.call_count, 2)
+        self.assertEqual([call.args[0] for call in mock_update.call_args_list], ['AAPL', 'MSFT'])
+
+    def test_get_earnings_info_normalizes_option_contract_symbol(self):
+        self.service.db.get_earnings_date.return_value = {
+            'ticker': 'AAPL',
+            'earnings_date': '2026-05-15',
+            'time_of_day': 'post-market',
+            'fiscal_date_ending': '2026-04-30',
+            'estimate': 2.35,
+            'currency': 'USD',
+            'earnings_source': 'Alpha Vantage',
+            'fetch_status': 'success',
+            'error_message': None,
+            'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+
+        info = self.service.get_earnings_info('US.AAPL260618C77000')
+
+        self.service.db.get_earnings_date.assert_called_once_with('AAPL')
+        self.assertEqual(info['earnings_date'], '2026-05-15')
+        self.assertEqual(info['earnings_source'], 'Alpha Vantage')
 
 
 
@@ -220,6 +295,97 @@ class TestAlphaVantageProvider(unittest.TestCase):
         self.assertIsNone(info['earnings_source'])
         self.assertIsNone(info['estimate'])
         self.assertIsNone(info['currency'])
+
+
+class TestIVNormalization(unittest.TestCase):
+    """Test IV normalization for mixed decimal/percentage history."""
+
+    def test_calculate_iv_rank_with_reliable_history(self):
+        """IV rank should work correctly with pre-normalized history from repository."""
+        from api.services.iv_earnings_service import IVEarningsService
+        mock_db = MagicMock()
+        # Repository normalizes on read, so _calculate_iv_rank receives normalized decimals
+        mock_db.get_iv_history.return_value = [
+            {'implied_volatility': 0.20},
+            {'implied_volatility': 0.25},
+            {'implied_volatility': 0.30},
+            {'implied_volatility': 0.35},
+            {'implied_volatility': 0.40},
+        ]
+        svc = IVEarningsService(database=mock_db)
+        rank, status = svc._calculate_iv_rank('AAPL', 0.30)
+        self.assertAlmostEqual(rank, 0.5, places=2)
+        self.assertEqual(status, 'normal')
+
+    def test_calculate_iv_rank_with_all_high_values(self):
+        """IV rank works correctly when current IV is at top of range."""
+        from api.services.iv_earnings_service import IVEarningsService
+        mock_db = MagicMock()
+        mock_db.get_iv_history.return_value = [
+            {'implied_volatility': 0.20},
+            {'implied_volatility': 0.25},
+            {'implied_volatility': 0.30},
+            {'implied_volatility': 0.35},
+            {'implied_volatility': 0.40},
+        ]
+        svc = IVEarningsService(database=mock_db)
+        rank, status = svc._calculate_iv_rank('AAPL', 0.40)
+        self.assertAlmostEqual(rank, 1.0, places=2)
+        self.assertEqual(status, 'normal')
+
+    def test_zero_iv_returns_neutral_unknown_status(self):
+        """Zero IV should return (0.5, 'unknown') instead of IV Rank 0%."""
+        from api.services.iv_earnings_service import IVEarningsService
+        mock_db = MagicMock()
+        svc = IVEarningsService(database=mock_db)
+        rank, status = svc._calculate_iv_rank('AAPL', 0.0)
+        self.assertEqual(rank, 0.5)
+        self.assertEqual(status, 'unknown')
+
+    def test_get_iv_environment_score_zero_iv_neutral(self):
+        """Zero IV in environment score should return neutral score with unknown status."""
+        from api.services.iv_earnings_service import IVEarningsService
+        svc = IVEarningsService(database=MagicMock())
+        score_adj, rank, status = svc.get_iv_environment_score('AAPL', 0.0)
+        self.assertEqual(score_adj, 0)
+        self.assertEqual(rank, 0.5)
+        self.assertEqual(status, 'unknown')
+
+    def test_calculate_iv_rank_with_mixed_raw_history(self):
+        """Mixed decimal/percentage raw history normalizes correctly to compute rank."""
+        from api.services.iv_earnings_service import IVEarningsService
+        mock_db = MagicMock()
+        # Raw history with mixed decimal and percentage values — _calculate_iv_rank
+        # must normalize each before computing rank.
+        mock_db.get_iv_history.return_value = [
+            {'implied_volatility': 0.20},
+            {'implied_volatility': 0.25},
+            {'implied_volatility': 30.0},  # percentage form: 30%
+            {'implied_volatility': 0.35},
+            {'implied_volatility': 40.0},  # percentage form: 40%
+        ]
+        svc = IVEarningsService(database=mock_db)
+        # 0.30 (decimal) is at the midpoint of the normalized range [0.20, 0.40]
+        rank, status = svc._calculate_iv_rank('AAPL', 0.30)
+        self.assertAlmostEqual(rank, 0.5, places=2)
+        self.assertEqual(status, 'normal')
+
+    def test_calculate_iv_rank_normalizes_current_iv(self):
+        """current_iv passed as percentage is normalized before rank computation."""
+        from api.services.iv_earnings_service import IVEarningsService
+        mock_db = MagicMock()
+        mock_db.get_iv_history.return_value = [
+            {'implied_volatility': 0.20},
+            {'implied_volatility': 0.25},
+            {'implied_volatility': 0.30},
+            {'implied_volatility': 0.35},
+            {'implied_volatility': 0.40},
+        ]
+        svc = IVEarningsService(database=mock_db)
+        # current_iv = 30.0 means 30% → normalized to 0.30
+        rank, status = svc._calculate_iv_rank('AAPL', 30.0)
+        self.assertAlmostEqual(rank, 0.5, places=2)
+        self.assertEqual(status, 'normal')
 
 
 if __name__ == '__main__':

@@ -28,9 +28,14 @@ reports/
 *.db
 options.db
 trades.db
+# SQLite WAL-mode sidecars (regenerated at runtime, never source-controlled)
+*.db-wal
+*.db-shm
+*.db-journal
 
 # Agent / tool caches
 .qwen/
+_tmp/
 
 # Connection config (may contain secrets)
 connection.json

@@ -7,12 +7,8 @@
         </div>
         <div class="app-section__actions">
             <small id="catalyst-last-updated" class="text-muted d-none"></small>
-            <button id="refresh-catalyst-signals" class="btn btn-outline-primary btn-sm" type="button">
-                <i class="bi bi-arrow-clockwise"></i> Refresh
-            </button>
-            <button id="sensitive-catalyst-scan" class="btn btn-outline-warning btn-sm" type="button">
-                <i class="bi bi-search"></i> Sensitive
-            </button>
+            <button id="refresh-catalyst-signals" class="btn btn-outline-primary btn-sm" type="button">Refresh</button>
+            <button id="sensitive-catalyst-scan" class="btn btn-outline-warning btn-sm" type="button">Sensitive</button>
         </div>
     </div>
 
@@ -20,9 +16,9 @@
     <div id="catalyst-content" class="catalyst-grid d-none"></div>
 
     <div class="app-section__footer">
-        <span class="text-success">High conviction</span> — fresh premium, low hedge, clustered.
-        <span class="text-info">Moderate</span> — some signals but hedged or moderate scale.
-        <span class="text-secondary">Low</span> — minor activity, not actionable.
+        <span class="text-success">Priority lead</span> &mdash; fresh premium, low hedge, concentrated.
+        <span class="text-info">Moderate</span> &mdash; some signals but hedged or moderate scale.
+        <span class="text-secondary">Low</span> &mdash; minor activity, not actionable.
     </div>
 </section>
 
@@ -35,6 +31,10 @@
             </div>
             <span class="catalyst-card__signal badge"></span>
         </div>
+
+        <div class="catalyst-card__action banner small"></div>
+
+        <div class="catalyst-card__conflict-warning small text-warning d-none"></div>
 
         <div class="catalyst-card__score">
             <span class="catalyst-card__score-value"></span>
@@ -62,7 +62,7 @@
 
         <div class="catalyst-card__extra">
             <div class="catalyst-card__extra-row">
-                <span>Clustered expirations</span>
+                <span>Expiration concentration</span>
                 <strong class="catalyst-card__cluster"></strong>
             </div>
             <div class="catalyst-card__extra-row">
@@ -78,5 +78,6 @@
         <div class="catalyst-card__rationale small text-muted"></div>
         <div class="catalyst-card__blockers small text-danger"></div>
         <div class="catalyst-card__social small text-info d-none"></div>
+        <div class="catalyst-card__overlay small text-muted d-none"></div>
     </article>
 </template>

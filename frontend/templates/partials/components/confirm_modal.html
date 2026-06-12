@@ -1,16 +1,4 @@
-<!-- 
-Confirmation Modal Component
-Usage: Include this file and then trigger with JavaScript.
-Parameters: 
-- modal_id: ID for the modal (default: confirmModal)
-- title: Modal title (default: Confirm Action)
-- body: Modal body text
-- confirm_button_text: Text for confirm button (default: Confirm)
-- cancel_button_text: Text for cancel button (default: Cancel)
-- confirm_button_class: CSS class for confirm button (default: btn-primary)
--->
-
-<!-- Default parameter values -->
+{# Confirmation modal. Parameters: modal_id, title, body, confirm_button_text, cancel_button_text, confirm_button_class. #}
 {% set modal_id = modal_id|default('confirmModal') %}
 {% set title = title|default('Confirm Action') %}
 {% set confirm_button_text = confirm_button_text|default('Confirm') %}
@@ -24,14 +12,14 @@ Parameters:
         <h5 class="modal-title" id="{{ modal_id }}Label">{{ title }}</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-    <div class="modal-body">
+      <div class="modal-body">
         {{ body|default('Are you sure you want to proceed?') }}
         <div id="{{ modal_id }}-cash-impact" class="mt-2 small text-muted"></div>
-    </div>
+      </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ cancel_button_text }}</button>
         <button type="button" class="btn {{ confirm_button_class }}" id="{{ modal_id }}-confirm">{{ confirm_button_text }}</button>
       </div>
     </div>
   </div>
-</div> 
+</div>

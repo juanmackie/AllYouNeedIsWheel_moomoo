@@ -10,7 +10,6 @@ from .schema import create_tables, migrate_database
 from .iv_repository import IVRepository
 from .earnings_repository import EarningsRepository
 from .trade_events_repository import TradeEventsRepository
-from .evaluator_repository import EvaluatorRepository
 from .sqlite_pool import (
     pooled_connection,
     get_connection_pool_stats,
@@ -40,7 +39,6 @@ class OptionsDatabase:
         self._iv = IVRepository(self.db_path)
         self._earnings = EarningsRepository(self.db_path)
         self._trade_events = TradeEventsRepository(self.db_path)
-        self._evaluator = EvaluatorRepository(self.db_path)
 
     @contextmanager
     def transaction(self):
@@ -106,36 +104,6 @@ class OptionsDatabase:
 
     def get_trade_analytics(self):
         return self._trade_events.get_trade_analytics()
-
-    # --- Evaluator (signals, feedback, calibration) ---
-
-    @property
-    def evaluator(self) -> EvaluatorRepository:
-        return self._evaluator
-
-    def record_evaluator_signal(self, signal: dict) -> str:
-        return self._evaluator.record_signal(signal)
-
-    def get_evaluator_summary_stats(self) -> dict:
-        return self._evaluator.get_summary_stats()
-
-    def get_evaluator_recent_signals(self, limit: int = 50) -> list[dict]:
-        return self._evaluator.get_recent_signals(limit=limit)
-
-    def get_evaluator_feedback_summary(self) -> dict:
-        return self._evaluator.get_feedback_summary()
-
-    def get_evaluator_calibration(self) -> dict:
-        return self._evaluator.get_latest_calibration()
-
-    def get_evaluator_calibration_history(self, limit: int = 20) -> list[dict]:
-        return self._evaluator.get_calibration_history(limit=limit)
-
-    def get_evaluator_scheduler_states(self) -> list[dict]:
-        return self._evaluator.get_all_scheduler_states()
-
-    def get_evaluator_valid_sample_count(self) -> int:
-        return self._evaluator.get_valid_sample_count()
 
     def close(self):
         if self._closed or not hasattr(self, 'db_path'):

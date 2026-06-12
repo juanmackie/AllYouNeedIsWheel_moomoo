@@ -5,7 +5,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger('db.schema')
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 def create_tables(conn):
@@ -25,7 +25,10 @@ def create_tables(conn):
         )
     ''')
 
-
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_timestamp
+        ON recommendations(ticker, timestamp)
+    ''')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS iv_history (
@@ -48,7 +51,7 @@ def create_tables(conn):
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS earnings_calendar (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL UNIQUE,
+            ticker TEXT NOT NULL,
             earnings_date TEXT,
             last_updated TEXT NOT NULL,
             fetch_status TEXT DEFAULT 'pending',
@@ -57,8 +60,19 @@ def create_tables(conn):
             fiscal_date_ending TEXT,
             estimate REAL,
             currency TEXT,
-            earnings_source TEXT
+            earnings_source TEXT,
+            UNIQUE(ticker, earnings_date)
         )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date
+        ON earnings_calendar(ticker, earnings_date)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated
+        ON earnings_calendar(last_updated)
     ''')
 
     cursor.execute('''
@@ -86,111 +100,6 @@ def create_tables(conn):
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_trade_events_ticker_timestamp
         ON trade_events(ticker, timestamp)
-    ''')
-
-    # ── Evaluator tables (outcome tracking, feedback, calibration) ──────────
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS evaluator_signals (
-            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-            recommendation_id    TEXT NOT NULL UNIQUE,
-            ticker               TEXT NOT NULL,
-            option_type          TEXT NOT NULL,
-            strike               REAL NOT NULL,
-            expiration           TEXT NOT NULL,
-            dte                  INTEGER,
-            signal_type          TEXT,
-            strategy             TEXT,
-            source               TEXT,
-            rank                 INTEGER,
-            score                REAL,
-            confidence           REAL,
-            annualized_return    REAL,
-            premium_per_contract REAL,
-            delta                REAL,
-            iv                   REAL,
-            cash_required        REAL,
-            capital_at_risk      REAL,
-            broker_buying_power  REAL,
-            portfolio_hash       TEXT,
-            score_details_json   TEXT,
-            full_payload_json    TEXT,
-            status               TEXT NOT NULL DEFAULT 'surfaced',
-            shown_to_user        INTEGER DEFAULT 1,
-            user_action          TEXT,
-            linked_position_key  TEXT,
-            linked_trade_event_id INTEGER,
-            resolved_at          TEXT,
-            resolved_outcome     TEXT,
-            actual_return        REAL,
-            created_at           TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_evaluator_signals_status
-        ON evaluator_signals(status)
-    ''')
-
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_evaluator_signals_created_at
-        ON evaluator_signals(created_at)
-    ''')
-
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_evaluator_signals_pos_key
-        ON evaluator_signals(ticker, option_type, strike, expiration)
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS evaluator_feedback_bias (
-            factor          TEXT PRIMARY KEY,
-            mean_error      REAL DEFAULT 0.0,
-            sample_count    INTEGER DEFAULT 0,
-            bias_multiplier REAL DEFAULT 1.0,
-            last_updated    TEXT
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_evaluator_feedback_bias_factor
-        ON evaluator_feedback_bias(factor)
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS evaluator_feedback_events (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            recommendation_id TEXT,
-            ticker           TEXT,
-            factor           TEXT,
-            predicted_contrib REAL,
-            actual_return    REAL,
-            error            REAL,
-            outcome_type     TEXT,
-            created_at       TEXT DEFAULT (datetime('now'))
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS evaluator_calibrations (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            cycle       INTEGER NOT NULL,
-            samples     INTEGER,
-            loss        REAL,
-            shadow_loss REAL,
-            weights_json TEXT,
-            accepted    INTEGER DEFAULT 0,
-            created_at  TEXT DEFAULT (datetime('now'))
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS evaluator_scheduler_state (
-            name         TEXT PRIMARY KEY,
-            last_run     TEXT,
-            last_status  TEXT,
-            last_message TEXT
-        )
     ''')
 
     # ── Wheel Scan Ledger (borrowed from Vibe-Trading run cards) ────────────
@@ -322,6 +231,30 @@ def migrate_database(db_path):
                 """)
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status ON playbook_hypotheses(status)")
                 cursor.execute('PRAGMA user_version = 2')
+                conn.commit()
+
+            if current_version < 3:
+                # Drop evaluator/calibrator tables — feature fully retired.
+                # Historical outcomes are no longer used for training.
+                for table in (
+                    'evaluator_signals',
+                    'evaluator_feedback_bias',
+                    'evaluator_feedback_events',
+                    'evaluator_calibrations',
+                    'evaluator_scheduler_state',
+                ):
+                    cursor.execute(f"DROP TABLE IF EXISTS {table}")
+                    logger.info("Migration: Dropped %s table (evaluator/calibrator retired)", table)
+                cursor.execute('PRAGMA user_version = 3')
+                conn.commit()
+
+            if current_version < 4:
+                # Add missing indexes for recommendations and earnings_calendar
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_timestamp ON recommendations(ticker, timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date ON earnings_calendar(ticker, earnings_date)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)")
+                logger.info("Migration: Added missing indexes for recommendations and earnings_calendar")
+                cursor.execute('PRAGMA user_version = 4')
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

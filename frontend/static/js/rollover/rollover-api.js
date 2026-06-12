@@ -4,6 +4,20 @@ import { formatCurrency } from '../utils/formatters.js';
 import { showAlert } from '../utils/alerts.js';
 import { fetchPositions, fetchOptionData, fetchStockPrices as apiFetchStockPrices, fetchRollPressure } from '../dashboard/api.js';
 
+function getUnavailableRolloverMessage() {
+    const status = window.appConnectionStatus || null;
+    if (!status) {
+        return 'OpenD is unavailable. Rollover positions cannot be loaded.';
+    }
+    if (status.status === 'login_required') {
+        return 'OpenD login is required to load rollover positions.';
+    }
+    if (status.status === 'unavailable') {
+        return status.message || 'OpenD is unavailable. Rollover positions cannot be loaded.';
+    }
+    return 'Rollover positions are unavailable right now.';
+}
+
 async function processOptionPositions(optionPositions) {
     const validOptions = optionPositions.filter(position =>
         position.market_price !== undefined && position.market_price !== null);
@@ -108,7 +122,10 @@ async function loadOptionPositions() {
 
         const positionsData = await fetchPositions();
         if (!positionsData) {
-            throw new Error('Failed to fetch positions data');
+            const unavailableMessage = getUnavailableRolloverMessage();
+            rolloverState.optionsData = [];
+            populateOptionsTable([], unavailableMessage);
+            return;
         }
 
         const optionPositions = positionsData.filter(position =>

@@ -89,6 +89,42 @@ class TestTvscreenerServiceGetWheelCandidates:
             result = service.get_wheel_candidates()
             assert result is None
 
+    def test_max_price_filters_with_stock_field_price(self):
+        """When max_price is provided, screener.where(StockField.PRICE <= max_price) is called."""
+        service = TvscreenerService()
+        service._initialized = True
+        service._tvscreener = MagicMock()
+
+        mock_screener = MagicMock()
+
+        import pandas as pd
+        mock_screener.get.return_value = pd.DataFrame({'symbol': ['CHEAP1']})
+
+        with patch('tvscreener.StockScreener', return_value=mock_screener):
+            result = service.get_wheel_candidates(max_price=133.6)
+
+        assert result == ['CHEAP1']
+        # 3 where() calls: volatility, volume, price
+        assert mock_screener.where.call_count == 3
+
+    def test_no_max_price_skips_price_filter(self):
+        """When max_price is None, no StockField.PRICE filter is applied."""
+        service = TvscreenerService()
+        service._initialized = True
+        service._tvscreener = MagicMock()
+
+        mock_screener = MagicMock()
+
+        import pandas as pd
+        mock_screener.get.return_value = pd.DataFrame({'symbol': ['ANY']})
+
+        with patch('tvscreener.StockScreener', return_value=mock_screener):
+            result = service.get_wheel_candidates(max_price=None)
+
+        assert result == ['ANY']
+        # Only 2 where() calls: volatility + volume (no price)
+        assert mock_screener.where.call_count == 2
+
 
 class TestCreateTvscreenerService:
     """Test factory function."""

@@ -49,12 +49,9 @@ function initElements() {
  */
 function getScoreColorClass(score) {
     if (score == null) return 'bg-secondary';
-    if (score >= 90) return 'bg-success';
-    if (score >= 80) return 'bg-success';
-    if (score >= 70) return 'bg-info';
-    if (score >= 60) return 'bg-warning';
-    if (score >= 50) return 'bg-warning';
-    return 'bg-danger';
+    if (score >= 70) return 'bg-success';
+    if (score >= 50) return 'bg-warning text-dark';
+    return 'bg-secondary';
 }
 
 /**
@@ -84,14 +81,74 @@ function getConfidenceBadge(confidence) {
     return { class: 'bg-danger', label: 'Poor conf' };
 }
 
+function addClassTokens(el, className) {
+    if (!el || !className) return;
+    className.split(/\s+/).filter(Boolean).forEach(cls => el.classList.add(cls));
+}
+
+function getOverlayBadgeInfo(rec) {
+    const overlay = rec.signal_overlay || {};
+    const fit = (rec.signal_overlay_fit || overlay.verdict || 'unknown').toLowerCase();
+    if (fit === 'unknown') return null;
+
+    const classes = {
+        supporting: 'bg-success',
+        confirming: 'bg-success',
+        neutral: 'bg-info',
+        caution: 'bg-warning text-dark',
+        conflict: 'bg-danger',
+    };
+    const labels = {
+        supporting: 'Overlay supports',
+        confirming: 'Overlay confirms',
+        neutral: 'Overlay neutral',
+        caution: 'Overlay caution',
+        conflict: 'Overlay conflict',
+    };
+    const summaryParts = [];
+    if (overlay.summary) summaryParts.push(overlay.summary);
+    if (overlay.capital?.summary) summaryParts.push(`capital: ${overlay.capital.summary}`);
+    if (overlay.technical?.summary) summaryParts.push(`technical: ${overlay.technical.summary}`);
+    if (overlay.derivatives?.summary) summaryParts.push(`derivatives: ${overlay.derivatives.summary}`);
+    const warningParts = overlay.warnings || rec.signal_overlay_warnings || [];
+
+    return {
+        class: classes[fit] || 'bg-secondary',
+        label: labels[fit] || 'Overlay',
+        summary: summaryParts.slice(0, 2).join(' • '),
+        title: warningParts.length > 0 ? warningParts.join(' • ') : summaryParts.join(' • '),
+    };
+}
+
 /**
  * Get data source display string and class
  * @param {Object} rec - Recommendation data
  * @returns {Object} text and icon class
  */
+function normalizeSourceLabel(value, fallback = 'Unknown') {
+    const source = String(value || '').trim().toLowerCase();
+    if (!source) return fallback;
+    if (source === 'broker' || source === 'moomoo' || source === 'opend') return 'Moomoo';
+    if (source === 'portfolio fallback' || source === 'portfolio_fallback') return 'Portfolio fallback';
+    if (source === 'yahoo') return 'yfinance';
+    if (source === 'yfinance') return 'yfinance';
+    return String(value);
+}
+
+function sourceBadgeClass(value) {
+    const source = String(value || '').trim().toLowerCase();
+    if (!source || source === 'unknown') return 'bg-secondary';
+    if (source === 'broker' || source === 'moomoo' || source === 'opend') return 'bg-success';
+    if (source === 'yfinance') return 'bg-warning text-dark';
+    return 'bg-info text-dark';
+}
+
 function getDataSourceInfo(rec) {
-    const source = rec.data_source || rec.wheel_decision?.price_source || 'unknown';
-    const quoteTs = rec.wheel_decision?.quote_timestamp || rec.wheel_decision?.generated_at;
+    const wd = rec.wheel_decision || {};
+    const priceSource = rec.price_source || wd.price_source || rec.data_source || 'unknown';
+    const chainSource = rec.chain_source || wd.chain_source || 'unknown';
+    const ivSource = rec.iv_source || wd.iv_source || 'unknown';
+    const quoteTs = rec.quote_timestamp || wd.quote_timestamp || wd.generated_at || rec.generated_at;
     let freshness = '';
     if (quoteTs) {
         const ageSec = (Date.now() - new Date(quoteTs).getTime()) / 1000;
@@ -100,11 +157,18 @@ function getDataSourceInfo(rec) {
         else if (ageSec < 3600) freshness = `${Math.floor(ageSec / 60)}m ago`;
         else freshness = '>1h ago';
     }
-    const isBroker = source === 'broker' || source === 'Moomoo';
-    const icon = isBroker ? 'bi-database-check' : 'bi-database-exclamation';
-    const label = isBroker ? `Moomoo` : `${source}`;
+    const icon = String(priceSource || '').toLowerCase() === 'yfinance'
+        || String(chainSource || '').toLowerCase() === 'yfinance'
+        || String(ivSource || '').toLowerCase() === 'yfinance'
+        ? 'bi-database-exclamation'
+        : 'bi-database-check';
+    const sources = [
+        { label: 'Price', value: priceSource },
+        { label: 'Chain', value: chainSource },
+        { label: 'IV', value: ivSource },
+    ];
     const freshnessClass = freshness && freshness.includes('>') ? 'text-warning' : '';
-    return { icon, label, freshness, freshnessClass, isBroker };
+    return { icon, sources, freshness, freshnessClass };
 }
 
 /**
@@ -185,7 +249,7 @@ function createRecommendationCard(rec) {
     const signalLabels = { csp: 'CSP', covered_call: 'Covered Call', call: 'Call', put: 'Put' };
     const signalColors = { csp: 'bg-danger', covered_call: 'bg-success', call: 'bg-info', put: 'bg-warning text-dark' };
     signalTypeBadge.textContent = signalLabels[signalType] || signalType;
-    signalTypeBadge.classList.add(signalColors[signalType] || 'bg-secondary');
+    addClassTokens(signalTypeBadge, signalColors[signalType] || 'bg-secondary');
     
     // Option type badge
     const optionTypeBadge = clone.querySelector('.option-type-badge');
@@ -220,7 +284,7 @@ function createRecommendationCard(rec) {
     const confidence = rec.confidence ?? rec.confidence_score ?? rec.wheel_decision?.confidence_score ?? 100;
     const ci = getConfidenceBadge(confidence);
     confidenceBadge.textContent = ci.label;
-    confidenceBadge.classList.add(ci.class);
+    addClassTokens(confidenceBadge, ci.class);
 
     // Underlying quality badge
     const qualityBadge = clone.querySelector('.underlying-quality-badge');
@@ -238,10 +302,27 @@ function createRecommendationCard(rec) {
     // Data source + freshness
     const sourceEl = clone.querySelector('.signal-data-source');
     const sourceInfo = getDataSourceInfo(rec);
-    const sourceIcon = sourceInfo.isBroker ? 'bi-database-check text-success' : 'bi-database-exclamation text-warning';
+    const sourceBadges = sourceInfo.sources.map((item) => {
+        const label = normalizeSourceLabel(item.value);
+        const badgeClass = sourceBadgeClass(item.value);
+        return `<span class="badge ${badgeClass} me-1" title="${item.label} source">${item.label}: ${label}</span>`;
+    }).join('');
     const freshnessClass = sourceInfo.freshnessClass || 'text-muted';
-    sourceEl.innerHTML = `<i class="bi ${sourceIcon}"></i> ${sourceInfo.label} <span class="${freshnessClass}">${sourceInfo.freshness ? '· ' + sourceInfo.freshness : ''}</span>`;
+    const freshnessHtml = sourceInfo.freshness ? `<span class="badge bg-light text-dark border ${freshnessClass ? 'ms-1' : ''}" title="Data freshness">${sourceInfo.freshness}</span>` : '';
+    sourceEl.innerHTML = `<i class="bi ${sourceInfo.icon}"></i> ${sourceBadges}${freshnessHtml}`;
     
+    const overlayEl = clone.querySelector('.signal-overlay');
+    const overlayBadge = overlayEl?.querySelector('.signal-overlay__badge');
+    const overlaySummary = overlayEl?.querySelector('.signal-overlay__summary');
+    const overlayInfo = getOverlayBadgeInfo(rec);
+    if (overlayEl && overlayBadge && overlaySummary && overlayInfo) {
+        overlayEl.classList.remove('d-none');
+        overlayBadge.textContent = overlayInfo.label;
+        addClassTokens(overlayBadge, overlayInfo.class);
+        overlaySummary.textContent = overlayInfo.summary || 'Multi-dimensional signal overlay';
+        overlayEl.title = overlayInfo.title || overlaySummary.textContent;
+    }
+
     // Warnings
     const warningsEl = clone.querySelector('.recommendation-warnings');
     if (rec.warnings && rec.warnings.length > 0) {
@@ -267,7 +348,14 @@ function createRecommendationCard(rec) {
     // Details
     clone.querySelector('.otm-pct').textContent = rec.otm_pct != null ? `${rec.otm_pct.toFixed(1)}%` : 'N/A';
     clone.querySelector('.delta-value').textContent = rec.delta != null ? rec.delta.toFixed(3) : 'N/A';
-    clone.querySelector('.iv-rank').textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
+    const ivRankEl = clone.querySelector('.iv-rank');
+    const ivStatus = rec.iv_status || rec.wheel_decision?.iv_status;
+    if (ivStatus === 'unknown' || (rec.iv_rank == null && rec.implied_volatility == null)) {
+        ivRankEl.textContent = 'IV unavailable';
+        ivRankEl.classList.add('text-muted');
+    } else {
+        ivRankEl.textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
+    }
 
     // Macro impact line
     const macroImpactEl = clone.querySelector('.macro-impact');
@@ -547,10 +635,10 @@ function applyGrowthMode(result) {
     // Show CSP screener profile
     const cspProfileText = document.getElementById('growth-csp-profile-text');
     if (cspProfileText) {
-        if (growthMode.csp_profile_summary) {
+        if (growthMode?.csp_profile_summary) {
             cspProfileText.textContent = growthMode.csp_profile_summary;
             document.getElementById('growth-csp-profile-label').classList.remove('d-none');
-        } else if (growthMode.screener_profile && Object.keys(growthMode.screener_profile).length > 0) {
+        } else if (growthMode?.screener_profile && Object.keys(growthMode.screener_profile).length > 0) {
             const sp = growthMode.screener_profile;
             const parts = [];
             parts.push(`Δ ${sp.csp_target_delta ?? '?'} ±${sp.csp_delta_tolerance ?? '?'}`);
@@ -586,7 +674,8 @@ function applyGrowthFieldsToCard(card, rec) {
     const scoreBadge = card.querySelector('.score-badge');
     if (scoreBadge) {
         scoreBadge.textContent = `Score: ${score.toFixed(1)}`;
-        scoreBadge.className = `score-badge badge fs-6 ${score >= 70 ? 'bg-success' : score >= 50 ? 'bg-warning text-dark' : 'bg-secondary'}`;
+        scoreBadge.className = `score-badge badge fs-6 ${getScoreColorClass(score)}`;
+        scoreBadge.title = 'Composite score capped at 100';
     }
 
     const goalImpact = card.querySelector('.growth-impact');
@@ -628,11 +717,25 @@ function renderBlockedSignals(blocked) {
         return;
     }
     section.classList.remove('d-none');
-    if (blockedCountEl) blockedCountEl.textContent = blocked.length;
+    const grouped = new Map();
+    blocked.forEach(item => {
+        const key = `${item.reason_code || ''}::${item.reason_text || ''}`;
+        const current = grouped.get(key) || { ...item, count: 0, tickers: [] };
+        const count = Number(item.ticker_count || 1) || 1;
+        current.count += count;
+        const ticker = item.ticker || '';
+        if (ticker && !current.tickers.includes(ticker)) {
+            current.tickers.push(ticker);
+        }
+        grouped.set(key, current);
+    });
+
+    const rows = Array.from(grouped.values());
+    if (blockedCountEl) blockedCountEl.textContent = rows.reduce((sum, item) => sum + item.count, 0);
     if (!blockedListEl) return;
-    blockedListEl.innerHTML = blocked.map(b => `
+    blockedListEl.innerHTML = rows.map(b => `
         <div class="d-flex justify-content-between align-items-center py-1 border-bottom border-light">
-            <span class="fw-semibold">${b.ticker || '?'}</span>
+            <span class="fw-semibold">${(b.tickers && b.tickers.length > 0 ? b.tickers.join(', ') : b.ticker || '?')}${b.count > 1 ? ` (${b.count} tickers)` : ''}</span>
             <span class="text-muted small">${b.reason_text || b.reason_code || 'Unknown'}</span>
         </div>
     `).join('');
@@ -774,7 +877,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
     }
     
     try {
-        const result = await fetchTopRecommendations(3, manualRefresh);
+        const result = await fetchTopRecommendations(10, manualRefresh);
         
         if (result.error) {
             if (result.timedOut) {
@@ -932,4 +1035,12 @@ export function cleanupTopRecommendations() {
     stopAutoRefresh();
     clearGeneratingRetry();
     document.removeEventListener('visibilitychange', handleVisibilityChange);
+    signalsData = null;
+    activeSignalType = 'all';
+    isVisible = true;
+    listenersBound = false;
+    isInitialized = false;
+    _isLoading = false;
+    loadingBannerId = null;
+    generatingRetryCount = 0;
 }

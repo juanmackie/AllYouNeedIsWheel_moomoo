@@ -133,9 +133,10 @@ def create_app(config=None):
     app.register_blueprint(technical.bp)
 
     # Extracted route modules (F008)
-    from api.routes import roll_pressure, alerts
+    from api.routes import roll_pressure, alerts, signals
     app.register_blueprint(roll_pressure.bp)
     app.register_blueprint(alerts.bp)
+    app.register_blueprint(signals.bp)
 
     # Wheel Scan Ledger, Playbook, Options Lab, Risk Panel
     from api.routes import ledger, playbook, options_lab, wheel_risk
@@ -260,11 +261,13 @@ def _register_services():
     # Import services here to avoid circular imports at module level
     from api.services.options_service import OptionsService
     from api.services.portfolio_service import PortfolioService
+    from api.services.signal_overlay_service import get_signal_overlay_service
     from api.services.tvscreener_service import create_tvscreener_service
 
     # Register service factories (not instances yet)
     register_service('options', OptionsService)
     register_service('portfolio', PortfolioService)
+    register_service('signal_overlay', get_signal_overlay_service)
     register_service('tvscreener', create_tvscreener_service)
 
     def _create_iv_earnings_service():

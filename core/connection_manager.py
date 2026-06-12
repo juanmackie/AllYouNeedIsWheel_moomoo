@@ -163,6 +163,7 @@ class MoomooConnection:
 
         self._pending_requests = {}
         self._pending_requests_lock = threading.Lock()
+        self._pending_result_ttl_seconds = 1.0
 
         self._connection_created_at = datetime.now()
 
@@ -430,26 +431,48 @@ class MoomooConnection:
         with self._pending_requests_lock:
             if request_key in self._pending_requests:
                 return self._pending_requests[request_key], False
-            event = threading.Event()
-            self._pending_requests[request_key] = event
-            return event, True
+            entry = {
+                'event': threading.Event(),
+                'result': None,
+                'completed_at': None,
+            }
+            self._pending_requests[request_key] = entry
+            return entry, True
+
+    def _cleanup_pending_request(self, request_key):
+        with self._pending_requests_lock:
+            entry = self._pending_requests.get(request_key)
+            if not entry:
+                return
+            if not entry.get('event') or not entry['event'].is_set():
+                return
+            self._pending_requests.pop(request_key, None)
 
     def _complete_pending_request(self, request_key, result):
         with self._pending_requests_lock:
-            if request_key in self._pending_requests:
-                event = self._pending_requests.pop(request_key)
-                self._pending_requests[f"{request_key}_result"] = result
-                event.set()
+            entry = self._pending_requests.get(request_key)
+            if entry is not None:
+                entry['result'] = result
+                entry['completed_at'] = time.time()
+                entry['event'].set()
+                timer = threading.Timer(
+                    self._pending_result_ttl_seconds,
+                    self._cleanup_pending_request,
+                    args=(request_key,),
+                )
+                timer.daemon = True
+                timer.start()
+            return
 
     def _wait_for_pending_request(self, request_key, timeout=90):
-        event, is_new = self._get_or_create_pending_request(request_key)
+        entry, is_new = self._get_or_create_pending_request(request_key)
         if not is_new:
             logger.debug(f"Waiting for pending request: {request_key}")
-            event.wait(timeout=timeout)
+            entry['event'].wait(timeout=timeout)
             with self._pending_requests_lock:
-                result_key = f"{request_key}_result"
-                if result_key in self._pending_requests:
-                    return self._pending_requests.pop(result_key)
+                current = self._pending_requests.get(request_key)
+                if current is not None:
+                    return current.get('result')
             logger.warning(f"Timeout waiting for pending request: {request_key}")
             return None
         return None
@@ -523,6 +546,115 @@ class MoomooConnection:
             self._complete_pending_request(request_key, None)
             return None
 
+    def _ensure_quote_context(self):
+        if self.quote_ctx is not None and self.is_connected():
+            return True
+        return self.connect() and self.quote_ctx is not None
+
+    def get_market_snapshot(self, symbols):
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        symbols = [self._format_symbol(symbol) for symbol in (symbols or []) if symbol]
+        if not symbols:
+            return RET_ERROR, None
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            return self.quote_ctx.get_market_snapshot(symbols)
+        except Exception as e:
+            logger.error(f"Error getting market snapshot for {symbols}: {str(e)}")
+            return RET_ERROR, None
+
+    def get_capital_distribution(self, symbol):
+        symbol = self._format_symbol(symbol)
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            return self.quote_ctx.get_capital_distribution(symbol)
+        except Exception as e:
+            logger.error(f"Error getting capital distribution for {symbol}: {str(e)}")
+            return RET_ERROR, None
+
+    def get_capital_flow(self, symbol, period_type=None, start=None, end=None):
+        symbol = self._format_symbol(symbol)
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            if period_type is None:
+                return self.quote_ctx.get_capital_flow(symbol, start=start, end=end)
+            return self.quote_ctx.get_capital_flow(symbol, period_type=period_type, start=start, end=end)
+        except Exception as e:
+            logger.error(f"Error getting capital flow for {symbol}: {str(e)}")
+            return RET_ERROR, None
+
+    def get_broker_queue(self, symbol):
+        symbol = self._format_symbol(symbol)
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None, None
+            return self.quote_ctx.get_broker_queue(symbol)
+        except Exception as e:
+            logger.error(f"Error getting broker queue for {symbol}: {str(e)}")
+            return RET_ERROR, None, None
+
+    def get_history_kline(self, symbol, start=None, end=None, ktype=None, autype=None, fields=None, max_count=120, page_req_key=None, extended_time=False, session=None):
+        symbol = self._format_symbol(symbol)
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None, None
+            kwargs = {
+                "code": symbol,
+                "start": start,
+                "end": end,
+                "max_count": max_count,
+                "page_req_key": page_req_key,
+                "extended_time": extended_time,
+            }
+            if ktype is not None:
+                kwargs["ktype"] = ktype
+            if autype is not None:
+                kwargs["autype"] = autype
+            if fields is not None:
+                kwargs["fields"] = fields
+            if session is not None:
+                kwargs["session"] = session
+            return self.quote_ctx.request_history_kline(**kwargs)
+        except Exception as e:
+            logger.error(f"Error getting history kline for {symbol}: {str(e)}")
+            return RET_ERROR, None, None
+
+    def get_cur_kline(self, symbol, num, ktype=None, autype=None):
+        symbol = self._format_symbol(symbol)
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            kwargs = {"code": symbol, "num": num}
+            if ktype is not None:
+                kwargs["ktype"] = ktype
+            if autype is not None:
+                kwargs["autype"] = autype
+            return self.quote_ctx.get_cur_kline(**kwargs)
+        except Exception as e:
+            logger.error(f"Error getting current kline for {symbol}: {str(e)}")
+            return RET_ERROR, None
+
+    def get_owner_plate(self, symbol):
+        symbol = self._format_symbol(symbol)
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            return self.quote_ctx.get_owner_plate([symbol])
+        except Exception as e:
+            logger.error(f"Error getting owner plate for {symbol}: {str(e)}")
+            return RET_ERROR, None
+
     def get_option_chain(self, symbol, expiration=None, right='C', target_strike=None):
         symbol = self._format_symbol(symbol)
         cache_key = f"{symbol}_{expiration}_{right}"
@@ -532,15 +664,12 @@ class MoomooConnection:
         if cached_result is not None:
             return cached_result
 
-        event, is_new = self._get_or_create_pending_request(request_key)
-        if not is_new:
-            logger.debug(f"Waiting for pending request: {request_key}")
-            event.wait(timeout=90)
+        pending_result = self._wait_for_pending_request(request_key)
+        if pending_result is not None:
             cached_result = self._get_cached_option_chain(symbol, expiration, right)
             if cached_result is not None:
                 return cached_result
-            logger.warning(f"Pending request completed but result not in cache: {request_key}")
-            return None
+            return pending_result
 
         try:
             self._option_chain_rate_limiter.check_rate_limit()

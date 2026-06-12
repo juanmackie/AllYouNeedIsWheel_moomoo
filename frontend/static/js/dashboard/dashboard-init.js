@@ -8,9 +8,10 @@ import { initializeLLMAdvisor } from './llm-advisor.js';
 import { formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
-import { loadLockedTickers, updateWeeklyEarningsSummary } from './dashboard-regime.js';
+import { updateWeeklyEarningsSummary } from './dashboard-regime.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
-import { loadEvaluatorWidget } from './evaluator-widget.js';
+import { loadMacroRegime } from './macro.js';
+import { loadVixRegime, loadTechnicalRegime } from './dashboard-regime.js';
 
 let diagnosticsLoaded = false;
 
@@ -19,7 +20,7 @@ let diagnosticsLoaded = false;
  * Wave 1: Account data (critical path)
  * Wave 2: Positions & orders
  * Wave 3: Signals (fast path)
- * Wave Lazy: Diagnostics (only when user opens #research-diagnostics)
+ * Wave Lazy: Heavy diagnostics (only when user opens #research-diagnostics)
  */
 export async function initializeDashboard() {
     try {
@@ -51,6 +52,9 @@ export async function initializeDashboard() {
         showWaveLoading('wave3', 'Loading market data...');
         try {
             await Promise.all([
+                loadMacroRegime(),
+                loadVixRegime(),
+                loadTechnicalRegime(),
                 updateWeeklyEarningsSummary(),
                 updateIdleCashPanel()
             ]);
@@ -89,18 +93,6 @@ export async function initializeDashboard() {
 async function loadDiagnosticsOnce() {
     if (diagnosticsLoaded) return;
     diagnosticsLoaded = true;
-
-    import('./macro.js').then(mod => {
-        mod.loadMacroRegime();
-    }).catch(() => {});
-
-    import('./dashboard-regime.js').then(mod => {
-        mod.loadVixRegime();
-        mod.loadTechnicalRegime();
-    }).catch(() => {});
-
-    loadLockedTickers();
-    loadEvaluatorWidget();
 
     import('./earnings-vol-signals.js').then(mod => {
         mod.initializeEarningsVolSignals();

@@ -5,7 +5,27 @@ Extracted from the monolithic options_service.py for maintainability.
 
 import logging
 
+from core.position_utils import parse_moomoo_symbol, parse_position_qty
+
 logger = logging.getLogger('api.services.portfolio_context')
+
+
+TRUE_CASH_FIELDS = ('available_cash', 'cash_balance', 'cash_available')
+MARGIN_CAPACITY_FIELDS = ('buying_power', 'excess_liquidity')
+
+
+def _first_positive_number(summary: dict, fields: tuple[str, ...]) -> tuple[float, str]:
+    for field in fields:
+        value = summary.get(field)
+        if value is None:
+            continue
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric_value > 0:
+            return numeric_value, field
+    return 0.0, 'none'
 
 
 class PortfolioContext:
@@ -73,39 +93,27 @@ class PortfolioContext:
         summary = {k: v for k, v in portfolio.items() if k != 'positions'}
         raw_positions = portfolio.get('positions', {}) or {}
 
-        cash_fields = ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']
-        raw_cash = 0.0
-        source_field = 'none'
-        for f in cash_fields:
-            v = summary.get(f)
-            if v is None:
-                continue
-            try:
-                raw_cash = float(v)
-                if raw_cash > 0:
-                    source_field = f
-                    break
-            except (TypeError, ValueError):
-                continue
+        true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
+        margin_capacity, margin_source = _first_positive_number(summary, MARGIN_CAPACITY_FIELDS)
 
-        context['cash_balance'] = float(summary.get('available_cash', summary.get('cash_balance', 0)) or 0)
+        context['cash_balance'] = float(summary.get('cash_balance', summary.get('available_cash', 0)) or 0)
         context['account_value'] = float(summary.get('account_value', 0) or 0)
         context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
-        context['available_cash'] = max(raw_cash, context['excess_liquidity'])
-        context['broker_buying_power'] = context['available_cash']
-        context['broker_buying_power_source'] = source_field
+        context['available_cash'] = true_cash
+        context['broker_buying_power'] = margin_capacity if margin_capacity > 0 else true_cash
+        context['broker_buying_power_source'] = margin_source if margin_capacity > 0 else true_cash_source
 
         cash_reserved = 0.0
         for raw_symbol, position in raw_positions.items():
             raw_symbol = str(raw_symbol or '')
-            symbol = raw_symbol.replace('US.', '')
+            symbol = parse_moomoo_symbol(raw_symbol)
             if not symbol:
                 continue
 
             pos = dict(position or {})
             qty_value = pos.get('position', pos.get('shares', 0))
             try:
-                pos_qty = int(float(qty_value or 0))
+                pos_qty = parse_position_qty(qty_value)
             except (TypeError, ValueError):
                 pos_qty = 0
             pos['position'] = pos_qty
@@ -130,16 +138,18 @@ class PortfolioContext:
 
         context['cash_reserved_for_csp'] = cash_reserved
         context['open_short_put_collateral'] = cash_reserved
-        context['cash_available_for_csp'] = max(0, context['broker_buying_power'])
+        context['cash_available_for_csp'] = max(0, context['available_cash'] - cash_reserved)
         context['_cash_diagnostics'] = {
-            'raw_summary_fields': {f: summary.get(f) for f in ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']},
+            'raw_summary_fields': {f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS]},
             'available_cash': context['available_cash'],
+            'available_cash_source': true_cash_source,
             'broker_buying_power': context['broker_buying_power'],
-            'broker_buying_power_source': source_field,
+            'broker_buying_power_source': context['broker_buying_power_source'],
             'excess_liquidity': context['excess_liquidity'],
             'open_short_put_collateral': cash_reserved,
             'cash_reserved_for_csp': cash_reserved,
             'cash_available_for_csp': context['cash_available_for_csp'],
+            'cash_available_for_csp_source': 'available_cash_minus_open_short_put_collateral',
         }
         return context
 
@@ -188,34 +198,23 @@ class PortfolioContext:
             option_positions = portfolio_service.get_positions('OPT') or []
 
             # Parse cash from first valid field: available_cash, cash_balance, cash_available, buying_power, excess_liquidity
-            cash_fields = ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']
-            raw_cash = 0.0
-            source_field = 'none'
-            for f in cash_fields:
-                v = summary.get(f)
-                if v is not None:
-                    try:
-                        raw_cash = float(v)
-                        if raw_cash > 0:
-                            source_field = f
-                            break
-                    except (TypeError, ValueError):
-                        continue
+            true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
+            margin_capacity, margin_source = _first_positive_number(summary, MARGIN_CAPACITY_FIELDS)
 
-            context['cash_balance'] = float(summary.get('available_cash', summary.get('cash_balance', 0)) or 0)
+            context['cash_balance'] = float(summary.get('cash_balance', summary.get('available_cash', 0)) or 0)
             context['account_value'] = float(summary.get('account_value', 0) or 0)
             context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
 
             # Use max of available cash and excess liquidity (more accurate for CSP buying power)
-            context['available_cash'] = max(raw_cash, context['excess_liquidity'])
+            context['available_cash'] = true_cash
 
             # Moomoo buying power is authoritative — broker already accounts for open positions
-            context['broker_buying_power'] = context['available_cash']
-            context['broker_buying_power_source'] = source_field
+            context['broker_buying_power'] = margin_capacity if margin_capacity > 0 else true_cash
+            context['broker_buying_power_source'] = margin_source if margin_capacity > 0 else true_cash_source
 
             for position in stock_positions:
                 raw_symbol = str(position.get('symbol', '') or '')
-                symbol = raw_symbol.replace('US.', '')
+                symbol = parse_moomoo_symbol(raw_symbol)
                 if not symbol:
                     continue
                 context['positions'][symbol] = position
@@ -223,11 +222,11 @@ class PortfolioContext:
                     context['positions'][raw_symbol] = position
 
             for position in option_positions:
-                symbol = str(position.get('symbol', '') or '').replace('US.', '')
+                symbol = parse_moomoo_symbol(position.get('symbol', ''))
                 if not symbol:
                     continue
                 
-                pos_qty = int(position.get('position', 0) or 0)
+                pos_qty = parse_position_qty(position.get('position', 0))
                 option_type = str(position.get('option_type', '') or '').upper()
                 
                 if pos_qty < 0:
@@ -304,8 +303,8 @@ class PortfolioContext:
                 option_positions = portfolio_service.get_positions('OPT') or []
 
             for position in option_positions:
-                symbol = str(position.get('symbol', '') or '').replace('US.', '')
-                pos_qty = int(position.get('position', 0) or 0)
+                symbol = parse_moomoo_symbol(position.get('symbol', ''))
+                pos_qty = parse_position_qty(position.get('position', 0))
                 option_type = str(position.get('option_type', '') or '').upper()
                 
                 # Only count short puts (negative quantity)

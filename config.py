@@ -54,7 +54,7 @@ DEFAULT_CONNECTION_CONFIG = {
             'require_cash_fit': True,
         },
     },
-    # ── Evaluator / Calibrator feature flags ─────────────────────────
+    # ── Catalyst flow feature flags ────────────────────────────────────
     'catalyst_flow': {
         'enabled': True,
         'research_only': True,
@@ -71,18 +71,6 @@ DEFAULT_CONNECTION_CONFIG = {
             'min_mentions': 5,
             'exclude_tickers': ['SPY', 'QQQ', 'VOO', 'VTI', 'VT', 'TQQQ', 'SQQQ'],
         },
-    },
-    'evaluator': {
-        'enabled': True,
-        'record_signals': True,
-        'auto_resolve': True,
-        'feedback_enabled': False,
-        'feedback_min_valid_samples': 30,
-        'feedback_max_factor_shift': 0.10,
-        'calibrator_enabled': False,
-        'calibrator_shadow_mode': True,
-        'calibrator_min_samples': 50,
-        'calibrator_blend': 0.20,
     },
 }
 

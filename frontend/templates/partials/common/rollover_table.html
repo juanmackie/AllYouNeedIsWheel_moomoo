@@ -1,4 +1,4 @@
-<section class="app-section rollover-section">
+<section class="app-section rollover-section" id="rollover-approaching-section">
     <div class="app-section__header">
         <div>
             <span class="app-section__eyebrow">Risk watch</span>
@@ -7,27 +7,27 @@
         </div>
     </div>
 
-    <div class="table-responsive">
-        <table class="table table-striped" id="options-approaching-table">
+    <div class="ft-table-wrap">
+        <table class="ft-table" id="options-approaching-table">
             <thead>
                 <tr>
                     <th>Symbol</th>
-                    <th>Contracts</th>
+                    <th class="ft-th-right">Contracts</th>
                     <th>Type</th>
-                    <th>Strike</th>
+                    <th class="ft-th-right">Strike</th>
                     <th>Expiration</th>
-                    <th>Current Price</th>
-                    <th>% OTM</th>
-                    <th>Roll Pressure</th>
-                    <th>Profit Target</th>
-                    <th>Strike Difference</th>
-                    <th>% Difference</th>
+                    <th class="ft-th-right">Current Price</th>
+                    <th class="ft-th-right">% OTM</th>
+                    <th class="ft-th-right">Roll Pressure</th>
+                    <th class="ft-th-right">Profit Target</th>
+                    <th class="ft-th-right">Strike Difference</th>
+                    <th class="ft-th-right">% Difference</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody id="option-positions-table-body">
                 <tr>
-                    <td colspan="12" class="text-center">Loading option positions...</td>
+                    <td colspan="12" class="ft-td-center ft-td-mute" style="padding: 32px 0;">Loading option positions...</td>
                 </tr>
             </tbody>
         </table>
@@ -38,7 +38,7 @@
     </div>
 </section>
 
-<section class="app-section rollover-section">
+<section class="app-section rollover-section" id="rollover-suggestions-section">
     <div class="app-section__header">
         <div>
             <span class="app-section__eyebrow">Replacement search</span>
@@ -47,26 +47,26 @@
         </div>
     </div>
 
-    <div class="table-responsive">
-        <table class="table table-striped">
+    <div class="ft-table-wrap">
+        <table class="ft-table">
             <thead>
                 <tr>
                     <th>Action</th>
                     <th>Symbol</th>
                     <th>Type</th>
-                    <th>Strike</th>
+                    <th class="ft-th-right">Strike</th>
                     <th>Expiration</th>
-                    <th>Contracts</th>
-                    <th>Limit Price</th>
+                    <th class="ft-th-right">Contracts</th>
+                    <th class="ft-th-right">Limit Price</th>
                     <th>Order Type</th>
-                    <th>Delta</th>
-                    <th>IV%</th>
+                    <th class="ft-th-right">Delta</th>
+                    <th class="ft-th-right">IV%</th>
                     <th>Action</th>
                 </tr>
             </thead>
             <tbody id="rollover-suggestions-table-body">
                 <tr>
-                    <td colspan="11" class="text-center">Select an option to roll to view suggested replacements.</td>
+                    <td colspan="11" class="ft-td-center ft-td-mute" style="padding: 32px 0;">Select an option to roll to view suggested replacements.</td>
                 </tr>
             </tbody>
         </table>
@@ -77,10 +77,10 @@
     </div>
 </section>
 
-{% with 
+{% with
   modal_id="confirmRollModal",
   title="Rollover Suggestion",
-  body="Signal only — review this rollover in your broker app.",
+  body="Signal only &mdash; review this rollover in your broker app.",
   confirm_button_text="Signal Only",
   confirm_button_class="btn-warning"
 %}

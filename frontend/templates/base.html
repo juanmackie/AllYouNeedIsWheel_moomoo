@@ -1,41 +1,51 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="light">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}All You Need Is Wheel{% endblock %}</title>
-    <script>
-        (function () {
-            const storageKey = 'theme';
-            const savedTheme = localStorage.getItem(storageKey);
-            const systemTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light';
-            document.documentElement.setAttribute('data-bs-theme', savedTheme || systemTheme);
-        })();
-    </script>
+    <title>{% block title %}AYNIWHEEL{% endblock %}</title>
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/ft.css') }}">
+
     {% block extra_head %}{% endblock %}
 </head>
 <body class="app-body {% block body_class %}{% endblock %}">
     <div class="app-layout">
-        {% include "partials/common/navigation.html" %}
+
+        {% set _now = now|default('', true) %}
+        {% set _meta_date = _now.strftime('%a %d %b %Y') if _now else '' %}
+
+        <header class="ft-masthead">
+            <div class="ft-masthead__top">
+                <div class="ft-masthead__meta">
+                    {% if _meta_date %}{{ _meta_date }} &middot; Local{% else %}The Wheel &middot; Moomoo OpenD{% endif %}
+                </div>
+                <div class="ft-masthead__wordmark">AYNIWHEEL</div>
+                <div class="ft-masthead__meta ft-masthead__meta--right">
+                    Cash account
+                    <span class="ft-masthead__dot" aria-hidden="true"></span>
+                </div>
+            </div>
+            <div class="ft-masthead__rule"></div>
+            <div class="ft-masthead__tagline">
+                <span class="ft-eyebrow">Cash-secured puts &amp; covered calls</span>
+                <span class="ft-eyebrow" style="color: var(--ft-ink-faint);">v2.0 &middot; live</span>
+            </div>
+            <div class="ft-masthead__rule" style="height: 1px; background: var(--ft-ink);"></div>
+            <nav class="ft-masthead__nav" aria-label="Primary">
+                <a class="ft-masthead__nav-link {% if request.path == '/' %}ft-masthead__nav-link--active{% endif %}" href="{{ url_for('index') if index is defined else '/' }}">Dashboard</a>
+                <a class="ft-masthead__nav-link {% if request.path.startswith('/portfolio') %}ft-masthead__nav-link--active{% endif %}" href="/portfolio">Portfolio</a>
+                <a class="ft-masthead__nav-link {% if request.path.startswith('/rollover') %}ft-masthead__nav-link--active{% endif %}" href="/rollover">Rollover</a>
+            </nav>
+            <div class="ft-masthead__rule" style="height: 1px; background: var(--ft-ink);"></div>
+        </header>
 
         <main class="app-main">
-            <div class="container app-shell py-4 py-lg-5">
-
-                <div class="d-flex align-items-center gap-2 mb-3">
-                    <button class="mobile-nav-toggle" id="mobile-nav-toggle" type="button" aria-label="Toggle navigation">
-                        <i class="bi bi-list"></i>
-                    </button>
-                    {% block page_header %}{% endblock %}
-                </div>
+            <div class="container app-shell">
 
                 <div id="global-error-boundary" role="alert" aria-live="polite"></div>
 
@@ -71,8 +81,10 @@
         </main>
     </div>
 
+    {% include "partials/components/confirm_modal.html" %}
+    {% include "partials/components/sizing_modal.html" %}
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>

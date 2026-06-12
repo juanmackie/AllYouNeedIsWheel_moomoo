@@ -47,7 +47,7 @@
     <div id="top-recommendations-container" class="recommendation-stage__body">
         <div id="top-recommendations-state"></div>
         <div id="top-recommendations-content" class="d-none">
-            <div id="top-recommendations-cards" class="row g-2"></div>
+            <div id="top-recommendations-cards"></div>
         </div>
     </div>
 
@@ -106,22 +106,27 @@
 
                 <div class="signal-data-source small text-muted text-center mb-2"></div>
 
+                <div class="signal-overlay small text-center mb-2 d-none">
+                    <span class="signal-overlay__badge badge me-1"></span>
+                    <span class="signal-overlay__summary text-muted"></span>
+                </div>
+
                 <div class="recommendation-warnings small mb-2"></div>
 
                 <div class="recommendation-details">
-                    <div class="d-flex justify-content-between">
+                    <div class="recommendation-detail-row d-flex justify-content-between">
                         <span>OTM</span>
                         <span class="otm-pct fw-semibold"></span>
                     </div>
-                    <div class="d-flex justify-content-between">
+                    <div class="recommendation-detail-row d-flex justify-content-between">
                         <span>Delta</span>
                         <span class="delta-value fw-semibold"></span>
                     </div>
-                    <div class="d-flex justify-content-between">
+                    <div class="recommendation-detail-row d-flex justify-content-between">
                         <span>IV Rank</span>
                         <span class="iv-rank fw-semibold"></span>
                     </div>
-                    <div class="d-flex justify-content-between">
+                    <div class="recommendation-detail-row d-flex justify-content-between">
                         <span>Macro</span>
                         <span class="macro-impact fw-semibold"></span>
                     </div>

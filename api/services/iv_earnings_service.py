@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
 from api.services.alpha_vantage_provider import AlphaVantageEarningsProvider
+from core.connection_constants import _normalize_iv
+from core.ticker_utils import earnings_underlying_ticker
 
 logger = logging.getLogger('api.services.iv_tracking')
 
@@ -61,62 +63,68 @@ class IVEarningsService:
             return
         
         try:
+            # Normalize IV before saving
+            normalized_iv = _normalize_iv(implied_volatility)
+            
             # Save to database
-            self.db.save_iv_data(ticker, implied_volatility, stock_price, 
+            self.db.save_iv_data(ticker, normalized_iv, stock_price, 
                                 option_type, expiration, dte)
             
             # Calculate IV rank
-            iv_rank = self._calculate_iv_rank(ticker, implied_volatility)
+            iv_rank, iv_status = self._calculate_iv_rank(ticker, normalized_iv)
             
             # Update cache
             self._iv_cache[ticker] = {
-                'iv': implied_volatility,
+                'iv': normalized_iv,
                 'timestamp': datetime.now(),
-                'iv_rank': iv_rank
+                'iv_rank': iv_rank,
+                'iv_status': iv_status,
             }
             
-            logger.debug(f"Recorded IV for {ticker}: {implied_volatility:.2%} (rank: {iv_rank:.1%})")
+            logger.debug(f"Recorded IV for {ticker}: {normalized_iv:.2%} (rank: {iv_rank:.1%})")
             
         except Exception as e:
             logger.error(f"Error recording IV data for {ticker}: {e}")
     
-    def _calculate_iv_rank(self, ticker: str, current_iv: float, days: int = 30) -> float:
+    def _calculate_iv_rank(self, ticker: str, current_iv: float, days: int = 30) -> tuple:
         """
-        Calculate IV Rank: where current IV falls in 30-day range
+        Calculate IV Rank: where current IV falls in 30-day range.
         
-        Args:
-            ticker: Stock ticker symbol
-            current_iv: Current implied volatility
-            days: Number of days to look back
-            
-        Returns:
-            float: IV rank as percentage (0-1)
+        Returns (rank, status) where:
+        - rank: float 0-1
+        - status: 'normal' | 'unknown'
+        
+        Unknown status when current_iv is 0 or missing.
         """
+        current_iv = _normalize_iv(current_iv)
+        if current_iv <= 0:
+            return (0.5, 'unknown')
+        
         if not self.db:
-            return 0.5  # Neutral if no DB
+            return (0.5, 'normal')
         
         try:
             # Get historical IV data
             history = self.db.get_iv_history(ticker, days)
             
             if len(history) < 5:  # Need at least 5 data points
-                return 0.5  # Neutral if insufficient data
+                return (0.5, 'normal')  # Neutral if insufficient data
             
-            iv_values = [record['implied_volatility'] for record in history]
+            iv_values = [_normalize_iv(record['implied_volatility']) for record in history]
             iv_values.append(current_iv)  # Include current
             
             min_iv = min(iv_values)
             max_iv = max(iv_values)
             
             if max_iv == min_iv:
-                return 0.5  # Neutral if no range
+                return (0.5, 'normal')  # Neutral if no range
             
             iv_rank = (current_iv - min_iv) / (max_iv - min_iv)
-            return max(0.0, min(1.0, iv_rank))  # Clamp to 0-1
+            return (max(0.0, min(1.0, iv_rank)), 'normal')
             
         except Exception as e:
             logger.error(f"Error calculating IV rank for {ticker}: {e}")
-            return 0.5
+            return (0.5, 'normal')
     
     def get_iv_environment_score(self, ticker: str, current_iv: float) -> tuple:
         """
@@ -132,17 +140,24 @@ class IVEarningsService:
                 iv_rank: 0-1 (percentile)
                 status_message: 'low', 'neutral', 'high', 'extreme'
         """
+        current_iv = _normalize_iv(current_iv)
         # Check cache first
         cache_entry = self._iv_cache.get(ticker)
         if self._is_cache_valid(cache_entry, self._cache_duration_hours):
             iv_rank = cache_entry.get('iv_rank', 0.5)
+            iv_status_cached = cache_entry.get('iv_status', 'normal')
         else:
-            iv_rank = self._calculate_iv_rank(ticker, current_iv)
+            iv_rank, iv_status_cached = self._calculate_iv_rank(ticker, current_iv)
             self._iv_cache[ticker] = {
                 'iv': current_iv,
                 'timestamp': datetime.now(),
-                'iv_rank': iv_rank
+                'iv_rank': iv_rank,
+                'iv_status': iv_status_cached,
             }
+        
+        # Unknown IV: return neutral score
+        if iv_status_cached == 'unknown':
+            return (0, 0.5, 'unknown')
         
         # Determine score adjustment and status
         if iv_rank < 0.20:
@@ -163,12 +178,22 @@ class IVEarningsService:
     def _strip_moomoo_prefix(self, ticker: str) -> str:
         return clean_yfinance_ticker(ticker)
 
+    def _earnings_lookup_ticker(self, ticker: str) -> str:
+        return earnings_underlying_ticker(ticker)
+
+    def _is_openbb_enabled(self) -> bool:
+        try:
+            from api.services.config import get_config
+            return bool(get_config().get('openbb_enabled', False))
+        except Exception:
+            return False
+
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
         Fetch earnings date using provider chain:
         Alpha Vantage -> optional enrichment -> yfinance.
         """
-        clean_ticker = self._strip_moomoo_prefix(ticker)
+        clean_ticker = self._earnings_lookup_ticker(ticker)
 
         # --- Provider 1: Alpha Vantage ---
         if self._alpha_vantage.available:
@@ -191,31 +216,32 @@ class IVEarningsService:
                 logger.warning(f"Alpha Vantage earnings lookup failed for {clean_ticker}: {e}")
 
         # --- Provider 2: optional enrichment ---
-        try:
-            from openbb import obb
-            result = obb.equity.earnings.calendar(symbol=clean_ticker)
-            df = result.to_df() if hasattr(result, 'to_df') else result
-            if df is not None and not df.empty:
-                date_col = None
-                for col in ['date', 'report_date', 'earning_date', 'earnings_date']:
-                    if col in df.columns:
-                        date_col = col
-                        break
-                if date_col:
-                    earnings_date = str(df[date_col].iloc[0])[:10]
-                    if earnings_date:
-                        return {
-                            'success': True,
-                            'earnings_date': earnings_date,
-                            'time_of_day': None,
-                            'fiscal_date_ending': None,
-                            'estimate': None,
-                            'currency': None,
-                            'earnings_source': 'optional_enrichment',
-                            'error': None,
-                        }
-        except Exception as e:
-            logger.warning(f"Optional enrichment earnings fetch failed for {clean_ticker}, falling back to yfinance: {e}")
+        if self._is_openbb_enabled():
+            try:
+                from openbb import obb
+                result = obb.equity.earnings.calendar(symbol=clean_ticker)
+                df = result.to_df() if hasattr(result, 'to_df') else result
+                if df is not None and not df.empty:
+                    date_col = None
+                    for col in ['date', 'report_date', 'earning_date', 'earnings_date']:
+                        if col in df.columns:
+                            date_col = col
+                            break
+                    if date_col:
+                        earnings_date = str(df[date_col].iloc[0])[:10]
+                        if earnings_date:
+                            return {
+                                'success': True,
+                                'earnings_date': earnings_date,
+                                'time_of_day': None,
+                                'fiscal_date_ending': None,
+                                'estimate': None,
+                                'currency': None,
+                                'earnings_source': 'optional_enrichment',
+                                'error': None,
+                            }
+            except Exception as e:
+                logger.warning(f"Optional enrichment earnings fetch failed for {clean_ticker}, falling back to yfinance: {e}")
 
         # --- Provider 3: yfinance ---
         try:
@@ -298,11 +324,16 @@ class IVEarningsService:
             return False
         
         try:
-            result = self.fetch_earnings_date(ticker)
+            normalized_ticker = self._earnings_lookup_ticker(ticker)
+            if not normalized_ticker:
+                logger.warning("Skipping empty earnings ticker input")
+                return False
+
+            result = self.fetch_earnings_date(normalized_ticker)
             
             if result['success']:
                 self.db.save_earnings_date(
-                    ticker,
+                    normalized_ticker,
                     result['earnings_date'],
                     fetch_status='success',
                     time_of_day=result.get('time_of_day'),
@@ -313,7 +344,8 @@ class IVEarningsService:
                 )
                 
                 # Update cache
-                self._earnings_cache[ticker] = {
+                self._earnings_cache[normalized_ticker] = {
+                    'normalized_ticker': normalized_ticker,
                     'earnings_date': result['earnings_date'],
                     'time_of_day': result.get('time_of_day'),
                     'fiscal_date_ending': result.get('fiscal_date_ending'),
@@ -327,7 +359,7 @@ class IVEarningsService:
                 return True
             else:
                 self.db.mark_earnings_error(
-                    ticker,
+                    normalized_ticker,
                     error_message=result['error'],
                     earnings_source=result.get('earnings_source'),
                 )
@@ -358,7 +390,8 @@ class IVEarningsService:
                 'earnings_source': str or None,
             }
         """
-        cache_entry = self._earnings_cache.get(ticker)
+        normalized_ticker = self._earnings_lookup_ticker(ticker)
+        cache_entry = self._earnings_cache.get(normalized_ticker)
         if self._is_cache_valid(cache_entry, self._earnings_cache_duration_hours):
             earnings_date = cache_entry.get('earnings_date')
             time_of_day = cache_entry.get('time_of_day')
@@ -367,7 +400,7 @@ class IVEarningsService:
             currency = cache_entry.get('currency')
             earnings_source = cache_entry.get('earnings_source')
         elif self.db:
-            record = self.db.get_earnings_date(ticker)
+            record = self.db.get_earnings_date(normalized_ticker)
             if record:
                 earnings_date = record.get('earnings_date')
                 time_of_day = record.get('time_of_day')
@@ -375,7 +408,7 @@ class IVEarningsService:
                 estimate = record.get('estimate')
                 currency = record.get('currency')
                 earnings_source = record.get('earnings_source')
-                self._earnings_cache[ticker] = {
+                self._earnings_cache[normalized_ticker] = {
                     'earnings_date': earnings_date,
                     'time_of_day': time_of_day,
                     'fiscal_date_ending': fiscal_date_ending,
@@ -493,6 +526,8 @@ class IVEarningsService:
         successful = 0
         failed = 0
         errors = []
+        normalized_tickers = []
+        seen = set()
 
         if not tickers:
             return {
@@ -502,11 +537,26 @@ class IVEarningsService:
                 'status': 'empty',
             }
 
-        max_workers = min(8, max(1, len(tickers)))
+        for ticker in tickers:
+            normalized = self._earnings_lookup_ticker(ticker)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_tickers.append(normalized)
+
+        if not normalized_tickers:
+            return {
+                'successful': 0,
+                'failed': 0,
+                'errors': [],
+                'status': 'empty',
+            }
+
+        max_workers = min(8, max(1, len(normalized_tickers)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
                 executor.submit(self.update_earnings_data, ticker): ticker
-                for ticker in tickers
+                for ticker in normalized_tickers
             }
             for future in as_completed(future_map):
                 ticker = future_map[future]

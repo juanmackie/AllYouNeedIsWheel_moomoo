@@ -125,6 +125,7 @@ class OptionsService:
                 port=int(self.config.get('port', 11111)),
                 readonly=bool(self.config.get('readonly', True)),
                 account_id=self.config.get('account_id'),
+                portfolio_env=self.config.get('portfolio_env'),
                 security_firm=self.config.get('security_firm')
             )
 

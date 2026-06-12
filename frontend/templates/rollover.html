@@ -1,24 +1,26 @@
 {% extends "base.html" %}
 
-{% block title %}Rollover - All You Need Is Wheel{% endblock %}
+{% block title %}Rollover - AYNIWHEEL{% endblock %}
 {% block body_class %}page-rollover{% endblock %}
 
-{% block page_header %}
-<div class="page-header flex-grow-1">
-    <div class="page-header__inner">
-        <div>
-            <h1 class="page-header__title">Rollover</h1>
-            <div class="page-header__meta">Option rollover management</div>
+{% block content %}
+<section class="ft-section" style="margin-top: 0;">
+    <div class="ft-section__head">
+        <div class="ft-section__head-left">
+            <span class="ft-section__num">ROLLOVER</span>
+            <h2 class="ft-section__title">Option rollover management</h2>
         </div>
-        <div class="page-header__actions">
-            <button class="btn btn-outline-primary btn-sm" id="refresh-rollover"><i class="bi bi-arrow-repeat"></i> Refresh</button>
-            <a class="btn btn-outline-primary btn-sm" href="/"><i class="bi bi-grid-1x2-fill"></i> Dashboard</a>
+        <div class="d-flex gap-2 align-items-center">
+            <button class="btn btn-outline-primary btn-sm" id="refresh-rollover">Refresh</button>
+            <a class="btn btn-outline-primary btn-sm" href="/">Dashboard</a>
         </div>
     </div>
-</div>
-{% endblock %}
+    <p style="font-family: var(--ft-font-body); font-size: 14px; color: var(--ft-ink-soft); max-width: 720px; padding-bottom: 16px;">
+        Scan active contracts near the strike, then review close-and-open replacement pairs side-by-side. Signal-only &mdash; execute in your broker.
+    </p>
+    <div style="height: 1px; background: var(--ft-rule);"></div>
+</section>
 
-{% block content %}
 {% include "partials/common/rollover_table.html" %}
 {% endblock %}
 

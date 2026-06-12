@@ -54,11 +54,11 @@ class TestOptionsDatabase(unittest.TestCase):
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 1)
+        self.assertEqual(cursor.fetchone()[0], 3)
 
-        cursor.execute("PRAGMA index_list('evaluator_signals')")
-        evaluator_indexes = {row[1] for row in cursor.fetchall()}
-        self.assertIn('idx_evaluator_signals_created_at', evaluator_indexes)
+        evaluator_tables = {t for t in actual_tables if t.startswith('evaluator_')}
+        self.assertEqual(evaluator_tables, set(),
+                         f"Evaluator tables should be dropped: {evaluator_tables}")
 
         conn.close()
 
@@ -610,68 +610,6 @@ class TestDatabaseConcurrency(unittest.TestCase):
         self.assertEqual(len(errors), 0, f"Purge+write errors: {errors}")
         final_count = len(self.db.get_iv_history('AAPL', days=365))
         self.assertGreaterEqual(final_count, 0)
-
-
-class TestEvaluatorRepositorySecurity(unittest.TestCase):
-    """Evaluator repository mutation helpers should stay parameterized."""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, 'test_evaluator.db')
-        conn = sqlite3.connect(self.db_path)
-        create_tables(conn)
-        conn.close()
-        self.db = OptionsDatabase(self.db_path)
-        self.repo = self.db.evaluator
-
-    def tearDown(self):
-        if hasattr(self, 'db') and self.db is not None:
-            self.db.close()
-        close_connection_pool(self.db_path)
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
-        os.rmdir(self.temp_dir)
-
-    def test_update_signal_status_round_trip(self):
-        recommendation_id = self.repo.record_signal({
-            'ticker': 'AAPL',
-            'option_type': 'PUT',
-            'strike': 150.0,
-            'expiration': '20240510',
-            'dte': 21,
-            'signal_type': 'csp',
-            'strategy': 'wheel',
-            'source': 'moomoo',
-            'rank': 1,
-            'score': 92.5,
-            'confidence': 98,
-            'annualized_return': 18.5,
-            'premium_per_contract': 250.0,
-            'delta': -0.24,
-            'iv': 0.31,
-            'cash_required': 15000.0,
-            'capital_at_risk': 15000.0,
-            'broker_buying_power': 20000.0,
-            'portfolio_hash': 'abc123',
-            'score_details': {'liquidity': 88},
-            'full_payload': {'ticker': 'AAPL'},
-        })
-
-        updated = self.repo.update_signal_status(
-            recommendation_id,
-            status='resolved',
-            resolved_outcome='closed_profit',
-            actual_return=12.5,
-            linked_position_key='AAPL:20240510:150P',
-            resolved_at='2026-05-24T10:00:00',
-        )
-
-        self.assertTrue(updated)
-        record = self.repo.get_signal_by_id(recommendation_id)
-        self.assertEqual(record['status'], 'resolved')
-        self.assertEqual(record['resolved_outcome'], 'closed_profit')
-        self.assertEqual(record['actual_return'], 12.5)
-        self.assertEqual(record['linked_position_key'], 'AAPL:20240510:150P')
 
 
 # ═══════════════════════════════════════════════════════════════════

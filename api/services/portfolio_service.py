@@ -8,6 +8,7 @@ import traceback
 from datetime import datetime, timedelta
 
 from core.connection_constants import _safe_float
+from core.ticker_utils import earnings_underlying_ticker
 
 logger = logging.getLogger('api.services.portfolio')
 
@@ -239,13 +240,7 @@ class PortfolioService:
                 # Add earnings info for stock AND option positions
                 if pos_type in ['STK', 'OPT']:
                     try:
-                        import re
-                        underlying_symbol = symbol
-                        if pos_type == 'OPT':
-                            # Extract underlying from standard option format
-                            match = re.match(r'^([A-Z]+)\d{6}[CP]\d+', symbol)
-                            if not match: match = re.match(r'^([A-Z]+)', symbol)
-                            if match: underlying_symbol = match.group(1)
+                        underlying_symbol = earnings_underlying_ticker(symbol)
                         
                         earnings_service = self._get_earnings_service()
                         info = earnings_service.get_earnings_info(underlying_symbol)

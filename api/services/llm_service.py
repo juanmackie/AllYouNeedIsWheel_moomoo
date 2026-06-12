@@ -42,7 +42,9 @@ def _get_client():
     from openai import OpenAI
 
     base_url = os.environ.get('LLM_BASE_URL', '').strip() or None
-    return OpenAI(api_key=api_key, base_url=base_url)
+    timeout_seconds = float(os.environ.get('LLM_TIMEOUT_SECONDS', '20'))
+    max_retries = int(os.environ.get('LLM_MAX_RETRIES', '0'))
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=max_retries)
 
 
 def build_advisor_context():
@@ -56,6 +58,7 @@ def build_advisor_context():
         'portfolio': {},
         'positions': [],
         'opportunities': [],
+        'signal_overlays': [],
         'macro': {},
         'vix': {},
         'scored_positions': [],
@@ -208,6 +211,16 @@ def build_advisor_context():
         options_svc = get_service('options')
         recs = options_svc.get_top_recommendations(limit=5)
         for r in recs.get('signals', [])[:5]:
+            overlay = r.get('signal_overlay') or {}
+            if overlay:
+                context['signal_overlays'].append({
+                    'ticker': r.get('ticker', ''),
+                    'signal_type': r.get('signal_type', ''),
+                    'option_type': r.get('option_type', ''),
+                    'overlay': overlay,
+                    'fit': r.get('signal_overlay_fit', 'unknown'),
+                    'warnings': r.get('signal_overlay_warnings', []),
+                })
             context['opportunities'].append({
                 'ticker': r.get('ticker', ''),
                 'option_type': r.get('option_type', ''),
@@ -219,6 +232,8 @@ def build_advisor_context():
                 'annualized_return': r.get('annualized_return', 0),
                 'score': r.get('score', 0),
                 'warnings': r.get('warnings', []),
+                'signal_overlay': overlay,
+                'signal_overlay_fit': r.get('signal_overlay_fit', 'unknown'),
             })
     except Exception as exc:
         logger.warning(f"Could not load signals: {exc}")
@@ -335,6 +350,14 @@ def get_suggestions():
             'model': model,
         }
     except Exception as exc:
+        if '429' in str(exc) or exc.__class__.__name__ == 'RateLimitError':
+            logger.error("LLM provider rate-limited upstream: %s", exc)
+            return {
+                'success': False,
+                'error': 'LLM provider is rate-limited upstream. Retry later or use your own API key/model.',
+                'provider': provider,
+                'model': model,
+            }
         logger.error(f"LLM call failed: {exc}")
         logger.error(traceback.format_exc())
         return {

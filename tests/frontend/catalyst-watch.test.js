@@ -37,6 +37,8 @@ function setupDOM() {
         <span class="catalyst-card__ticker"></span>
         <span class="catalyst-card__direction"></span>
         <span class="catalyst-card__signal"></span>
+        <span class="catalyst-card__action"></span>
+        <span class="catalyst-card__conflict-warning d-none"></span>
         <span class="catalyst-card__score-value"></span>
         <span class="catalyst-card__premium"></span>
         <span class="catalyst-card__fresh"></span>
@@ -297,7 +299,7 @@ describe('catalyst-watch', () => {
           ticker: 'GME',
           direction: 'BULLISH',
           signal: 'GREEN',
-          label: 'High conviction',
+          label: 'Priority lead',
           score: 80,
           premium_notional: 3_000_000,
           fresh_volume_ratio: 12,
@@ -306,7 +308,7 @@ describe('catalyst-watch', () => {
           cluster_expirations: ['20260718'],
           is_hedged: false,
           earnings_dte: null,
-          rationale: ['Social rising (200 mentions)'],
+          rationale: ['Scan source: social momentum (200 mentions)'],
           blockers: [],
           social: {
             source: 'apewisdom',
@@ -336,10 +338,10 @@ describe('catalyst-watch', () => {
 
     const socialEl = document.querySelector('.catalyst-card__social');
     expect(socialEl).toBeTruthy();
-    expect(socialEl.textContent).toContain('Social rising');
+    expect(socialEl.textContent).toContain('Scan source: social momentum');
     expect(socialEl.textContent).toContain('200 mentions');
     expect(socialEl.textContent).toContain('rank #5');
-    expect(socialEl.textContent).toContain('↑15');
+    expect(socialEl.textContent).toContain('\u219115');
   });
 
   it('hides social note when signal has no social context', async () => {
@@ -438,6 +440,6 @@ describe('catalyst-watch', () => {
     await loadCatalystSignals();
 
     const socialEl = document.querySelector('.catalyst-card__social');
-    expect(socialEl.textContent).toContain('↓20');
+    expect(socialEl.textContent).toContain('\u219320');
   });
 });

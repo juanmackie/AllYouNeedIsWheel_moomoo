@@ -46,7 +46,8 @@ class TvscreenerService:
 
     def get_wheel_candidates(self, min_iv_rank: int = 30,
                             min_volume: int = 1000000,
-                            limit: int = 50) -> Optional[List[str]]:
+                            limit: int = 50,
+                            max_price: float = None) -> Optional[List[str]]:
         """
         Fetch stocks suitable for wheel strategy.
 
@@ -54,6 +55,7 @@ class TvscreenerService:
             min_iv_rank: Minimum IV rank percentage (0-100)
             min_volume: Minimum average daily volume
             limit: Maximum number of stocks to return
+            max_price: Optional maximum stock price filter
 
         Returns:
             List of ticker symbols or None if unavailable
@@ -61,7 +63,7 @@ class TvscreenerService:
         if not self._ensure_initialized():
             return None
 
-        cache_key = f"wheel_candidates:{min_iv_rank}:{min_volume}:{limit}"
+        cache_key = f"wheel_candidates:{min_iv_rank}:{min_volume}:{limit}:{max_price}"
 
         # Check cache
         with self._cache_lock:
@@ -78,6 +80,8 @@ class TvscreenerService:
             # Note: IV_PERCENTILE is not available in tvscreener, using volatility instead
             screener.where(StockField.VOLATILITY >= min_iv_rank / 100)  # Convert percentage to decimal
             screener.where(StockField.AVERAGE_VOLUME >= min_volume)
+            if max_price is not None and max_price > 0:
+                screener.where(StockField.PRICE <= max_price)
             try:
                 screener.limit(limit)
             except AttributeError:

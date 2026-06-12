@@ -358,13 +358,11 @@ AllYouNeedIsWheel_moomoo/
 â”‚   â”œâ”€â”€ ticker_utils.py          # Ticker formatting and caching
 â”‚   â”œâ”€â”€ rate_limiter.py          # Thread-safe rate limiting (virtual scheduling)
 â”‚   â”œâ”€â”€ ttl_cache.py             # Shared TTL cache helper (cachetools + fallback)
-â”‚   â”œâ”€â”€ scheduler.py             # APScheduler: evaluator, calibrator, earnings updater
+â”‚   â”œâ”€â”€ scheduler.py             # APScheduler: earnings updater
 â”‚   â”œâ”€â”€ background_manager.py    # Health monitor for background tasks
 â”‚   â”œâ”€â”€ rate_limiter.py          # Shared request throttling
 â”‚   â”œâ”€â”€ wheel_decision.py        # Scoring engine and decision logic
 â”‚   â”œâ”€â”€ scoring_factors.py       # Pure scoring sub-functions
-â”‚   â”œâ”€â”€ evaluator.py             # Signal outcome evaluation
-â”‚   â”œâ”€â”€ calibrator.py            # Weight calibration via gradient-free optimisation
 â”‚   â”œâ”€â”€ ttl_cache.py             # Shared TTL cache helper
 â”‚   â”œâ”€â”€ currency.py              # Currency conversion
 â”‚   â”œâ”€â”€ logging_config.py        # Logging setup
@@ -428,39 +426,6 @@ The system uses a multi-factor scoring algorithm (0-100) to rank option plays.
 | Quarterlies | 46-90 | 0.25-0.35 | 15% |
 
 > ðŸ“– **Full scoring algorithm, formulas, weights, and data models:** see [SCORING.md](SCORING.md)
-
-## Evaluator Loop & Feedback Calibration
-
-The system includes an in-process evaluator loop that tracks recommendation
-outcomes and uses them to calibrate scoring weights over time.
-
-**Evaluator:** Records predicted metrics (score, return, delta, IV, confidence)
-when a recommendation is generated, and resolves outcomes (expired worthless,
-assigned, closed early) after expiration.  Persisted in `~/.wheel/evaluator/outcomes.db`.
-
-**Feedback Loop:** When an outcome is resolved, each scoring factor's contribution
-is compared against the actual return.  Factors that over-predict get their
-influence reduced; factors that under-predict get increased.  Bias multipliers
-are clamped to `[0.5, 2.0]` and applied in `score_contract()` on every call.
-Persistence: `~/.wheel/evaluator/feedback.db`.
-
-**Calibrator:** A gradient-free optimiser that iterates weight combinations
-against historical outcomes to minimise prediction error.  Runs weekly.
-Persistence: `~/.wheel/evaluator/calibration.db`.
-
-**Scheduler:** APScheduler runs the evaluator daily at 8:00 AM, the
-calibrator weekly on Sunday at 8:15 AM (Australia/Brisbane time), and the
-earnings updater every 6 hours via `IntervalTrigger`. A host-level lock
-ensures only one process schedules jobs under multi-worker deployments.
-
-**Dashboard Widget:** Shows tracked/resolved counts, assignment vs expiry rate,
-top over/under-predicting factors, latest calibration result, and last run times.
-
-**Manual triggers:**
-- `POST /api/options/evaluator/cron` â€” Run evaluator cycle
-- `POST /api/options/calibrator/run` â€” Run calibration cycle
-- `GET /api/options/evaluator/stats` â€” Full status payload
-- `GET /api/options/feedback/biases` â€” Current bias multipliers
 
 ## Docker (Optional)
 

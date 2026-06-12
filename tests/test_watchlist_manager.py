@@ -70,7 +70,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ['GME', 'AMC'])
         mock_tvscreener.get_wheel_candidates.assert_called_once_with(
-            min_iv_rank=30, min_volume=1000000, limit=50
+            min_iv_rank=30, min_volume=1000000, limit=50, max_price=None
         )
 
     @patch.object(WatchlistManager, '_get_tvscreener_service')
@@ -124,6 +124,57 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
         result = manager.get_effective_watchlist()
 
         self.assertEqual(result, ['AAPL'])
+
+    @patch.object(WatchlistManager, '_get_tvscreener_service')
+    def test_dynamic_mode_passes_max_price_from_portfolio_context(self, mock_get_tvscreener):
+        """Dynamic watchlist passes max_price to tvscreener when portfolio_context is provided."""
+        mock_tvscreener = MagicMock()
+        mock_tvscreener.get_wheel_candidates.return_value = ['CHEAP1', 'CHEAP2']
+        mock_get_tvscreener.return_value = mock_tvscreener
+        self.mock_context.config = {
+            'watchlist': ['AAPL'],
+            'watchlist_mode': 'dynamic',
+            'screening_criteria': {
+                'min_iv_rank': 30,
+                'min_volume': 1000000,
+                'max_stocks': 50,
+            },
+        }
+        portfolio = {'broker_buying_power': 11358.0}
+        manager = WatchlistManager(self.mock_context)
+
+        result = manager.get_effective_watchlist(portfolio_context=portfolio)
+
+        self.assertEqual(result, ['CHEAP1', 'CHEAP2'])
+        # max_price = 11358 / 100 / 0.85 ≈ 133.62
+        expected_max_price = 11358 / 100 / (1 - 15 / 100)
+        mock_tvscreener.get_wheel_candidates.assert_called_once_with(
+            min_iv_rank=30, min_volume=1000000, limit=50, max_price=expected_max_price
+        )
+
+    @patch.object(WatchlistManager, '_get_tvscreener_service')
+    def test_dynamic_mode_no_max_price_without_portfolio_context(self, mock_get_tvscreener):
+        """Dynamic watchlist passes max_price=None when no portfolio_context."""
+        mock_tvscreener = MagicMock()
+        mock_tvscreener.get_wheel_candidates.return_value = ['GME', 'AMC']
+        mock_get_tvscreener.return_value = mock_tvscreener
+        self.mock_context.config = {
+            'watchlist': ['AAPL'],
+            'watchlist_mode': 'dynamic',
+            'screening_criteria': {
+                'min_iv_rank': 30,
+                'min_volume': 1000000,
+                'max_stocks': 50,
+            },
+        }
+        manager = WatchlistManager(self.mock_context)
+
+        result = manager.get_effective_watchlist()
+
+        self.assertEqual(result, ['GME', 'AMC'])
+        mock_tvscreener.get_wheel_candidates.assert_called_once_with(
+            min_iv_rank=30, min_volume=1000000, limit=50, max_price=None
+        )
 
 
 class TestWatchlistManagerScreeningProfile(unittest.TestCase):

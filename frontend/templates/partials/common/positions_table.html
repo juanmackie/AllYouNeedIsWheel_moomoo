@@ -1,4 +1,4 @@
-<section class="app-section holdings-section">
+<section class="app-section holdings-section" id="stock-positions-section">
     <div class="app-section__header">
         <div>
             <span class="app-section__eyebrow">Equity book</span>
@@ -7,28 +7,28 @@
         </div>
     </div>
 
-    <div class="table-responsive">
-        <table class="table table-striped">
+    <div class="ft-table-wrap">
+        <table class="ft-table">
             <thead>
                 <tr>
                     <th>Symbol</th>
-                    <th>Shares</th>
-                    <th>Avg Cost</th>
-                    <th>Current Price</th>
-                    <th>Market Value</th>
-                    <th>Unrealized P&amp;L</th>
+                    <th class="ft-th-right">Shares</th>
+                    <th class="ft-th-right">Avg Cost</th>
+                    <th class="ft-th-right">Current Price</th>
+                    <th class="ft-th-right">Market Value</th>
+                    <th class="ft-th-right">Unrealized P&amp;L</th>
                 </tr>
             </thead>
             <tbody id="stock-positions-table-body">
                 <tr>
-                    <td colspan="6" class="text-center">Loading stock positions...</td>
+                    <td colspan="6" class="ft-td-center ft-td-mute" style="padding: 32px 0;">Loading stock positions...</td>
                 </tr>
             </tbody>
         </table>
     </div>
 </section>
 
-<section class="app-section holdings-section">
+<section class="app-section holdings-section" id="option-positions-section">
     <div class="app-section__header">
         <div>
             <span class="app-section__eyebrow">Derivative book</span>
@@ -37,24 +37,24 @@
         </div>
     </div>
 
-    <div class="table-responsive">
-        <table class="table table-striped">
+    <div class="ft-table-wrap">
+        <table class="ft-table">
             <thead>
                 <tr>
                     <th>Symbol</th>
-                    <th>Contracts</th>
+                    <th class="ft-th-right">Contracts</th>
                     <th>Type</th>
-                    <th>Strike</th>
+                    <th class="ft-th-right">Strike</th>
                     <th>Expiration</th>
-                    <th>Avg Cost</th>
-                    <th>Current Price</th>
-                    <th>Market Value</th>
-                    <th>Unrealized P&amp;L</th>
+                    <th class="ft-th-right">Avg Cost</th>
+                    <th class="ft-th-right">Current Price</th>
+                    <th class="ft-th-right">Market Value</th>
+                    <th class="ft-th-right">Unrealized P&amp;L</th>
                 </tr>
             </thead>
             <tbody id="option-positions-table-body">
                 <tr>
-                    <td colspan="9" class="text-center">Loading option positions...</td>
+                    <td colspan="9" class="ft-td-center ft-td-mute" style="padding: 32px 0;">Loading option positions...</td>
                 </tr>
             </tbody>
         </table>

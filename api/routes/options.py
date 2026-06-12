@@ -464,7 +464,7 @@ def get_top_recommendations():
                     cache_metadata['cache_status'],
                 )
         
-        # Cache miss or manual refresh — generate in background instead of blocking
+        # Cache miss or manual refresh â€” generate in background instead of blocking
         logger.info(f"Generating fresh top recommendations in background (manual_refresh={manual_refresh})")
         generation_started = _generate_in_background(cache_key, limit, current_portfolio_hash)
         generation_age = _get_generation_age(cache_key)
@@ -476,7 +476,7 @@ def get_top_recommendations():
                 return _build_top_recommendations_stale_response(stale_result, stale_metadata)
         except Exception:
             logger.warning("Stale cache fallback for top_recommendations failed", exc_info=True)
-        # No stale data at all — return generating signal immediately
+        # No stale data at all â€” return generating signal immediately
         if not generation_started and generation_age and generation_age > GENERATION_IN_FLIGHT_TIMEOUT_SECONDS:
             logger.warning(
                 "Top recommendations generation has been in flight for %.1fs; returning timeout diagnostic",
@@ -484,7 +484,7 @@ def get_top_recommendations():
             )
             return _build_top_recommendations_timeout_response()
 
-        logger.info("No cache available — returning generating signal to frontend")
+        logger.info("No cache available â€” returning generating signal to frontend")
         return _build_top_recommendations_generating_response()
 
     except Exception as e:
@@ -615,7 +615,7 @@ def catalyst_watch():
                     "max_scan_tickers": 2,
                 },
             }, served_from_cache=False, cache_age_seconds=None, fresh_attempted=False, fresh_succeeded=False, last_successful_generated_at=None)
-            logger.debug("GET /catalyst-watch: disabled — fresh_attempted=false served_from_cache=false")
+            logger.debug("GET /catalyst-watch: disabled â€” fresh_attempted=false served_from_cache=false")
             return jsonify(attach_source_policy(
                 payload,
                 build_research_source_policy('catalyst_watch', {}, fallback_sources_allowed=['yfinance']),
@@ -655,7 +655,7 @@ def catalyst_watch():
                     last_successful_generated_at=cached_result.get("generated_at"),
                 )
                 logger.debug(
-                    "GET /catalyst-watch: fast cache hit (age=%ss) — served_from_cache=true fresh_attempted=false",
+                    "GET /catalyst-watch: fast cache hit (age=%ss) â€” served_from_cache=true fresh_attempted=false",
                     cached_age,
                 )
                 return _apply_source(payload)
@@ -697,7 +697,7 @@ def catalyst_watch():
                 last_successful_generated_at=cached_result.get("generated_at"),
             )
             logger.debug(
-                "GET /catalyst-watch: stale cache (age=%ss) + bg refresh — served_from_cache=true fresh_attempted=true",
+                "GET /catalyst-watch: stale cache (age=%ss) + bg refresh â€” served_from_cache=true fresh_attempted=true",
                 bagr_age,
             )
             return _apply_source(payload)
@@ -718,7 +718,7 @@ def catalyst_watch():
                 last_successful_generated_at=cached_result.get("generated_at"),
             )
             logger.debug(
-                "GET /catalyst-watch: fresh scan succeeded — served_from_cache=false fresh_succeeded=true",
+                "GET /catalyst-watch: fresh scan succeeded â€” served_from_cache=false fresh_succeeded=true",
             )
             return _apply_source(payload)
 
@@ -735,7 +735,7 @@ def catalyst_watch():
             cache_age_seconds=None,
         )
         logger.debug(
-            "GET /catalyst-watch: no cache, scan timed out — served_from_cache=false fresh_attempted=true fresh_succeeded=false",
+            "GET /catalyst-watch: no cache, scan timed out â€” served_from_cache=false fresh_attempted=true fresh_succeeded=false",
         )
         return _apply_source(empty)
     except Exception as e:
@@ -830,7 +830,7 @@ def get_cash_status():
                 })
         
         cash_available = max(0, cash_balance - cash_reserved)
-        cash_available_for_csp = max(0, available_cash)  # No subtraction — broker buying power is authoritative
+        cash_available_for_csp = max(0, available_cash)  # No subtraction â€” broker buying power is authoritative
         broker_buying_power = available_cash
         reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
@@ -959,192 +959,4 @@ def get_leakage_analytics():
         logger.error(f"Error fetching leakage analytics: {str(e)}")
         logger.error(traceback.format_exc())
         return error_response(str(e))
-
-
-def _get_evaluator_db():
-    """Resolve the app's OptionsDatabase from Flask config."""
-    from flask import current_app
-    db = current_app.config.get('database')
-    if db:
-        return db
-    from db.database import OptionsDatabase
-    from api.services.config import get_config as cfg
-    return OptionsDatabase(cfg().get('db_path'))
-
-
-@bp.route('/evaluator/stats', methods=['GET'])
-def evaluator_stats():
-    """Return evaluator summary statistics for the dashboard.
-
-    Uses app DB via OptionsDatabase — all evaluator state now lives in options.db.
-    """
-    try:
-        db = _get_evaluator_db()
-        stats = db.get_evaluator_summary_stats()
-        recent = db.get_evaluator_recent_signals(limit=50)
-        scheduler_info = _get_scheduler_info(db)
-        latest_calibration = db.get_evaluator_calibration()
-        feedback_summary = db.get_evaluator_feedback_summary()
-
-        calibration_data = None
-        if latest_calibration:
-            weights = latest_calibration.get('weights', {})
-            calibration_data = {
-                'cycle': latest_calibration.get('cycle'),
-                'loss': latest_calibration.get('loss'),
-                'shadow_loss': latest_calibration.get('shadow_loss'),
-                'samples': latest_calibration.get('samples'),
-                'weights': weights,
-                'accepted': bool(latest_calibration.get('accepted')),
-                'created_at': latest_calibration.get('created_at'),
-            }
-
-        return success_response({
-            'stats': stats,
-            'recent_outcomes': recent,
-            'recent_count': len(recent),
-            'scheduler': scheduler_info,
-            'calibration': calibration_data,
-            'feedback_summary': feedback_summary,
-        })
-    except Exception as e:
-        logger.error(f"Error fetching evaluator stats: {e}")
-        return success_response({
-            'stats': {'total_recommendations': 0, 'resolved': 0},
-            'recent_outcomes': [],
-            'recent_count': 0,
-            'scheduler': {'running': False, 'state': {}},
-            'calibration': None,
-            'feedback_summary': {},
-        })
-
-
-def _get_scheduler_info(db):
-    """Get scheduler state. First tries the in-process scheduler, then DB."""
-    try:
-        from core.scheduler import get_scheduler_info as scheduler_process_info
-        proc_info = scheduler_process_info()
-        running = proc_info.get('running', False)
-        state_map = proc_info.get('state', {})
-    except Exception:
-        running = False
-        state_map = {}
-
-    if not state_map:
-        states = db.get_evaluator_scheduler_states()
-        for s in states:
-            state_map[s['name']] = {
-                'last_run': s.get('last_run', ''),
-                'last_status': s.get('last_status', ''),
-                'last_message': s.get('last_message', ''),
-            }
-    return {
-        'running': running,
-        'state': state_map,
-    }
-
-
-@bp.route('/evaluator/cron', methods=['POST'])
-def evaluator_cron():
-    """
-    Trigger an evaluator cycle: check expired-but-unresolved signals
-    and log outcomes. Uses app DB.
-    """
-    try:
-        db = _get_evaluator_db()
-        from core.evaluator import run_evaluation_cycle
-        from api.services.config import get_config as cfg
-
-        portfolio_service = None
-        try:
-            import api
-            portfolio_service = api.get_service('portfolio')
-        except Exception:
-            logger.warning("Portfolio service init failed for evaluation", exc_info=True)
-
-        result = run_evaluation_cycle(
-            db.evaluator,
-            portfolio_service=portfolio_service,
-            config=cfg().get('evaluator', {}),
-        )
-
-        db.evaluator.set_scheduler_state(
-            'evaluator',
-            'ok' if result.get('errors', 0) == 0 else 'partial',
-            f"Checked {result.get('checked', 0)}, resolved {result.get('resolved', 0)}, errors {result.get('errors', 0)}",
-        )
-        return success_response(result)
-    except Exception as e:
-        logger.error(f"Evaluator cron cycle failed: {e}")
-        return error_response(str(e))
-
-
-@bp.route('/feedback/biases', methods=['GET'])
-def feedback_biases():
-    """Return current factor bias multipliers from the feedback loop (app DB)."""
-    try:
-        db = _get_evaluator_db()
-        biases = db.evaluator.get_feedback_biases()
-        summary = db.get_evaluator_feedback_summary()
-        return success_response({
-            'biases': biases,
-            'summary': summary,
-        })
-    except Exception as e:
-        logger.error(f"Error fetching feedback biases: {e}")
-        return success_response({'biases': [], 'summary': {}})
-
-
-@bp.route('/feedback/events', methods=['GET'])
-def feedback_events():
-    """Return recent feedback events from app DB."""
-    try:
-        db = _get_evaluator_db()
-        with db.evaluator._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM evaluator_feedback_events ORDER BY id DESC LIMIT 50"
-            ).fetchall()
-            events = [dict(r) for r in rows]
-        return success_response({'events': events})
-    except Exception as e:
-        logger.error(f"Error fetching feedback events: {e}")
-        return success_response({'events': []})
-
-
-@bp.route('/calibrator/run', methods=['POST'])
-def calibrator_run():
-    """Trigger a calibration cycle using app DB."""
-    try:
-        db = _get_evaluator_db()
-        from core.calibrator import run_calibration_cycle
-        from api.services.config import get_config as cfg
-
-        result = run_calibration_cycle(
-            db.evaluator,
-            config=cfg().get('evaluator', {}),
-        )
-
-        db.evaluator.set_scheduler_state(
-            'calibrator',
-            'ok' if result.get('success') else 'skipped',
-            result.get('message', str(result)),
-        )
-        return success_response(result)
-    except Exception as e:
-        logger.error(f"Calibration cycle failed: {e}")
-        return error_response(str(e))
-
-
-@bp.route('/calibrator/history', methods=['GET'])
-def calibrator_history():
-    """Return calibration history from app DB."""
-    try:
-        db = _get_evaluator_db()
-        history = db.get_evaluator_calibration_history(limit=20)
-        return success_response({'history': history})
-    except Exception as e:
-        logger.error(f"Error fetching calibration history: {e}")
-        return success_response({'history': []})
-
-
 
