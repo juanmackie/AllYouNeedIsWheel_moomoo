@@ -660,14 +660,13 @@ def score_contract(
             )
         cash_required = strike * 100
 
-        # Cash reserve check using broker buying power (authoritative)
-        # Broker buying power already accounts for open positions — no local subtraction needed
-        if cash_required > broker_buying_power:
-            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, broker buying power ${broker_buying_power:.0f} (open short-put collateral ${cash_reserved_for_csp:.0f})")
+        # Cash-secured puts require true CSP cash, not margin buying power.
+        if cash_required > cash_available_for_csp:
+            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, CSP cash available ${cash_available_for_csp:.0f} (open short-put collateral ${cash_reserved_for_csp:.0f}; broker buying power ${broker_buying_power:.0f})")
 
         breakeven = strike - mid_price
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
-        capital_fit = 1.0 if available_cash <= 0 else _clamp(available_cash / cash_required)
+        capital_fit = 1.0 if cash_available_for_csp <= 0 else _clamp(cash_available_for_csp / cash_required)
 
         capital_efficiency = 0.0
         ce_score = 0.0
@@ -682,7 +681,7 @@ def score_contract(
         decision.breakeven = round(breakeven, 2)
         decision.breakeven_buffer_pct = round(breakeven_buffer_pct, 2)
         decision.cash_required = round(cash_required, 2)
-        decision.max_contracts = max(int(broker_buying_power // cash_required), 0)
+        decision.max_contracts = max(int(cash_available_for_csp // cash_required), 0)
         decision.capital_fit = round(capital_fit * 100, 1)
         decision.ce_score = round(ce_score, 1)
         decision.capital_efficiency = round(capital_efficiency, 1)
@@ -740,8 +739,8 @@ def score_contract(
             decision.warnings.append(f'Wide bid/ask spread ({spread_pct:.0f}%)')
         if open_interest < profile.get('ideal_open_interest', 500):
             decision.warnings.append('Below ideal open interest')
-        if available_cash > 0 and cash_required > broker_buying_power:
-            decision.warnings.append(f'Cash required (${cash_required:.0f}) exceeds broker buying power (${broker_buying_power:.0f})')
+        if cash_available_for_csp > 0 and cash_required > cash_available_for_csp:
+            decision.warnings.append(f'Cash required (${cash_required:.0f}) exceeds CSP cash available (${cash_available_for_csp:.0f})')
         if iv_status_str == 'extreme_low':
             decision.warnings.append(f'IV extremely low ({decision.iv_rank:.0f}%) - poor risk/reward')
         elif iv_status_str == 'low':

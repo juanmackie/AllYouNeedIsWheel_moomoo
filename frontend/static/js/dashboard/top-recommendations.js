@@ -381,16 +381,13 @@ function createRecommendationCard(rec) {
     if (signalType === 'csp' || signalType === 'put') {
         cspSection.classList.remove('d-none');
         const cashReq = rec.cash_required || rec.wheel_decision?.cash_required;
-        const bp = signalsData?.broker_buying_power || 0;
-        const cashPct = cashReq && bp > 0 ? (cashReq / bp) * 100 : 0;
-        const cashRemaining = bp > 0 && cashReq ? bp - cashReq : 0;
+        const cspCash = signalsData?.cash_available_for_csp || 0;
+        const cashPct = cashReq && cspCash > 0 ? (cashReq / cspCash) * 100 : 0;
         const breakevenBuffer = rec.breakeven_buffer_pct ?? rec.wheel_decision?.breakeven_buffer_pct;
         const expectedMove = rec.expected_move_buffer ?? rec.wheel_decision?.expected_move_buffer;
 
         clone.querySelector('.csp-cash-required').textContent = cashReq ? formatCurrency(cashReq) : 'N/A';
         clone.querySelector('.csp-cash-pct').textContent = cashPct > 0 ? `${cashPct.toFixed(1)}%` : 'N/A';
-        const remainingEl = clone.querySelector('.csp-cash-remaining');
-        // No separate CSP cash remaining element in template, skip for now
         clone.querySelector('.csp-breakeven-buffer').textContent = breakevenBuffer != null ? `${breakevenBuffer.toFixed(1)}%` : 'N/A';
         clone.querySelector('.csp-expected-move').textContent = expectedMove != null ? `${expectedMove.toFixed(1)}%` : 'N/A';
     }
@@ -747,14 +744,17 @@ function renderBlockedSignals(blocked) {
  */
 function updateBuyingPowerIndicator(result) {
     if (!bpIndicator) return;
+    const cspCash = result?.cash_available_for_csp;
     const bp = result?.broker_buying_power;
     const reserved = result?.cash_reserved_for_csp;
-    if (bp != null && bp > 0) {
+    if (cspCash != null && cspCash >= 0) {
         bpIndicator.classList.remove('d-none');
         const bpEl = document.getElementById('bp-amount');
         const reservedEl = document.getElementById('bp-reserved');
-        if (bpEl) bpEl.textContent = formatCurrency(bp);
+        const brokerEl = document.getElementById('bp-broker');
+        if (bpEl) bpEl.textContent = formatCurrency(cspCash);
         if (reservedEl) reservedEl.textContent = formatCurrency(reserved || 0);
+        if (brokerEl) brokerEl.textContent = formatCurrency(bp || 0);
     } else {
         bpIndicator.classList.add('d-none');
     }

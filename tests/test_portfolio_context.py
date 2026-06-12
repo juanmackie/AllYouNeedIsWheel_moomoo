@@ -122,6 +122,7 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context['broker_buying_power'], 6000.0)
         self.assertEqual(context['short_puts']['AAPL240315P00150000'], 2)
         self.assertEqual(context['cash_reserved_for_csp'], 30000.0)
+        self.assertEqual(context['cash_available_for_csp'], 0.0)
         self.assertEqual(context['vix_regime']['regime'], 'normal')
 
 
@@ -198,8 +199,8 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         self.assertIn('cash_reserved_for_csp', context)
         self.assertIn('available_cash', context)
 
-    def test_csp_buying_power_not_reduced_by_open_short_puts(self):
-        """Broker buying power is authoritative — open short puts do NOT reduce cash_available_for_csp."""
+    def test_csp_cash_reduced_by_open_short_puts(self):
+        """CSP cash is true cash minus collateral already tied up by open short puts."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             'available_cash': 50000.0,
             'account_value': 100000.0,
@@ -214,16 +215,14 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         }.get(t, [])
 
         context = self.ctx.get_portfolio_context()
-        # 2 short puts * 150 strike * 100 = 30000 open collateral (diagnostics only)
+        # 2 short puts * 150 strike * 100 = 30000 open collateral
         self.assertEqual(context['cash_reserved_for_csp'], 30000.0)
         self.assertEqual(context['open_short_put_collateral'], 30000.0)
-        # broker_buying_power is authoritative — NOT reduced by open short puts
         self.assertEqual(context['broker_buying_power'], 50000.0)
-        # cash_available_for_csp = broker_buying_power (no subtraction)
-        self.assertEqual(context['cash_available_for_csp'], 50000.0)
+        self.assertEqual(context['cash_available_for_csp'], 20000.0)
 
-    def test_csp_buying_power_with_no_short_puts(self):
-        """cash_available_for_csp should equal broker_buying_power when no short puts."""
+    def test_csp_cash_with_no_short_puts(self):
+        """cash_available_for_csp should equal true cash, not margin buying power."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             'available_cash': 50000.0,
             'account_value': 100000.0,
@@ -233,11 +232,11 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
 
         context = self.ctx.get_portfolio_context()
         self.assertEqual(context['broker_buying_power'], 60000.0)
-        self.assertEqual(context['cash_available_for_csp'], 60000.0)
+        self.assertEqual(context['cash_available_for_csp'], 50000.0)
         self.assertEqual(context['cash_reserved_for_csp'], 0.0)
 
-    def test_available_cash_uses_excess_liquidity(self):
-        """available_cash should prefer excess_liquidity over cash_balance."""
+    def test_available_cash_uses_true_cash_not_excess_liquidity(self):
+        """available_cash should use cash-like fields, not excess liquidity."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             'available_cash': 30000.0,
             'account_value': 100000.0,
@@ -246,7 +245,8 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         self.portfolio_service.get_positions.return_value = []
 
         context = self.ctx.get_portfolio_context()
-        self.assertEqual(context['available_cash'], 60000.0)
+        self.assertEqual(context['available_cash'], 30000.0)
+        self.assertEqual(context['broker_buying_power'], 60000.0)
 
     def test_cash_fallback_prefers_available_cash(self):
         """available_cash is the first field checked — should win when positive."""
@@ -279,25 +279,29 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         context = self.ctx.get_portfolio_context()
         self.assertEqual(context['available_cash'], 35000.0)
 
-    def test_cash_fallback_buying_power(self):
-        """buying_power should be used when other cash fields are missing."""
+    def test_cash_fallback_buying_power_is_not_true_cash(self):
+        """buying_power should stay broker capacity when cash fields are missing."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             'buying_power': 25000.0,
         }
         self.portfolio_service.get_positions.return_value = []
 
         context = self.ctx.get_portfolio_context()
-        self.assertEqual(context['available_cash'], 25000.0)
+        self.assertEqual(context['available_cash'], 0.0)
+        self.assertEqual(context['broker_buying_power'], 25000.0)
+        self.assertEqual(context['cash_available_for_csp'], 0.0)
 
-    def test_cash_fallback_excess_liquidity(self):
-        """excess_liquidity should be used as last resort cash field."""
+    def test_cash_fallback_excess_liquidity_is_not_true_cash(self):
+        """excess_liquidity should stay broker capacity, not CSP cash."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             'excess_liquidity': 20000.0,
         }
         self.portfolio_service.get_positions.return_value = []
 
         context = self.ctx.get_portfolio_context()
-        self.assertEqual(context['available_cash'], 20000.0)
+        self.assertEqual(context['available_cash'], 0.0)
+        self.assertEqual(context['broker_buying_power'], 20000.0)
+        self.assertEqual(context['cash_available_for_csp'], 0.0)
 
     def test_cash_fallback_skips_zero_values(self):
         """Should skip zero values and try the next field."""
@@ -311,8 +315,8 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         context = self.ctx.get_portfolio_context()
         self.assertEqual(context['available_cash'], 15000.0)
 
-    def test_cash_fallback_max_with_excess_liquidity(self):
-        """available_cash should be max of parsed cash and excess_liquidity."""
+    def test_cash_fallback_keeps_excess_liquidity_separate(self):
+        """available_cash should not be maxed with excess_liquidity."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             'available_cash': 30000.0,
             'excess_liquidity': 60000.0,
@@ -320,7 +324,8 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         self.portfolio_service.get_positions.return_value = []
 
         context = self.ctx.get_portfolio_context()
-        self.assertEqual(context['available_cash'], 60000.0)
+        self.assertEqual(context['available_cash'], 30000.0)
+        self.assertEqual(context['broker_buying_power'], 60000.0)
 
     def test_cash_diagnostics_in_context(self):
         """_cash_diagnostics should be present with broker_buying_power."""
@@ -337,9 +342,10 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         self.assertIn('raw_summary_fields', diag)
         self.assertEqual(diag['raw_summary_fields']['available_cash'], 50000.0)
         self.assertEqual(diag['raw_summary_fields']['cash_balance'], 45000.0)
-        self.assertEqual(diag['available_cash'], 55000.0)
+        self.assertEqual(diag['available_cash'], 50000.0)
         self.assertEqual(diag['broker_buying_power'], 55000.0)
-        self.assertEqual(diag['broker_buying_power_source'], 'available_cash')
+        self.assertEqual(diag['available_cash_source'], 'available_cash')
+        self.assertEqual(diag['broker_buying_power_source'], 'excess_liquidity')
         self.assertEqual(diag['excess_liquidity'], 55000.0)
 
     def test_stock_positions_are_keyed_by_prefixed_and_bare_symbol(self):

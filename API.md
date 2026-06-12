@@ -496,7 +496,7 @@ Retrieve the top-ranked option plays across all watchlist tickers. Uses multi-th
 
 ### Get Cash Status
 
-Check available cash for trading after margin requirements.
+Check true cash available for CSP signals after subtracting open short-put collateral. Broker buying power is returned separately for context and may include margin capacity.
 
 **Endpoint:** `GET /api/options/cash-status`
 
@@ -505,8 +505,9 @@ Check available cash for trading after margin requirements.
 {
   "success": true,
   "cash_balance": 25000.00,
-  "buying_power": 22000.00,
+  "broker_buying_power": 22000.00,
   "cash_available_for_csp": 20000.00,
+  "cash_reserved_for_csp": 5000.00,
   "max_put_contracts_at_avg_strike": 5
 }
 ```

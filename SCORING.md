@@ -266,7 +266,7 @@ capital_fit = clamp(cash_balance / cash_required, 0, 1)
 final_score = score * (0.75 + 0.25 * capital_fit)
 ```
 
-PUT sizing sets `max_contracts = floor(broker_buying_power / cash_required)` and then recommends the smaller of that maximum and the 10%-of-account position target.
+PUT sizing sets `max_contracts = floor(cash_available_for_csp / cash_required)` and then recommends the smaller of that maximum and the 10%-of-account position target. `cash_available_for_csp` means true cash not already tied up by open short-put collateral; margin buying power is shown only as context.
 
 ## Dynamic Screening Profiles
 

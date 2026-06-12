@@ -3,11 +3,13 @@
         <div>
             <span class="app-section__eyebrow" id="top-recs-eyebrow">Opportunity desk</span>
             <h2 id="top-recs-title">Top Signals</h2>
-            <p id="top-recs-desc">Highest-conviction wheel signals ranked by growth impact, premium efficiency, and buying power fit.</p>
+            <p id="top-recs-desc">Highest-conviction wheel signals ranked by growth impact, premium efficiency, and cash fit.</p>
             <div id="buying-power-indicator" class="small text-muted d-none">
-                Broker buying power: <span id="bp-amount"></span>
+                CSP cash: <span id="bp-amount"></span>
                 <span class="text-secondary">|</span>
                 Open short-put collateral: <span id="bp-reserved"></span>
+                <span class="text-secondary">|</span>
+                Broker buying power: <span id="bp-broker"></span>
             </div>
         </div>
         <div class="app-section__actions">
@@ -63,7 +65,7 @@
     </div>
 
     <div class="app-section__footer">
-        Signals ranked by premium efficiency, liquidity, and 2x portfolio impact. Only contracts you can realistically sell based on broker buying power are shown.
+        Signals ranked by premium efficiency, liquidity, and 2x portfolio impact. CSP signals require cash not tied up by open short puts.
     </div>
 </section>
 
@@ -138,7 +140,7 @@
                             <span class="csp-cash-required fw-semibold"></span>
                         </div>
                         <div class="d-flex justify-content-between">
-                            <span>% of available cash</span>
+                            <span>% of CSP cash</span>
                             <span class="csp-cash-pct fw-semibold"></span>
                         </div>
                         <div class="d-flex justify-content-between">

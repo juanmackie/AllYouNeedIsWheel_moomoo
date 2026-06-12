@@ -40,7 +40,11 @@ function setupDOM() {
       </div>
       <div id="top-recs-last-updated" class="d-none"></div>
       <div id="blocked-candidates-section" class="d-none"></div>
-      <div id="buying-power-indicator" class="d-none"></div>
+      <div id="buying-power-indicator" class="d-none">
+        <span id="bp-amount"></span>
+        <span id="bp-reserved"></span>
+        <span id="bp-broker"></span>
+      </div>
       <div id="signal-tabs" class="d-none"></div>
     </div>
     <div id="growth-mode-banner" class="d-none"></div>
@@ -370,6 +374,9 @@ describe('top-recommendations source badges', () => {
       success: true,
       count: 1,
       generated_at: now,
+      cash_available_for_csp: 20000,
+      cash_reserved_for_csp: 10000,
+      broker_buying_power: 100000,
       signals: [{
         rank: 1,
         ticker: 'AAPL',
@@ -434,5 +441,8 @@ describe('top-recommendations source badges', () => {
     expect(sourceEl.textContent).toContain('Chain: yfinance');
     expect(sourceEl.textContent).toContain('IV: yfinance');
     expect(sourceEl.querySelectorAll('.badge').length).toBeGreaterThanOrEqual(4);
+    expect(document.querySelector('.csp-cash-pct')?.textContent).toBe('75.0%');
+    expect(document.getElementById('bp-amount')?.textContent).toBe('$20000.00');
+    expect(document.getElementById('bp-broker')?.textContent).toBe('$100000.00');
   });
 });

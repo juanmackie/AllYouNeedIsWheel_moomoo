@@ -823,9 +823,9 @@ class RecommendationEngine:
         - CALLs: Only if user has 100+ shares
         - PUTs: Only if user has sufficient cash (strike * 100)
 
-        Uses broker buying power as authoritative constraint:
-        - Broker buying power is NOT reduced by open short puts (broker already accounts for them)
-        - Local staging capacity = broker buying power - pending staged CSP collateral
+        Uses CSP cash as the affordability constraint:
+        - CSP cash is true cash not tied up by open short-put collateral
+        - Broker buying power is returned separately as account context
 
         Args:
             limit (int): Number of top signals to return (default: 5, max: 10)
@@ -961,7 +961,7 @@ class RecommendationEngine:
             ) if growth_cfg else 5000.0
             if cash_available_for_csp < min_csp_buying_power:
                 logger.info(
-                    "Skipping watchlist CSP scan: buying power %.2f < minimum %.2f",
+                    "Skipping watchlist CSP scan: CSP cash %.2f < minimum %.2f",
                     cash_available_for_csp,
                     min_csp_buying_power,
                 )
@@ -970,7 +970,7 @@ class RecommendationEngine:
                     'watchlist_csp_skipped_low_buying_power',
                     (
                         f'CSP scan skipped for {len(effective_watchlist)} watchlist tickers: '
-                        f'broker buying power (${cash_available_for_csp:.0f}) is below the minimum '
+                        f'CSP cash (${cash_available_for_csp:.0f}) is below the minimum '
                         f'${min_csp_buying_power:.0f} for Growth Mode CSP screening'
                     ),
                 ))

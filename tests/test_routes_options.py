@@ -1116,14 +1116,13 @@ class TestCashStatusCSPFields(unittest.TestCase):
         self.assertIn('available_cash', data)
         self.assertIn('broker_buying_power', data)
         self.assertIn('broker_buying_power_source', data)
-        # available_cash = max(50000, 55000) = 55000
-        self.assertEqual(data['available_cash'], 55000.0)
+        # available_cash is true cash; excess_liquidity remains broker buying power.
+        self.assertEqual(data['available_cash'], 50000.0)
         # cash_reserved = 1 * 150 * 100 = 15000
         self.assertEqual(data['cash_reserved_for_csp'], 15000.0)
-        # broker_buying_power = available_cash (NOT reduced by open short puts)
         self.assertEqual(data['broker_buying_power'], 55000.0)
-        # cash_available_for_csp = broker_buying_power (no subtraction)
-        self.assertEqual(data['cash_available_for_csp'], 55000.0)
+        self.assertEqual(data['broker_buying_power_source'], 'excess_liquidity')
+        self.assertEqual(data['cash_available_for_csp'], 35000.0)
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')

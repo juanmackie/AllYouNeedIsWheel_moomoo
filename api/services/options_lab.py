@@ -148,13 +148,13 @@ def _compute_max_contracts(strike: float, premium: float, option_type: str, port
     account_value = float(portfolio_context.get("account_value", 0) or 0)
     cash_balance = float(portfolio_context.get("cash_balance", 0) or 0)
     available_cash = float(portfolio_context.get("available_cash", cash_balance) or cash_balance)
-    broker_buying_power = float(portfolio_context.get("broker_buying_power", available_cash) or available_cash)
+    csp_cash = float(portfolio_context.get("cash_available_for_csp", available_cash) or available_cash)
 
     if option_type == "PUT":
         cash_req = strike * 100
         if cash_req <= 0:
             return {"by_cash": 0, "by_risk": 0, "recommended": 0}
-        by_cash = int(broker_buying_power // cash_req) if cash_req > 0 else 0
+        by_cash = int(csp_cash // cash_req) if cash_req > 0 else 0
         by_risk = max(1, int((account_value * 0.10) // cash_req)) if cash_req > 0 else 1
         return {
             "by_cash": max(by_cash, 0),

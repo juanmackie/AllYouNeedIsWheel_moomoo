@@ -809,8 +809,16 @@ def get_cash_status():
         option_positions = portfolio_service.get_positions('OPT') or []
         
         cash_balance = float(summary.get('cash_balance', summary.get('available_cash', 0)) or 0)
+        true_cash = float(summary.get('available_cash', summary.get('cash_balance', summary.get('cash_available', 0))) or 0)
+        if summary.get('buying_power') is not None:
+            broker_buying_power_source = 'buying_power'
+        elif summary.get('excess_liquidity') is not None:
+            broker_buying_power_source = 'excess_liquidity'
+        else:
+            broker_buying_power_source = 'available_cash'
+        broker_buying_power = float(summary.get('buying_power', summary.get('excess_liquidity', true_cash)) or 0)
         excess_liquidity = float(summary.get('excess_liquidity', 0) or 0)
-        available_cash = max(cash_balance, excess_liquidity)
+        available_cash = true_cash
         cash_reserved = 0.0
         open_puts = []
         
@@ -829,9 +837,8 @@ def get_cash_status():
                     'expiration': expiration, 'cash_required': round(cash_required, 2)
                 })
         
-        cash_available = max(0, cash_balance - cash_reserved)
-        cash_available_for_csp = max(0, available_cash)  # No subtraction â€” broker buying power is authoritative
-        broker_buying_power = available_cash
+        cash_available = max(0, available_cash - cash_reserved)
+        cash_available_for_csp = cash_available
         reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
         return success_response(attach_source_policy({
@@ -841,7 +848,7 @@ def get_cash_status():
             'cash_available_for_csp': round(cash_available_for_csp, 2),
             'cash_reserved_for_csp': round(cash_reserved, 2),
             'broker_buying_power': round(broker_buying_power, 2),
-            'broker_buying_power_source': 'available_cash',
+            'broker_buying_power_source': broker_buying_power_source,
             'available_cash': round(available_cash, 2),
             'excess_liquidity': round(excess_liquidity, 2),
             'reserve_enabled': reserve_enabled,

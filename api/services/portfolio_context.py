@@ -197,7 +197,7 @@ class PortfolioContext:
             stock_positions = portfolio_service.get_positions('STK') or []
             option_positions = portfolio_service.get_positions('OPT') or []
 
-            # Parse cash from first valid field: available_cash, cash_balance, cash_available, buying_power, excess_liquidity
+            # Keep true cash separate from margin/buying-power fields.
             true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
             margin_capacity, margin_source = _first_positive_number(summary, MARGIN_CAPACITY_FIELDS)
 
@@ -205,10 +205,8 @@ class PortfolioContext:
             context['account_value'] = float(summary.get('account_value', 0) or 0)
             context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
 
-            # Use max of available cash and excess liquidity (more accurate for CSP buying power)
             context['available_cash'] = true_cash
 
-            # Moomoo buying power is authoritative — broker already accounts for open positions
             context['broker_buying_power'] = margin_capacity if margin_capacity > 0 else true_cash
             context['broker_buying_power_source'] = margin_source if margin_capacity > 0 else true_cash_source
 

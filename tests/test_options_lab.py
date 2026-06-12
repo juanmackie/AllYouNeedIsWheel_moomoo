@@ -189,15 +189,16 @@ class TestComputeMaxContracts(unittest.TestCase):
         self.assertEqual(result["by_cash"], 0)
         self.assertEqual(result["recommended"], 0)
 
-    def test_put_uses_broker_buying_power(self):
+    def test_put_uses_csp_cash_not_broker_buying_power(self):
         ctx = {
             "account_value": 100000.0,
             "cash_balance": 50000.0,
             "available_cash": 50000.0,
+            "cash_available_for_csp": 20000.0,
             "broker_buying_power": 30000.0,
         }
         result = _compute_max_contracts(100.0, 250.0, "PUT", ctx)
-        self.assertEqual(result["by_cash"], 3)
+        self.assertEqual(result["by_cash"], 2)
 
     def test_put_recommended_is_min_of_cash_and_risk(self):
         ctx = {"account_value": 5000.0, "cash_balance": 50000.0, "available_cash": 50000.0}

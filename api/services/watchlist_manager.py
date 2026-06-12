@@ -45,14 +45,14 @@ class WatchlistManager:
 
         When growth_mode is enabled, uses growth-tuned screener parameters
         (higher min_iv_rank, smaller max_stocks) to reduce wasted scanning.
-        When portfolio_context is provided, computes max_price from buying power
+        When portfolio_context is provided, computes max_price from CSP cash
         to cap CSP underlyings.
 
         Args:
             growth_mode_config: Optional growth mode config dict. When provided
                                 and enabled, overrides screening_criteria values.
             portfolio_context: Optional portfolio context dict. When provided,
-                               computes max_price from broker buying power.
+                               computes max_price from CSP cash.
 
         Returns:
             List of ticker symbols
@@ -83,16 +83,16 @@ class WatchlistManager:
                 # Compute max_price from portfolio context
                 max_price = None
                 if portfolio_context:
-                    broker_buying_power = float(portfolio_context.get('broker_buying_power', 0) or 0)
-                    if broker_buying_power > 0:
-                        # Max price = broker_buying_power / 100 / (1 - max_otm_pct/100)
+                    csp_cash = float(portfolio_context.get('cash_available_for_csp', 0) or 0)
+                    if csp_cash > 0:
+                        # Max price = CSP cash / 100 / (1 - max_otm_pct/100)
                         # With 15% max OTM: strike = price * 0.85, cash = strike * 100
                         # So max_price = cash / 100 / 0.85
                         max_otm_pct = 15.0
                         if growth_mode_config:
                             sp = growth_mode_config.get('screener_profile', {})
                             max_otm_pct = float(sp.get('csp_max_otm_pct', 15) or 15)
-                        max_price = broker_buying_power / 100 / (1 - max_otm_pct / 100)
+                        max_price = csp_cash / 100 / (1 - max_otm_pct / 100)
 
                 dynamic = tvscreener.get_wheel_candidates(
                     min_iv_rank=min_iv_rank,
