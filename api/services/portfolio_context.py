@@ -241,21 +241,20 @@ class PortfolioContext:
             context['cash_reserved_for_csp'] = cash_reserved
             context['open_short_put_collateral'] = cash_reserved
 
-            # cash_available_for_csp = broker_buying_power (NOT reduced by open short puts)
-            # Broker buying power already accounts for open positions.
-            # Only pending staged CSP orders reduce staging capacity (handled at order-executor level).
-            context['cash_available_for_csp'] = max(0, context['broker_buying_power'])
+            context['cash_available_for_csp'] = max(0, context['available_cash'] - cash_reserved)
 
             # Diagnostics: expose raw summary fields for debugging
             context['_cash_diagnostics'] = {
-                'raw_summary_fields': {f: summary.get(f) for f in ['available_cash', 'cash_balance', 'cash_available', 'buying_power', 'excess_liquidity']},
+                'raw_summary_fields': {f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS]},
                 'available_cash': context['available_cash'],
+                'available_cash_source': true_cash_source,
                 'broker_buying_power': context['broker_buying_power'],
-                'broker_buying_power_source': source_field,
+                'broker_buying_power_source': context['broker_buying_power_source'],
                 'excess_liquidity': context['excess_liquidity'],
                 'open_short_put_collateral': cash_reserved,
                 'cash_reserved_for_csp': cash_reserved,
                 'cash_available_for_csp': context['cash_available_for_csp'],
+                'cash_available_for_csp_source': 'available_cash_minus_open_short_put_collateral',
             }
                         
         except Exception as exc:
