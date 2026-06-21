@@ -8,12 +8,11 @@ import json
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config is read
 import atexit
-from flask import render_template, request, redirect, url_for, jsonify, current_app
+from flask import render_template, request, redirect, url_for, current_app
 from api import create_app
 from core.logging_config import get_logger
 from db.database import OptionsDatabase
 from config import apply_env_overrides
-from api.services.iv_earnings_service import IVEarningsService
 from core.background_manager import BackgroundTaskManager
 from core.ticker_utils import earnings_underlying_ticker
 
@@ -30,6 +29,49 @@ def _resolve_local_path(path_value, base_dir):
     if os.path.isabs(path_value):
         return path_value
     return os.path.join(base_dir, path_value)
+
+
+def _build_scheduler_earnings_ticker_provider(app):
+    def _provider():
+        from api import get_service
+        from api.services.watchlist_manager import WatchlistManager
+
+        tickers = set()
+
+        portfolio_service = get_service('portfolio')
+        positions = portfolio_service.get_positions() or []
+        for position in positions:
+            normalized = earnings_underlying_ticker(str(position.get('symbol', '') or '').strip())
+            if normalized:
+                tickers.add(normalized)
+
+        connection_config = app.config.get('connection_config', {})
+        watchlist_manager = WatchlistManager(connection_config)
+        growth_mode = connection_config.get('growth_mode', {})
+        for ticker in watchlist_manager.get_effective_watchlist(growth_mode_config=growth_mode) or []:
+            normalized = earnings_underlying_ticker(str(ticker).strip())
+            if normalized:
+                tickers.add(normalized)
+
+        return sorted(tickers)
+
+    return _provider
+
+
+def _build_scheduler_warm_cache_provider():
+    def _provider():
+        from api import get_service
+        return get_service('options')
+
+    return _provider
+
+
+def _build_scheduler_earnings_service_provider():
+    def _provider(db):
+        from api.services.iv_earnings_service import IVEarningsService
+        return IVEarningsService(db)
+
+    return _provider
 
 
 # Create Flask application with necessary configs
@@ -128,7 +170,13 @@ except Exception as e:
 # Start background scheduler (earnings updater)
 try:
     from core.scheduler import start_scheduler, stop_scheduler
-    started = start_scheduler(db=app.config.get('database'), app=app)
+    started = start_scheduler(
+        db=app.config.get('database'),
+        app=app,
+        earnings_ticker_provider=_build_scheduler_earnings_ticker_provider(app),
+        earnings_service_provider=_build_scheduler_earnings_service_provider(),
+        warm_cache_service_provider=_build_scheduler_warm_cache_provider(),
+    )
     if started:
         logger.info("Background scheduler started (this process owns the lock)")
     else:
@@ -173,102 +221,6 @@ def rollover():
     """
     logger.info("Rendering rollover page")
     return render_template('rollover.html')
-
-@app.route('/api/earnings/status')
-def earnings_status():
-    """
-    Get earnings updater status and cache statistics
-    """
-    db = current_app.config.get('database') or OptionsDatabase()
-    service = IVEarningsService(db)
-
-    from core.scheduler import get_scheduler_info
-    scheduler_info = get_scheduler_info()
-
-    return jsonify({
-        'status': 'running' if scheduler_info.get('running') else 'stopped',
-        'scheduler': scheduler_info,
-        'cache_stats': service.get_cache_stats(),
-    })
-
-@app.route('/api/earnings/update/<ticker>')
-def update_single_earnings(ticker):
-    """
-    Manually update earnings for a single ticker
-    """
-    db = current_app.config.get('database') or OptionsDatabase()
-    service = IVEarningsService(db)
-
-    success = service.update_earnings_data(ticker)
-    info = service.get_earnings_info(ticker)
-
-    return jsonify({
-        'success': success,
-        'ticker': ticker,
-        'earnings_info': info
-    })
-
-@app.route('/api/earnings/refresh', methods=['POST'])
-def refresh_all_earnings():
-    """
-    Trigger a global update for all active symbols in background
-    """
-    from api.services.portfolio_service import PortfolioService
-
-    db = current_app.config.get('database') or OptionsDatabase()
-    service = IVEarningsService(db)
-    portfolio = PortfolioService()
-
-    # Get all active items from positions + watchlist
-    positions = portfolio.get_positions() or []
-
-    all_tickers = set()
-    for p in positions:
-        normalized = earnings_underlying_ticker(str(p.get('symbol', '') or ''))
-        if normalized:
-            all_tickers.add(normalized)
-
-    try:
-        from api.services.watchlist_manager import WatchlistManager
-        connection_config = current_app.config.get('connection_config', {})
-        wm = WatchlistManager(connection_config)
-        growth_mode = connection_config.get('growth_mode', {})
-        watchlist_tickers = [
-            earnings_underlying_ticker(t.strip())
-            for t in wm.get_effective_watchlist(growth_mode_config=growth_mode)
-            if t.strip()
-        ]
-        all_tickers.update(t for t in watchlist_tickers if t)
-    except Exception:
-        logger.warning("Could not load watchlist tickers for earnings update", exc_info=True)
-
-    if not all_tickers:
-        return jsonify({'success': True, 'updated': 0, 'message': 'No active symbols found'})
-
-    # Update in foreground for the API response, or just trigger?
-    # For better UX, let's update a few or just start a thread.
-    # Actually, we can just run it synchronously if it's not too many.
-    result = service.batch_update_earnings(list(all_tickers))
-
-    return jsonify({
-        'success': True,
-        'updated_count': result['successful'],
-        'failed_count': result['failed'],
-        'total_attempted': len(all_tickers)
-    })
-
-@app.route('/api/earnings/pending')
-def get_pending_earnings():
-    """
-    Get all tickers with pending earnings in the next 7 days
-    """
-    db = current_app.config.get('database') or OptionsDatabase()
-    pending = db.get_pending_earnings(days_threshold=7)
-
-    return jsonify({
-        'count': len(pending),
-        'tickers': pending
-    })
 
 @app.errorhandler(404)
 def page_not_found(e):

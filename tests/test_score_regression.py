@@ -158,6 +158,7 @@ class TestScoreRegression(unittest.TestCase):
         self.assertIsNotNone(result)
         # Delta should have been computed (non-zero)
         self.assertGreater(abs(result.delta), 0.001)
+        self.assertEqual(result.greeks_source, 'Black-Scholes computed')
 
     def test_missing_iv_blocks_contract(self):
         """Missing IV should not receive inflated IV-adjusted and EV scores."""

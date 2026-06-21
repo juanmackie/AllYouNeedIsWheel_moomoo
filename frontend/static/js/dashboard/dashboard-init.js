@@ -3,7 +3,7 @@
  * Split from dashboard.js (F042)
  */
 import { loadPortfolioData } from './account.js';
-import { initializeTopRecommendations } from './top-recommendations.js';
+import { initializeTopRecommendations, isBackendGenerating } from './top-recommendations.js';
 import { initializeLLMAdvisor } from './llm-advisor.js';
 import { formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api.js';
@@ -11,16 +11,16 @@ import { updateCashReserveStatus } from './dashboard-cash.js';
 import { updateWeeklyEarningsSummary } from './dashboard-regime.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
 import { loadMacroRegime } from './macro.js';
-import { loadVixRegime, loadTechnicalRegime } from './dashboard-regime.js';
+import { loadVixRegime } from './dashboard-regime.js';
 
-let diagnosticsLoaded = false;
+let signalPanelsInitialized = false;
 
 /**
  * Initialize the dashboard with progressive loading
  * Wave 1: Account data (critical path)
  * Wave 2: Positions & orders
  * Wave 3: Signals (fast path)
- * Wave Lazy: Heavy diagnostics (only when user opens #research-diagnostics)
+ * Wave 4: Visible signal panels (directly rendered on dashboard)
  */
 export async function initializeDashboard() {
     try {
@@ -54,12 +54,13 @@ export async function initializeDashboard() {
             await Promise.all([
                 loadMacroRegime(),
                 loadVixRegime(),
-                loadTechnicalRegime(),
                 updateWeeklyEarningsSummary(),
                 updateIdleCashPanel()
             ]);
         } catch (error) { console.error('Wave 3 error:', error); }
         hideWaveLoading('wave3');
+
+        initializeSignalPanels();
 
         initSizingModeSelector();
 
@@ -70,9 +71,6 @@ export async function initializeDashboard() {
         }
 
         initializeLLMAdvisor();
-
-        // Diagnostics are lazily loaded when the user opens the section
-        initLazyDiagnostics();
 
         const refreshAllBtn = document.getElementById('refresh-all-btn');
         if (refreshAllBtn && !refreshAllBtn.dataset.bound) {
@@ -88,11 +86,23 @@ export async function initializeDashboard() {
 }
 
 /**
- * Lazy-load diagnostics when user opens #research-diagnostics
+ * Load the signal panels rendered directly on the dashboard.
+ * These were previously hidden behind the removed research diagnostics lazy gate.
  */
-async function loadDiagnosticsOnce() {
-    if (diagnosticsLoaded) return;
-    diagnosticsLoaded = true;
+async function initializeSignalPanels() {
+    if (signalPanelsInitialized) return;
+    signalPanelsInitialized = true;
+
+    import('./weekly-income.js').then(mod => {
+        mod.renderWeeklyIncome();
+        const refreshBtn = document.getElementById('refresh-filled-orders');
+        if (refreshBtn && !refreshBtn.dataset.bound) {
+            refreshBtn.dataset.bound = 'true';
+            refreshBtn.addEventListener('click', () => mod.renderWeeklyIncome());
+        }
+    }).catch(err => {
+        console.error('Failed to load weekly income:', err);
+    });
 
     import('./earnings-vol-signals.js').then(mod => {
         mod.initializeEarningsVolSignals();
@@ -100,49 +110,41 @@ async function loadDiagnosticsOnce() {
         console.error('Failed to load earnings-vol-signals:', err);
     });
 
-    import('./weekly-income.js').then(mod => {
-        mod.renderWeeklyIncome();
-        const refreshBtn = document.getElementById('refresh-filled-orders');
-        if (refreshBtn) {
-            refreshBtn.removeEventListener('click', mod.renderWeeklyIncome);
-            refreshBtn.addEventListener('click', () => mod.renderWeeklyIncome());
+    import('./options-table.js').then(mod => {
+        const loadBtn = document.getElementById('load-options-scanner');
+        if (loadBtn && !loadBtn.dataset.bound) {
+            loadBtn.dataset.bound = 'true';
+            loadBtn.addEventListener('click', () => {
+                if (isBackendGenerating()) {
+                    const prev = loadBtn.textContent;
+                    loadBtn.disabled = true;
+                    loadBtn.textContent = 'Growth signals loading…';
+                    setTimeout(() => {
+                        loadBtn.disabled = false;
+                        loadBtn.textContent = prev;
+                    }, 3000);
+                    return;
+                }
+                loadBtn.disabled = true;
+                loadBtn.textContent = 'Loading scanner...';
+                mod.loadTickers().catch(err => {
+                    loadBtn.disabled = false;
+                    loadBtn.textContent = 'Load scanner';
+                    console.error('Options table error:', err);
+                });
+            });
         }
-    }).catch(err => {
-        console.error('Failed to load weekly-income:', err);
-    });
-
-    import('./options-table.js').then(async mod => {
-        await mod.loadTickers();
     }).catch(err => {
         console.error('Options table error:', err);
     });
 
-    window.setTimeout(() => {
-        import('./catalyst-watch.js').then(mod => {
-            mod.initializeCatalystWatch().catch(err => {
-                console.error('Catalyst watch error:', err);
-            });
-        }).catch(err => {
+    import('./catalyst-watch.js').then(mod => {
+        mod.initializeCatalystWatch().catch(err => {
             console.error('Catalyst watch error:', err);
         });
-    }, 1500);
-}
-
-function initLazyDiagnostics() {
-    const details = document.getElementById('research-diagnostics');
-    if (!details) return;
-
-    if (!details.dataset.bound) {
-        details.dataset.bound = 'true';
-        details.addEventListener('toggle', () => {
-            if (!details.open || diagnosticsLoaded) return;
-            loadDiagnosticsOnce();
-        });
-    }
-
-    if (details.open) {
-        loadDiagnosticsOnce();
-    }
+    }).catch(err => {
+        console.error('Catalyst watch error:', err);
+    });
 }
 
 function showWaveLoading(waveId, message) {

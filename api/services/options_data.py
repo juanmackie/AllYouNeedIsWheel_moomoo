@@ -7,9 +7,10 @@ import logging
 import time
 from datetime import datetime
 import pandas as pd
+from core.scoring_factors import premium_velocity_per_day
 from core.wheel_decision import score_contract
 from core.growth_mode import should_block_for_data_quality
-from core.utils import get_closest_friday
+from core.utils import get_closest_friday, is_market_open
 from api.services.utils import (
     clean_yfinance_ticker,
     get_yfinance_history,
@@ -267,7 +268,13 @@ class OptionsDataService:
 
         # -- Enrich option with yfinance IV and computed BS Greeks --------------
         from core.greeks import prepare_option_for_scoring
-        iv, _ = prepare_option_for_scoring(option, ticker, stock_price, self._yfinance_iv_cache)
+        iv, _ = prepare_option_for_scoring(
+            option,
+            ticker,
+            stock_price,
+            self._yfinance_iv_cache,
+            chain_fetcher=get_yfinance_option_chain,
+        )
 
         # -- Update IV context with enriched IV --------------------------------
         if iv > 0:
@@ -558,6 +565,27 @@ class OptionsDataService:
                 target_strike = stock_price * (1 + (otm_percentage / 100)) if side == 'CALL' else stock_price * (1 - (otm_percentage / 100))
                 for expiry in expirations:
                     try:
+                        use_after_hours_cache = self._get_config().get('broker_cache_after_hours', True) if self._get_config() else True
+                        if not is_market_open() and use_after_hours_cache:
+                            snapshot = self.db.get_latest_option_chain(
+                                ticker, 'C' if side == 'CALL' else 'P', max_age_hours=168
+                            )
+                            if snapshot and snapshot.get('chain_data'):
+                                chain = snapshot['chain_data']
+                                chain = _annotate_chain_sources(
+                                    chain,
+                                    price_source=stock_price_source,
+                                    chain_source=snapshot.get('source', 'persisted'),
+                                    iv_source=snapshot.get('source', 'persisted'),
+                                    from_yfinance=snapshot.get('source') == 'yfinance',
+                                )
+                                chain['quote_timestamp'] = snapshot.get('as_of', '')
+                                chain['data_source'] = 'persisted'
+                                for opt in chain.get('options', []):
+                                    opt['quote_timestamp'] = snapshot.get('as_of', '')
+                                options_chains.append(chain)
+                                continue
+
                         chain = conn.get_option_chain(
                             ticker,
                             expiry,
@@ -573,6 +601,13 @@ class OptionsDataService:
                                 from_yfinance=False,
                             )
                             options_chains.append(chain)
+                            try:
+                                self.db.save_option_chain_snapshot(
+                                    ticker, expiry, 'C' if side == 'CALL' else 'P',
+                                    stock_price, chain, source='broker',
+                                )
+                            except Exception:
+                                logger.debug("Could not persist broker chain snapshot", exc_info=True)
                         else:
                             logger.debug(f"Moomoo returned no options for {ticker} {expiry} {side}, trying yfinance fallback")
                             yf_chain = self._get_yfinance_option_chain(ticker, expiry, 'C' if side == 'CALL' else 'P')
@@ -585,6 +620,13 @@ class OptionsDataService:
                                     from_yfinance=True,
                                 )
                                 options_chains.append(yf_chain)
+                                try:
+                                    self.db.save_option_chain_snapshot(
+                                        ticker, expiry, 'C' if side == 'CALL' else 'P',
+                                        stock_price, yf_chain, source='yfinance',
+                                    )
+                                except Exception:
+                                    logger.debug("Could not persist yfinance chain snapshot", exc_info=True)
                     except Exception as chain_exc:
                         logger.exception(f"Error getting option chain for {ticker} {expiry} {side}: {chain_exc}")
 
@@ -670,9 +712,9 @@ class OptionsDataService:
 
                 candidates.sort(
                     key=lambda item: (
-                        item.get('wheel_decision', {}).get('contract_score', 0),
+                        premium_velocity_per_day(item.get('premium_per_contract', 0), item.get('dte', 0)),
                         item.get('annualized_return', 0),
-                        item.get('premium_per_contract', 0)
+                        item.get('wheel_decision', {}).get('contract_score', 0),
                     ),
                     reverse=True
                 )

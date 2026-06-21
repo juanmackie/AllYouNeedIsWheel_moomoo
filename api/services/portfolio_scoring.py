@@ -8,6 +8,7 @@ the roll-pressure and alerts endpoints.
 from datetime import datetime
 
 from core.position_utils import parse_moomoo_symbol, parse_position_qty
+from core.ticker_utils import earnings_underlying_ticker
 
 from core.logging_config import get_logger
 logger = get_logger('api.services.portfolio_scoring', 'api')
@@ -54,6 +55,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
     from api.services.macro_regime_service import get_macro_service
 
     ticker = parse_moomoo_symbol(pos.get('symbol', ''))
+    underlying = earnings_underlying_ticker(ticker)
     option_type = str(pos.get('option_type', '') or '').upper()
     strike = float(pos.get('strike', 0) or 0)
     expiration = str(pos.get('expiration', '') or '')
@@ -63,7 +65,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
         return None
 
     try:
-        current_price = conn.get_stock_price(ticker)
+        current_price = conn.get_stock_price(underlying)
         if current_price is None or current_price <= 0:
             return None
     except Exception:

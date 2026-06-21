@@ -58,6 +58,29 @@ def test_blocks_signal_when_front_iv_is_not_elevated():
     assert "Front IV is not elevated over back IV" in signal.blockers
 
 
+def test_wider_but_still_tradable_spread_stays_researchable():
+    signal = classify_earnings_vol_signal({
+        "ticker": "AMD",
+        "earnings_date": "2026-05-12",
+        "days_to_earnings": 2,
+        "front_iv": 0.72,
+        "back_iv": 0.48,
+        "rv30": 0.38,
+        "avg_volume_30d": 8_000_000,
+        "spread_pct": 22.0,
+        "open_interest": 2_000,
+        "option_volume": 500,
+        "front_expiration": "2026-05-15",
+        "back_expiration": "2026-06-05",
+        "atm_strike": 185.0,
+        "estimated_calendar_debit": 2.50,
+        "max_risk_per_contract": 2.50,
+    })
+
+    assert signal.signal in {"GREEN", "YELLOW", "WATCH"}
+    assert "Options spread is too wide" not in signal.blockers
+
+
 def test_blocks_signal_when_earnings_date_is_missing():
     signal = classify_earnings_vol_signal({
         "ticker": "NVDA",

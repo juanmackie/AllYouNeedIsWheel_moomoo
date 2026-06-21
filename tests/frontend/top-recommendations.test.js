@@ -18,6 +18,7 @@ vi.mock('../../frontend/static/js/dashboard/options-table-rendering.js', () => (
 }));
 
 vi.mock('../../frontend/static/js/utils/formatters.js', () => ({
+  escapeHtml: vi.fn((value) => String(value ?? '')),
   formatCurrency: vi.fn((v) => `$${v.toFixed(2)}`),
   formatPercent: vi.fn((v) => `${v.toFixed(1)}%`),
 }));
@@ -44,8 +45,22 @@ function setupDOM() {
         <span id="bp-amount"></span>
         <span id="bp-reserved"></span>
         <span id="bp-broker"></span>
+        <div id="bp-diagnostics"></div>
       </div>
       <div id="signal-tabs" class="d-none"></div>
+      <label
+        class="best-plays-toggle"
+        data-bs-toggle="tooltip"
+        data-bs-placement="top"
+        title="Reloads rankings without CSP cash or broker buying-power filters. Over-budget CSPs are marked Research only; no trades are placed."
+      >
+        <input id="ignore-cash-limits-toggle" type="checkbox" aria-describedby="best-plays-help">
+        <span>Best plays</span>
+        <i class="bi bi-info-circle best-plays-toggle__info" aria-hidden="true"></i>
+      </label>
+      <div id="best-plays-help" class="best-plays-help d-none"></div>
+      <button id="research-long-options"></button>
+      <button id="refresh-top-recommendations"></button>
     </div>
     <div id="growth-mode-banner" class="d-none"></div>
     <div id="growth-mode-objective"></div>
@@ -65,11 +80,13 @@ function setupDOM() {
         <span class="strike-price"></span>
         <span class="expiration-date"></span>
         <span class="dte-badge"></span>
+        <span class="premium-velocity"></span>
         <span class="premium-amount"></span>
         <span class="annualized-return"></span>
         <span class="score-badge"></span>
         <span class="confidence-badge"></span>
         <span class="underlying-quality-badge"></span>
+        <span class="research-only-badge"></span>
         <span class="signal-data-source"></span>
         <span class="recommendation-warnings"></span>
         <span class="otm-pct"></span>
@@ -139,15 +156,178 @@ describe('top-recommendations empty state', () => {
 
     await new Promise(r => setTimeout(r, 50));
 
-    expect(fetchTopRecommendations).toHaveBeenCalledWith(10, false);
+    expect(fetchTopRecommendations).toHaveBeenCalledWith(3, false, true, false, null);
     const emptyCall = StateModel.showEmpty.mock.calls.find(c => c[0] === 'top-recommendations-state');
     expect(emptyCall).toBeDefined();
     const message = emptyCall[1];
-    expect(message).toContain('No signals available');
+    expect(message).toContain('No growth signals available');
     expect(message).toContain('Try refresh or adjust criteria');
     expect(message).not.toContain('market open');
     expect(message).not.toContain('trading day');
     expect(message).not.toContain('Check back after');
+  });
+
+  it('loads research calls/puts on demand when the research button is clicked', async () => {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      success: true,
+      signals: [],
+      count: 0,
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    document.getElementById('research-long-options').click();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(fetchTopRecommendations).toHaveBeenCalledWith(3, true, true, false, null);
+  });
+
+  it('loads best plays without cash limits when the toggle is enabled', async () => {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      success: true,
+      signals: [],
+      count: 0,
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const toggle = document.getElementById('ignore-cash-limits-toggle');
+    expect(toggle.checked).toBe(false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(fetchTopRecommendations).toHaveBeenLastCalledWith(3, true, true, true, null);
+    expect(document.getElementById('best-plays-help').classList.contains('d-none')).toBe(false);
+    expect(document.getElementById('top-recs-desc').textContent).toContain('2-25% OTM');
+  });
+
+  it('queues best plays reload when toggled during an in-flight scan', async () => {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    let resolveInitial;
+    fetchTopRecommendations
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveInitial = resolve;
+      }))
+      .mockResolvedValueOnce({
+        success: true,
+        signals: [],
+        count: 0,
+        generated_at: '2026-05-24T12:00:01',
+        ignore_cash_limits: true,
+      });
+
+    initializeTopRecommendations();
+    await vi.waitFor(() => {
+      expect(fetchTopRecommendations).toHaveBeenCalledTimes(1);
+    });
+
+    const toggle = document.getElementById('ignore-cash-limits-toggle');
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+
+    expect(fetchTopRecommendations).toHaveBeenCalledTimes(1);
+    expect(document.getElementById('best-plays-help').textContent).toContain('queued');
+
+    resolveInitial({
+      success: true,
+      signals: [],
+      count: 0,
+      generated_at: '2026-05-24T12:00:00',
+      ignore_cash_limits: false,
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchTopRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    expect(fetchTopRecommendations).toHaveBeenLastCalledWith(3, true, true, true, null);
+    await vi.waitFor(() => {
+      expect(document.getElementById('best-plays-help').textContent).toContain('active');
+    });
+  });
+
+  it('adds tooltip affordance to the best plays toggle', () => {
+    const toggleLabel = document.querySelector('.best-plays-toggle');
+    const toggle = document.getElementById('ignore-cash-limits-toggle');
+
+    expect(toggleLabel.dataset.bsToggle).toBe('tooltip');
+    expect(toggleLabel.getAttribute('title')).toContain('without CSP cash');
+    expect(toggle.getAttribute('aria-describedby')).toBe('best-plays-help');
+  });
+
+  it('shows dominant blocker and cash diagnostics when no signals surface', async () => {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      success: true,
+      signals: [],
+      count: 0,
+      generated_at: '2026-05-24T12:00:00',
+      cash_available_for_csp: 0,
+      blocked_reason_counts: {
+        cash_fit: 8,
+        low_premium: 2,
+      },
+      cash_diagnostics: {
+        cash_available_for_csp_source: 'available_cash_minus_open_short_put_collateral',
+        raw_summary_fields: {
+          available_cash: 0,
+          usd_net_cash_power: 25000,
+        },
+      },
+    });
+
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const emptyCall = StateModel.showEmpty.mock.calls.find(c => c[0] === 'top-recommendations-state');
+    expect(emptyCall).toBeDefined();
+    const message = emptyCall[1];
+    expect(message).toContain('Dominant blocker: cash fit (8)');
+    expect(message).toContain('CSP cash $0.00');
+    expect(message).toContain('source available_cash_minus_open_short_put_collateral');
+    expect(message).toContain('available_cash=$0.00');
+    expect(message).toContain('usd_net_cash_power=$25000.00');
   });
 });
 
@@ -260,7 +440,7 @@ describe('top-recommendations generating state', () => {
 
     const generatingNotice = document.querySelector('[data-generating-notice="true"]');
     expect(generatingNotice).toBeTruthy();
-    expect(generatingNotice.textContent).toContain('Fresh signals are being computed');
+    expect(generatingNotice.textContent).toContain('Fresh growth signals are being computed');
 
     expect(consoleDebugSpy).toHaveBeenCalled();
     expect(consoleWarnSpy).not.toHaveBeenCalled();
@@ -313,7 +493,7 @@ describe('top-recommendations unknown IV status', () => {
           ask: 2.10,
           mid_price: 2.05,
           annualized_return: 50.0,
-          score: 75.0,
+          score: 65.0,
           iv_rank: 50,
           iv_status: 'unknown',
           otm_pct: 5.0,
@@ -334,6 +514,11 @@ describe('top-recommendations unknown IV status', () => {
     const ivRankEl = cards[0].querySelector('.iv-rank');
     expect(ivRankEl.textContent).toBe('IV unavailable');
     expect(ivRankEl.classList.contains('text-muted')).toBe(true);
+    // Regression: score 75 maps to multi-token 'bg-warning text-dark'; both
+    // tokens must be applied (classList.add chokes on the space, addClassTokens does not).
+    const scoreBadgeEl = cards[0].querySelector('.score-badge');
+    expect(scoreBadgeEl.classList.contains('bg-warning')).toBe(true);
+    expect(scoreBadgeEl.classList.contains('text-dark')).toBe(true);
     expect(cards[0].querySelectorAll('.recommendation-detail-row').length).toBe(4);
     expect(cards[0].querySelector('.csp-details')?.classList.contains('d-none')).toBe(false);
     expect(cards[0].querySelector('.cc-details')?.classList.contains('d-none')).toBe(true);
@@ -377,6 +562,16 @@ describe('top-recommendations source badges', () => {
       cash_available_for_csp: 20000,
       cash_reserved_for_csp: 10000,
       broker_buying_power: 100000,
+      cash_diagnostics: {
+        available_cash_source: 'usd_net_cash_power',
+        cash_available_for_csp_source: 'available_cash_minus_open_short_put_collateral',
+        raw_summary_fields: {
+          us_avl_withdrawal_cash: 0,
+          us_cash: 40000,
+          usd_net_cash_power: 25000,
+          cash: 0,
+        },
+      },
       signals: [{
         rank: 1,
         ticker: 'AAPL',
@@ -426,7 +621,7 @@ describe('top-recommendations source badges', () => {
         confidence: 74,
         quote_quality: 'tradable',
         blocked_reason_codes: [],
-        research_only: false,
+        research_only: true,
       }],
       blocked_signals: [],
     });
@@ -441,8 +636,13 @@ describe('top-recommendations source badges', () => {
     expect(sourceEl.textContent).toContain('Chain: yfinance');
     expect(sourceEl.textContent).toContain('IV: yfinance');
     expect(sourceEl.querySelectorAll('.badge').length).toBeGreaterThanOrEqual(4);
+    expect(document.querySelector('.csp-cash-required')?.textContent).toBe('$15000.00');
     expect(document.querySelector('.csp-cash-pct')?.textContent).toBe('75.0%');
     expect(document.getElementById('bp-amount')?.textContent).toBe('$20000.00');
     expect(document.getElementById('bp-broker')?.textContent).toBe('$100000.00');
+    expect(document.getElementById('bp-diagnostics')?.textContent).toContain('available cash source: usd_net_cash_power');
+    expect(document.getElementById('bp-diagnostics')?.textContent).toContain('raw: us_cash=$40000.00, usd_net_cash_power=$25000.00');
+    expect(document.querySelector('.research-only-badge')?.textContent).toBe('Research only');
+    expect(document.querySelector('.research-only-badge')?.classList.contains('d-none')).toBe(false);
   });
 });

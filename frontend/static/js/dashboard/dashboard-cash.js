@@ -3,7 +3,7 @@
  * Split from dashboard.js (F042)
  */
 import { fetchWeeklyOptionIncome } from './api.js';
-import { formatCurrency } from '../utils/formatters.js';
+import { escapeHtml, formatCurrency } from '../utils/formatters.js';
 
 export async function updateCashReserveStatus() {
     try {
@@ -26,7 +26,7 @@ export async function updateCashReserveStatus() {
         const list = document.getElementById('open-puts-list');
         if (details && list && data.open_puts && data.open_puts.length > 0) {
             list.innerHTML = data.open_puts.map(put =>
-                `<div>${put.ticker} ${put.strike}P ${put.expiration.slice(4,6)}/${put.expiration.slice(6)} (${put.contracts} contract${put.contracts > 1 ? 's' : ''})</div>`
+                `<div>${escapeHtml(put.ticker)} ${escapeHtml(put.strike)}P ${escapeHtml(put.expiration.slice(4, 6))}/${escapeHtml(put.expiration.slice(6))} (${escapeHtml(put.contracts)} contract${put.contracts > 1 ? 's' : ''})</div>`
             ).join('');
             details.style.display = 'block';
         } else if (details) { details.style.display = 'none'; }

@@ -17,7 +17,7 @@ import { initializeDashboard } from './dashboard-init.js';
 
 export { initializeDashboard };
 export { updateCashReserveStatus, updateIdleCashPanel } from './dashboard-cash.js';
-export { loadTechnicalRegime, loadLockedTickers, loadVixRegime, updateWeeklyEarningsSummary } from './dashboard-regime.js';
+export { loadLockedTickers, loadVixRegime, updateWeeklyEarningsSummary } from './dashboard-regime.js';
 
 export let weeklyIncomeData = null;
 

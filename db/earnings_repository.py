@@ -21,14 +21,25 @@ class EarningsRepository:
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
                 cursor.execute('''
-                    INSERT OR REPLACE INTO earnings_calendar
+                    INSERT INTO earnings_calendar
                     (ticker, earnings_date, last_updated, fetch_status, error_message,
                      time_of_day, fiscal_date_ending, estimate, currency, earnings_source)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(ticker) DO UPDATE SET
+                        earnings_date = excluded.earnings_date,
+                        last_updated = excluded.last_updated,
+                        fetch_status = excluded.fetch_status,
+                        error_message = excluded.error_message,
+                        time_of_day = excluded.time_of_day,
+                        fiscal_date_ending = excluded.fiscal_date_ending,
+                        estimate = excluded.estimate,
+                        currency = excluded.currency,
+                        earnings_source = excluded.earnings_source
                 ''', (ticker, earnings_date, timestamp, fetch_status, error_message,
                       time_of_day, fiscal_date_ending, estimate, currency, earnings_source))
 
                 conn.commit()
+                logger.info("Saved earnings date for %s: %s (status=%s)", ticker, earnings_date, fetch_status)
                 return True
         except Exception as e:
             logger.error(f"Error saving earnings date for {ticker}: {str(e)}")
@@ -56,7 +67,12 @@ class EarningsRepository:
             with pooled_connection(self.db_path, row_factory=sqlite3.Row) as conn:
                 cursor = conn.cursor()
 
-                cursor.execute('SELECT * FROM earnings_calendar WHERE ticker = ?', (ticker,))
+                cursor.execute('''
+                    SELECT * FROM earnings_calendar
+                    WHERE ticker = ?
+                    ORDER BY datetime(last_updated) DESC, id DESC
+                    LIMIT 1
+                ''', (ticker,))
                 row = cursor.fetchone()
 
                 return dict(row) if row else None

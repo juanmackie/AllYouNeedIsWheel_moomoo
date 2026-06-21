@@ -13,6 +13,7 @@ import {
   calculatePremium,
   calculateOTMPercentage,
   calculateRecommendedPutQuantity,
+  getPremiumPerContract,
 } from '../../frontend/static/js/dashboard/options-table-calc.js';
 
 describe('options-table-calc', () => {
@@ -35,6 +36,20 @@ describe('options-table-calc', () => {
 
     it('returns 0.05 fallback when all are zero', () => {
       expect(calculatePremium(0, 0, 0)).toBe(0.05);
+    });
+  });
+
+  describe('getPremiumPerContract', () => {
+    it('uses authoritative premium_per_contract when present', () => {
+      expect(getPremiumPerContract({ premium_per_contract: 280.5, mid_price: 2.1 })).toBe(280.5);
+    });
+
+    it('uses mid_price when premium_per_contract is unavailable', () => {
+      expect(getPremiumPerContract({ mid_price: 2.805 })).toBe(280.5);
+    });
+
+    it('returns null for one-sided quotes without vetted premium', () => {
+      expect(getPremiumPerContract({ bid: 0, ask: 2.8, last: 2.7 })).toBeNull();
     });
   });
 

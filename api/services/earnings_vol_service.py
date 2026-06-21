@@ -9,6 +9,7 @@ import logging
 import math
 import time
 from datetime import datetime
+from collections import Counter
 from typing import Iterable
 
 from api.services.utils import clean_yfinance_ticker
@@ -48,6 +49,11 @@ class EarningsVolSignalService:
         signal_rank = {"GREEN": 0, "YELLOW": 1, "WATCH": 2, "AVOID": 3}
         signals.sort(key=lambda item: (signal_rank.get(item.get("signal"), 9), -(item.get("score") or 0)))
 
+        blocker_counts = Counter()
+        for signal in signals:
+            for blocker in signal.get("blockers", []) or []:
+                blocker_counts[str(blocker)] += 1
+
         return {
             "success": True,
             "generated_at": datetime.now().isoformat(),
@@ -55,6 +61,7 @@ class EarningsVolSignalService:
             "signals": signals[:limit],
             "scanned": len(scan_tickers),
             "errors": errors,
+            "blocker_counts": dict(blocker_counts.most_common()),
             "read_only": True,
         }
 

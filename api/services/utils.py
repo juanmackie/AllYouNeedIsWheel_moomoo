@@ -133,11 +133,11 @@ class _SharedYFinanceBudget:
     _limiter = RateLimiter(
         max_requests_per_window=30,
         rate_limit_window=60,
-        burst_threshold=5,
-        burst_window=10,
+        burst_threshold=8,
+        burst_window=15,
     )
     _limiter._min_request_spacing = 1.0
-    _history_cache = make_ttl_cache(maxsize=256, ttl=60)
+    _history_cache = make_ttl_cache(maxsize=256, ttl=1800)
     _options_cache = make_ttl_cache(maxsize=256, ttl=300)
     _chain_cache = make_ttl_cache(maxsize=512, ttl=300)
 

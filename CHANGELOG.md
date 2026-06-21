@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+---
+
+## [3.0.0] - 2026-06-17
+
+### Changed — Application Purpose (Intent Refinement)
+
+The application's core purpose was re-derived via structured intent extraction (`interview-me` skill). What was originally a broad Wheel Strategy signals dashboard with multi-factor scoring, macro regime detection, catalyst flow, and broad-market screening is now a **focused premium velocity scanner** scoped to the user's watchlist.
+
+Key changes:
+- **Premium velocity (premium / DTE)** is now the primary ranking axis. Multi-factor scoring qualifies but does not rank.
+- **Scan scope is the user's watchlist only.** Broad-market screening, social sentiment, and ticker discovery are out of scope for the core scan path.
+- **Top 3 shortlist** replaces a flat list of maybes. The app surfaces the highest-conviction plays, not everything that qualifies.
+- **Runtime defaults** now favor the static watchlist (`watchlist_mode=static`) unless an operator explicitly opts into dynamic/hybrid screening.
+- **All secondary features** (FRED macro regime, Ape Wisdom catalyst expansion, LLM advisor, dynamic TradingView screening) are de-prioritized relative to the core scan path. They remain in the codebase but are not the focus.
+- The binding constraint is **free-tier OpenD API rate limits**. Everything is scoped to work within that bottleneck.
+
+### Added
+- `docs/intent/application-purpose.md` — confirmed intent statement for downstream consumers (dev team, future agents)
+
+### Documentation
+- `AGENTS.md` — Purpose, project-wide rules (premium velocity primacy, watchlist scope)
+- `OVERARCHING GOAL.txt` — Refined to match the narrowed, watchlist-centric framing
+- `README.md` — Updated header, description, and feature list to reflect premium velocity focus
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
@@ -9,17 +33,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [2.3.0] - 2026-05-31
 
 ### Added
-- **Ape Wisdom Catalyst Expansion** â€” Catalyst Watch can now widen its scan universe with Ape Wisdom social momentum from `all-stocks`, then confirm candidates with broker-side options flow before surfacing signals.
-- **Social Context on Confirmed Signals** â€” Matching catalyst signals now include compact Ape Wisdom metadata (`rank`, `mentions`, `upvotes`, and momentum score) when social momentum was part of the scan.
-- **Catalyst Watch Docs** â€” README, API reference, scoring notes, test README, and local env examples now describe the social expansion path and its research-only guardrails.
+- **Ape Wisdom Catalyst Expansion** ? Catalyst Watch can now widen its scan universe with Ape Wisdom social momentum from `all-stocks`, then confirm candidates with broker-side options flow before surfacing signals.
+- **Social Context on Confirmed Signals** ? Matching catalyst signals now include compact Ape Wisdom metadata (`rank`, `mentions`, `upvotes`, and momentum score) when social momentum was part of the scan.
+- **Catalyst Watch Docs** ? README, API reference, scoring notes, test README, and local env examples now describe the social expansion path and its research-only guardrails.
 
 ### Fixed
-- **Ape Wisdom Cache Lifetime** â€” The social client now stays attached to `CatalystFlowService`, so the 5-minute cache actually survives repeated route calls instead of resetting every request.
-- **Failure Semantics** â€” Ape Wisdom fetch failures no longer poison the cache with an empty result; future requests keep retrying normally.
+- **Ape Wisdom Cache Lifetime** ? The social client now stays attached to `CatalystFlowService`, so the 5-minute cache actually survives repeated route calls instead of resetting every request.
+- **Failure Semantics** ? Ape Wisdom fetch failures no longer poison the cache with an empty result; future requests keep retrying normally.
 
 ### Changed
-- **Social Boost Ordering** â€” Ape Wisdom context is attached and the light score bump is applied before the final sort, so boosted signals are ranked correctly.
-- **Config Cleanup** â€” Reverted an unrelated flag flip while documenting the new `catalyst_flow.apewisdom` config block.
+- **Social Boost Ordering** ? Ape Wisdom context is attached and the light score bump is applied before the final sort, so boosted signals are ranked correctly.
+- **Config Cleanup** ? Reverted an unrelated flag flip while documenting the new `catalyst_flow.apewisdom` config block.
 
 ## [2.1.0] - 2026-05-24
 
@@ -184,4 +208,4 @@ This project follows [Semantic Versioning](https://semver.org/):
 - **MINOR** — New features, backward compatible
 - **PATCH** — Bug fixes, documentation updates
 
-Current version: **2.3.0** — Catalyst Watch Ape Wisdom expansion, social context, and docs updates
+Current version: **3.0.0** — Intent refinement: watchlist-focused premium velocity scanner

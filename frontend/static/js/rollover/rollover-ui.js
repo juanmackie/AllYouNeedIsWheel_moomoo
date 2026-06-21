@@ -1,8 +1,25 @@
 import { rolloverState } from './rollover-state.js';
 import { formatPercentage, formatDate, getBadgeColor, calculateMidPrice, calculateTargetStrike, roundStrikeToNearestHalf, parseExpirationDate, formatExpirationDisplay, addDaysToDate, formatDateToAPIfmt } from './rollover-calculator.js';
 import { formatCurrency } from '../utils/formatters.js';
-import { loadOptionPositions, loadPendingOrders, fetchRolloverSuggestions } from './rollover-api.js';
 import { fetchOptionExpirations } from '../dashboard/api.js';
+import { registerRolloverUiHandlers } from './rollover-api.js';
+
+async function getRolloverActions() {
+    return import('./rollover-api.js');
+}
+
+function getRolloverUnderlying(option) {
+    if (option?.underlying) return option.underlying;
+    const symbol = String(option?.symbol || option?.ticker || '').split(' ')[0].replace(/^[A-Z]{2}\./, '');
+    const match = symbol.match(/^([A-Z0-9-]+)\d{6}[CP]\d+$/);
+    return match ? match[1] : symbol;
+}
+
+function getRolloverQuantity(option) {
+    const raw = option?.position ?? option?.quantity ?? option?.contracts ?? 0;
+    const quantity = Math.abs(Number(raw));
+    return Number.isFinite(quantity) ? quantity : 0;
+}
 
 function populateOptionsTable(options, emptyMessage = 'No option positions found') {
     const tableBody = document.getElementById('option-positions-table-body');
@@ -123,7 +140,7 @@ function populateRolloverSuggestionsTable(suggestions) {
     const buyRow = document.createElement('tr');
     const buyAsk = st.ask || st.market_price;
     const buyBid = st.bid || 0;
-    const quantity = Math.abs(st.position);
+    const quantity = getRolloverQuantity(st);
 
     const delta = st.delta || 'N/A';
     const iv = st.implied_volatility || 'N/A';
@@ -165,7 +182,7 @@ function populateRolloverSuggestionsTable(suggestions) {
 
         sellRow.innerHTML = `
             <td>SELL</td>
-            <td>${st.symbol.split(' ')[0]}</td>
+            <td>${getRolloverUnderlying(st)}</td>
             <td>${st.optionType}</td>
             <td>${formatCurrency(suggestion.strike)}</td>
             <td>${suggestion.expiration}</td>
@@ -231,7 +248,7 @@ async function selectOptionToRoll(optionId) {
         rolloverState.selectedOption = rolloverState.optionsData[optionId];
         const st = rolloverState.selectedOption;
 
-        const ticker = st.symbol.split(' ')[0];
+        const ticker = getRolloverUnderlying(st);
 
         let currentOtmValue = 10;
         const existingOtmSelect = document.getElementById('otm-percentage');
@@ -305,7 +322,7 @@ async function selectOptionToRoll(optionId) {
         const buyAsk = st.ask || st.market_price;
         const buyBid = st.bid || 0;
         const buyLimitPricePerContract = buyAsk * 100;
-        const quantity = Math.abs(st.position);
+        const quantity = getRolloverQuantity(st);
 
         const delta = st.delta || 'N/A';
         const iv = st.implied_volatility || 'N/A';
@@ -404,6 +421,7 @@ async function selectOptionToRoll(optionId) {
                             rolloverState.selectedOption.targetExpiration = expValue;
                         }
 
+                        const { fetchRolloverSuggestions } = await getRolloverActions();
                         await fetchRolloverSuggestions();
                     }
                 });
@@ -416,6 +434,7 @@ async function selectOptionToRoll(optionId) {
 
 async function initializeRollover() {
     try {
+        const { loadOptionPositions } = await getRolloverActions();
         await loadOptionPositions();
 
         const optionsTable = document.getElementById('options-approaching-table');
@@ -438,6 +457,7 @@ async function initializeRollover() {
                     const currentSelectedOption = rolloverState.selectedOption ? JSON.parse(JSON.stringify(rolloverState.selectedOption)) : null;
                     const currentSuggestions = rolloverState.rolloverSuggestions ? JSON.parse(JSON.stringify(rolloverState.rolloverSuggestions)) : [];
 
+                    const { loadOptionPositions } = await getRolloverActions();
                     await loadOptionPositions();
 
                     if (currentSelectedOption && currentSuggestions && currentSuggestions.length > 0) {
@@ -484,6 +504,12 @@ async function initializeRollover() {
         console.error('Error initializing rollover page:', error);
     }
 }
+
+registerRolloverUiHandlers({
+    clearRolloverSuggestions,
+    populateOptionsTable,
+    populateRolloverSuggestionsTable,
+});
 
 export {
     populateOptionsTable,

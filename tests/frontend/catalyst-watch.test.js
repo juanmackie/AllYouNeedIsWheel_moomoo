@@ -19,6 +19,7 @@ vi.mock('../../frontend/static/js/dashboard/options-table-rendering.js', () => (
 }));
 
 vi.mock('../../frontend/static/js/utils/formatters.js', () => ({
+  escapeHtml: vi.fn((value) => String(value ?? '')),
   formatCurrency: vi.fn((v) => `$${v.toFixed(2)}`),
 }));
 
@@ -39,6 +40,7 @@ function setupDOM() {
         <span class="catalyst-card__signal"></span>
         <span class="catalyst-card__action"></span>
         <span class="catalyst-card__conflict-warning d-none"></span>
+        <span class="catalyst-card__interpretation"></span>
         <span class="catalyst-card__score-value"></span>
         <span class="catalyst-card__premium"></span>
         <span class="catalyst-card__fresh"></span>
@@ -285,6 +287,55 @@ describe('catalyst-watch', () => {
     const lastUpdatedEl = document.getElementById('catalyst-last-updated');
     expect(lastUpdatedEl.textContent).not.toContain('cached');
     expect(lastUpdatedEl.className).not.toContain('text-warning');
+  });
+
+  it('renders a plain-English interpretation with a research-only caveat', async () => {
+    const { loadCatalystSignals } = await import('../../frontend/static/js/dashboard/catalyst-watch.js');
+
+    const mockResponse = {
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        enabled: true,
+        signals: [{
+          ticker: 'AAPL',
+          direction: 'BULLISH',
+          signal: 'GREEN',
+          label: 'Priority lead',
+          score: 85,
+          premium_notional: 2_000_000,
+          fresh_volume_ratio: 10,
+          otm_pct: 5,
+          strike: 200,
+          cluster_expirations: ['20260619'],
+          is_hedged: false,
+          earnings_dte: 15,
+          action_bucket: 'CALL_RESEARCH',
+          action_label: 'Call Research',
+          action_reason: 'Bullish call flow — research long calls or call spreads. Research-only, not a trade signal.',
+          rationale: ['High premium volume'],
+          blockers: [],
+        }],
+        count: 1,
+        generated_at: '2026-05-24T12:00:00',
+        served_from_cache: false,
+        cache_age_seconds: null,
+        fresh_attempted: true,
+        fresh_succeeded: true,
+        last_successful_generated_at: '2026-05-24T12:00:00',
+        scanned: 5,
+        elapsed_seconds: 2.3,
+      }),
+    };
+
+    fetchWithTimeout.mockResolvedValue(mockResponse);
+
+    await loadCatalystSignals();
+
+    const interpretationEl = document.querySelector('.catalyst-card__interpretation');
+    expect(interpretationEl).toBeTruthy();
+    expect(interpretationEl.textContent).toContain('Research-only, not a trade signal');
+    expect(interpretationEl.textContent).toContain('call spreads');
   });
 
   it('renders social note when signal has social context', async () => {

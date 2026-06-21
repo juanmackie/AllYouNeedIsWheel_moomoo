@@ -5,7 +5,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger('db.schema')
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 
 def create_tables(conn):
@@ -61,7 +61,7 @@ def create_tables(conn):
             estimate REAL,
             currency TEXT,
             earnings_source TEXT,
-            UNIQUE(ticker, earnings_date)
+            UNIQUE(ticker)
         )
     ''')
 
@@ -153,6 +153,32 @@ def create_tables(conn):
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status
         ON playbook_hypotheses(status)
+    ''')
+
+    # ── Option Chain Snapshots (persistent cache for after-hours / broker-unavailable) ──
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS option_chain_snapshots (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker      TEXT NOT NULL,
+            expiration  TEXT NOT NULL,
+            right       TEXT NOT NULL,
+            stock_price REAL,
+            chain_json  TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'broker',
+            as_of       TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now')),
+            UNIQUE(ticker, expiration, right)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_ticker
+        ON option_chain_snapshots(ticker)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_as_of
+        ON option_chain_snapshots(as_of)
     ''')
 
 
@@ -255,6 +281,73 @@ def migrate_database(db_path):
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)")
                 logger.info("Migration: Added missing indexes for recommendations and earnings_calendar")
                 cursor.execute('PRAGMA user_version = 4')
+                conn.commit()
+
+            if current_version < 5:
+                # Enforce one earnings row per ticker and keep the freshest update.
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS earnings_calendar_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ticker TEXT NOT NULL,
+                        earnings_date TEXT,
+                        last_updated TEXT NOT NULL,
+                        fetch_status TEXT DEFAULT 'pending',
+                        error_message TEXT,
+                        time_of_day TEXT,
+                        fiscal_date_ending TEXT,
+                        estimate REAL,
+                        currency TEXT,
+                        earnings_source TEXT,
+                        UNIQUE(ticker)
+                    )
+                """)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO earnings_calendar_new (
+                        id, ticker, earnings_date, last_updated, fetch_status,
+                        error_message, time_of_day, fiscal_date_ending, estimate,
+                        currency, earnings_source
+                    )
+                    SELECT
+                        e.id, e.ticker, e.earnings_date, e.last_updated, e.fetch_status,
+                        e.error_message, e.time_of_day, e.fiscal_date_ending, e.estimate,
+                        e.currency, e.earnings_source
+                    FROM earnings_calendar e
+                    WHERE e.id = (
+                        SELECT e2.id
+                        FROM earnings_calendar e2
+                        WHERE e2.ticker = e.ticker
+                        ORDER BY datetime(e2.last_updated) DESC, e2.id DESC
+                        LIMIT 1
+                    )
+                """)
+                cursor.execute("DROP TABLE earnings_calendar")
+                cursor.execute("ALTER TABLE earnings_calendar_new RENAME TO earnings_calendar")
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_earnings_calendar_ticker ON earnings_calendar(ticker)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date ON earnings_calendar(ticker, earnings_date)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)")
+                logger.info("Migration: Deduplicated earnings_calendar by ticker")
+                cursor.execute('PRAGMA user_version = 5')
+                conn.commit()
+
+            if current_version < 6:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS option_chain_snapshots (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ticker      TEXT NOT NULL,
+                        expiration  TEXT NOT NULL,
+                        right       TEXT NOT NULL,
+                        stock_price REAL,
+                        chain_json  TEXT NOT NULL,
+                        source      TEXT NOT NULL DEFAULT 'broker',
+                        as_of       TEXT NOT NULL,
+                        created_at  TEXT DEFAULT (datetime('now')),
+                        UNIQUE(ticker, expiration, right)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_ticker ON option_chain_snapshots(ticker)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_as_of ON option_chain_snapshots(as_of)")
+                logger.info("Migration: Created option_chain_snapshots table for persistent chain cache")
+                cursor.execute('PRAGMA user_version = 6')
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

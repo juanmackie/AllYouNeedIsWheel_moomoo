@@ -114,9 +114,11 @@ def classify_catalyst_flow(
     min_notional = float(cfg.get("min_premium_notional", 1_000_000))
     min_fresh = float(cfg.get("min_fresh_volume_ratio", 5.0))
     max_expirations = int(cfg.get("max_expirations", 6))
+    scanned_expirations = int(cfg.get("scanned_expirations", max_expirations) or max_expirations)
 
     earnings = earnings_info or {}
     days_to_earnings = earnings.get("days_to_earnings")
+    earnings_data_stale = bool(earnings.get("data_stale"))
 
     # -- Group options by (strike, side) --#
     groups: dict[tuple[float, str], dict] = {}
@@ -187,7 +189,7 @@ def classify_catalyst_flow(
             continue
         if entry["otm_pct"] <= 0:
             continue
-        if entry["volume"] < min_volume:
+        if entry["volume"] < min_volume and entry["premium"] < min_notional:
             continue
 
         # -- Hedge detection: mirrored OTM strike on opposite side --#
@@ -203,7 +205,7 @@ def classify_catalyst_flow(
 
         # -- Cluster score --#
         cluster_count = len(entry["expirations"])
-        cluster_score = _clamp(cluster_count / max(max_expirations, 1) * 100)
+        cluster_score = _clamp(cluster_count / max(scanned_expirations, 1) * 100)
 
         # -- Score --#
         premium_score = _clamp(math.log10(entry["premium"] / max(min_notional, 1) + 1) * 25, 0, 40)
@@ -214,7 +216,7 @@ def classify_catalyst_flow(
             score *= 0.5
             score = min(score, 50)
 
-        if days_to_earnings is not None and 0 <= days_to_earnings <= 14:
+        if not earnings_data_stale and days_to_earnings is not None and 0 <= days_to_earnings <= 14:
             score *= 1.15
 
         score = _clamp(score)
@@ -231,8 +233,10 @@ def classify_catalyst_flow(
             rationale.append(f"{cluster_count} expiration cluster")
         if is_hedged:
             rationale.append("Mirrored opposite strike (hedged)")
-        if days_to_earnings is not None and 0 <= days_to_earnings <= 14:
+        if not earnings_data_stale and days_to_earnings is not None and 0 <= days_to_earnings <= 14:
             rationale.append(f"{days_to_earnings}d to earnings")
+        elif earnings_data_stale and days_to_earnings is not None and 0 <= days_to_earnings <= 14:
+            rationale.append("Earnings date is stale; catalyst boost suppressed")
 
         blockers = []
         if is_hedged:
@@ -242,19 +246,22 @@ def classify_catalyst_flow(
         if entry["otm_pct"] > 50:
             action_bucket = "SPECULATIVE_ONLY"
             action_label = "Speculative Only"
-            action_reason = f"OTM {entry['otm_pct']:.0f}% — lottery flow, not core signal"
+            action_reason = f"OTM {entry['otm_pct']:.0f}% lottery flow — low conviction; watch only. Research-only, not a trade signal."
         elif is_hedged:
             action_bucket = "WATCH"
             action_label = "Watch"
-            action_reason = "Hedged position — directional conviction reduced"
+            action_reason = "Two-sided flow; directional conviction reduced. Research-only, not a trade signal."
         elif score < 30:
             action_bucket = "REJECT"
             action_label = "Reject"
-            action_reason = f"Score {score:.0f} below threshold"
+            action_reason = f"Score {score:.0f} below threshold — watch only. Research-only, not a trade signal."
         else:
             action_bucket = f"{side}_RESEARCH"
             action_label = ACTION_BUCKETS[f"{side}_RESEARCH"]
-            action_reason = "; ".join(rationale[:2]) if rationale else "Fresh flow detected"
+            if side == "CALL":
+                action_reason = "Bullish call flow — research long calls or call spreads. Research-only, not a trade signal."
+            else:
+                action_reason = "Bearish put flow — research long puts or put spreads. Research-only, not a trade signal."
 
         # -- Signal tier --#
         if score >= 65:

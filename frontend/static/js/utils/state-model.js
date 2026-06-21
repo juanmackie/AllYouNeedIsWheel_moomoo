@@ -1,3 +1,5 @@
+import { escapeHtml } from './formatters.js';
+
 /**
  * Unified State Model for dashboard sections
  * Provides consistent loading/empty/error/stale states across all sections
@@ -18,7 +20,7 @@ const StateModel = {
                 <div class="spinner-border text-primary" role="status">
                     <span class="visually-hidden">Loading...</span>
                 </div>
-                <p class="mt-3 text-muted mb-0">${message}</p>
+                <p class="mt-3 text-muted mb-0">${escapeHtml(message)}</p>
             </div>
         `;
     },
@@ -35,7 +37,7 @@ const StateModel = {
         container.innerHTML = `
             <div class="text-center py-4">
                 <i class="bi bi-inbox display-4 text-muted"></i>
-                <p class="mt-3 text-muted mb-0">${message}</p>
+                <p class="mt-3 text-muted mb-0">${escapeHtml(message)}</p>
             </div>
         `;
     },
@@ -59,7 +61,7 @@ const StateModel = {
         container.innerHTML = `
             <div class="text-center py-4">
                 <i class="bi bi-exclamation-triangle display-4 text-warning"></i>
-                <p class="mt-3 text-muted mb-0">${message}</p>
+                <p class="mt-3 text-muted mb-0">${escapeHtml(message)}</p>
                 ${retryButton}
             </div>
         `;

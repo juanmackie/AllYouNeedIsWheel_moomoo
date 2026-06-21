@@ -43,23 +43,24 @@ TARGET_BREAKEVEN_BUFFER = 8
 TARGET_THETA_DELTA_RATIO = 0.005
 TARGET_IF_CALLED_RETURN = 12
 
-# Score weights
+# Score weights — tuned toward contribution-to-2x objective
 CALL_W_IV_ADJ = 0.30
 CALL_W_TDR = 0.15
 CALL_W_LIQ = 0.15
 CALL_W_EV = 0.10
-CALL_W_UPSIDE = 0.15
+CALL_W_UPSIDE = 0.10
 CALL_W_OTM = 0.10
 CALL_W_EARNINGS = 0.05
+CALL_W_CE = 0.10
 
 PUT_W_IV_ADJ = 0.30
 PUT_W_TDR = 0.15
 PUT_W_EV = 0.10
 PUT_W_LIQ = 0.15
 PUT_W_BUF = 0.10
-PUT_W_CE = 0.15
+PUT_W_CE = 0.20
 PUT_W_EARNINGS = 0.05
-PUT_W_DELTA = 0.10
+PUT_W_DELTA = 0.05
 
 # Score adjustments
 IV_ENV_SCORE_MAX = 20
@@ -129,6 +130,20 @@ def _calculate_mid_price(bid: float, ask: float, last: float = 0.0) -> float:
     return 0.0
 
 
+def premium_velocity_per_day(premium_per_contract: float, dte: float) -> float:
+    """Return premium velocity as premium dollars per day to expiration."""
+    try:
+        premium = float(premium_per_contract or 0)
+        days = float(dte or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if premium <= 0 or days <= 0:
+        return 0.0
+    velocity = premium / days
+    logger.debug("premium_velocity ticker=NA premium=%.2f dte=%.0f velocity=%.4f", premium, days, velocity)
+    return velocity
+
+
 def _compute_shared_subscores(decision, profile: dict, growth_mode_weights: dict | None = None) -> None:
     """
     Compute all sub-scores that are shared between CALL and PUT.
@@ -175,6 +190,13 @@ def _compute_shared_subscores(decision, profile: dict, growth_mode_weights: dict
     if decision.premium_per_contract > 0:
         decision.ev_score = _clamp(decision.expected_value / max(decision.premium_per_contract, 0.01)) * 100
 
+    logger.debug(
+        "shared_subscores ticker=%s option_type=%s dte=%d liquidity=%.1f iv_adj=%.1f "
+        "delta_score=%.1f dte_score=%.1f",
+        getattr(decision, 'ticker', '?'), getattr(decision, 'option_type', '?'),
+        decision.dte, decision.liquidity_score, decision.iv_adjusted_score,
+        decision.delta_score, decision.dte_score,
+    )
     decision.delta_score = _score_proximity(
         abs(decision.delta), profile['target_delta'], profile['delta_tolerance']
     ) * 100

@@ -11,7 +11,7 @@ Configuration via environment variables:
     LLM_ENABLED   — 'true' or 'false' (default: false)
     LLM_PROVIDER  — label for logging only
     LLM_API_KEY   — API key
-    LLM_MODEL     — model name (default: gpt-4o)
+    LLM_MODEL     — model name (default: moonshotai/kimi-k2.6)
     LLM_BASE_URL  — optional base URL override
     LLM_TEMPERATURE — optional (default: 0.3)
     LLM_MAX_TOKENS  — optional (default: 2000)
@@ -45,6 +45,31 @@ def _get_client():
     timeout_seconds = float(os.environ.get('LLM_TIMEOUT_SECONDS', '20'))
     max_retries = int(os.environ.get('LLM_MAX_RETRIES', '0'))
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=max_retries)
+
+
+def get_status():
+    """Return lightweight LLM advisor availability without creating a client."""
+    enabled = _is_enabled()
+    api_key = os.environ.get('LLM_API_KEY', '').strip()
+    configured = bool(api_key) and not api_key.startswith('sk-your-')
+    provider = os.environ.get('LLM_PROVIDER', 'openai').strip()
+    model = os.environ.get('LLM_MODEL', 'moonshotai/kimi-k2.6').strip()
+
+    if not enabled:
+        message = 'LLM advisor is disabled.'
+    elif not configured:
+        message = 'LLM advisor needs LLM_API_KEY before suggestions can run.'
+    else:
+        message = 'LLM advisor is ready.'
+
+    return {
+        'enabled': enabled,
+        'configured': configured,
+        'available': enabled and configured,
+        'provider': provider,
+        'model': model,
+        'message': message,
+    }
 
 
 def build_advisor_context():
@@ -266,6 +291,70 @@ def format_prompt(context):
     return evidence.to_prompt()
 
 
+def _coerce_message_text(value):
+    """Extract displayable text from OpenAI/OpenRouter message fields."""
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        parts = [_coerce_message_text(item).strip() for item in value]
+        return '\n'.join(part for part in parts if part)
+    if isinstance(value, dict):
+        for key in ('text', 'content', 'reasoning', 'reasoning_content', 'output_text', 'refusal'):
+            text = _coerce_message_text(value.get(key)).strip()
+            if text:
+                return text
+        return ''
+
+    for attr in ('text', 'content', 'reasoning', 'reasoning_content', 'output_text', 'refusal'):
+        text = _coerce_message_text(getattr(value, attr, None)).strip()
+        if text:
+            return text
+    return ''
+
+
+def _message_to_mapping(message):
+    if isinstance(message, dict):
+        return message
+    if hasattr(message, 'model_dump'):
+        try:
+            return message.model_dump()
+        except Exception:
+            return None
+    if hasattr(message, 'dict'):
+        try:
+            return message.dict()
+        except Exception:
+            return None
+    return None
+
+
+def _extract_message_text(message):
+    """Return the best displayable assistant text from a provider response message."""
+    for attr in ('content', 'reasoning', 'reasoning_content', 'output_text', 'text', 'refusal'):
+        text = _coerce_message_text(getattr(message, attr, None)).strip()
+        if text:
+            return text
+
+    mapping = _message_to_mapping(message)
+    if not mapping:
+        return ''
+
+    for key in ('content', 'reasoning', 'reasoning_content', 'output_text', 'text', 'refusal'):
+        text = _coerce_message_text(mapping.get(key)).strip()
+        if text:
+            return text
+
+    for key in ('additional_kwargs', 'metadata', 'response_metadata'):
+        nested = mapping.get(key)
+        text = _coerce_message_text(nested).strip()
+        if text:
+            return text
+
+    return ''
+
+
 def get_suggestions():
     """
     Main entry point. Gathers context, calls the LLM, returns the advice text.
@@ -291,7 +380,7 @@ def get_suggestions():
             'error': 'LLM not configured. Set LLM_API_KEY in .env (not the placeholder).',
         }
 
-    model = os.environ.get('LLM_MODEL', 'gpt-4o').strip()
+    model = os.environ.get('LLM_MODEL', 'moonshotai/kimi-k2.6').strip()
     provider = os.environ.get('LLM_PROVIDER', 'openai').strip()
 
     try:
@@ -332,16 +421,17 @@ def get_suggestions():
             max_tokens=max_tokens,
         )
         message = response.choices[0].message
-        content = message.content
-        if content is None:
-            # Try to get reasoning (for models like tencent/hy3-preview)
-            reasoning = getattr(message, 'reasoning', None)
-            if reasoning:
-                content = reasoning
-            else:
-                content = ''
-        text = content.strip()
+        text = _extract_message_text(message).strip()
         logger.info(f"LLM response received ({len(text)} chars)")
+
+        if not text:
+            logger.warning("LLM provider returned an empty advisor response")
+            return {
+                'success': False,
+                'error': 'LLM provider returned an empty response. Try again or choose a different model.',
+                'provider': provider,
+                'model': model,
+            }
 
         return {
             'success': True,

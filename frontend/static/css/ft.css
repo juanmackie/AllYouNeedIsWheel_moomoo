@@ -352,9 +352,10 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   cursor: pointer;
   text-transform: none;
   border-radius: 0;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background-color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1), color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.15s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .ft-btn:hover { background: var(--ft-ink); color: var(--ft-paper); }
+.ft-btn:active { transform: scale(0.96); }
 .ft-btn--sm { padding: 4px 10px; font-size: 11px; }
 .ft-btn--ghost { border-color: var(--ft-rule-soft); color: var(--ft-ink-soft); }
 .ft-btn--ghost:hover { background: transparent; color: var(--ft-ink); border-color: var(--ft-ink); }
@@ -378,9 +379,10 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   text-transform: none;
   border-radius: 0;
   text-decoration: none;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background-color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1), color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.15s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .btn:hover { background: var(--ft-ink); color: var(--ft-paper); text-decoration: none; }
+.btn:active { transform: scale(0.96); }
 .btn-sm { padding: 4px 10px; font-size: 11px; }
 .btn-primary { background: var(--ft-ink); color: var(--ft-paper); border-color: var(--ft-ink); }
 .btn-primary:hover { background: var(--ft-paper); color: var(--ft-ink); }
@@ -410,6 +412,7 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .btn-close::before { content: "×"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .btn-close::after { content: ""; }
 .btn-close:hover { color: var(--ft-down); }
+.btn-close:active { transform: scale(0.88); }
 
 /* ── 11. SCORE BARS (the 120% detail) ────────────────────────── */
 .ft-score-row {
@@ -513,6 +516,47 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   flex: 0 1 auto;
   min-width: 0;
 }
+.best-plays-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--ft-rule);
+  background: var(--ft-paper);
+  color: var(--ft-ink);
+  font-family: var(--ft-font-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.best-plays-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--ft-ink);
+}
+.best-plays-toggle__info {
+  color: var(--ft-ink-mute);
+  font-size: 12px;
+  line-height: 1;
+}
+.best-plays-toggle:has(input:checked) {
+  border-color: var(--ft-warn);
+  background: var(--ft-warn-soft);
+  color: var(--ft-ink);
+}
+.best-plays-toggle:has(input:checked) .best-plays-toggle__info {
+  color: var(--ft-ink);
+}
+.best-plays-help {
+  margin-top: -8px;
+  margin-bottom: 12px;
+  color: var(--ft-ink-mute);
+  font-family: var(--ft-font-body);
+  font-size: 12px;
+}
 #top-recommendations-section .app-section__header h2,
 #top-recommendations-section .app-section__header p {
   min-width: 0;
@@ -550,6 +594,17 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   flex-wrap: wrap;
   min-width: 0;
 }
+/* Card group sections */
+.recommendation-card__group {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ft-rule-softer);
+}
+
+.recommendation-card__group:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
 .recommendation-card__hero { padding-top: 4px; }
 .recommendation-card .strike-price {
   font-family: var(--ft-font-display);
@@ -713,7 +768,7 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .alert-success { border-color: var(--ft-signal); background: var(--ft-signal-soft); color: var(--ft-signal); }
 .alert-dismissible { padding-right: 44px; }
 .alert .btn-close { position: absolute; top: 8px; right: 8px; }
-.alert.fade { transition: opacity 0.15s linear; }
+.alert.fade { transition: opacity 0.3s cubic-bezier(0.22, 0.61, 0.36, 1); }
 .alert.show { opacity: 1; }
 .alert:not(.show) { display: none; }
 #opend-status-banner { margin: 16px 0; }
@@ -1187,4 +1242,189 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
   padding: 18px 0 8px;
   gap: 24px;
   flex-wrap: wrap;
+}
+
+/* ── 32. TRANSITIONS + INTERACTION POLISH ──────────────────── */
+/* Smooth cubic-bezier for all interactive elements */
+.ft-btn,
+.btn,
+.ft-masthead__nav-link,
+.btn-close,
+.recommendation-card,
+.catalyst-card,
+.earnings-vol-card {
+  transition: background-color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1),
+              color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1),
+              border-color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1),
+              transform 0.15s cubic-bezier(0.22, 0.61, 0.36, 1),
+              box-shadow 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Focus-visible states for accessibility */
+.ft-btn:focus-visible,
+.btn:focus-visible,
+.ft-masthead__nav-link:focus-visible,
+.btn-close:focus-visible,
+.form-control:focus-visible,
+.form-select:focus-visible {
+  outline: 2px solid var(--ft-ink);
+  outline-offset: 2px;
+}
+
+/* Press states */
+.ft-btn:active,
+.btn:active,
+.btn-close:active {
+  transform: scale(0.96);
+}
+
+/* ── 33. CARD HIERARCHY ─────────────────────────────────────── */
+/* Desk ticket — primary signal (heavier, more prominent) */
+.recommendation-card--primary {
+  border: 2px solid var(--ft-ink);
+  background: var(--ft-paper);
+  box-shadow: 4px 4px 0 rgba(10,10,10,0.08);
+}
+
+/* Secondary — quieter signals */
+.recommendation-card--secondary {
+  border: 1px dashed var(--ft-rule-soft);
+  background: rgba(255,241,229,0.55);
+}
+
+/* Risk strip — warnings/blockers */
+.recommendation-card--risk {
+  border: 2px solid var(--ft-warn);
+  background: var(--ft-warn-soft);
+}
+
+/* ── 34. SCANNER TABLE IMPROVEMENTS ─────────────────────────── */
+/* Card-row mode for mobile */
+@media (max-width: 768px) {
+  .ft-table-wrap {
+    overflow-x: visible;
+  }
+  
+  .ft-table--card-mode thead {
+    display: none;
+  }
+  
+  .ft-table--card-mode tbody tr {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--ft-rule-soft);
+    margin-bottom: 12px;
+    padding: 12px;
+    background: var(--ft-paper);
+  }
+  
+  .ft-table--card-mode tbody td {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--ft-rule-softer);
+  }
+  
+  .ft-table--card-mode tbody td:last-child {
+    border-bottom: none;
+  }
+  
+  .ft-table--card-mode tbody td::before {
+    content: attr(data-label);
+    font-family: var(--ft-font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ft-ink-mute);
+    margin-right: auto;
+  }
+}
+
+/* Sticky first column and action columns on desktop */
+@media (min-width: 769px) {
+  .ft-table--sticky-col {
+    position: relative;
+  }
+  
+  .ft-table--sticky-col thead th:first-child,
+  .ft-table--sticky-col tbody td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--ft-paper);
+    z-index: 2;
+    border-right: 1px solid var(--ft-rule-soft);
+  }
+  
+  .ft-table--sticky-col thead th:last-child,
+  .ft-table--sticky-col tbody td:last-child {
+    position: sticky;
+    right: 0;
+    background: var(--ft-paper);
+    z-index: 2;
+   ;
+    border-left: 1px solid var(--ft-rule-soft);
+  }
+}
+
+/* ── 35. INLINE STYLE REPLACEMENTS ─────────────────────────── */
+/* Put quantity input width */
+.put-qty-input {
+  width: 70px;
+}
+
+/* Leverage bar height */
+.leverage-bar-height {
+  height: 4px;
+}
+
+/* Section margin override for portfolio/rollover pages */
+.ft-section--no-top-margin {
+  margin-top: 0;
+}
+
+/* Section description */
+.ft-section__desc {
+  font-family: var(--ft-font-body);
+  font-size: 14px;
+  color: var(--ft-ink-soft);
+  max-width: 720px;
+  padding-bottom: 16px;
+}
+
+/* Section rule inline replacement */
+.ft-section__rule-line {
+  height: 1px;
+  background: var(--ft-rule);
+}
+
+/* Score badge compact */
+.badge--compact {
+  font-size: 0.7rem;
+}
+
+/* Gap utilities for inline layout */
+.gap-inline-2 { gap: 8px; }
+.gap-inline-3 { gap: 12px; }
+.gap-inline-4 { gap: 16px; }
+
+/* Min-width zero for flex items */
+.min-w-0 { min-width: 0; }
+
+/* Progress bar height */
+.progress--sm {
+  height: 6px;
+}
+
+/* ── 36. SCROLL-SYNC ANIMATIONS ─────────────────────────────── */
+/* Fade-up on scroll (use with IntersectionObserver in JS) */
+.ft-fade-up {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.6s cubic-bezier(0.22, 0.61, 0.36, 1),
+              transform 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.ft-fade-up.visible {
+  opacity: 1;
+  transform: translateY(0);
 }

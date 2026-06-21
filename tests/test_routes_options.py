@@ -694,9 +694,69 @@ class TestTopRecommendations(unittest.TestCase):
 
         # Should clamp to 10 when passed to background generation
         mock_gen.assert_called_once()
-        args, _ = mock_gen.call_args
+        args, kwargs = mock_gen.call_args
         _, limit, _ = args
         self.assertEqual(limit, 10)
+        self.assertTrue(kwargs.get('include_long_options', False))
+        self.assertFalse(kwargs.get('ignore_cash_limits', False))
+
+    @patch('api.routes.options._generate_in_background')
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
+    @patch('api.routes.options.recommendation_cache')
+    def test_include_long_options_cache_key_and_generation_arg(self, mock_cache, mock_probe, mock_get_svc, mock_gen):
+        """Should include research long options in cache key and pass it to generation."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_cache.get.return_value = (None, {'cache_status': 'MISS',
+                                                'cache_age_seconds': 0,
+                                                'portfolio_changed': False,
+                                                'is_valid': True,
+                                                'background_refresh_failed': False,
+                                                'cached_at': ''})
+        mock_get_svc.return_value = self.mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/top-recommendations',
+                              query_string={'include_long_options': 'true'})
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 202)
+        self.assertTrue(data.get('generating'))
+        mock_gen.assert_called_once()
+        args, kwargs = mock_gen.call_args
+        self.assertTrue(args[0].startswith('top_recommendations:limit=3:include_long_options=True:ignore_cash_limits=False:screener=none:hash='))
+        self.assertEqual(kwargs['include_long_options'], True)
+        self.assertEqual(kwargs['ignore_cash_limits'], False)
+
+    @patch('api.routes.options._generate_in_background')
+    @patch('api.routes.options.get_options_service')
+    @patch('api.routes.options.probe_opend_status')
+    @patch('api.routes.options.recommendation_cache')
+    def test_ignore_cash_limits_cache_key_and_generation_arg(self, mock_cache, mock_probe, mock_get_svc, mock_gen):
+        """Should isolate best-plays scans from cash-constrained cache entries."""
+        mock_probe.return_value = {'status': 'connected'}
+        mock_cache.get.return_value = (None, {'cache_status': 'MISS',
+                                                'cache_age_seconds': 0,
+                                                'portfolio_changed': False,
+                                                'is_valid': True,
+                                                'background_refresh_failed': False,
+                                                'cached_at': ''})
+        mock_get_svc.return_value = self.mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get('/api/options/top-recommendations',
+                              query_string={'ignore_cash_limits': 'true'})
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 202)
+        self.assertTrue(data.get('generating'))
+        mock_gen.assert_called_once()
+        args, kwargs = mock_gen.call_args
+        self.assertTrue(args[0].startswith('top_recommendations:limit=3:include_long_options=True:ignore_cash_limits=True:screener=none:hash='))
+        self.assertEqual(kwargs['include_long_options'], True)
+        self.assertEqual(kwargs['ignore_cash_limits'], True)
 
     @patch('api.routes.options._generate_in_background')
     @patch('api.routes.options.get_options_service')
@@ -978,7 +1038,7 @@ class TestWatchlistTickers(unittest.TestCase):
         mock_config.get.side_effect = lambda k, d=None: {
             'watchlist': ['AAPL', 'MSFT'],
             'watchlist_mode': 'static',
-            'growth_mode': {'enabled': True, 'screener_profile': {'min_iv_rank': 45}},
+            'growth_mode': {'enabled': True, 'screener_profile': {'min_volatility_pct': 4.5}},
         }.get(k, d)
         mock_get_config.return_value = mock_config
 
@@ -997,7 +1057,7 @@ class TestWatchlistTickers(unittest.TestCase):
         self.assertIn('mode', data)
         self.assertTrue(data['growth_mode_enabled'])
         mock_wl.get_effective_watchlist.assert_called_once_with(
-            growth_mode_config={'enabled': True, 'screener_profile': {'min_iv_rank': 45}}
+            growth_mode_config={'enabled': True, 'screener_profile': {'min_volatility_pct': 4.5}}
         )
 
     @patch('api.services.watchlist_manager.WatchlistManager')
@@ -1044,7 +1104,7 @@ class TestScreeningConfig(unittest.TestCase):
                     'csp_default_otm_pct': 10,
                     'csp_min_otm_pct': 5,
                     'csp_max_otm_pct': 15,
-                    'min_iv_rank': 45,
+                    'min_volatility_pct': 4.5,
                 },
             },
         }.get(k, d)
@@ -1122,7 +1182,7 @@ class TestCashStatusCSPFields(unittest.TestCase):
         self.assertEqual(data['cash_reserved_for_csp'], 15000.0)
         self.assertEqual(data['broker_buying_power'], 55000.0)
         self.assertEqual(data['broker_buying_power_source'], 'excess_liquidity')
-        self.assertEqual(data['cash_available_for_csp'], 35000.0)
+        self.assertEqual(data['cash_available_for_csp'], 40000.0)
 
     @patch('api.routes.options.get_options_service')
     @patch('api.routes.options.probe_opend_status')

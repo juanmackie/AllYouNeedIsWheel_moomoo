@@ -181,6 +181,16 @@ class IVEarningsService:
     def _earnings_lookup_ticker(self, ticker: str) -> str:
         return earnings_underlying_ticker(ticker)
 
+    def _earnings_data_freshness(self, last_updated: Optional[str]) -> tuple[bool, Optional[float]]:
+        if not last_updated:
+            return False, None
+        try:
+            parsed = datetime.strptime(last_updated, '%Y-%m-%d %H:%M:%S')
+            age_hours = (datetime.now() - parsed).total_seconds() / 3600
+            return age_hours > self._earnings_cache_duration_hours, round(age_hours, 1)
+        except Exception:
+            return False, None
+
     def _is_openbb_enabled(self) -> bool:
         try:
             from api.services.config import get_config
@@ -399,6 +409,7 @@ class IVEarningsService:
             estimate = cache_entry.get('estimate')
             currency = cache_entry.get('currency')
             earnings_source = cache_entry.get('earnings_source')
+            last_updated = cache_entry.get('last_updated')
         elif self.db:
             record = self.db.get_earnings_date(normalized_ticker)
             if record:
@@ -408,6 +419,7 @@ class IVEarningsService:
                 estimate = record.get('estimate')
                 currency = record.get('currency')
                 earnings_source = record.get('earnings_source')
+                last_updated = record.get('last_updated')
                 self._earnings_cache[normalized_ticker] = {
                     'earnings_date': earnings_date,
                     'time_of_day': time_of_day,
@@ -415,16 +427,20 @@ class IVEarningsService:
                     'estimate': estimate,
                     'currency': currency,
                     'earnings_source': earnings_source,
+                    'last_updated': last_updated,
                     'timestamp': datetime.now(),
                 }
             else:
                 earnings_date = None
                 time_of_day = fiscal_date_ending = estimate = currency = earnings_source = None
+                last_updated = None
         else:
             earnings_date = None
             time_of_day = fiscal_date_ending = estimate = currency = earnings_source = None
+            last_updated = None
 
         if not earnings_date:
+            data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
             return {
                 'earnings_date': None,
                 'days_to_earnings': None,
@@ -436,6 +452,8 @@ class IVEarningsService:
                 'estimate': None,
                 'currency': None,
                 'earnings_source': None,
+                'data_stale': data_stale,
+                'data_age_hours': data_age_hours,
             }
 
         try:
@@ -456,6 +474,7 @@ class IVEarningsService:
             else:
                 warning_level = 'none'
 
+            data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
             return {
                 'earnings_date': earnings_date,
                 'days_to_earnings': days_to_earnings,
@@ -467,9 +486,12 @@ class IVEarningsService:
                 'estimate': estimate,
                 'currency': currency,
                 'earnings_source': earnings_source,
+                'data_stale': data_stale,
+                'data_age_hours': data_age_hours,
             }
 
         except Exception as e:
+            data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
             return {
                 'earnings_date': earnings_date,
                 'days_to_earnings': None,
@@ -481,6 +503,8 @@ class IVEarningsService:
                 'estimate': estimate,
                 'currency': currency,
                 'earnings_source': earnings_source,
+                'data_stale': data_stale,
+                'data_age_hours': data_age_hours,
             }
     
     def get_earnings_score_impact(self, ticker: str) -> tuple:

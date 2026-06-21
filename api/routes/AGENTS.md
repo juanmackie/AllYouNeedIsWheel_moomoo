@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`api/routes/` exposes Flask blueprints for portfolio, options, alerts, signals, earnings, macro, risk, probability, technical, ledger, playbook, options lab, and wheel-risk endpoints.
+`api/routes/` exposes Flask blueprints for portfolio, options, alerts, signals, earnings, macro, risk, ledger, roll-pressure, llm, and source-policy endpoints.
 
 ## Ownership
 
@@ -15,6 +15,7 @@
 - Keep route error handling explicit and user-readable.
 - Keep source-policy metadata visible for endpoints that combine Moomoo, watchlist, social, or third-party data.
 - Do not add routes that imply autonomous order execution.
+- `GET /api/options/top-recommendations` supports screener-override query params: `csp_min_otm_pct`, `csp_max_otm_pct`, `csp_min_dte`, `csp_max_dte`, `csp_target_delta`, `min_volatility_pct`, `min_csp_buying_power`. These are passed through as `screener_overrides` to the generation service and included in the cache key.
 
 ## Work Guidance
 
@@ -24,7 +25,7 @@
 
 ## Verification
 
-- Run the specific route test for changed endpoints.
+- Run the specific route test for changed endpoints (e.g. `tests/test_routes_earnings.py` for earnings routes).
 - For validation changes, run `pytest tests/test_routes_validation.py`.
 - For portfolio/options route behavior, run `pytest tests/test_routes_portfolio.py tests/test_routes_options.py`.
 

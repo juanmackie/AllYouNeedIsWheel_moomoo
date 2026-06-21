@@ -1,5 +1,9 @@
 # Tests
 
+## Python Environment
+
+Use the canonical `.venv` created by `start_local.ps1`. Do not run tests from a stale top-level `venv/`; remove it if present so missing dependencies fail loudly.
+
 ## Unit Tests
 
 Run all unit tests:

@@ -7,7 +7,7 @@
 ## Ownership
 
 - Top-level `test_*.py` files own Python unit and integration coverage.
-- `tests/frontend/` owns Vitest coverage for browser JavaScript modules.
+- `tests/frontend/` owns Vitest coverage for browser JavaScript modules (including `dashboard-safety.test.js` for XSS-safe rendering paths).
 - `tests/e2e/` owns browser-level smoke checks.
 - `tests/fixtures/` owns reusable deterministic test scenarios.
 - `tests/README.md` owns the manual smoke checklist.
@@ -21,10 +21,11 @@
 
 ## Work Guidance
 
-- Add focused tests near the feature or risk changed.
+- Add focused tests near the feature or risk changed (e.g. `tests/test_api_config.py` for secret-key/CORS hardening, `tests/test_routes_earnings.py` for earnings routes).
 - Use `conftest.py` fixtures where shared app/database setup already exists.
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
+- `test_recommendations.py` includes `test_get_top_recommendations_caps_scan_tickers_at_12` verifying the cold-scan ticker cap (`MAX_COLD_SCAN_TICKERS = 12`).
 
 ## Verification
 

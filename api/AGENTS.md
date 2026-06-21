@@ -6,7 +6,7 @@
 
 ## Ownership
 
-- `api/__init__.py` owns app factory setup, service registration, request logging, CORS, health checks, and blueprint registration.
+- `api/__init__.py` owns app factory setup, service registration, request logging, CORS (including `_supports_credentialed_cors` and `_is_trusted_cors_origin` helpers), secret-key resolution (`_resolve_secret_key`), health checks, and blueprint registration.
 - `api/routes/` owns request parsing, response shaping, HTTP status handling, and delegation to services.
 - `api/services/` owns broker-facing, market-data, portfolio, recommendation, LLM, and signal orchestration.
 
@@ -31,6 +31,7 @@
 - Route changes: run targeted `tests/test_routes_*.py`, relevant feature tests, and `tests/test_api_health.py` when app setup changes.
 - Service changes: run the matching `tests/test_*service*.py` or feature-specific tests.
 - If blueprint registration or service registry changes, run `pytest tests/test_import_side_effects.py tests/test_api_health.py`.
+- If secret-key or CORS configuration changes, run `pytest tests/test_api_config.py`.
 
 ## Child DOX Index
 

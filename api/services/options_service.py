@@ -8,7 +8,7 @@ from api.services.options_data import OptionsDataService
 from api.services.watchlist_manager import WatchlistManager
 from api.services.recommendations import RecommendationEngine
 from api.services.portfolio_context import PortfolioContext
-from api.services.market_regime import MarketRegime
+from api.services.vix_regime_service import VixRegimeService
 
 logger = logging.getLogger('api.services.options')
 
@@ -27,19 +27,15 @@ class OptionsService:
         from api.services.iv_earnings_service import IVEarningsService
         self.iv_earnings_service = IVEarningsService(self.db)
         self.portfolio_service = None
-        self._openbb_service = None
-        self._tvscreener_service = None
-        
         # Initialize composed services with explicit dependencies
         # Order matters: leaf dependencies first, then consumers
         self.watchlist_manager = WatchlistManager(config_provider=self)
-        self.market_regime = MarketRegime(
+        self.vix_regime_service = VixRegimeService(
             config_provider=self,
-            openbb_service_provider=self,
         )
         self.portfolio_context_helper = PortfolioContext(
             portfolio_service_provider=self,
-            vix_regime_provider=self.market_regime,
+            vix_regime_provider=self.vix_regime_service,
             config_provider=self,
         )
         self.options_data = OptionsDataService(
@@ -62,43 +58,6 @@ class OptionsService:
             cash_calculator_provider=self.portfolio_context_helper,
         )
         
-    def _get_openbb_service(self):
-        """
-        Lazy initialization of optional enrichment service.
-        Returns the service if explicitly enabled and available, None otherwise.
-        Uses a sentinel (False) to avoid repeated failed initialization attempts.
-        """
-        if not self.config.get('openbb_enabled', False):
-            logger.debug("Optional enrichment disabled by config")
-            self._openbb_service = False
-            return None
-
-        if self._openbb_service is None:
-            try:
-                from api.services.openbb_service import get_openbb_service
-                self._openbb_service = get_openbb_service()
-                if self._openbb_service and self._openbb_service._ensure_initialized():
-                    logger.info("Optional enrichment service initialized successfully")
-                else:
-                    logger.debug("Optional enrichment service not available, skipping quality checks")
-                    self._openbb_service = False
-            except Exception as e:
-                logger.debug(f"Optional enrichment service initialization failed: {e}, skipping quality checks")
-                self._openbb_service = False
-        return self._openbb_service if self._openbb_service else None
-
-    def _get_tvscreener_service(self):
-        from api import get_service
-        if self._tvscreener_service is None:
-            try:
-                self._tvscreener_service = get_service('tvscreener')
-                if not self._tvscreener_service:
-                    self._tvscreener_service = False
-            except Exception as e:
-                logger.debug(f"TV Screener service initialization failed: {e}")
-                self._tvscreener_service = False
-        return self._tvscreener_service if self._tvscreener_service else None
-
     def _ensure_connection(self):
         """
         Ensure that the moomoo connection exists and is connected.
@@ -126,7 +85,8 @@ class OptionsService:
                 readonly=bool(self.config.get('readonly', True)),
                 account_id=self.config.get('account_id'),
                 portfolio_env=self.config.get('portfolio_env'),
-                security_firm=self.config.get('security_firm')
+                security_firm=self.config.get('security_firm'),
+                broker_cache_after_hours=self.config.get('broker_cache_after_hours', True),
             )
 
             if not self.connection.connect():
@@ -140,12 +100,6 @@ class OptionsService:
         except Exception as e:
             logger.error(f"Error ensuring connection: {str(e)}")
             return None
-
-    def _adjust_to_standard_strike(self, price):
-        """
-        Adjust a price to a standard strike price
-        """
-        return round(price)
 
     # Delegate methods to composed services
     
@@ -193,9 +147,14 @@ class OptionsService:
         """Get stock price (delegates to options_data)"""
         return self.options_data.get_stock_price(ticker)
 
-    def get_top_recommendations(self, limit=5):
+    def get_top_recommendations(self, limit=3, include_long_options=False, ignore_cash_limits=False, screener_overrides=None):
         """Get top signals (delegates to recommendation_engine)."""
-        return self.recommendation_engine.get_top_recommendations(limit)
+        return self.recommendation_engine.get_top_recommendations(
+            limit,
+            include_long_options=include_long_options,
+            ignore_cash_limits=ignore_cash_limits,
+            screener_overrides=screener_overrides or {},
+        )
 
     def _get_portfolio_context(self, refresh=True):
         """Get portfolio context (delegates to portfolio_context_helper)."""
@@ -214,8 +173,7 @@ class OptionsService:
         return self.portfolio_context_helper._get_fallback_stock_price(portfolio_context, ticker)
 
     def _get_vix_regime(self):
-        """Get VIX regime (delegates to market_regime)"""
-        return self.market_regime.get_vix_regime()
+        return self.vix_regime_service.get_vix_regime()
 
     def _sanitize_result(self, result):
         """Sanitize result to remove NaN values"""

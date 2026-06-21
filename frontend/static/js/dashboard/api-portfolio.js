@@ -3,7 +3,7 @@
  * Split from api.js (F041)
  */
 import { showAlert } from '../utils/alerts.js';
-import { readJsonSafely, isOpenDUnavailable, setConnectionStatusFromPayload, clearUnavailableStatus, isRealAccountUnavailableError } from './api.js';
+import { readJsonSafely, isOpenDUnavailable, setConnectionStatusFromPayload, clearUnavailableStatus, isRealAccountUnavailableError } from './api-core.js';
 
 export async function fetchAccountData() {
     try {

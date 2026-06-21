@@ -13,6 +13,7 @@ vi.mock('../../frontend/static/js/utils/state-model.js', () => ({
 }));
 
 vi.mock('../../frontend/static/js/utils/formatters.js', () => ({
+  escapeHtml: vi.fn((value) => String(value ?? '')),
   formatCurrency: vi.fn((v) => `$${v.toFixed(2)}`),
   formatPercent: vi.fn((v) => `${v.toFixed(1)}%`),
 }));

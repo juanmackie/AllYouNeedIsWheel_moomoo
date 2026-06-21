@@ -9,6 +9,7 @@ import traceback
 import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from core.utils import is_market_open
 try:
     from moomoo import (
         OpenQuoteContext,
@@ -19,7 +20,9 @@ try:
         TrdEnv,
 
         OptionType,
-    )
+    UserSecurityGroupType,
+    OptionDataFilter,
+)
 except ImportError:
     # Allow graceful fallback during test collection / environments without full moomoo SDK
     OpenQuoteContext = None
@@ -30,6 +33,8 @@ except ImportError:
     TrdEnv = None
 
     OptionType = None
+    UserSecurityGroupType = None
+    OptionDataFilter = None
 
 from core.logging_config import get_logger
 from core.rate_limiter import RateLimiter
@@ -59,6 +64,74 @@ def _safe_str(value) -> str:
         return raw
     except UnicodeEncodeError:
         return raw.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+
+
+def _safe_cash_value(value) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric != numeric:
+        return None
+    return numeric
+
+
+def _select_withdrawable_cash_field(acc_row) -> tuple[float, str]:
+    """Choose withdrawable/cash-like USD fields, not margin buying power."""
+    cash_fields = (
+        'us_avl_withdrawal_cash',
+        'available_funds',
+        'avl_withdrawal_cash',
+        'us_cash',
+        'cash',
+    )
+    for field in cash_fields:
+        value = _safe_cash_value(acc_row.get(field))
+        if value is not None and value > 0:
+            return value, field
+    return 0.0, 'none'
+
+
+def _select_buying_power_field(acc_row) -> tuple[float, str]:
+    """Choose the Moomoo field that represents option cash power/capacity."""
+    power_fields = (
+        'usd_net_cash_power',
+        'max_power_short_sell',
+        'power',
+        'buying_power',
+    )
+    for field in power_fields:
+        value = _safe_cash_value(acc_row.get(field))
+        if value is not None and value > 0:
+            return value, field
+    return 0.0, 'none'
+
+
+def _select_account_cash_field(acc_row) -> tuple[float, str]:
+    return _select_withdrawable_cash_field(acc_row)
+
+
+def _cash_diagnostics_from_acc_row(acc_row) -> dict:
+    fields = [
+        'us_avl_withdrawal_cash',
+        'us_cash',
+        'usd_net_cash_power',
+        'max_power_short_sell',
+        'power',
+        'buying_power',
+        'cash',
+        'available_funds',
+        'avl_withdrawal_cash',
+    ]
+    cash, source = _select_account_cash_field(acc_row)
+    buying_power, buying_power_source = _select_buying_power_field(acc_row)
+    return {
+        'selected_cash': cash,
+        'selected_cash_source': source,
+        'selected_buying_power': buying_power,
+        'selected_buying_power_source': buying_power_source,
+        'fields': {field: acc_row.get(field) for field in fields},
+    }
 
 
 class MoomooConnection:
@@ -109,7 +182,8 @@ class MoomooConnection:
 
             return cls._instances[key]
 
-    def __init__(self, host='127.0.0.1', port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None):
+    def __init__(self, host='127.0.0.1', port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None, broker_cache_after_hours=True):
+        self._broker_cache_after_hours = broker_cache_after_hours
         if self._initialized:
             return
 
@@ -166,6 +240,7 @@ class MoomooConnection:
         self._pending_result_ttl_seconds = 1.0
 
         self._connection_created_at = datetime.now()
+        self._cash_diagnostics_logged = False
 
     def _get_cached_option_chain(self, symbol, expiration, right):
         cache_key = f"{symbol}_{expiration}_{right}"
@@ -173,12 +248,12 @@ class MoomooConnection:
             if cache_key in self._option_chain_cache:
                 cached_data, timestamp = self._option_chain_cache[cache_key]
                 cache_age = time.time() - timestamp
-                now_market = datetime.now(self._market_timezone)
-                market_close = now_market.replace(hour=16, minute=0, second=0, microsecond=0)
-                market_session_closed = now_market.weekday() < 5 and now_market >= market_close
-                cached_at_market = datetime.fromtimestamp(timestamp, self._market_timezone)
-                if cache_age < self._cache_ttl and not (market_session_closed and cached_at_market.date() == now_market.date() and cached_at_market < market_close):
-                    logger.debug(f"Using cached option chain for {cache_key}")
+                if is_market_open():
+                    if cache_age < self._cache_ttl:
+                        logger.debug(f"Using cached option chain for {cache_key}")
+                        return cached_data
+                elif self._broker_cache_after_hours:
+                    logger.debug(f"Using cached option chain for {cache_key} (after-hours, age={cache_age:.0f}s)")
                     return cached_data
                 del self._option_chain_cache[cache_key]
         return None
@@ -193,10 +268,15 @@ class MoomooConnection:
         with self._cache_lock:
             if symbol in self._option_expiration_cache:
                 cached_data, timestamp = self._option_expiration_cache[symbol]
-                if time.time() - timestamp < self._expiration_cache_ttl:
-                    logger.debug(f"Using cached option expirations for {symbol}")
+                cache_age = time.time() - timestamp
+                if is_market_open():
+                    if cache_age < self._expiration_cache_ttl:
+                        logger.debug(f"Using cached option expirations for {symbol}")
+                        return cached_data
+                    del self._option_expiration_cache[symbol]
+                elif self._broker_cache_after_hours:
+                    logger.debug(f"Using cached option expirations for {symbol} (after-hours, age={cache_age:.0f}s)")
                     return cached_data
-                del self._option_expiration_cache[symbol]
         return None
 
     def _cache_option_expirations(self, symbol, data):
@@ -655,21 +735,22 @@ class MoomooConnection:
             logger.error(f"Error getting owner plate for {symbol}: {str(e)}")
             return RET_ERROR, None
 
-    def get_option_chain(self, symbol, expiration=None, right='C', target_strike=None):
+    def get_option_chain(self, symbol, expiration=None, right='C', target_strike=None, data_filter=None):
         symbol = self._format_symbol(symbol)
         cache_key = f"{symbol}_{expiration}_{right}"
         request_key = f"option_chain:{cache_key}"
 
-        cached_result = self._get_cached_option_chain(symbol, expiration, right)
-        if cached_result is not None:
-            return cached_result
-
-        pending_result = self._wait_for_pending_request(request_key)
-        if pending_result is not None:
+        if data_filter is None:
             cached_result = self._get_cached_option_chain(symbol, expiration, right)
             if cached_result is not None:
                 return cached_result
-            return pending_result
+
+            pending_result = self._wait_for_pending_request(request_key)
+            if pending_result is not None:
+                cached_result = self._get_cached_option_chain(symbol, expiration, right)
+                if cached_result is not None:
+                    return cached_result
+                return pending_result
 
         try:
             self._option_chain_rate_limiter.check_rate_limit()
@@ -694,14 +775,15 @@ class MoomooConnection:
                 'options': []
             }
 
+            if data_filter is not None and OptionDataFilter is None:
+                logger.warning("OptionDataFilter not available in this SDK version, ignoring filter")
+
             self._acquire_option_chain_gate(request_key)
             try:
-                ret, data = self.quote_ctx.get_option_chain(
-                    code=symbol,
-                    start=start_date,
-                    end=end_date,
-                    option_type=opt_type
-                )
+                chain_kwargs = dict(code=symbol, start=start_date, end=end_date, option_type=opt_type)
+                if data_filter is not None and OptionDataFilter is not None:
+                    chain_kwargs['data_filter'] = data_filter
+                ret, data = self.quote_ctx.get_option_chain(**chain_kwargs)
 
                 if ret != RET_OK:
                     logger.error(f"Failed to get option chain for {symbol}: {_safe_str(data)}")
@@ -709,7 +791,8 @@ class MoomooConnection:
                     return None
 
                 if data.empty:
-                    self._cache_option_chain(symbol, expiration, right, result)
+                    if data_filter is None:
+                        self._cache_option_chain(symbol, expiration, right, result)
                     self._complete_pending_request(request_key, result)
                     return result
 
@@ -719,7 +802,8 @@ class MoomooConnection:
 
                 option_codes = data['code'].tolist()
                 if not option_codes:
-                    self._cache_option_chain(symbol, expiration, right, result)
+                    if data_filter is None:
+                        self._cache_option_chain(symbol, expiration, right, result)
                     self._complete_pending_request(request_key, result)
                     return result
 
@@ -752,7 +836,8 @@ class MoomooConnection:
             if not result['expiration'] and result['options']:
                 result['expiration'] = result['options'][0]['expiration']
 
-            self._cache_option_chain(symbol, expiration, right, result)
+            if data_filter is None:
+                self._cache_option_chain(symbol, expiration, right, result)
             self._complete_pending_request(request_key, result)
             return result
         except Exception as e:
@@ -778,12 +863,15 @@ class MoomooConnection:
                 return None
 
             acc = acc_data.iloc[0]
-            available_cash = _first_non_zero(
-                acc.get('us_avl_withdrawal_cash'),
-                acc.get('us_cash'),
-                acc.get('usd_net_cash_power'),
-                acc.get('cash', 0)
-            )
+            if not self._cash_diagnostics_logged:
+                diagnostics = _cash_diagnostics_from_acc_row(acc)
+                logger.warning(
+                    "Account cash field selection diagnostics: %s",
+                    _safe_str(diagnostics),
+                )
+                self._cash_diagnostics_logged = True
+            available_cash, available_cash_source = _select_account_cash_field(acc)
+            buying_power, buying_power_source = _select_buying_power_field(acc)
             account_value = _first_non_zero(
                 acc.get('usd_assets'),
                 acc.get('us_cash'),
@@ -806,6 +894,9 @@ class MoomooConnection:
                 'account_id': str(acc.get('acc_id', account_id or '')),
                 'trading_env': _env_name(trd_env),
                 'available_cash': available_cash,
+                'available_cash_source': available_cash_source,
+                'buying_power': buying_power,
+                'buying_power_source': buying_power_source,
                 'account_value': account_value,
                 'excess_liquidity': excess_liquidity,
                 'initial_margin': initial_margin,
@@ -869,6 +960,91 @@ class MoomooConnection:
             logger.debug(traceback.format_exc())
             return None
 
+    def get_user_security_group(self, group_type=None):
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            kwargs = {}
+            if group_type is not None:
+                kwargs["group_type"] = group_type
+            return self.quote_ctx.get_user_security_group(**kwargs)
+        except Exception as e:
+            logger.error(f"Error getting user security groups: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
+
+    def get_user_security(self, group_name):
+        try:
+            self._rate_limiter.check_rate_limit()
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            return self.quote_ctx.get_user_security(group_name)
+        except Exception as e:
+            logger.error(f"Error getting securities for group '{group_name}': {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
+
+    def query_subscription(self, is_all_conn=True):
+        try:
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            return self.quote_ctx.query_subscription(is_all_conn=is_all_conn)
+        except Exception as e:
+            logger.error(f"Error querying subscription: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
+
+    @staticmethod
+    def _get_sdk_version():
+        try:
+            import moomoo as _m
+            return getattr(_m, '__version__', 'unknown')
+        except Exception:
+            return 'N/A'
+
+    def get_opend_diagnostics(self):
+        sdk_version = self._get_sdk_version()
+        if not self._ensure_quote_context():
+            return {
+                'connected': False,
+                'sdk_available': OpenQuoteContext is not None,
+                'sdk_version': sdk_version,
+                'security_firm': str(self.security_firm) if self.security_firm else 'N/A',
+                'portfolio_env': _env_name(self.portfolio_env),
+                'readonly': self.readonly,
+            }
+        try:
+            ret, sub_data = self.query_subscription()
+            sub_info = None
+            if ret == RET_OK and sub_data is not None:
+                sub_info = {
+                    'total_used': int(sub_data.get('total_used', 0)),
+                    'remain': int(sub_data.get('remain', 0)),
+                    'own_used': int(sub_data.get('own_used', 0)),
+                }
+            return {
+                'connected': True,
+                'sdk_available': True,
+                'sdk_version': sdk_version,
+                'security_firm': str(self.security_firm) if self.security_firm else 'N/A',
+                'portfolio_env': _env_name(self.portfolio_env),
+                'readonly': self.readonly,
+                'subscription': sub_info,
+                'option_data_filter_available': OptionDataFilter is not None,
+                'host': self.host,
+                'port': self.port,
+            }
+        except Exception as e:
+            logger.error(f"Error getting OpenD diagnostics: {e}")
+            logger.debug(traceback.format_exc())
+            return {
+                'connected': True,
+                'sdk_available': OpenQuoteContext is not None,
+                'sdk_version': sdk_version,
+                'error': str(e),
+            }
+
     def create_option_contract(self, symbol, expiry, strike, option_type):
         symbol = self._format_symbol(symbol)
         opt_type = OptionType.CALL if option_type.upper() in ['C', 'CALL'] else OptionType.PUT
@@ -882,5 +1058,100 @@ class MoomooConnection:
                 return match.iloc[0]['code']
 
         return None
+
+    def get_option_volatility(self, code, query_time_period=None, hv_time_period=None):
+        try:
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            kwargs = {}
+            if query_time_period is not None:
+                kwargs["query_time_period"] = query_time_period
+            if hv_time_period is not None:
+                kwargs["hv_time_period"] = hv_time_period
+            return self.quote_ctx.get_option_volatility(code, **kwargs)
+        except AttributeError:
+            logger.warning("get_option_volatility not available in this SDK version (requires upgrade)")
+            return RET_ERROR, None
+        except Exception as e:
+            logger.error(f"Error getting option volatility: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
+
+    def get_option_exercise_probability(self, code):
+        try:
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            return self.quote_ctx.get_option_exercise_probability(code)
+        except AttributeError:
+            logger.warning("get_option_exercise_probability not available in this SDK version (requires upgrade)")
+            return RET_ERROR, None
+        except Exception as e:
+            logger.error(f"Error getting exercise probability: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
+
+    def get_option_screen(self, screen_request):
+        try:
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            return self.quote_ctx.get_option_screen(screen_request)
+        except AttributeError:
+            logger.warning("get_option_screen not available in this SDK version (requires upgrade)")
+            return RET_ERROR, None
+        except Exception as e:
+            logger.error(f"Error running option screen: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
+
+    def get_short_interest(self, code, next_key=None, num=None):
+        try:
+            if not self._ensure_quote_context():
+                return RET_ERROR, None, None
+            kwargs = {}
+            if next_key is not None:
+                kwargs["next_key"] = next_key
+            if num is not None:
+                kwargs["num"] = num
+            return self.quote_ctx.get_short_interest(code, **kwargs)
+        except AttributeError:
+            logger.warning("get_short_interest not available in this SDK version (requires upgrade)")
+            return RET_ERROR, None, None
+        except Exception as e:
+            logger.error(f"Error getting short interest: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None, None
+
+    def get_financials_earnings_price_move(self, code, period_count=None):
+        try:
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            kwargs = {}
+            if period_count is not None:
+                kwargs["period_count"] = period_count
+            return self.quote_ctx.get_financials_earnings_price_move(code, **kwargs)
+        except AttributeError:
+            logger.warning("get_financials_earnings_price_move not available in this SDK version (requires upgrade)")
+            return RET_ERROR, None
+        except Exception as e:
+            logger.error(f"Error getting earnings price move: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
+
+    def get_financials_earnings_price_history(self, code):
+        try:
+            if not self._ensure_quote_context():
+                return RET_ERROR, None
+            api = getattr(self.quote_ctx, "get_financials_earnings_price_history", None)
+            if not callable(api):
+                logger.warning("get_financials_earnings_price_history not available in this SDK version (requires upgrade)")
+                return RET_ERROR, None
+            return api(code)
+        except AttributeError:
+            logger.warning("get_financials_earnings_price_history not available in this SDK version (requires upgrade)")
+            return RET_ERROR, None
+        except Exception as e:
+            logger.error(f"Error getting earnings price history: {e}")
+            logger.debug(traceback.format_exc())
+            return RET_ERROR, None
 
 

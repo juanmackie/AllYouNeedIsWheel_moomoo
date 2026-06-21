@@ -51,7 +51,7 @@ def get_underlying_quality(ticker: str) -> dict:
 
 def _compute(ticker: str) -> dict:
     try:
-        from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker, validate_ticker
+        from api.services.utils import get_yfinance_history, validate_ticker
         import pandas as pd
         import numpy as np
     except ImportError:
@@ -61,9 +61,7 @@ def _compute(ticker: str) -> dict:
         return {**_EMPTY, 'warnings': ['invalid_ticker']}
 
     try:
-        clean = clean_yfinance_ticker(ticker)
-        stock = get_yfinance_ticker(clean)
-        hist = stock.history(period='1y', interval='1d')
+        hist = get_yfinance_history(ticker, period='1y')
         if hist is None or hist.empty or len(hist) < 50:
             return {**_EMPTY, 'warnings': ['insufficient_price_data'], 'updated_at': datetime.now().isoformat()}
 
@@ -89,8 +87,7 @@ def _compute(ticker: str) -> dict:
         # --- Relative strength slope vs SPY (63-day) ---
         rs_slope = 0.0
         try:
-            spy = get_yfinance_ticker('SPY')
-            spy_hist = spy.history(period='1y', interval='1d')
+            spy_hist = get_yfinance_history('SPY', period='1y')
             if spy_hist is not None and not spy_hist.empty and len(spy_hist) >= 63:
                 spy_close = spy_hist['Close']
                 # Align on common dates

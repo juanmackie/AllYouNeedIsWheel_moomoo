@@ -51,9 +51,9 @@
     </div>
 
     <div id="options-table-container" class="market-table-section__body table-stage-shell">
-        <div class="text-center my-4">
-            <div class="spinner-border text-primary" role="status"></div>
-            <p class="mt-2 mb-0 text-muted small">Loading options data...</p>
+        <div class="text-center my-4" id="options-table-lazy-state">
+            <p class="mb-2 text-muted small">Wheel scanner tables are loaded on demand to preserve the Moomoo rate-limit budget for growth signals.</p>
+            <button class="btn btn-primary btn-sm" id="load-options-scanner" type="button">Load scanner</button>
         </div>
     </div>
 

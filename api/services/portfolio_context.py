@@ -11,7 +11,13 @@ logger = logging.getLogger('api.services.portfolio_context')
 
 
 TRUE_CASH_FIELDS = ('available_cash', 'cash_balance', 'cash_available')
-MARGIN_CAPACITY_FIELDS = ('buying_power', 'excess_liquidity')
+MARGIN_CAPACITY_FIELDS = ('buying_power', 'excess_liquidity', 'max_power_short_sell', 'power')
+BROKER_NET_BUYING_POWER_SOURCES = {
+    'usd_net_cash_power',
+    'us_avl_withdrawal_cash',
+    'avl_withdrawal_cash',
+    'available_funds',
+}
 
 
 def _first_positive_number(summary: dict, fields: tuple[str, ...]) -> tuple[float, str]:
@@ -26,6 +32,24 @@ def _first_positive_number(summary: dict, fields: tuple[str, ...]) -> tuple[floa
         if numeric_value > 0:
             return numeric_value, field
     return 0.0, 'none'
+
+
+def _broker_buying_power(summary: dict, true_cash: float, true_cash_source: str) -> tuple[float, str]:
+    margin_capacity, margin_source = _first_positive_number(summary, MARGIN_CAPACITY_FIELDS)
+    if margin_capacity > 0:
+        if margin_source == 'buying_power':
+            source_hint = str(summary.get('buying_power_source', '') or '').strip()
+            if source_hint:
+                margin_source = source_hint
+        return margin_capacity, margin_source
+    return true_cash, true_cash_source
+
+
+def _csp_cash_available(source_value: float, source: str, reserved: float) -> tuple[float, str]:
+    source_name = str(source or 'none')
+    if source_name in BROKER_NET_BUYING_POWER_SOURCES:
+        return max(0.0, source_value), source_name
+    return max(0.0, source_value - reserved), f'{source_name}_minus_open_short_put_collateral'
 
 
 class PortfolioContext:
@@ -94,14 +118,13 @@ class PortfolioContext:
         raw_positions = portfolio.get('positions', {}) or {}
 
         true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
-        margin_capacity, margin_source = _first_positive_number(summary, MARGIN_CAPACITY_FIELDS)
-
         context['cash_balance'] = float(summary.get('cash_balance', summary.get('available_cash', 0)) or 0)
         context['account_value'] = float(summary.get('account_value', 0) or 0)
         context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
         context['available_cash'] = true_cash
-        context['broker_buying_power'] = margin_capacity if margin_capacity > 0 else true_cash
-        context['broker_buying_power_source'] = margin_source if margin_capacity > 0 else true_cash_source
+        context['broker_buying_power'], context['broker_buying_power_source'] = _broker_buying_power(
+            summary, true_cash, true_cash_source
+        )
 
         cash_reserved = 0.0
         for raw_symbol, position in raw_positions.items():
@@ -138,9 +161,13 @@ class PortfolioContext:
 
         context['cash_reserved_for_csp'] = cash_reserved
         context['open_short_put_collateral'] = cash_reserved
-        context['cash_available_for_csp'] = max(0, context['available_cash'] - cash_reserved)
+        csp_cash_source_value = context['broker_buying_power'] if context['broker_buying_power'] > 0 else context['available_cash']
+        csp_cash_source = context['broker_buying_power_source'] if context['broker_buying_power'] > 0 else true_cash_source
+        context['cash_available_for_csp'], csp_cash_source_label = _csp_cash_available(
+            csp_cash_source_value, csp_cash_source, cash_reserved
+        )
         context['_cash_diagnostics'] = {
-            'raw_summary_fields': {f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS]},
+            'raw_summary_fields': {f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS, 'buying_power_source']},
             'available_cash': context['available_cash'],
             'available_cash_source': true_cash_source,
             'broker_buying_power': context['broker_buying_power'],
@@ -149,7 +176,7 @@ class PortfolioContext:
             'open_short_put_collateral': cash_reserved,
             'cash_reserved_for_csp': cash_reserved,
             'cash_available_for_csp': context['cash_available_for_csp'],
-            'cash_available_for_csp_source': 'available_cash_minus_open_short_put_collateral',
+            'cash_available_for_csp_source': csp_cash_source_label,
         }
         return context
 
@@ -199,16 +226,15 @@ class PortfolioContext:
 
             # Keep true cash separate from margin/buying-power fields.
             true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
-            margin_capacity, margin_source = _first_positive_number(summary, MARGIN_CAPACITY_FIELDS)
-
             context['cash_balance'] = float(summary.get('cash_balance', summary.get('available_cash', 0)) or 0)
             context['account_value'] = float(summary.get('account_value', 0) or 0)
             context['excess_liquidity'] = float(summary.get('excess_liquidity', 0) or 0)
 
             context['available_cash'] = true_cash
 
-            context['broker_buying_power'] = margin_capacity if margin_capacity > 0 else true_cash
-            context['broker_buying_power_source'] = margin_source if margin_capacity > 0 else true_cash_source
+            context['broker_buying_power'], context['broker_buying_power_source'] = _broker_buying_power(
+                summary, true_cash, true_cash_source
+            )
 
             for position in stock_positions:
                 raw_symbol = str(position.get('symbol', '') or '')
@@ -239,11 +265,15 @@ class PortfolioContext:
             context['cash_reserved_for_csp'] = cash_reserved
             context['open_short_put_collateral'] = cash_reserved
 
-            context['cash_available_for_csp'] = max(0, context['available_cash'] - cash_reserved)
+            csp_cash_source_value = context['broker_buying_power'] if context['broker_buying_power'] > 0 else context['available_cash']
+            csp_cash_source = context['broker_buying_power_source'] if context['broker_buying_power'] > 0 else true_cash_source
+            context['cash_available_for_csp'], csp_cash_source_label = _csp_cash_available(
+                csp_cash_source_value, csp_cash_source, cash_reserved
+            )
 
             # Diagnostics: expose raw summary fields for debugging
             context['_cash_diagnostics'] = {
-                'raw_summary_fields': {f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS]},
+                'raw_summary_fields': {f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS, 'buying_power_source']},
                 'available_cash': context['available_cash'],
                 'available_cash_source': true_cash_source,
                 'broker_buying_power': context['broker_buying_power'],
@@ -252,7 +282,7 @@ class PortfolioContext:
                 'open_short_put_collateral': cash_reserved,
                 'cash_reserved_for_csp': cash_reserved,
                 'cash_available_for_csp': context['cash_available_for_csp'],
-                'cash_available_for_csp_source': 'available_cash_minus_open_short_put_collateral',
+                'cash_available_for_csp_source': csp_cash_source_label,
             }
                         
         except Exception as exc:

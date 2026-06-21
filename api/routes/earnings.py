@@ -4,13 +4,24 @@ Earnings lock and locked tickers endpoints.
 """
 
 import logging
-from flask import Blueprint, request
+from flask import Blueprint, current_app, request, jsonify
 from api.routes.utils import error_response, success_response
 from api import get_service
+from core.scheduler import get_scheduler_info
+from core.ticker_utils import earnings_underlying_ticker
+from db.database import OptionsDatabase
+from api.services.iv_earnings_service import IVEarningsService
+from api.services.portfolio_service import PortfolioService
+from api.services.watchlist_manager import WatchlistManager
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('earnings', __name__, url_prefix='/api/earnings')
+
+
+def _get_earnings_service():
+    db = current_app.config.get('database') or OptionsDatabase()
+    return IVEarningsService(db)
 
 
 @bp.route('/locked-tickers')
@@ -120,3 +131,82 @@ def get_earnings_vol_signals():
     except Exception as e:
         logger.error(f"Error getting earnings vol signals: {e}")
         return error_response(str(e))
+
+
+@bp.route('/status')
+def get_earnings_status():
+    """Get earnings updater status and cache statistics."""
+    service = _get_earnings_service()
+    scheduler_info = get_scheduler_info()
+
+    return jsonify({
+        'status': 'running' if scheduler_info.get('running') else 'stopped',
+        'scheduler': scheduler_info,
+        'cache_stats': service.get_cache_stats(),
+    })
+
+
+@bp.route('/update/<ticker>')
+def update_single_earnings(ticker):
+    """Manually update earnings for a single ticker."""
+    service = _get_earnings_service()
+    success = service.update_earnings_data(ticker)
+    info = service.get_earnings_info(ticker)
+
+    return jsonify({
+        'success': success,
+        'ticker': ticker,
+        'earnings_info': info,
+    })
+
+
+@bp.route('/refresh', methods=['POST'])
+def refresh_all_earnings():
+    """Trigger a global update for all active symbols."""
+    service = _get_earnings_service()
+    portfolio = PortfolioService()
+
+    positions = portfolio.get_positions() or []
+
+    all_tickers = set()
+    for position in positions:
+        normalized = earnings_underlying_ticker(str(position.get('symbol', '') or ''))
+        if normalized:
+            all_tickers.add(normalized)
+
+    try:
+        connection_config = current_app.config.get('connection_config', {})
+        wm = WatchlistManager(connection_config)
+        growth_mode = connection_config.get('growth_mode', {})
+        watchlist_tickers = [
+            earnings_underlying_ticker(t.strip())
+            for t in wm.get_effective_watchlist(growth_mode_config=growth_mode)
+            if t.strip()
+        ]
+        all_tickers.update(t for t in watchlist_tickers if t)
+    except Exception:
+        logger.warning("Could not load watchlist tickers for earnings update", exc_info=True)
+
+    if not all_tickers:
+        return jsonify({'success': True, 'updated': 0, 'message': 'No active symbols found'})
+
+    result = service.batch_update_earnings(list(all_tickers))
+
+    return jsonify({
+        'success': True,
+        'updated_count': result['successful'],
+        'failed_count': result['failed'],
+        'total_attempted': len(all_tickers),
+    })
+
+
+@bp.route('/pending')
+def get_pending_earnings():
+    """Get tickers with pending earnings in the next 7 days."""
+    db = current_app.config.get('database') or OptionsDatabase()
+    pending = db.get_pending_earnings(days_threshold=7)
+
+    return jsonify({
+        'count': len(pending),
+        'tickers': pending,
+    })

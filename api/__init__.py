@@ -16,7 +16,9 @@ import os
 import sqlite3
 import time
 import uuid
+import secrets
 from datetime import datetime
+from urllib.parse import urlparse
 from flask import Flask, current_app, request, jsonify, g
 from flask_cors import CORS
 from core.logging_config import get_logger
@@ -30,6 +32,41 @@ logger = get_logger('autotrader.api', 'api')
 _service_registry = {}
 # Maps service name -> singleton instance
 _service_instances = {}
+
+
+def _is_trusted_cors_origin(origin):
+    parsed = urlparse(origin.strip())
+    return parsed.scheme in {'http', 'https'} and parsed.hostname in {'localhost', '127.0.0.1', '::1'}
+
+
+def _supports_credentialed_cors(origins):
+    return bool(origins) and all(_is_trusted_cors_origin(origin) for origin in origins)
+
+
+def _resolve_secret_key(config=None):
+    config = config or {}
+    secret_key = config.get('SECRET_KEY') or os.environ.get('SECRET_KEY')
+    if secret_key and secret_key != 'dev':
+        return secret_key
+
+    env_name = (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV') or '').strip().lower()
+    in_dev_or_test = bool(
+        config.get('TESTING')
+        or config.get('DEBUG')
+        or env_name in {'dev', 'development', 'test', 'testing'}
+        or os.environ.get('PYTEST_CURRENT_TEST')
+        or os.environ.get('FLASK_DEBUG', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    )
+
+    if secret_key == 'dev' and not in_dev_or_test:
+        logger.warning("Ignoring insecure default SECRET_KEY=dev outside dev/test")
+    elif not secret_key and not in_dev_or_test:
+        logger.warning("SECRET_KEY was not set; using an ephemeral fallback secret")
+
+    if in_dev_or_test and secret_key == 'dev':
+        return secret_key
+
+    return secrets.token_urlsafe(32)
 
 
 def register_service(name, factory):
@@ -98,12 +135,14 @@ def create_app(config=None):
         'CORS_ALLOWED_ORIGINS',
         'http://localhost:8000,http://127.0.0.1:8000'
     ).split(',')
-    CORS(app, origins=allowed_origins, supports_credentials=True)
-    logger.debug(f"CORS enabled for origins: {allowed_origins}")
+    allowed_origins = [origin.strip() for origin in allowed_origins if origin.strip()]
+    supports_credentials = _supports_credentialed_cors(allowed_origins)
+    CORS(app, origins=allowed_origins, supports_credentials=supports_credentials)
+    logger.debug(f"CORS enabled for origins: {allowed_origins} (supports_credentials={supports_credentials})")
 
     # Default configuration
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get('SECRET_KEY', 'dev'),
+        SECRET_KEY=_resolve_secret_key(config),
         DATABASE='sqlite:///:memory:',
         LLM_ENABLED=os.environ.get('LLM_ENABLED', 'false'),
     )
@@ -126,11 +165,9 @@ def create_app(config=None):
     app.register_blueprint(llm.bp)
 
     # Register new feature blueprints
-    from api.routes import earnings, pop, risk, technical
+    from api.routes import earnings, risk
     app.register_blueprint(earnings.bp)
-    app.register_blueprint(pop.bp)
     app.register_blueprint(risk.bp)
-    app.register_blueprint(technical.bp)
 
     # Extracted route modules (F008)
     from api.routes import roll_pressure, alerts, signals
@@ -138,12 +175,9 @@ def create_app(config=None):
     app.register_blueprint(alerts.bp)
     app.register_blueprint(signals.bp)
 
-    # Wheel Scan Ledger, Playbook, Options Lab, Risk Panel
-    from api.routes import ledger, playbook, options_lab, wheel_risk
+    # Wheel Scan Ledger
+    from api.routes import ledger
     app.register_blueprint(ledger.bp)
-    app.register_blueprint(playbook.bp)
-    app.register_blueprint(options_lab.bp)
-    app.register_blueprint(wheel_risk.bp)
     logger.info("Registered API blueprints")
 
     # Authentication middleware
@@ -163,6 +197,12 @@ def create_app(config=None):
             auth_header = request.headers.get('Authorization', '')
             if auth_header == f'Bearer {api_key}':
                 return None
+            logger.warning(
+                "Unauthorized API request method=%s path=%s request_id=%s",
+                request.method,
+                request.path,
+                g.request_id,
+            )
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
 
     @app.before_request
@@ -212,7 +252,8 @@ def create_app(config=None):
                 tvscreener_status = 'available'
             else:
                 tvscreener_status = 'unavailable'
-        except Exception:
+        except Exception as exc:
+            logger.warning("Health check tvscreener probe failed: %s", exc, exc_info=True)
             tvscreener_status = 'error'
 
         database_status = 'unknown'
@@ -224,13 +265,18 @@ def create_app(config=None):
                 database_status = 'available'
             else:
                 database_status = 'unavailable'
-        except Exception:
+        except Exception as exc:
+            logger.warning("Health check database probe failed: %s", exc, exc_info=True)
             database_status = 'error'
 
-        opend_status = probe_opend_status(
-            host=current_app.config.get('connection_config', {}).get('host', '127.0.0.1'),
-            port=current_app.config.get('connection_config', {}).get('port', 11111),
-        )
+        try:
+            opend_status = probe_opend_status(
+                host=current_app.config.get('connection_config', {}).get('host', '127.0.0.1'),
+                port=current_app.config.get('connection_config', {}).get('port', 11111),
+            )
+        except Exception as exc:
+            logger.warning("Health check OpenD probe failed: %s", exc, exc_info=True)
+            opend_status = {'status': 'error'}
 
         return {
             'status': 'healthy',

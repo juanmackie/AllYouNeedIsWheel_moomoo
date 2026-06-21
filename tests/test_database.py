@@ -14,7 +14,7 @@ import threading
 from datetime import datetime, timedelta
 
 from db.database import OptionsDatabase
-from db.schema import create_tables
+from db.schema import create_tables, migrate_database
 from db.trade_events_repository import TradeEventsRepository
 from db.sqlite_pool import close_connection_pool
 
@@ -54,13 +54,69 @@ class TestOptionsDatabase(unittest.TestCase):
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 3)
+        self.assertEqual(cursor.fetchone()[0], 6)
 
         evaluator_tables = {t for t in actual_tables if t.startswith('evaluator_')}
         self.assertEqual(evaluator_tables, set(),
                          f"Evaluator tables should be dropped: {evaluator_tables}")
 
         conn.close()
+
+    def test_earnings_migration_dedupes_ticker_keeps_latest(self):
+        self.db.close()
+        close_connection_pool(self.db_path)
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+
+        old_path = os.path.join(self.temp_dir, 'old_earnings.db')
+        conn = sqlite3.connect(old_path)
+        conn.executescript("""
+            CREATE TABLE earnings_calendar (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                earnings_date TEXT,
+                last_updated TEXT NOT NULL,
+                fetch_status TEXT DEFAULT 'pending',
+                error_message TEXT,
+                time_of_day TEXT,
+                fiscal_date_ending TEXT,
+                estimate REAL,
+                currency TEXT,
+                earnings_source TEXT,
+                UNIQUE(ticker, earnings_date)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO earnings_calendar
+            (ticker, earnings_date, last_updated, fetch_status, earnings_source)
+            VALUES ('AAPL', '2024-04-25', '2026-06-01 00:00:00', 'success', 'old')
+        """)
+        conn.execute("""
+            INSERT INTO earnings_calendar
+            (ticker, earnings_date, last_updated, fetch_status, earnings_source)
+            VALUES ('AAPL', '2024-05-02', '2026-06-02 00:00:00', 'success', 'new')
+        """)
+        conn.execute('PRAGMA user_version = 4')
+        conn.commit()
+        conn.close()
+
+        migrate_database(old_path)
+        migrated = OptionsDatabase(old_path)
+        try:
+            record = migrated.get_earnings_date('AAPL')
+            cursor = sqlite3.connect(old_path).cursor()
+            cursor.execute("SELECT COUNT(*) FROM earnings_calendar WHERE ticker='AAPL'")
+            count = cursor.fetchone()[0]
+            cursor.connection.close()
+
+            self.assertEqual(count, 1)
+            self.assertEqual(record['earnings_date'], '2024-05-02')
+            self.assertEqual(record['earnings_source'], 'new')
+        finally:
+            migrated.close()
+            close_connection_pool(old_path)
+            if os.path.exists(old_path):
+                os.remove(old_path)
 
     def test_save_and_get_iv_data(self):
         """Test saving and retrieving IV data"""

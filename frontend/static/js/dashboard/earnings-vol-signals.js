@@ -46,6 +46,17 @@ function formatNumber(value, digits = 2) {
     return Number(value).toFixed(digits);
 }
 
+function summarizeBlockerCounts(payload) {
+    const counts = payload.blocker_counts || {};
+    const entries = Object.entries(counts)
+        .map(([reason, count]) => ({ reason, count: Number(count) || 0 }))
+        .filter(item => item.reason && item.count > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3);
+    if (!entries.length) return '';
+    return entries.map(item => `${item.count} ${item.reason.toLowerCase()}`).join(' · ');
+}
+
 function renderCard(signal) {
     const template = document.getElementById('earnings-vol-card-template');
     const clone = template.content.cloneNode(true);
@@ -100,8 +111,9 @@ function renderCard(signal) {
     setupEls.cut.textContent = signal.invalidation || 'N/A';
 
     const notesEl = clone.querySelector('.earnings-vol-card__notes');
-    const lines = signal.blockers?.length ? signal.blockers : signal.notes;
-    notesEl.textContent = lines?.length ? lines.slice(0, 2).join(' | ') : 'Clean enough to research.';
+    const lines = [...(signal.blockers || []), ...(signal.notes || [])].filter(Boolean);
+    const uniqueLines = [...new Set(lines)];
+    notesEl.textContent = uniqueLines.length ? uniqueLines.slice(0, 3).join(' | ') : 'Clean enough to research.';
 
     return clone;
 }
@@ -124,11 +136,15 @@ function renderSignals(payload) {
         let message = 'No earnings-vol signals found for the current watchlist.';
         const scanned = payload.scanned || 0;
         const errors = payload.errors || [];
+        const blockerSummary = summarizeBlockerCounts(payload);
         if (scanned > 0 || errors.length > 0) {
             const parts = [];
             if (scanned > 0) parts.push(`Scanned ${scanned} ticker${scanned === 1 ? '' : 's'}`);
             if (errors.length > 0) parts.push(`${errors.length} error${errors.length === 1 ? '' : 's'}: ${errors.join(', ')}`);
             message += ` (${parts.join('; ')})`;
+        }
+        if (blockerSummary) {
+            message += ` ${blockerSummary}.`;
         }
         StateModel.showEmpty('earnings-vol-state', message);
         return;
@@ -170,10 +186,12 @@ export async function loadEarningsVolSignals(manualRefresh = false) {
     }
 }
 
-export function initializeEarningsVolSignals() {
+export function initializeEarningsVolSignals({ autoLoad = false } = {}) {
     initElements();
     document.getElementById('refresh-earnings-vol-signals')?.addEventListener('click', () => {
         loadEarningsVolSignals(true);
     });
-    loadEarningsVolSignals();
+    if (autoLoad) {
+        loadEarningsVolSignals();
+    }
 }

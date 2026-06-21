@@ -7,7 +7,8 @@
 ## Ownership
 
 - Own business-critical trading logic that should not depend on Flask.
-- Own reusable decision functions for Wheel strategy signals, scoring factors, Greeks, catalyst flow, earnings-volatility, growth mode, playbooks, and evidence-gated advice.
+- Own reusable decision functions for Wheel strategy signals, scoring factors, Greeks, and evidence-gated advice.
+- Own premium velocity calculation — the primary ranking axis for all surfaced signals.
 - Own OpenD connection lifecycle helpers and shared runtime utilities.
 
 ## Local Contracts
@@ -22,8 +23,11 @@
 
 - Prefer pure functions and small data transformations for scoring/risk logic.
 - Keep thresholds, weights, and profile choices explicit and covered by regression tests.
+- Decision helpers for read-only panels should prefer plain-English blockers/rationale and preserve the ability to surface research-only outcomes.
 - Avoid import-time network calls, scheduler starts, or DB writes.
 - Reuse `ticker_utils`, `ttl_cache`, `rate_limiter`, and logging helpers instead of local one-off versions.
+- Scheduler callbacks should be injected from `app.py` rather than imported directly from `api`. Use the factory pattern (`app.py` → `wired_scheduler_providers`) to keep `core` import-free from Flask layers.
+- Greek calculations that need option-chain data should accept a `chain_fetcher` callable parameter to avoid importing `api` services at module level.
 
 ## Verification
 
@@ -34,4 +38,3 @@
 ## Child DOX Index
 
 No child DOX files yet.
-

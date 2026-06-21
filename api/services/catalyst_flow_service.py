@@ -20,7 +20,7 @@ class CatalystFlowService:
     """Self-contained scanner for anomalous options flow."""
 
     _shared_cache = {}
-    _shared_cache_ttl = 300  # 5 minutes
+    _shared_cache_ttl = 1800  # 30 minutes
 
     def __init__(self, config_provider=None, watchlist_provider=None):
         self._config_provider = config_provider
@@ -50,6 +50,7 @@ class CatalystFlowService:
             account_id=self.config.get("account_id"),
             portfolio_env=self.config.get("portfolio_env"),
             security_firm=self.config.get("security_firm"),
+            broker_cache_after_hours=self.config.get("broker_cache_after_hours", True),
         )
         if self.connection.connect():
             return self.connection
@@ -159,11 +160,15 @@ class CatalystFlowService:
 
         for ticker in scan_tickers:
             cached = CatalystFlowService._shared_cache.get(ticker)
-            if not refresh and cached and time.time() - cached["ts"] < CatalystFlowService._shared_cache_ttl:
-                if cached["signals"]:
-                    all_signals.extend(cached["signals"])
-                cache_hits += 1
-                continue
+            if cached:
+                cache_age = time.time() - cached["ts"]
+                if cache_age < CatalystFlowService._shared_cache_ttl:
+                    if refresh:
+                        logger.debug("Catalyst refresh kept fresh cache for %s (age %.0fs)", ticker, cache_age)
+                    if cached["signals"]:
+                        all_signals.extend(cached["signals"])
+                    cache_hits += 1
+                    continue
 
             try:
                 result = self._scan_ticker(conn, ticker, scan_config)
@@ -359,7 +364,7 @@ class CatalystFlowService:
 
         for exp_str in valid_exps[:max_exp]:
             for right in ("C", "P"):
-                chain = conn.get_option_chain(ticker, exp_str, right, target_strike=stock_price)
+                chain = conn.get_option_chain(ticker, exp_str, right, target_strike=None)
                 if chain and chain.get("options"):
                     side = "CALL" if right == "C" else "PUT"
                     for opt in chain["options"]:
@@ -381,12 +386,15 @@ class CatalystFlowService:
         except Exception:
             earnings_info = {}
 
+        scan_config = dict(config)
+        scan_config["scanned_expirations"] = max_exp
+
         signals = classify_catalyst_flow(
             ticker=ticker,
             stock_price=stock_price,
             option_list=option_list,
             earnings_info=earnings_info,
-            config=config,
+            config=scan_config,
         )
 
         if not signals:
@@ -422,41 +430,6 @@ class CatalystFlowService:
             elif side == "PUT" and not sig.get("is_hedged"):
                 warnings.append("Bearish put flow detected \u2014 tail risk for CSPs")
         return warnings
-
-    def _record_signals(self, signals: list[dict]):
-        """Record surfaced catalyst signals to evaluator for outcome tracking."""
-        try:
-            cfg = self.config.get("evaluator", {})
-            if not cfg.get("enabled", True) or not cfg.get("record_signals", True):
-                return
-            from db.database import OptionsDatabase
-            db_path = self.config.get("db_path", "options.db")
-            db = OptionsDatabase(db_path)
-            formatted = []
-            for rank, sig in enumerate(signals, 1):
-                formatted.append({
-                    "ticker": sig.get("ticker"),
-                    "option_type": sig.get("side"),
-                    "strike": sig.get("strike"),
-                    "expiration": (sig.get("cluster_expirations") or [None])[0] or "",
-                    "dte": None,
-                    "signal_type": "catalyst_flow",
-                    "strategy": "catalyst_watch",
-                    "data_source": "moomoo",
-                    "rank": rank,
-                    "score": sig.get("score", 0),
-                    "confidence": sig.get("score", 0),
-                    "annualized_return": None,
-                    "premium_per_contract": None,
-                    "delta": sig.get("delta"),
-                    "implied_volatility": sig.get("implied_volatility"),
-                    "capital_required": None,
-                    "wheel_decision": {},
-                    "score_details": sig,
-                })
-            db.evaluator.record_surfaced_signals(formatted, source="catalyst_watch")
-        except Exception as exc:
-            logger.debug("Failed to record catalyst signals to evaluator: %s", exc)
 
     def _get_fallback_price(self, ticker):
         """Get stock price from yfinance as fallback."""

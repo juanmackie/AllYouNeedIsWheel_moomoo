@@ -16,6 +16,9 @@
 - Services must degrade gracefully when external providers fail, rate-limit, or return partial data.
 - Keep caches and TTLs explicit so stale market data is not presented as fresh.
 - Do not introduce production mocks or simulated account data.
+- When a signal can remain visible only as research-only data, keep that label and caveat explicit rather than silently dropping it.
+- Scanner services should return blocker/diagnostic counts when useful so the UI can explain empty panels.
+- `OptionsService.get_top_recommendations()` accepts `screener_overrides` dict and forwards it to `RecommendationEngine.get_top_recommendations()`. Supported override keys: `csp_min_otm_pct`, `csp_max_otm_pct`, `csp_min_dte`, `csp_max_dte`, `csp_target_delta`, `min_volatility_pct`, `min_csp_buying_power`. Overrides are merged on top of defaults and Best Plays unconstrained overrides.
 
 ## Work Guidance
 
@@ -33,4 +36,3 @@
 ## Child DOX Index
 
 No child DOX files yet.
-

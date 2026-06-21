@@ -56,12 +56,6 @@ class PortfolioContextProvider(Protocol):
         ...
 
 
-class OpenBBServiceProvider(Protocol):
-    """Provides OpenBB service."""
-    def _get_openbb_service(self):
-        ...
-
-
 class VixRegimeProvider(Protocol):
     """Provides VIX regime data."""
     def _get_vix_regime(self) -> dict:

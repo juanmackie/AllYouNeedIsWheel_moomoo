@@ -1,5 +1,5 @@
 import { state, getUnavailableTickerMessage, getRenderExpirationValue, formatExpirationLabel, loadExcludedTickers, saveOtmSettings, getOtmBounds, normalizeOtmValue } from './options-table-state.js';
-import { calculatePremium, calculateEarningsSummary, updateEarningsSummary } from './options-table-calc.js';
+import { calculateEarningsSummary, getPremiumPerContract, updateEarningsSummary } from './options-table-calc.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 
 function sanitize(str) {
@@ -148,17 +148,19 @@ export function addPutQtyInputEventListeners() {
 
             const row = this.closest('tr');
             if (row) {
-                const premiumPerContract = parseFloat(row.dataset.premium) || 0;
+                const premiumPerContract = row.dataset.premium === '' ? null : parseFloat(row.dataset.premium);
                 const strike = parseFloat(row.dataset.strike) || 0;
 
-                const totalPremium = premiumPerContract * newQty;
+                const totalPremium = premiumPerContract != null ? premiumPerContract * newQty : null;
                 const cashRequired = strike * 100 * newQty;
 
                 const totalPremiumCell = row.querySelector('.total-premium');
                 const cashRequiredCell = row.querySelector('.cash-required');
 
                 if (totalPremiumCell) {
-                    totalPremiumCell.innerHTML = `<div class="fw-bold">${formatCurrency(totalPremium)}</div>`;
+                    totalPremiumCell.innerHTML = totalPremium != null
+                        ? `<div class="fw-bold">${formatCurrency(totalPremium)}</div>`
+                        : `<div class="fw-bold">&mdash;</div>`;
                 }
                 if (cashRequiredCell) {
                     cashRequiredCell.innerHTML = `<div>${formatCurrency(cashRequired)}</div>`;
@@ -355,7 +357,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                     <input type="number" class="form-control form-control-sm put-qty-input" 
                         data-ticker="${ticker}" 
                         value="${putQuantity}" 
-                        min="1" max="100" step="1" style="width: 70px;">
+                        min="1" max="100" step="1">
                 </td>
                 <td class="align-middle total-premium">$ 0.00</td>
                 <td class="align-middle cash-required">$ 0.00</td>
@@ -417,9 +419,12 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
     const scoreBadgeClass = score >= 80 ? 'bg-success' : (score >= 65 ? 'bg-primary' : 'bg-warning text-dark');
 
-    const midPrice = calculatePremium(option.bid, option.ask, option.last);
+    const premiumPerContract = getPremiumPerContract(option);
+    const midPrice = option.mid_price != null
+        ? Number(option.mid_price)
+        : (premiumPerContract != null ? premiumPerContract / 100 : null);
 
-    row.dataset.premium = midPrice * 100;
+    row.dataset.premium = premiumPerContract != null ? premiumPerContract : '';
     row.dataset.strike = option.strike || 0;
 
     const ivPercent = option.implied_volatility ? option.implied_volatility.toFixed(2) : 'N/A';
@@ -436,10 +441,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
         const maxContracts = Math.floor(sharesOwned / 100);
         const selectedExpirationValue = getRenderExpirationValue(ticker, 'CALL', option.expiration);
 
-        const premiumPerContract = midPrice * 100;
-        const totalPremium = premiumPerContract * maxContracts;
-
-        const returnOnCapital = option.strike > 0 ? ((totalPremium / (stockPrice * 100 * maxContracts)) * 100) : 0;
+        const totalPremium = premiumPerContract != null ? premiumPerContract * maxContracts : null;
 
         let expirationOptionsHtml = '';
         const expirations = state.tickersData[ticker].expirations || [];
@@ -456,7 +458,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle">
                 <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
                 <div class="d-flex align-items-center gap-1 mt-1">
-                    <span class="badge ${scoreBadgeClass}" style="font-size: 0.7rem;" 
+                    <span class="badge ${scoreBadgeClass} badge--compact" 
                           data-bs-toggle="tooltip" 
                           title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
                         Score: ${score.toFixed(1)}
@@ -492,7 +494,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 </select>
                 <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Days To Expiration: Time until option expires">${option.dte || '-'} DTE</div>
             </td>
-            <td class="align-middle" data-field="mid-price" data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price when selling">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-field="mid-price" data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price when selling">${midPrice != null ? '$ ' + midPrice.toFixed(2) : '&mdash;'}</td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Delta: Probability this option finishes in-the-money (0-1 scale). Lower = safer.">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <div data-bs-toggle="tooltip" title="Implied Volatility: Market's expectation of price movement. Higher IV = more premium.">${ivPercent}%</div>
@@ -500,7 +502,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Number of contracts you can sell (1 contract = 100 shares)">${maxContracts}</td>
             <td class="align-middle">
-                <div class="fw-bold" data-bs-toggle="tooltip" title="Total premium you'll receive immediately when selling">$ ${totalPremium.toFixed(2)}</div>
+                <div class="fw-bold" data-bs-toggle="tooltip" title="Total premium you'll receive immediately when selling">${totalPremium != null ? `$ ${totalPremium.toFixed(2)}` : '—'}</div>
                 <div class="small text-muted" data-bs-toggle="tooltip" title="Return if your shares get called away at the strike price">Max if-called: ${formatPercent(option.if_called_return || 0)}</div>
             </td>
             <td class="align-middle d-flex">
@@ -559,7 +561,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle">
                 <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
                 <div class="d-flex align-items-center gap-1 mt-1">
-                    <span class="badge ${scoreBadgeClass}" style="font-size: 0.7rem;" 
+                    <span class="badge ${scoreBadgeClass} badge--compact" 
                           data-bs-toggle="tooltip" 
                           title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
                         Score: ${score.toFixed(1)}
@@ -595,7 +597,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 </select>
                 <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Days To Expiration: Time until option expires">${option.dte || '-'} DTE</div>
             </td>
-            <td class="align-middle" data-field="mid-price" data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price when selling">${midPrice ? '$ ' + midPrice.toFixed(2) : 'N/A'}</td>
+            <td class="align-middle" data-field="mid-price" data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price when selling">${midPrice != null ? '$ ' + midPrice.toFixed(2) : '&mdash;'}</td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Delta: Probability this option finishes in-the-money (0-1 scale). Lower = safer.">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <div data-bs-toggle="tooltip" title="Implied Volatility: Market's expectation of price movement. Higher IV = more premium.">${ivPercent}%</div>
@@ -605,10 +607,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 <input type="number" class="form-control form-control-sm put-qty-input" 
                     data-ticker="${ticker}" 
                     value="${putQuantity}" 
-                    min="1" max="${maxAffordableContracts}" step="1" style="width: 70px;">
+                    min="1" max="${maxAffordableContracts}" step="1">
             </td>
             <td class="align-middle total-premium">
-                <div class="fw-bold" data-bs-toggle="tooltip" title="Total premium you'll receive immediately when selling">$ ${(midPrice * 100 * putQuantity).toFixed(2)}</div>
+                <div class="fw-bold" data-bs-toggle="tooltip" title="Total premium you'll receive immediately when selling">${premiumPerContract != null ? `$ ${(premiumPerContract * putQuantity).toFixed(2)}` : '—'}</div>
                 <div class="small text-muted" data-bs-toggle="tooltip" title="Breakeven: Stock price where you neither gain nor lose">BE: ${formatCurrency(option.breakeven || 0)}</div>
             </td>
             <td class="align-middle cash-required">
@@ -650,12 +652,12 @@ export function insertProgressBanner(totalTickers) {
     banner.className = 'options-table-progress alert alert-info py-2 px-3 mb-3';
     banner.id = 'options-load-progress';
     banner.innerHTML = `
-        <div class="d-flex align-items-center w-100" style="gap: 12px;">
+        <div class="d-flex align-items-center w-100 gap-inline-3">
             <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
-            <div class="flex-grow-1" style="min-width: 0;">
-                <div class="d-flex align-items-center" style="gap: 8px;">
+            <div class="flex-grow-1 min-w-0">
+                <div class="d-flex align-items-center gap-inline-2">
                     <span class="fw-semibold small" id="progress-percent">0%</span>
-                    <div class="progress flex-grow-1" style="height: 6px;">
+                    <div class="progress flex-grow-1 progress--sm">
                         <div class="progress-bar progress-bar-striped progress-bar-animated" id="progress-bar" role="progressbar" style="width: 0%"></div>
                     </div>
                     <span class="small text-muted" id="progress-count">0/${totalTickers}</span>
@@ -709,7 +711,7 @@ export function finishProgressBanner() {
 
     banner.className = 'options-table-progress alert alert-success py-2 px-3 mb-3';
     banner.innerHTML = `
-        <div class="d-flex align-items-center w-100" style="gap: 12px;">
+        <div class="d-flex align-items-center w-100 gap-inline-3">
             <i class="bi bi-check-circle-fill text-success flex-shrink-0"></i>
             <div class="flex-grow-1">
                 <span class="fw-semibold small">Loading complete</span>
@@ -730,7 +732,7 @@ export function failProgressBanner(message) {
 
     banner.className = 'options-table-progress alert alert-danger py-2 px-3 mb-3';
     banner.innerHTML = `
-        <div class="d-flex align-items-center w-100" style="gap: 12px;">
+        <div class="d-flex align-items-center w-100 gap-inline-3">
             <i class="bi bi-exclamation-triangle-fill text-danger flex-shrink-0"></i>
             <div class="flex-grow-1">
                 <span class="fw-semibold small">${sanitize(message)}</span>
@@ -762,8 +764,7 @@ export function showPanelLoading(containerId, message) {
     const bannerId = `${containerId}-progress`;
     const banner = document.createElement('div');
     banner.id = bannerId;
-    banner.className = 'panel-progress-banner alert alert-info py-2 px-3 mb-0 d-flex align-items-center';
-    banner.style.cssText = 'gap: 10px;';
+    banner.className = 'panel-progress-banner alert alert-info py-2 px-3 mb-0 d-flex align-items-center gap-inline-3';
     banner.innerHTML = `
         <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
         <span class="small fw-semibold flex-grow-1" id="${bannerId}-text">${sanitize(message)}</span>
@@ -793,8 +794,7 @@ export function finishPanelLoading(bannerId, doneMessage = 'Complete') {
     const banner = document.getElementById(bannerId);
     if (!banner) return;
 
-    banner.className = 'panel-progress-banner alert alert-success py-2 px-3 mb-0 d-flex align-items-center';
-    banner.style.cssText = 'gap: 10px;';
+    banner.className = 'panel-progress-banner alert alert-success py-2 px-3 mb-0 d-flex align-items-center gap-inline-3';
     banner.innerHTML = `
         <i class="bi bi-check-circle-fill text-success flex-shrink-0"></i>
         <span class="small fw-semibold flex-grow-1">${sanitize(doneMessage)}</span>
@@ -813,8 +813,7 @@ export function failPanelLoading(bannerId, errorMessage) {
     const banner = document.getElementById(bannerId);
     if (!banner) return;
 
-    banner.className = 'panel-progress-banner alert alert-danger py-2 px-3 mb-0 d-flex align-items-center';
-    banner.style.cssText = 'gap: 10px;';
+    banner.className = 'panel-progress-banner alert alert-danger py-2 px-3 mb-0 d-flex align-items-center gap-inline-3';
     banner.innerHTML = `
         <i class="bi bi-exclamation-triangle-fill text-danger flex-shrink-0"></i>
         <span class="small fw-semibold flex-grow-1">${sanitize(errorMessage)}</span>

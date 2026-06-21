@@ -16,6 +16,7 @@ vi.mock('../../frontend/static/js/utils/alerts.js', () => ({
 }));
 
 vi.mock('../../frontend/static/js/utils/formatters.js', () => ({
+  escapeHtml: vi.fn((value) => String(value ?? '')),
   formatCurrency: vi.fn((value) => `$${Number(value || 0).toFixed(2)}`),
   formatPercent: vi.fn((value) => `${Number(value || 0).toFixed(1)}%`),
 }));
@@ -84,6 +85,8 @@ describe('rollover unavailable state', () => {
     fetchPositions.mockResolvedValue(null);
     const { fetchRollPressure } = await import('../../frontend/static/js/dashboard/api.js');
     fetchRollPressure.mockResolvedValue({ positions: [] });
+
+    await import('../../frontend/static/js/rollover/rollover-ui.js');
 
     const { loadOptionPositions } = await import('../../frontend/static/js/rollover/rollover-api.js');
     await loadOptionPositions();

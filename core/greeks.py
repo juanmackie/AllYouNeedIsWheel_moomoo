@@ -137,6 +137,13 @@ def enrich_option_with_greeks(
             option['theta'] = round(new_theta, 5)
         if abs(new_vega) > 0.0001:
             option['vega'] = round(new_vega, 5)
+        option['greeks_source'] = 'Black-Scholes computed'
+        logger.info(
+            "Computed BS Greeks for strike=%.2f exp=%s type=%s S=%.2f IV=%.2f "
+            "delta=%.4f gamma=%.4f theta=%.4f vega=%.4f",
+            strike, expiration, option_type, stock_price, iv,
+            new_delta, new_gamma, new_theta, new_vega,
+        )
     except Exception as e:
         logger.debug(f"BS Greeks computation failed: {e}")
 
@@ -148,6 +155,7 @@ def fetch_yfinance_iv_for_chain(
     expiration: str,
     option_type: str,
     yfinance_cache: dict,
+    chain_fetcher=None,
 ) -> Optional[dict]:
     """
     Fetch an option chain from yfinance and return a dict mapping strike -> IV.
@@ -170,9 +178,12 @@ def fetch_yfinance_iv_for_chain(
         return yfinance_cache[cache_key]
 
     try:
-        from api.services.utils import get_yfinance_option_chain
+        if chain_fetcher is None:
+            logger.debug("No yfinance chain fetcher provided for %s %s %s", ticker, expiration, option_type)
+            yfinance_cache[cache_key] = None
+            return None
 
-        chain = get_yfinance_option_chain(ticker, expiration)
+        chain = chain_fetcher(ticker, expiration)
         if not chain:
             yfinance_cache[cache_key] = None
             return None
@@ -200,7 +211,7 @@ def fetch_yfinance_iv_for_chain(
         return None
 
 
-def prepare_option_for_scoring(option, ticker, stock_price, yfinance_iv_cache=None):
+def prepare_option_for_scoring(option, ticker, stock_price, yfinance_iv_cache=None, chain_fetcher=None):
     """
     Enrich an option dict with IV normalization, yfinance IV fallback,
     and Black-Scholes Greeks computation.
@@ -213,7 +224,13 @@ def prepare_option_for_scoring(option, ticker, stock_price, yfinance_iv_cache=No
     if iv <= 0 and yfinance_iv_cache is not None:
         exp = str(option.get('expiration', ''))
         opt_type = 'C' if str(option.get('option_type', '')).upper() == 'CALL' else 'P'
-        iv_map = fetch_yfinance_iv_for_chain(ticker, exp, opt_type, yfinance_iv_cache)
+        iv_map = fetch_yfinance_iv_for_chain(
+            ticker,
+            exp,
+            opt_type,
+            yfinance_iv_cache,
+            chain_fetcher=chain_fetcher,
+        )
         if iv_map:
             strike = float(option.get('strike', 0))
             iv = iv_map.get(strike, 0)
@@ -224,5 +241,9 @@ def prepare_option_for_scoring(option, ticker, stock_price, yfinance_iv_cache=No
     if iv > 0 and abs(delta) < 0.001:
         enrich_option_with_greeks(option, stock_price)
         delta = float(option.get('delta', 0) or 0)
+    elif abs(delta) > 0.001 and not option.get('greeks_source'):
+        option['greeks_source'] = 'broker'
+    elif not option.get('greeks_source'):
+        option['greeks_source'] = 'missing'
 
     return iv, delta

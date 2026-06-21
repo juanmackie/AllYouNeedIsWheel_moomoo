@@ -33,6 +33,9 @@ trades.db
 *.db-shm
 *.db-journal
 
+# Node.js
+node_modules/
+
 # Agent / tool caches
 .qwen/
 _tmp/

@@ -21,6 +21,28 @@ function calculatePremium(bid, ask, last) {
     return 0.05;
 }
 
+function getPremiumPerContract(option) {
+    if (!option) return null;
+
+    const premiumPerContract = Number(option.premium_per_contract);
+    if (premiumPerContract > 0) {
+        return premiumPerContract;
+    }
+
+    const midPrice = Number(option.mid_price);
+    if (midPrice > 0) {
+        return midPrice * 100;
+    }
+
+    const bid = parseFloat(option.bid || 0);
+    const ask = parseFloat(option.ask || 0);
+    if (bid > 0 && ask > 0) {
+        return ((bid + ask) / 2) * 100;
+    }
+
+    return null;
+}
+
 function calculateOTMPercentage(strikePrice, currentPrice) {
     if (!strikePrice || !currentPrice) return 0;
     const diff = strikePrice - currentPrice;
@@ -87,20 +109,24 @@ function calculateEarningsSummary() {
             if (sharesOwned >= 100 && optionData.calls && optionData.calls.length > 0) {
                 const callOption = optionData.calls[0];
                 if (callOption) {
-                    const callPremiumPerContract = calculatePremium(callOption.bid, callOption.ask, callOption.last) * 100;
-                    const totalCallPremium = callPremiumPerContract * maxCallContracts;
-                    summary.totalWeeklyCallPremium += totalCallPremium;
+                    const callPremiumPerContract = getPremiumPerContract(callOption);
+                    if (callPremiumPerContract != null) {
+                        const totalCallPremium = callPremiumPerContract * maxCallContracts;
+                        summary.totalWeeklyCallPremium += totalCallPremium;
+                    }
                 }
             }
 
             if ((sharesOwned >= 100 || isCustomTicker || isWatchlistTicker) && optionData.puts && optionData.puts.length > 0) {
                 const putOption = optionData.puts[0];
                 if (putOption) {
-                    const putPremiumPerContract = calculatePremium(putOption.bid, putOption.ask, putOption.last) * 100;
+                    const putPremiumPerContract = getPremiumPerContract(putOption);
                     const customPutQuantity = tickerData.putQuantity ||
                                              (sharesOwned >= 100 ? Math.floor(sharesOwned / 100) : 1);
-                    const totalPutPremium = putPremiumPerContract * customPutQuantity;
-                    summary.totalWeeklyPutPremium += totalPutPremium;
+                    if (putPremiumPerContract != null) {
+                        const totalPutPremium = putPremiumPerContract * customPutQuantity;
+                        summary.totalWeeklyPutPremium += totalPutPremium;
+                    }
                     const putExerciseCost = putOption.strike * customPutQuantity * 100;
                     summary.totalPutExerciseCost += putExerciseCost;
                 }
@@ -174,6 +200,7 @@ function updateEarningsSummary() {
 
 export {
     calculatePremium,
+    getPremiumPerContract,
     calculateOTMPercentage,
     calculateRecommendedPutQuantity,
     calculateEarningsSummary,

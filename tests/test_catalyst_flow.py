@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import time
 from unittest.mock import patch
 
 import pandas as pd
@@ -39,6 +40,83 @@ def test_classifier_accepts_common_quote_alias_fields():
     assert signals[0].fresh_volume_ratio == 15.0
 
 
+def test_classifier_keeps_high_notional_flow_with_499_volume():
+    signals = classify_catalyst_flow(
+        ticker="AAPL",
+        stock_price=100.0,
+        option_list=[
+            {
+                "strike": 110.0,
+                "option_type": "CALL",
+                "option_volume": 499,
+                "option_open_interest": 1,
+                "bid_price": 24.8,
+                "ask_price": 25.2,
+                "expiration": "20260619",
+            }
+        ],
+        config={
+            "min_volume": 500,
+            "min_premium_notional": 1_000_000,
+            "min_fresh_volume_ratio": 2,
+            "max_expirations": 3,
+        },
+    )
+
+    assert signals
+    assert signals[0].side == "CALL"
+
+
+def test_classifier_suppresses_earnings_boost_when_earnings_data_stale():
+    fresh = classify_catalyst_flow(
+        ticker="AAPL",
+        stock_price=100.0,
+        option_list=[
+            {
+                "strike": 110.0,
+                "option_type": "CALL",
+                "option_volume": 300,
+                "option_open_interest": 20,
+                "bid_price": 5.00,
+                "ask_price": 5.20,
+                "expiration": "20260619",
+            }
+        ],
+        earnings_info={"days_to_earnings": 10},
+        config={
+            "min_volume": 100,
+            "min_premium_notional": 100_000,
+            "min_fresh_volume_ratio": 2,
+            "max_expirations": 3,
+        },
+    )
+    stale = classify_catalyst_flow(
+        ticker="AAPL",
+        stock_price=100.0,
+        option_list=[
+            {
+                "strike": 110.0,
+                "option_type": "CALL",
+                "option_volume": 300,
+                "option_open_interest": 20,
+                "bid_price": 5.00,
+                "ask_price": 5.20,
+                "expiration": "20260619",
+            }
+        ],
+        earnings_info={"days_to_earnings": 10, "data_stale": True},
+        config={
+            "min_volume": 100,
+            "min_premium_notional": 100_000,
+            "min_fresh_volume_ratio": 2,
+            "max_expirations": 3,
+        },
+    )
+
+    assert stale[0].score < fresh[0].score
+    assert "stale" in " ".join(stale[0].rationale).lower()
+
+
 def test_service_uses_requested_chain_side_when_snapshot_side_is_ambiguous():
     moomoo = pytest.importorskip("moomoo")
     from api.services.catalyst_flow_service import CatalystFlowService
@@ -53,6 +131,7 @@ def test_service_uses_requested_chain_side_when_snapshot_side_is_ambiguous():
             return moomoo.RET_OK, pd.DataFrame({"expiration_date": [expiration]})
 
         def get_option_chain(self, ticker, exp_str, right, target_strike=None):
+            assert target_strike is None
             if right != "C":
                 return {"options": []}
             return {
@@ -76,7 +155,7 @@ def test_service_uses_requested_chain_side_when_snapshot_side_is_ambiguous():
                 "min_volume": 100,
                 "min_premium_notional": 100_000,
                 "min_fresh_volume_ratio": 2,
-                "max_expirations": 1,
+                "max_expirations": 3,
                 "max_dte": 90,
             },
         }
@@ -108,9 +187,9 @@ def _make_catalyst_service(*, apewisdom_enabled=True, max_boost_tickers=2):
                 "min_volume": 100,
                 "min_premium_notional": 100_000,
                 "min_fresh_volume_ratio": 2,
-                "max_expirations": 1,
-                "max_dte": 90,
-                "max_scan_tickers": 2,
+            "max_expirations": 3,
+            "max_dte": 90,
+            "max_scan_tickers": 12,
                 "apewisdom": {
                     "enabled": apewisdom_enabled,
                     "min_mentions": 1,
@@ -163,6 +242,40 @@ def test_get_signals_reuses_apewisdom_cache_across_calls():
     assert svc._apewisdom_service is not None
     assert first["apewisdom"]["boost_tickers_applied"] == ["TSLA"]
     assert second["apewisdom"]["boost_tickers_applied"] == ["TSLA"]
+
+
+def test_refresh_keeps_fresh_catalyst_cache_entry():
+    from api.services.catalyst_flow_service import CatalystFlowService
+
+    svc = _make_catalyst_service(apewisdom_enabled=False)
+    svc.connection = type("Conn", (), {"is_connected": lambda self: True})()
+    CatalystFlowService._shared_cache = {
+        "AAPL": {"ts": time.time() - 100, "signals": _fake_signal("AAPL", 40)}
+    }
+
+    with patch.object(svc, "_scan_ticker") as scan_mock:
+        result = svc.get_signals(tickers=["AAPL"], limit=1, refresh=True)
+
+    assert result["cache_hits"] == 1
+    assert result["signals"][0]["ticker"] == "AAPL"
+    scan_mock.assert_not_called()
+
+
+def test_refresh_rescans_stale_catalyst_cache_entry():
+    from api.services.catalyst_flow_service import CatalystFlowService
+
+    svc = _make_catalyst_service(apewisdom_enabled=False)
+    svc.connection = type("Conn", (), {"is_connected": lambda self: True})()
+    CatalystFlowService._shared_cache = {
+        "AAPL": {"ts": time.time() - 2500, "signals": _fake_signal("AAPL", 40)}
+    }
+
+    with patch.object(svc, "_scan_ticker", return_value=_fake_signal("AAPL", 60)) as scan_mock:
+        result = svc.get_signals(tickers=["AAPL"], limit=1, refresh=True)
+
+    assert result["cache_hits"] == 0
+    assert result["signals"][0]["score"] == 60
+    scan_mock.assert_called_once()
 
 
 def test_watchlist_ticker_receives_social_context():

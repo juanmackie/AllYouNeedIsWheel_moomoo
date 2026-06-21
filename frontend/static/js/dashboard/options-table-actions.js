@@ -3,7 +3,6 @@ import { calculatePremium, calculateEarningsSummary, updateEarningsSummary } fro
 import { showAlert } from '../utils/alerts.js';
 import { fetchOptionData, fetchTickers, fetchAccountData, fetchOptionExpirations } from './api.js';
 import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, showToast, addPutQtyInputEventListeners } from './options-table-rendering.js';
-import { addOptionsTableEventListeners } from './options-table-events.js';
 
 const expirationPrefetches = new Map();
 
@@ -13,7 +12,7 @@ async function prefetchExpirations(ticker, optionType = null) {
         return expirationPrefetches.get(key);
     }
 
-    const promise = fetchOptionExpirations(ticker, optionType)
+    const promise = fetchOptionExpirations(ticker, optionType, { quietTimeout: true })
         .then(expirationData => {
             if (expirationData && expirationData.expirations && expirationData.expirations.length > 0 && state.tickersData[ticker]) {
                 state.tickersData[ticker].expirations = expirationData.expirations;
@@ -27,6 +26,11 @@ async function prefetchExpirations(ticker, optionType = null) {
 
     expirationPrefetches.set(key, promise);
     return promise;
+}
+
+async function rebindOptionsTableEventListeners() {
+    const { addOptionsTableEventListeners } = await import('./options-table-events.js');
+    addOptionsTableEventListeners();
 }
 
 
@@ -126,7 +130,7 @@ export async function refreshOptionsForTicker(ticker, updateUI = false, onProgre
             }
 
             updateOptionsTable();
-            addOptionsTableEventListeners();
+            await rebindOptionsTableEventListeners();
         }
     } catch (error) {
         const isTimeout = error?.message?.includes('Request timed out');
@@ -235,7 +239,7 @@ export async function refreshAllOptions(optionType) {
         }
 
         updateOptionsTable();
-        addOptionsTableEventListeners();
+        await rebindOptionsTableEventListeners();
     } catch (error) {
         console.error(`Error refreshing ${optionType || 'all'} options:`, error);
         showAlert(`Error refreshing options: ${error.message}`, 'danger');
@@ -323,7 +327,7 @@ export async function refreshOptionsForTickerByType(ticker, optionType, updateUI
             }
 
             updateOptionsTable();
-            addOptionsTableEventListeners();
+            await rebindOptionsTableEventListeners();
         }
     } catch (error) {
         const isTimeout = error?.message?.includes('Request timed out');

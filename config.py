@@ -24,9 +24,11 @@ DEFAULT_CONNECTION_CONFIG = {
     'openbb_enabled': False,
     'fred_enabled': True,
     'cash_reserve_enabled': True,
-    'watchlist_mode': 'hybrid',  # 'static', 'dynamic', 'hybrid'
+    'watchlist_mode': 'static',  # 'static', 'dynamic', 'hybrid', 'moomoo'
+    'moomoo_watchlist_group': 'My Watchlist',
+    'broker_cache_after_hours': True,  # use cached broker data outside US market hours
     'screening_criteria': {
-        'min_iv_rank': 30,
+        'min_volatility_pct': 3.0,
         'min_volume': 1000000,
         'max_stocks': 50
     },
@@ -49,7 +51,7 @@ DEFAULT_CONNECTION_CONFIG = {
             'csp_min_otm_pct': 5,
             'csp_max_otm_pct': 15,
             'min_csp_buying_power': 5000,
-            'min_iv_rank': 45,
+            'min_volatility_pct': 4.5,
             'max_watchlist_tickers': 25,
             'require_cash_fit': True,
         },
@@ -61,9 +63,9 @@ DEFAULT_CONNECTION_CONFIG = {
         'min_premium_notional': 1_000_000,
         'min_fresh_volume_ratio': 5,
         'min_volume': 500,
-        'max_expirations': 1,
+        'max_expirations': 3,
         'max_dte': 60,
-        'max_scan_tickers': 2,
+        'max_scan_tickers': 12,
         'apewisdom': {
             'enabled': True,
             'filter': 'all-stocks',

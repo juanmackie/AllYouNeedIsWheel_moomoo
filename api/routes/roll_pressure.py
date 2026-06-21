@@ -4,12 +4,13 @@ Roll-pressure analysis route.
 Extracted from api/routes/portfolio.py (F008).
 """
 
-from flask import Blueprint
+from flask import Blueprint, jsonify
 from datetime import datetime
 import traceback
 
 from api.routes.utils import error_response, success_response
 from api.services.portfolio_scoring import build_portfolio_context, score_position
+from core.ticker_utils import earnings_underlying_ticker
 
 from core.logging_config import get_logger
 logger = get_logger('api.routes.roll_pressure', 'api')
@@ -77,8 +78,15 @@ def get_roll_pressure():
             if decision is None:
                 continue
 
+            raw_symbol = pos.get('symbol') or decision.ticker
+            option_code = decision.ticker or raw_symbol
+            underlying = earnings_underlying_ticker(raw_symbol or option_code)
+
             scored_positions.append({
                 'ticker': decision.ticker,
+                'symbol': raw_symbol,
+                'underlying': underlying,
+                'position': pos.get('position', 0),
                 'option_type': decision.option_type,
                 'strike': decision.strike,
                 'expiration': decision.expiration,

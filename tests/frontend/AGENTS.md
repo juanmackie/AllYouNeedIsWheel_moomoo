@@ -19,6 +19,8 @@
 
 - Prefer focused module tests over broad brittle DOM snapshots.
 - Add regression tests for any bug that could hide, mis-rank, or mislabel a signal.
+- Test files that exercise rollover API behaviour (`portfolio-rollover-unavailable.test.js`) must import the UI module (`rollover-ui.js`) before calling `loadOptionPositions` so the handler-registration side-effect sets up `rolloverUiHandlers`.
+- `dashboard-safety.test.js` verifies that API-fed content is rendered through `escapeHtml` instead of raw `innerHTML` assignment.
 
 ## Verification
 

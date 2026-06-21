@@ -19,4 +19,10 @@ export function formatCurrency(value) {
 export function formatPercent(value) {
     if (value === null || value === undefined) return '0.00%';
     return `${value.toFixed(2)}%`;
-} 
+}
+
+export function escapeHtml(value) {
+    const el = document.createElement('div');
+    el.textContent = value == null ? '' : String(value);
+    return el.innerHTML;
+}

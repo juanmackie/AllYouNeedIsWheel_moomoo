@@ -48,7 +48,18 @@ class TradeEventsRepository:
                 ))
 
                 conn.commit()
+                logger.info(
+                    "Trade event saved: type=%s ticker=%s opt=%s strike=%.2f exp=%s pnl=%s",
+                    event_data.get('event_type'), event_data.get('ticker'),
+                    event_data.get('option_type'), float(event_data.get('strike', 0) or 0),
+                    event_data.get('expiration'), event_data.get('pnl'),
+                )
         except Exception:
+            logger.error(
+                "Error saving trade event: type=%s ticker=%s",
+                event_data.get('event_type'), event_data.get('ticker'),
+                exc_info=True,
+            )
             raise
 
     def get_trade_events(self, ticker=None, event_type=None, limit=100):

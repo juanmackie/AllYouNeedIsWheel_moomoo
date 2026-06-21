@@ -27,6 +27,7 @@ class IVRepository:
                 ''', (ticker, timestamp, normalized_iv, stock_price, option_type, expiration, dte))
 
                 conn.commit()
+                logger.debug("Saved IV data for %s: IV=%.2f price=%s", ticker, normalized_iv, stock_price)
                 return True
         except Exception as e:
             logger.error(f"Error saving IV data for {ticker}: {str(e)}")

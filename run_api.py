@@ -10,6 +10,7 @@ import sys
 import platform
 import argparse
 import shutil
+import subprocess
 from dotenv import load_dotenv
 from core.logging_config import get_logger
 
@@ -44,6 +45,19 @@ def ensure_local_connection_config():
     except Exception as exc:
         logger.warning(f"Could not create {config_path} from example: {exc}")
 
+
+def _parse_positive_int(name, value, *, maximum=None):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer")
+    if parsed < 1:
+        raise ValueError(f"{name} must be at least 1")
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"{name} must be at most {maximum}")
+    return parsed
+
+
 def main():
     """
     Start the API server using appropriate WSGI server based on platform
@@ -71,18 +85,18 @@ def main():
         ensure_local_connection_config()
         
         # Get port from environment variable or use default (changed from 5000 to 8000)
-        port = os.environ.get('PORT', '8000')
-        workers = os.environ.get('WORKERS', '4')
+        port = _parse_positive_int('PORT', os.environ.get('PORT', '8000'), maximum=65535)
+        workers = _parse_positive_int('WORKERS', os.environ.get('WORKERS', '4'))
         
         # Check if port is available
         import socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        result = sock.connect_ex(('127.0.0.1', int(port)))
+        result = sock.connect_ex(('127.0.0.1', port))
         sock.close()
         
         if result == 0:
             logger.error(f"Port {port} is already in use. Please stop the existing process or use a different port.")
-            logger.info(f"Try: PORT={int(port)+1} python3 run_api.py")
+            logger.info(f"Try: PORT={port + 1} python3 run_api.py")
             sys.exit(1)
         
         # Detect operating system
@@ -96,7 +110,7 @@ def main():
                 from waitress import serve
                 from app import app
                 # Start the server
-                serve(app, host='0.0.0.0', port=int(port), threads=int(workers))
+                serve(app, host='0.0.0.0', port=port, threads=workers)
             except ImportError:
                 logger.error("Waitress is not installed. Please install it with: pip install waitress")
                 sys.exit(1)
@@ -104,17 +118,19 @@ def main():
             # Unix/Linux/Mac: Use gunicorn
             logger.info(f"Starting Auto-Trader API server on port {port} with {workers} workers using gunicorn")
             try:
-                # Build the gunicorn command
-                cmd = f"gunicorn --workers={workers} --bind=0.0.0.0:{port} app:app"
-                # Run gunicorn
-                os.system(cmd)
+                subprocess.run([
+                    'gunicorn',
+                    f'--workers={workers}',
+                    f'--bind=0.0.0.0:{port}',
+                    'app:app',
+                ], check=True)
             except Exception as e:
                 logger.error(f"Error starting gunicorn: {str(e)}")
                 
                 # Fallback to Flask development server
                 logger.info("Falling back to Flask development server")
                 from app import app
-                app.run(host='0.0.0.0', port=int(port))
+                app.run(host='0.0.0.0', port=port)
         
     except Exception as e:
         logger.error(f"Error starting API server: {str(e)}")

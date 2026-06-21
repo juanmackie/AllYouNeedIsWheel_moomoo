@@ -67,7 +67,8 @@ class PortfolioService:
                 readonly=bool(self.config.get('readonly', True)),
                 account_id=self.config.get('account_id'),
                 portfolio_env=self.config.get('portfolio_env'),
-                security_firm=self.config.get('security_firm')
+                security_firm=self.config.get('security_firm'),
+                broker_cache_after_hours=self.config.get('broker_cache_after_hours', True),
             )
             
             if not self.connection.connect():

@@ -125,6 +125,24 @@ class TestTvscreenerServiceGetWheelCandidates:
         # Only 2 where() calls: volatility + volume (no price)
         assert mock_screener.where.call_count == 2
 
+    def test_min_volatility_pct_sets_volatility_percent_floor(self):
+        """The renamed screener knob is a TradingView volatility percent floor."""
+        service = TvscreenerService()
+        service._initialized = True
+        service._tvscreener = MagicMock()
+
+        mock_screener = MagicMock()
+
+        import pandas as pd
+        mock_screener.get.return_value = pd.DataFrame({'symbol': ['ANY']})
+
+        with patch('tvscreener.StockScreener', return_value=mock_screener):
+            result = service.get_wheel_candidates(min_volatility_pct=4.5, max_price=None)
+
+        assert result == ['ANY']
+        volatility_filter = mock_screener.where.call_args_list[0][0][0]
+        assert volatility_filter.value == 4.5
+
 
 class TestCreateTvscreenerService:
     """Test factory function."""

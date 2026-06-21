@@ -4,7 +4,10 @@ import { showAlert } from '../utils/alerts.js';
 import { formatCurrency } from '../utils/formatters.js';
 import { fetchOptionData, fetchOptionExpirations, fetchStockPrices } from './api.js';
 import { updateOptionsTable, showToast, addOtmInputEventListeners } from './options-table-rendering.js';
-import { refreshOptionsForTicker, refreshOptionsForTickerByType, refreshAllOptions, sellAllOptions } from './options-table-actions.js';
+
+async function getOptionsTableActions() {
+    return import('./options-table-actions.js');
+}
 
 export async function handleExpirationChange(selectElement) {
     const ticker = selectElement.getAttribute('data-ticker');
@@ -120,8 +123,10 @@ export function addOptionsTableEventListeners() {
 
                     try {
                         if (optionType) {
+                            const { refreshOptionsForTickerByType } = await getOptionsTableActions();
                             await refreshOptionsForTickerByType(ticker, optionType, true);
                         } else {
+                            const { refreshOptionsForTicker } = await getOptionsTableActions();
                             await refreshOptionsForTicker(ticker, true);
                         }
                         button.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
@@ -289,6 +294,7 @@ export function addOptionsTableEventListeners() {
                 }
 
                 try {
+                    const { sellAllOptions } = await getOptionsTableActions();
                     await sellAllOptions('CALL');
                 } catch (error) {
                     console.error('Error in sell all calls handler:', error);
@@ -307,6 +313,7 @@ export function addOptionsTableEventListeners() {
                 }
 
                 try {
+                    const { sellAllOptions } = await getOptionsTableActions();
                     await sellAllOptions('PUT');
                 } catch (error) {
                     console.error('Error in sell all puts handler:', error);
@@ -328,6 +335,7 @@ export function addOptionsTableEventListeners() {
                 button.disabled = true;
 
                 try {
+                    const { refreshAllOptions } = await getOptionsTableActions();
                     await refreshAllOptions();
                     } catch (error) {
                         const isTimeout = error?.message?.includes('Request timed out');
@@ -353,6 +361,7 @@ export function addOptionsTableEventListeners() {
                 button.disabled = true;
 
                 try {
+                    const { refreshAllOptions } = await getOptionsTableActions();
                     await refreshAllOptions('CALL');
                     } catch (error) {
                         const isTimeout = error?.message?.includes('Request timed out');
@@ -378,6 +387,7 @@ export function addOptionsTableEventListeners() {
                 button.disabled = true;
 
                 try {
+                    const { refreshAllOptions } = await getOptionsTableActions();
                     await refreshAllOptions('PUT');
                     } catch (error) {
                         const isTimeout = error?.message?.includes('Request timed out');
@@ -419,6 +429,7 @@ export function addOptionsTableEventListeners() {
             refreshAllButton.disabled = true;
 
             try {
+                const { refreshAllOptions } = await getOptionsTableActions();
                 await refreshAllOptions();
                 } catch (error) {
                     const isTimeout = error?.message?.includes('Request timed out');
@@ -444,6 +455,7 @@ export function addOptionsTableEventListeners() {
             refreshAllCallsButton.disabled = true;
 
             try {
+                const { refreshAllOptions } = await getOptionsTableActions();
                 await refreshAllOptions('CALL');
                 } catch (error) {
                     const isTimeout = error?.message?.includes('Request timed out');
@@ -462,6 +474,7 @@ export function addOptionsTableEventListeners() {
             refreshAllPutsButton.disabled = true;
 
             try {
+                const { refreshAllOptions } = await getOptionsTableActions();
                 await refreshAllOptions('PUT');
                 } catch (error) {
                     const isTimeout = error?.message?.includes('Request timed out');

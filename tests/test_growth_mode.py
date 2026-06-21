@@ -317,10 +317,11 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
         # triggering a hard blocker
         self.assertEqual(result.covered_call_intent, 'upside-capping risk',
                          f"Expected upside-capping risk, got: {result.covered_call_intent}")
-        self.assertTrue(
+        self.assertFalse(
             result.hard_blockers,
-            f"Expected hard_blockers for low-premium CC, got: {result.hard_blockers}"
+            f"Expected low-premium CC to warn, not hard-block, got: {result.hard_blockers}"
         )
+        self.assertTrue(any('Low-premium CC' in w for w in result.warnings))
 
 
 
@@ -414,9 +415,17 @@ class TestShouldBlockForDataQuality(unittest.TestCase):
         self.assertTrue(blocked)
         self.assertIn("low confidence", reason.lower())
 
-    def test_moderate_confidence_yfinance_blocked(self):
+    def test_moderate_confidence_yfinance_is_not_blocked_at_the_looser_threshold(self):
         blocked, reason = should_block_for_data_quality(
             confidence_score=65, has_blockers=False,
+            is_from_yfinance=True, price_source='yfinance',
+        )
+        self.assertFalse(blocked)
+        self.assertEqual(reason, '')
+
+    def test_lower_confidence_yfinance_is_still_blocked(self):
+        blocked, reason = should_block_for_data_quality(
+            confidence_score=64, has_blockers=False,
             is_from_yfinance=True, price_source='yfinance',
         )
         self.assertTrue(blocked)

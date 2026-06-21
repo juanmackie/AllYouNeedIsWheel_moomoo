@@ -5,6 +5,22 @@ Extracted from the monolithic options_service.py for maintainability.
 
 import logging
 
+try:
+    from moomoo import RET_OK, RET_ERROR
+except ImportError:
+    RET_OK = None
+    RET_ERROR = None
+
+
+def _screening_min_volatility_pct(criteria: dict, fallback: float) -> float:
+    if 'min_volatility_pct' in criteria:
+        return float(criteria.get('min_volatility_pct') or fallback)
+    legacy_iv_rank = criteria.get('min_iv_rank')
+    if legacy_iv_rank is not None:
+        return float(legacy_iv_rank) / 10
+    return fallback
+
+
 logger = logging.getLogger('api.services.watchlist_manager')
 
 
@@ -21,6 +37,56 @@ class WatchlistManager:
         if hasattr(self._config_provider, 'config'):
             return self._config_provider.config
         return self._config_provider
+
+    def _get_moomoo_connection(self):
+        if not hasattr(self, '_moomoo_connection'):
+            try:
+                from core.connection import MoomooConnection
+                cfg = self.config
+                self._moomoo_connection = MoomooConnection(
+                    host=str(cfg.get('host', '127.0.0.1')),
+                    port=int(cfg.get('port', 11111)),
+                    readonly=bool(cfg.get('readonly', True)),
+                    account_id=cfg.get('account_id'),
+                    portfolio_env=cfg.get('portfolio_env'),
+                    security_firm=cfg.get('security_firm'),
+                    broker_cache_after_hours=cfg.get('broker_cache_after_hours', True),
+                )
+            except Exception as e:
+                logger.warning(f"Moomoo watchlist connection init failed: {e}")
+                self._moomoo_connection = False
+        return self._moomoo_connection if self._moomoo_connection else None
+
+    def _fetch_moomoo_watchlist(self):
+        conn = self._get_moomoo_connection()
+        if conn is None:
+            logger.warning("Moomoo watchlist: no connection, falling back to static watchlist")
+            return self.config.get('watchlist', [])
+        if not conn.is_connected() and not conn.connect():
+            logger.warning("Moomoo watchlist: failed to connect, falling back to static watchlist")
+            return self.config.get('watchlist', [])
+        group_name = self.config.get('moomoo_watchlist_group', 'My Watchlist')
+        try:
+            ret, data = conn.get_user_security(group_name)
+            if ret != (RET_OK or 0) or data is None or (hasattr(data, 'empty') and data.empty):
+                logger.warning(f"Moomoo watchlist: group '{group_name}' returned no securities, falling back")
+                return self.config.get('watchlist', [])
+            if hasattr(data, 'to_dict'):
+                records = data.to_dict('records')
+            else:
+                records = list(data)
+            tickers = []
+            for record in records:
+                code = record.get('code', '')
+                if code:
+                    if '.' in code:
+                        code = code.rsplit('.', 1)[-1]
+                    tickers.append(code.upper())
+            logger.info(f"Moomoo watchlist: fetched {len(tickers)} tickers from group '{group_name}'")
+            return tickers
+        except Exception as e:
+            logger.warning(f"Moomoo watchlist fetch failed: {e}, falling back to static watchlist")
+            return self.config.get('watchlist', [])
         
     def _get_tvscreener_service(self):
         """
@@ -41,10 +107,10 @@ class WatchlistManager:
     def get_effective_watchlist(self, growth_mode_config=None, portfolio_context=None):
         """
         Get effective watchlist based on configuration.
-        Supports static, dynamic, and hybrid modes.
+        Supports static, moomoo, dynamic, and hybrid modes.
 
         When growth_mode is enabled, uses growth-tuned screener parameters
-        (higher min_iv_rank, smaller max_stocks) to reduce wasted scanning.
+        (higher min_volatility_pct, smaller max_stocks) to reduce wasted scanning.
         When portfolio_context is provided, computes max_price from CSP cash
         to cap CSP underlyings.
 
@@ -65,19 +131,22 @@ class WatchlistManager:
         if watchlist_mode == 'static':
             return static_watchlist
 
+        if watchlist_mode == 'moomoo':
+            return self._fetch_moomoo_watchlist()
+
         # Try dynamic screening
         try:
             tvscreener = self._get_tvscreener_service()
             if tvscreener:
                 criteria = self.config.get('screening_criteria', {})
-                min_iv_rank = criteria.get('min_iv_rank', 30)
+                min_volatility_pct = _screening_min_volatility_pct(criteria, 3.0)
                 min_volume = criteria.get('min_volume', 1000000)
                 max_stocks = criteria.get('max_stocks', 50)
 
                 # Apply growth mode overlay on screening criteria
                 if growth_mode_config:
                     screener_profile = growth_mode_config.get('screener_profile', {})
-                    min_iv_rank = screener_profile.get('min_iv_rank', min_iv_rank)
+                    min_volatility_pct = _screening_min_volatility_pct(screener_profile, min_volatility_pct)
                     max_stocks = screener_profile.get('max_watchlist_tickers', max_stocks)
 
                 # Compute max_price from portfolio context
@@ -95,7 +164,7 @@ class WatchlistManager:
                         max_price = csp_cash / 100 / (1 - max_otm_pct / 100)
 
                 dynamic = tvscreener.get_wheel_candidates(
-                    min_iv_rank=min_iv_rank,
+                    min_volatility_pct=min_volatility_pct,
                     min_volume=min_volume,
                     limit=max_stocks,
                     max_price=max_price,
@@ -104,7 +173,7 @@ class WatchlistManager:
                 if dynamic:
                     if watchlist_mode == 'hybrid':
                         # Combine dynamic and static watchlists
-                        combined = list(set(dynamic + static_watchlist))
+                        combined = list(dict.fromkeys(dynamic + static_watchlist))
                         logger.info(f"Hybrid watchlist: {len(dynamic)} dynamic + {len(static_watchlist)} static = {len(combined)} total")
                         return combined
                     else:  # 'dynamic'

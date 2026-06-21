@@ -36,8 +36,41 @@ function actionBucketClass(bucket) {
     if (bucket === 'PUT_RESEARCH') return 'text-danger';
     if (bucket === 'CONFLICT_WATCH') return 'text-warning';
     if (bucket === 'SPECULATIVE_ONLY') return 'text-info';
-    if (bucket === 'REJECT') return 'text-secondary';
+    if (bucket === 'REJECT') return 'text-muted opacity-75';
     return 'text-muted';
+}
+
+function addClassTokens(el, className) {
+    if (!el || !className) return;
+    className.split(/\s+/).filter(Boolean).forEach(cls => el.classList.add(cls));
+}
+
+function buildInterpretation(signal) {
+    const caveat = 'Research-only, not a trade signal.';
+    const bucket = signal.action_bucket || '';
+    const side = String(signal.side || '').toUpperCase();
+
+    if (bucket === 'CALL_RESEARCH') {
+        return `Bullish call flow. Research long calls or call spreads. ${caveat}`;
+    }
+    if (bucket === 'PUT_RESEARCH') {
+        return `Bearish put flow. Research long puts or put spreads. ${caveat}`;
+    }
+    if (bucket === 'SPECULATIVE_ONLY') {
+        return `Deep-OTM lottery flow. Low conviction; watch only. ${caveat}`;
+    }
+    if (bucket === 'CONFLICT_WATCH') {
+        return `Two-sided flow; no clear directional edge. Wait for resolution. ${caveat}`;
+    }
+    if (bucket === 'WATCH') {
+        if (side === 'CALL') return `Mixed bullish flow. ${caveat}`;
+        if (side === 'PUT') return `Mixed bearish flow. ${caveat}`;
+        return `Mixed flow. ${caveat}`;
+    }
+    if (signal.action_reason) {
+        return `${signal.action_reason} ${caveat}`;
+    }
+    return caveat;
 }
 
 function directionBadgeClass(direction) {
@@ -68,7 +101,7 @@ function getOverlayBadgeInfo(signal) {
     const summaryParts = [];
     if (overlay.summary) summaryParts.push(overlay.summary);
     if (overlay.capital?.summary) summaryParts.push(`capital: ${overlay.capital.summary}`);
-    if (overlay.technical?.summary) summaryParts.push(`technical: ${overlay.technical.summary}`);
+
     if (overlay.derivatives?.summary) summaryParts.push(`derivatives: ${overlay.derivatives.summary}`);
     const warnings = overlay.warnings || signal.signal_overlay_warnings || [];
 
@@ -89,10 +122,15 @@ function renderCard(signal) {
     const actionEl = clone.querySelector('.catalyst-card__action');
     if (signal.action_label) {
         actionEl.textContent = signal.action_label;
-        actionEl.classList.add(actionBucketClass(signal.action_bucket));
+        addClassTokens(actionEl, actionBucketClass(signal.action_bucket));
         if (signal.action_reason) {
             actionEl.title = signal.action_reason;
         }
+    }
+
+    const interpretationEl = clone.querySelector('.catalyst-card__interpretation');
+    if (interpretationEl) {
+        interpretationEl.textContent = buildInterpretation(signal);
     }
 
     const conflictEl = clone.querySelector('.catalyst-card__conflict-warning');
@@ -182,7 +220,7 @@ function renderSignals(payload) {
         const parts = [];
         if (payload.scanned != null) parts.push(`Scanned ${payload.scanned} tickers`);
         if (payload.cache_hits != null) parts.push(`${payload.cache_hits} cached`);
-        if (payload.rejected_by_threshold_count != null && payload.rejected_by_threshold_count > 0) parts.push(`${payload.rejected_by_threshold_count} rejected`);
+        if (payload.rejected_by_threshold_count != null && payload.rejected_by_threshold_count > 0) parts.push(`${payload.rejected_by_threshold_count} no-signal tickers`);
         if (payload.elapsed_seconds != null) parts.push(`${payload.elapsed_seconds}s`);
         if (payload.errors?.length) parts.push(`${payload.errors.length} errors`);
 
@@ -232,7 +270,7 @@ function renderSignals(payload) {
     if (payload.scanned != null) scanParts.push(`${payload.scanned} scanned`);
     if (payload.cache_hits != null) scanParts.push(`${payload.cache_hits} cached`);
     if (payload.candidate_count != null) scanParts.push(`${payload.candidate_count} candidates`);
-    if (payload.rejected_by_threshold_count != null && payload.rejected_by_threshold_count > 0) scanParts.push(`${payload.rejected_by_threshold_count} rejected`);
+    if (payload.rejected_by_threshold_count != null && payload.rejected_by_threshold_count > 0) scanParts.push(`${payload.rejected_by_threshold_count} no-signal tickers`);
     if (payload.errors?.length) scanParts.push(`${payload.errors.length} errors`);
     if (payload.elapsed_seconds != null) scanParts.push(`${payload.elapsed_seconds}s`);
     if (scanParts.length) {
@@ -286,7 +324,7 @@ export async function loadCatalystSignals(manualRefresh = false, thresholds = nu
     }
 }
 
-export function initializeCatalystWatch() {
+export function initializeCatalystWatch({ autoLoad = false } = {}) {
     initElements();
     if (!listenersBound) {
         listenersBound = true;
@@ -306,6 +344,7 @@ export function initializeCatalystWatch() {
             });
         });
     }
+    if (!autoLoad) return Promise.resolve();
     return loadCatalystSignals(false, {
         maxScanTickers: 2,
         maxExpirations: 1,

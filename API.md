@@ -464,14 +464,16 @@ Scan the watchlist for unusual options flow and optionally widen the scan with A
 
 ### Get Top Recommendations
 
-Retrieve the top-ranked option plays across all watchlist tickers. Uses multi-threaded scoring with caching.
+Retrieve the top-ranked option plays across all watchlist tickers. Ranks by premium velocity (`premium_per_contract / dte`) with caching.
 
 **Endpoint:** `GET /api/options/top-recommendations`
 
 **Query Parameters:**
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `limit` | integer | No | 10 | Max recommendations to return |
+| `limit` | integer | No | 3 | Max recommendations to return |
+| `include_long_options` | boolean | No | false | Include research-only long Call/Put lane in the scan |
+| `ignore_cash_limits` | boolean | No | false | Show best plays without CSP cash/buying-power fit filters; over-cash CSPs remain research-only signals |
 
 **Response:**
 ```json
@@ -808,6 +810,25 @@ Get prefilled data for closing a position, used for rollover workflows.
 
 ## LLM
 
+### Get LLM Status
+
+Check whether the optional AI advisor is enabled and configured before requesting suggestions.
+
+**Endpoint:** `GET /api/llm/status`
+
+**Response:**
+```json
+{
+  "success": true,
+  "enabled": true,
+  "configured": false,
+  "available": false,
+  "provider": "openai",
+  "model": "moonshotai/kimi-k2.6",
+  "message": "LLM advisor needs LLM_API_KEY before suggestions can run."
+}
+```
+
 ### Get LLM Suggestions
 
 Get AI-driven suggestions for option plays based on current market conditions.
@@ -1109,7 +1130,7 @@ The API does not use API keys or tokens. Access control is through:
 
 ## Version History
 
-- **2.3** â€” Catalyst Watch Ape Wisdom expansion, social context, and source-policy disclosure
+- **2.3** ? Catalyst Watch Ape Wisdom expansion, social context, and source-policy disclosure
 
 - **2.1** — Analytics and LLM endpoints; expanded Portfolio and Options endpoints
 - **2.0** — Phase 1-4: Risk-adjusted scoring, IV environment, earnings integration, macro regime

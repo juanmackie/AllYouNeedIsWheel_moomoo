@@ -59,7 +59,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
             'watchlist': ['AAPL'],
             'watchlist_mode': 'dynamic',
             'screening_criteria': {
-                'min_iv_rank': 30,
+                'min_volatility_pct': 3.0,
                 'min_volume': 1000000,
                 'max_stocks': 50,
             },
@@ -70,7 +70,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ['GME', 'AMC'])
         mock_tvscreener.get_wheel_candidates.assert_called_once_with(
-            min_iv_rank=30, min_volume=1000000, limit=50, max_price=None
+            min_volatility_pct=3.0, min_volume=1000000, limit=50, max_price=None
         )
 
     @patch.object(WatchlistManager, '_get_tvscreener_service')
@@ -82,7 +82,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
             'watchlist': ['AAPL', 'TSLA'],
             'watchlist_mode': 'hybrid',
             'screening_criteria': {
-                'min_iv_rank': 20,
+                'min_volatility_pct': 2.0,
                 'min_volume': 500000,
                 'max_stocks': 30,
             },
@@ -125,6 +125,99 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ['AAPL'])
 
+    @patch.object(WatchlistManager, '_get_moomoo_connection')
+    def test_moomoo_mode_returns_tickers(self, mock_get_conn):
+        """Moomoo watchlist mode returns tickers from Moomoo watchlist group."""
+        mock_conn = MagicMock()
+        mock_conn.is_connected.return_value = True
+        mock_df = MagicMock()
+        mock_df.empty = False
+        mock_df.to_dict.return_value = [
+            {'code': 'US.AAPL'},
+            {'code': 'US.TSLA'},
+            {'code': 'US.NVDA'},
+        ]
+        mock_conn.get_user_security.return_value = (0, mock_df)
+        mock_get_conn.return_value = mock_conn
+        self.mock_context.config = {
+            'watchlist': ['FALLBACK'],
+            'watchlist_mode': 'moomoo',
+            'moomoo_watchlist_group': 'My Watchlist',
+        }
+        manager = WatchlistManager(self.mock_context)
+
+        result = manager.get_effective_watchlist()
+
+        self.assertEqual(result, ['AAPL', 'TSLA', 'NVDA'])
+        mock_conn.get_user_security.assert_called_once_with('My Watchlist')
+
+    @patch.object(WatchlistManager, '_get_moomoo_connection')
+    def test_moomoo_mode_falls_back_on_connection_none(self, mock_get_conn):
+        """Moomoo watchlist falls back to static when connection is None."""
+        mock_get_conn.return_value = None
+        self.mock_context.config = {
+            'watchlist': ['AAPL', 'TSLA'],
+            'watchlist_mode': 'moomoo',
+        }
+        manager = WatchlistManager(self.mock_context)
+
+        result = manager.get_effective_watchlist()
+
+        self.assertEqual(result, ['AAPL', 'TSLA'])
+
+    @patch.object(WatchlistManager, '_get_moomoo_connection')
+    def test_moomoo_mode_falls_back_on_connect_failure(self, mock_get_conn):
+        """Moomoo watchlist falls back to static when connection fails."""
+        mock_conn = MagicMock()
+        mock_conn.is_connected.return_value = False
+        mock_conn.connect.return_value = False
+        mock_get_conn.return_value = mock_conn
+        self.mock_context.config = {
+            'watchlist': ['MSFT'],
+            'watchlist_mode': 'moomoo',
+        }
+        manager = WatchlistManager(self.mock_context)
+
+        result = manager.get_effective_watchlist()
+
+        self.assertEqual(result, ['MSFT'])
+
+    @patch.object(WatchlistManager, '_get_moomoo_connection')
+    def test_moomoo_mode_falls_back_on_empty_data(self, mock_get_conn):
+        """Moomoo watchlist falls back to static when group has no securities."""
+        mock_conn = MagicMock()
+        mock_conn.is_connected.return_value = True
+        mock_df = MagicMock()
+        mock_df.empty = True
+        mock_conn.get_user_security.return_value = (0, mock_df)
+        mock_get_conn.return_value = mock_conn
+        self.mock_context.config = {
+            'watchlist': ['GOOGL'],
+            'watchlist_mode': 'moomoo',
+        }
+        manager = WatchlistManager(self.mock_context)
+
+        result = manager.get_effective_watchlist()
+
+        self.assertEqual(result, ['GOOGL'])
+
+    @patch.object(WatchlistManager, '_get_moomoo_connection')
+    def test_moomoo_mode_falls_back_on_api_error(self, mock_get_conn):
+        """Moomoo watchlist falls back to static when get_user_security fails."""
+        mock_conn = MagicMock()
+        mock_conn.is_connected.return_value = True
+        mock_conn.get_user_security.side_effect = Exception('API error')
+        mock_get_conn.return_value = mock_conn
+        self.mock_context.config = {
+            'watchlist': ['AMD'],
+            'watchlist_mode': 'moomoo',
+        }
+        manager = WatchlistManager(self.mock_context)
+
+        result = manager.get_effective_watchlist()
+
+        self.assertEqual(result, ['AMD'])
+
     @patch.object(WatchlistManager, '_get_tvscreener_service')
     def test_dynamic_mode_passes_max_price_from_portfolio_context(self, mock_get_tvscreener):
         """Dynamic watchlist passes max_price to tvscreener when portfolio_context is provided."""
@@ -135,12 +228,12 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
             'watchlist': ['AAPL'],
             'watchlist_mode': 'dynamic',
             'screening_criteria': {
-                'min_iv_rank': 30,
+                'min_volatility_pct': 3.0,
                 'min_volume': 1000000,
                 'max_stocks': 50,
             },
         }
-        portfolio = {'broker_buying_power': 11358.0}
+        portfolio = {'cash_available_for_csp': 11358.0}
         manager = WatchlistManager(self.mock_context)
 
         result = manager.get_effective_watchlist(portfolio_context=portfolio)
@@ -149,7 +242,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
         # max_price = 11358 / 100 / 0.85 ≈ 133.62
         expected_max_price = 11358 / 100 / (1 - 15 / 100)
         mock_tvscreener.get_wheel_candidates.assert_called_once_with(
-            min_iv_rank=30, min_volume=1000000, limit=50, max_price=expected_max_price
+            min_volatility_pct=3.0, min_volume=1000000, limit=50, max_price=expected_max_price
         )
 
     @patch.object(WatchlistManager, '_get_tvscreener_service')
@@ -162,7 +255,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
             'watchlist': ['AAPL'],
             'watchlist_mode': 'dynamic',
             'screening_criteria': {
-                'min_iv_rank': 30,
+                'min_volatility_pct': 3.0,
                 'min_volume': 1000000,
                 'max_stocks': 50,
             },
@@ -173,7 +266,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ['GME', 'AMC'])
         mock_tvscreener.get_wheel_candidates.assert_called_once_with(
-            min_iv_rank=30, min_volume=1000000, limit=50, max_price=None
+            min_volatility_pct=3.0, min_volume=1000000, limit=50, max_price=None
         )
 
 
@@ -243,7 +336,7 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
                 'csp_default_otm_pct': 10,
                 'csp_min_otm_pct': 5,
                 'csp_max_otm_pct': 15,
-                'min_iv_rank': 45,
+                'min_volatility_pct': 4.5,
                 'max_watchlist_tickers': 25,
                 'require_cash_fit': True,
             },
@@ -364,18 +457,18 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
         self.assertEqual(call_profile['target_delta'], 0.24)
         self.assertEqual(call_profile['delta_tolerance'], 0.18)
 
-    def test_growth_mode_effective_watchlist_uses_higher_iv_rank(self):
-        """Growth mode watchlist should use higher min_iv_rank from screener_profile."""
+    def test_growth_mode_effective_watchlist_uses_higher_volatility(self):
+        """Growth mode watchlist should use higher min_volatility_pct from screener_profile."""
         growth_cfg = {
             'enabled': True,
             'screener_profile': {
-                'min_iv_rank': 45,
+                'min_volatility_pct': 4.5,
                 'max_watchlist_tickers': 25,
             },
         }
         # Just verify the config parsing works properly
         sp = growth_cfg.get('screener_profile', {})
-        self.assertEqual(sp.get('min_iv_rank'), 45)
+        self.assertEqual(sp.get('min_volatility_pct'), 4.5)
         self.assertEqual(sp.get('max_watchlist_tickers'), 25)
 
 

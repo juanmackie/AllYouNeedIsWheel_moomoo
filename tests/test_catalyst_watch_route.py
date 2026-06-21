@@ -59,9 +59,9 @@ def test_catalyst_empty_response_default_thresholds_unchanged():
     assert payload["thresholds"]["min_premium_notional"] == 1_000_000
     assert payload["thresholds"]["min_fresh_volume_ratio"] == 5
     assert payload["thresholds"]["min_volume"] == 500
-    assert payload["thresholds"]["max_expirations"] == 1
+    assert payload["thresholds"]["max_expirations"] == 3
     assert payload["thresholds"]["max_dte"] == 60
-    assert payload["thresholds"]["max_scan_tickers"] == 2
+    assert payload["thresholds"]["max_scan_tickers"] == 12
 
 
 def test_add_freshness_metadata_fresh_response():

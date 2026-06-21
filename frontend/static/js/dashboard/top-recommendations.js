@@ -3,7 +3,7 @@
  * Displays the highest-scoring option opportunities with auto-refresh
  */
 import { fetchTopRecommendations } from './api.js';
-import { formatCurrency, formatPercent } from '../utils/formatters.js';
+import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
 import { getMacroData } from './macro.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
 import StateModel from '../utils/state-model.js';
@@ -16,15 +16,20 @@ let listenersBound = false;
 let isInitialized = false;
 let activeSignalType = 'all';
 let _isLoading = false; // in-flight guard — prevents overlapping requests
+let lastIncludeLongOptions = true;
+let pendingRecommendationRequest = null;
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const GENERATING_RETRY_DELAYS_MS = [8000, 15000, 30000, 60000];
+const GENERATING_RETRY_DELAYS_MS = [8000, 15000, 30000, 60000, 120000];
 let loadingBannerId = null;
 let generatingRetryTimer = null;
 let generatingRetryCount = 0;
+let _isBackendGenerating = false;
+let lastIgnoreCashLimits = false;
+let _toggleRefreshInProgress = false;
 
 // DOM Elements (initialized lazily)
 let container, contentEl, cardsContainer, lastUpdatedEl;
-let blockedListEl, blockedCountEl, bpIndicator;
+let blockedListEl, blockedCountEl, bpIndicator, ignoreCashLimitsToggle, bestPlaysHelpEl;
 let tabContainer, signalCountDisplay;
 
 /**
@@ -38,8 +43,52 @@ function initElements() {
     blockedListEl = document.getElementById('blocked-candidates-list');
     blockedCountEl = document.getElementById('blocked-candidates-count');
     bpIndicator = document.getElementById('buying-power-indicator');
+    ignoreCashLimitsToggle = document.getElementById('ignore-cash-limits-toggle');
+    bestPlaysHelpEl = document.getElementById('best-plays-help');
     tabContainer = document.getElementById('signal-tabs');
     signalCountDisplay = document.getElementById('signal-count-display');
+}
+
+function getIgnoreCashLimitsEnabled() {
+    return Boolean(ignoreCashLimitsToggle?.checked);
+}
+
+const SCREENER_INPUT_IDS = ['screener-otm-min', 'screener-otm-max', 'screener-dte-min', 'screener-dte-max',
+    'screener-delta-target', 'screener-min-volatility', 'screener-min-buying-power'];
+function getScreenerOverrides() {
+    const overrides = {};
+    const otmMin = document.getElementById('screener-otm-min');
+    const otmMax = document.getElementById('screener-otm-max');
+    const dteMin = document.getElementById('screener-dte-min');
+    const dteMax = document.getElementById('screener-dte-max');
+    const deltaTarget = document.getElementById('screener-delta-target');
+    const minVol = document.getElementById('screener-min-volatility');
+    const minBP = document.getElementById('screener-min-buying-power');
+    if (otmMin && otmMin.value !== '' && otmMin.value !== otmMin.defaultValue) overrides.csp_min_otm_pct = parseFloat(otmMin.value);
+    if (otmMax && otmMax.value !== '' && otmMax.value !== otmMax.defaultValue) overrides.csp_max_otm_pct = parseFloat(otmMax.value);
+    if (dteMin && dteMin.value !== '' && dteMin.value !== dteMin.defaultValue) overrides.csp_min_dte = parseFloat(dteMin.value);
+    if (dteMax && dteMax.value !== '' && dteMax.value !== dteMax.defaultValue) overrides.csp_max_dte = parseFloat(dteMax.value);
+    if (deltaTarget && deltaTarget.value !== '' && deltaTarget.value !== deltaTarget.defaultValue) overrides.csp_target_delta = parseFloat(deltaTarget.value);
+    if (minVol && minVol.value !== '' && minVol.value !== minVol.defaultValue) overrides.min_volatility_pct = parseFloat(minVol.value);
+    if (minBP && minBP.value !== '' && minBP.value !== minBP.defaultValue) overrides.min_csp_buying_power = parseFloat(minBP.value);
+    return Object.keys(overrides).length > 0 ? overrides : null;
+}
+
+function updateBestPlaysHelp(enabled, queued = false) {
+    const isEnabled = Boolean(enabled);
+    if (bestPlaysHelpEl) {
+        bestPlaysHelpEl.classList.toggle('d-none', !isEnabled);
+        bestPlaysHelpEl.textContent = queued
+            ? 'Best plays queued: the list will reload with wider OTM/DTE range and no cash filters after the current scan finishes.'
+            : 'Best plays active: OTM widened to 2-25%, DTE to 7-60, and cash/buying-power filters ignored. Over-budget CSPs are research-only.';
+    }
+
+    const descEl = document.getElementById('top-recs-desc');
+    if (descEl) {
+        descEl.textContent = isEnabled
+            ? 'Best plays: wider screener (2-25% OTM, 7-60 DTE), no cash fit filters. Review research-only CSPs before acting.'
+            : 'Signals ranked by estimated impact on reaching your 2x account target.';
+    }
 }
 
 /**
@@ -61,11 +110,11 @@ function getScoreColorClass(score) {
  */
 function getRankBadge(rank) {
     const badges = {
-        1: { class: 'rank-gold', icon: '🥇', label: '#1' },
-        2: { class: 'rank-silver', icon: '🥈', label: '#2' },
-        3: { class: 'rank-bronze', icon: '🥉', label: '#3' }
+        1: { class: 'rank-gold', icon: '🥇', label: '#1 Pick' },
+        2: { class: 'rank-silver', icon: '🥈', label: '#2 Pick' },
+        3: { class: 'rank-bronze', icon: '🥉', label: '#3 Pick' }
     };
-    return badges[rank] || { class: 'rank-standard', icon: `#${rank}`, label: `#${rank}` };
+    return badges[rank] || { class: 'rank-standard', icon: `#${rank}`, label: `#${rank} Pick` };
 }
 
 /**
@@ -234,10 +283,10 @@ function createRecommendationCard(rec) {
         throw new Error('Recommendation card root is missing');
     }
     
-    // Rank badge
+    // Rank badge (icon + text label)
     const rankInfo = getRankBadge(rec.rank);
     const rankBadge = clone.querySelector('.rank-badge');
-    rankBadge.textContent = rankInfo.icon;
+    rankBadge.textContent = rankInfo.icon + ' ' + rankInfo.label;
     rankBadge.classList.add(rankInfo.class);
     
     // Ticker
@@ -266,6 +315,20 @@ function createRecommendationCard(rec) {
     const dteBadge = clone.querySelector('.dte-badge');
     dteBadge.textContent = rec.dte != null ? `${rec.dte} DTE` : 'N/A DTE';
     
+    // Premium velocity — headlining metric
+    const velocityEl = clone.querySelector('.premium-velocity');
+    const dte = rec.dte;
+    const premiumPerContract = rec.premium_per_contract;
+    let velocityDisplay = 'N/A';
+    let velocityPositive = false;
+    if (premiumPerContract != null && premiumPerContract > 0 && dte != null && dte > 0) {
+        const dailyVelocity = premiumPerContract / dte;
+        velocityDisplay = '$' + dailyVelocity.toFixed(2) + ' / day';
+        velocityPositive = true;
+    }
+    velocityEl.textContent = velocityDisplay;
+    velocityEl.classList.add(velocityPositive ? 'text-success' : 'text-muted');
+
     // Premium
     clone.querySelector('.premium-amount').textContent = rec.premium_per_contract != null ? formatCurrency(rec.premium_per_contract) : 'N/A';
     
@@ -274,10 +337,10 @@ function createRecommendationCard(rec) {
     annualizedEl.textContent = rec.annualized_return != null ? `${rec.annualized_return.toFixed(1)}%` : 'N/A';
     annualizedEl.classList.add(rec.annualized_return != null && rec.annualized_return > 0 ? 'text-success' : 'text-danger');
     
-    // Score badge
+    // Score badge (secondary — premium velocity is the primary ranking metric)
     const scoreBadge = clone.querySelector('.score-badge');
     scoreBadge.textContent = rec.score != null ? `Score: ${rec.score.toFixed(1)}` : 'Score: N/A';
-    scoreBadge.classList.add(getScoreColorClass(rec.score));
+    addClassTokens(scoreBadge, getScoreColorClass(rec.score));
 
     // Confidence badge
     const confidenceBadge = clone.querySelector('.confidence-badge');
@@ -285,6 +348,14 @@ function createRecommendationCard(rec) {
     const ci = getConfidenceBadge(confidence);
     confidenceBadge.textContent = ci.label;
     addClassTokens(confidenceBadge, ci.class);
+
+    // Research-only badge
+    const researchOnlyBadge = clone.querySelector('.research-only-badge');
+    if (rec.research_only) {
+        researchOnlyBadge.textContent = 'Research only';
+        addClassTokens(researchOnlyBadge, 'bg-secondary');
+        researchOnlyBadge.classList.remove('d-none');
+    }
 
     // Underlying quality badge
     const qualityBadge = clone.querySelector('.underlying-quality-badge');
@@ -305,10 +376,10 @@ function createRecommendationCard(rec) {
     const sourceBadges = sourceInfo.sources.map((item) => {
         const label = normalizeSourceLabel(item.value);
         const badgeClass = sourceBadgeClass(item.value);
-        return `<span class="badge ${badgeClass} me-1" title="${item.label} source">${item.label}: ${label}</span>`;
+        return `<span class="badge ${badgeClass} me-1" title="${escapeHtml(item.label)} source">${escapeHtml(item.label)}: ${escapeHtml(label)}</span>`;
     }).join('');
     const freshnessClass = sourceInfo.freshnessClass || 'text-muted';
-    const freshnessHtml = sourceInfo.freshness ? `<span class="badge bg-light text-dark border ${freshnessClass ? 'ms-1' : ''}" title="Data freshness">${sourceInfo.freshness}</span>` : '';
+    const freshnessHtml = sourceInfo.freshness ? `<span class="badge bg-light text-dark border ${freshnessClass ? 'ms-1' : ''}" title="Data freshness">${escapeHtml(sourceInfo.freshness)}</span>` : '';
     sourceEl.innerHTML = `<i class="bi ${sourceInfo.icon}"></i> ${sourceBadges}${freshnessHtml}`;
     
     const overlayEl = clone.querySelector('.signal-overlay');
@@ -335,10 +406,10 @@ function createRecommendationCard(rec) {
         
         let warningHtml = '';
         if (criticalWarnings.length > 0) {
-            warningHtml += `<div class="text-danger fw-bold"><i class="bi bi-exclamation-triangle-fill"></i> ${criticalWarnings[0]}</div>`;
+            warningHtml += `<div class="text-danger fw-bold"><i class="bi bi-exclamation-triangle-fill"></i> ${escapeHtml(criticalWarnings[0])}</div>`;
         }
         if (otherWarnings.length > 0) {
-            warningHtml += `<div><i class="bi bi-exclamation-circle"></i> ${otherWarnings.slice(0, 2).join(' • ')}</div>`;
+            warningHtml += `<div><i class="bi bi-exclamation-circle"></i> ${escapeHtml(otherWarnings.slice(0, 2).join(' • '))}</div>`;
         }
         warningsEl.innerHTML = warningHtml;
     } else {
@@ -369,7 +440,7 @@ function createRecommendationCard(rec) {
 
         macroImpactEl.innerHTML = `
             <span class="${impactColor}">
-                Macro: ${impactSign}${impactPct}% ${impactText} (${macroData.rate_regime}/${macroData.credit_stress})
+                Macro: ${impactSign}${impactPct}% ${escapeHtml(impactText)} (${escapeHtml(macroData.rate_regime)}/${escapeHtml(macroData.credit_stress)})
             </span>
         `;
     } else if (macroImpactEl) {
@@ -380,9 +451,9 @@ function createRecommendationCard(rec) {
     const cspSection = clone.querySelector('.csp-details');
     if (signalType === 'csp' || signalType === 'put') {
         cspSection.classList.remove('d-none');
-        const cashReq = rec.cash_required || rec.wheel_decision?.cash_required;
+        const cashReq = rec.cash_required ?? rec.capital_required ?? rec.wheel_decision?.cash_required;
         const cspCash = signalsData?.cash_available_for_csp || 0;
-        const cashPct = cashReq && cspCash > 0 ? (cashReq / cspCash) * 100 : 0;
+        const cashPct = cashReq != null && cspCash > 0 ? (cashReq / cspCash) * 100 : 0;
         const breakevenBuffer = rec.breakeven_buffer_pct ?? rec.wheel_decision?.breakeven_buffer_pct;
         const expectedMove = rec.expected_move_buffer ?? rec.wheel_decision?.expected_move_buffer;
 
@@ -390,6 +461,22 @@ function createRecommendationCard(rec) {
         clone.querySelector('.csp-cash-pct').textContent = cashPct > 0 ? `${cashPct.toFixed(1)}%` : 'N/A';
         clone.querySelector('.csp-breakeven-buffer').textContent = breakevenBuffer != null ? `${breakevenBuffer.toFixed(1)}%` : 'N/A';
         clone.querySelector('.csp-expected-move').textContent = expectedMove != null ? `${expectedMove.toFixed(1)}%` : 'N/A';
+        // Show active screener profile on CSP card (P2.3)
+        const screenerSummary = clone.querySelector('.csp-screener-summary');
+        if (screenerSummary) {
+            const cspProfile = signalsData?.growth_mode?.csp_profile_summary;
+            if (cspProfile) {
+                screenerSummary.textContent = cspProfile;
+            } else {
+                const sp = signalsData?.growth_mode?.screener_profile;
+                if (sp && Object.keys(sp).length > 0) {
+                    const parts = [];
+                    if (sp.csp_min_otm_pct != null && sp.csp_max_otm_pct != null) parts.push(`OTM ${sp.csp_min_otm_pct}-${sp.csp_max_otm_pct}%`);
+                    if (sp.csp_min_dte != null && sp.csp_max_dte != null) parts.push(`DTE ${sp.csp_min_dte}-${sp.csp_max_dte}`);
+                    screenerSummary.textContent = parts.length > 0 ? parts.join(', ') : '';
+                }
+            }
+        }
     }
 
     // Covered call-specific details
@@ -439,7 +526,7 @@ function createRecommendationCard(rec) {
         const existingDiv = document.createElement('div');
         existingDiv.className = 'd-flex justify-content-between text-info fw-bold mt-1';
         existingDiv.innerHTML = `
-            <span><i class="bi bi-check-circle-fill"></i> Existing ${rec.option_type}s:</span>
+            <span><i class="bi bi-check-circle-fill"></i> Existing ${escapeHtml(rec.option_type)}s:</span>
             <span>${rec.existing_position} short</span>
         `;
         detailsEl.appendChild(existingDiv);
@@ -468,31 +555,56 @@ function showLoading() {
     loadingBannerId = showPanelLoading('top-recommendations-container', 'Analyzing live opportunities...');
 }
 
+function getGrowthModeLabel() {
+    const growthBanner = document.getElementById('growth-mode-banner');
+    return growthBanner && !growthBanner.classList.contains('d-none') ? 'Growth signals' : 'Signals';
+}
+
 /**
  * Show generating state — signals are being computed but took longer than expected.
  * Keeps any existing stale content visible beneath the banner.
  */
 function showGenerating() {
+    _isBackendGenerating = true;
+    const label = getGrowthModeLabel();
     if (loadingBannerId) {
-        finishPanelLoading(loadingBannerId, 'Signals still generating...');
+        finishPanelLoading(loadingBannerId, `${label} still generating...`);
         loadingBannerId = null;
     }
-    // Don't hide existing content — stale signals remain visible
-    if (contentEl) contentEl.classList.remove('d-none');
     const stateEl = document.getElementById('top-recommendations-state');
-    if (stateEl) {
-        const nextRetry = scheduleGeneratingRetry();
-        let notice = stateEl.querySelector('[data-generating-notice="true"]');
-        if (!notice) {
-            notice = document.createElement('div');
-            notice.dataset.generatingNotice = 'true';
+    // When toggle-triggered, clear stale cards and show explicit recomputing state
+    if (_toggleRefreshInProgress) {
+        if (cardsContainer) cardsContainer.innerHTML = '';
+        if (contentEl) contentEl.classList.add('d-none');
+        if (tabContainer) tabContainer.classList.add('d-none');
+        if (stateEl) {
+            stateEl.innerHTML = '';
+            const notice = document.createElement('div');
             notice.className = 'text-warning small text-center py-2';
+            notice.innerHTML = `<i class="bi bi-hourglass-split"></i> Recomputing best plays... This may take a moment.`;
             stateEl.appendChild(notice);
         }
-        if (nextRetry.scheduled) {
-            notice.textContent = `Fresh signals are being computed. Showing prior data while retry ${nextRetry.attempt}/${GENERATING_RETRY_DELAYS_MS.length} runs in ${Math.round(nextRetry.delay / 1000)}s.`;
-        } else {
-            notice.textContent = 'Signal generation is still taking longer than expected. Automatic retries are paused for now; use Refresh after broker data settles.';
+        // Schedule retry polling even for toggle-triggered regenerations
+        if (!generatingRetryTimer) {
+            const nextRetry = scheduleGeneratingRetry();
+        }
+    } else {
+        // Don't hide existing content — stale signals remain visible during auto-refresh
+        if (contentEl) contentEl.classList.remove('d-none');
+        if (stateEl) {
+            const nextRetry = scheduleGeneratingRetry();
+            let notice = stateEl.querySelector('[data-generating-notice="true"]');
+            if (!notice) {
+                notice = document.createElement('div');
+                notice.dataset.generatingNotice = 'true';
+                notice.className = 'text-warning small text-center py-2';
+                stateEl.appendChild(notice);
+            }
+            if (nextRetry.scheduled) {
+                notice.textContent = `Fresh ${label.toLowerCase()} are being computed. Showing prior data while retry ${nextRetry.attempt}/${GENERATING_RETRY_DELAYS_MS.length} runs in ${Math.round(nextRetry.delay / 1000)}s.`;
+            } else {
+                notice.textContent = `${label} generation is still taking longer than expected. Automatic retries are paused for now; use Refresh after broker data settles.`;
+            }
         }
     }
     if (lastUpdatedEl) {
@@ -529,7 +641,7 @@ function scheduleGeneratingRetry() {
     generatingRetryCount += 1;
     generatingRetryTimer = setTimeout(() => {
         generatingRetryTimer = null;
-        loadTopRecommendations(false);
+        loadTopRecommendations(false, lastIncludeLongOptions, lastIgnoreCashLimits);
     }, delay);
     return { scheduled: true, delay, attempt };
 }
@@ -538,6 +650,8 @@ function scheduleGeneratingRetry() {
  * Show content with signals — finish the loading banner
  */
 function showContent() {
+    _isBackendGenerating = false;
+    _toggleRefreshInProgress = false;
     resetGeneratingRetryState();
     if (loadingBannerId) {
         finishPanelLoading(loadingBannerId, 'Recommendations loaded');
@@ -550,13 +664,86 @@ function showContent() {
 /**
  * Show empty state
  */
-function showEmpty() {
+function getDominantBlockedReason(result) {
+    const counts = result?.blocked_reason_counts || result?._diagnostics?.blocked_reason_counts || {};
+    const countEntries = Object.entries(counts)
+        .map(([reason, count]) => ({ reason, count: Number(count) || 0 }))
+        .filter(item => item.reason && item.count > 0)
+        .sort((a, b) => b.count - a.count);
+    if (countEntries.length > 0) {
+        return `${countEntries[0].reason.replace(/_/g, ' ')} (${countEntries[0].count})`;
+    }
+
+    const blocked = result?.blocked_signals || [];
+    if (blocked.length === 0) return '';
+    const grouped = new Map();
+    blocked.forEach(item => {
+        const reason = item.reason_text || item.reason_code || 'Unknown blocker';
+        grouped.set(reason, (grouped.get(reason) || 0) + (Number(item.ticker_count || 1) || 1));
+    });
+    const [reason, count] = Array.from(grouped.entries()).sort((a, b) => b[1] - a[1])[0] || [];
+    return reason ? `${reason}${count > 1 ? ` (${count})` : ''}` : '';
+}
+
+function getCashDiagnosticSummary(result) {
+    const diagnostics = result?.cash_diagnostics || {};
+    const raw = diagnostics.raw_summary_fields || {};
+    const parts = [];
+    if (result?.cash_available_for_csp != null) {
+        parts.push(`CSP cash ${formatCurrency(Number(result.cash_available_for_csp) || 0)}`);
+    }
+    if (diagnostics.cash_available_for_csp_source) {
+        parts.push(`source ${diagnostics.cash_available_for_csp_source}`);
+    } else if (diagnostics.available_cash_source) {
+        parts.push(`available cash source ${diagnostics.available_cash_source}`);
+    }
+    const rawDetails = ['available_cash', 'cash_available', 'us_cash', 'usd_net_cash_power', 'buying_power', 'excess_liquidity']
+        .filter(field => raw[field] != null)
+        .slice(0, 3)
+        .map(field => `${field}=${formatCurrency(Number(raw[field]) || 0)}`);
+    if (rawDetails.length > 0) {
+        parts.push(`raw ${rawDetails.join(', ')}`);
+    }
+    return parts.join('; ');
+}
+
+function getScanCoverageSummary(result) {
+    const diag = result?._diagnostics || {};
+    const parts = [];
+    const scanned = diag.scan_tickers_count;
+    const cap = diag.scan_tickers_cap;
+    if (scanned != null && cap != null) {
+        parts.push(`Scanned ${scanned}/${cap} watchlist tickers`);
+    } else if (scanned != null) {
+        parts.push(`Scanned ${scanned} watchlist tickers`);
+    }
+    if (diag.watchlist_errors) {
+        parts.push(`${diag.watchlist_errors} watchlist errors`);
+    }
+    if (diag.skipped_csp_count) {
+        parts.push(`${diag.skipped_csp_count} CSP skip diagnostics`);
+    }
+    return parts.join('; ');
+}
+
+function showEmpty(result = null) {
+    _isBackendGenerating = false;
+    _toggleRefreshInProgress = false;
+    const label = getGrowthModeLabel();
     resetGeneratingRetryState();
     if (loadingBannerId) {
-        finishPanelLoading(loadingBannerId, 'No signals');
+        finishPanelLoading(loadingBannerId, `No ${label.toLowerCase()}`);
         loadingBannerId = null;
     }
-    StateModel.showEmpty('top-recommendations-state', 'No signals available right now. Try refresh or adjust criteria.');
+    const details = [];
+    const blockedReason = getDominantBlockedReason(result);
+    const cashDiagnostic = getCashDiagnosticSummary(result);
+    const scanDiagnostic = getScanCoverageSummary(result);
+    if (blockedReason) details.push(`Dominant blocker: ${blockedReason}.`);
+    if (cashDiagnostic) details.push(cashDiagnostic);
+    if (scanDiagnostic) details.push(scanDiagnostic);
+    const detailText = details.length > 0 ? ` ${details.join(' ')}` : ' Try refresh or adjust criteria.';
+    StateModel.showEmpty('top-recommendations-state', `No ${label.toLowerCase()} available right now.${detailText}`);
     document.getElementById('top-recommendations-content').classList.add('d-none');
 }
 
@@ -565,6 +752,8 @@ function showEmpty() {
  * @param {string} message - Optional custom error message
  */
 function showError(message) {
+    _isBackendGenerating = false;
+    _toggleRefreshInProgress = false;
     resetGeneratingRetryState();
     if (loadingBannerId) {
         failPanelLoading(loadingBannerId, 'Unable to load signals');
@@ -627,7 +816,7 @@ function applyGrowthMode(result) {
     document.getElementById('growth-mode-drawdown').textContent = `${((growthMode?.max_drawdown_pct ?? 0.40) * 100).toFixed(0)}%`;
     document.getElementById('top-recs-title').textContent = 'Growth signals';
     document.getElementById('top-recs-eyebrow').textContent = 'Growth mode';
-    document.getElementById('top-recs-desc').textContent = 'Signals ranked by estimated impact on reaching your 2x account target.';
+    updateBestPlaysHelp(Boolean(result?.ignore_cash_limits ?? lastIgnoreCashLimits));
 
     // Show CSP screener profile
     const cspProfileText = document.getElementById('growth-csp-profile-text');
@@ -732,8 +921,8 @@ function renderBlockedSignals(blocked) {
     if (!blockedListEl) return;
     blockedListEl.innerHTML = rows.map(b => `
         <div class="d-flex justify-content-between align-items-center py-1 border-bottom border-light">
-            <span class="fw-semibold">${(b.tickers && b.tickers.length > 0 ? b.tickers.join(', ') : b.ticker || '?')}${b.count > 1 ? ` (${b.count} tickers)` : ''}</span>
-            <span class="text-muted small">${b.reason_text || b.reason_code || 'Unknown'}</span>
+            <span class="fw-semibold">${escapeHtml((b.tickers && b.tickers.length > 0 ? b.tickers.join(', ') : b.ticker || '?') + (b.count > 1 ? ` (${b.count} tickers)` : ''))}</span>
+            <span class="text-muted small">${escapeHtml(b.reason_text || b.reason_code || 'Unknown')}</span>
         </div>
     `).join('');
 }
@@ -752,9 +941,39 @@ function updateBuyingPowerIndicator(result) {
         const bpEl = document.getElementById('bp-amount');
         const reservedEl = document.getElementById('bp-reserved');
         const brokerEl = document.getElementById('bp-broker');
+        const diagnosticsEl = document.getElementById('bp-diagnostics');
         if (bpEl) bpEl.textContent = formatCurrency(cspCash);
         if (reservedEl) reservedEl.textContent = formatCurrency(reserved || 0);
         if (brokerEl) brokerEl.textContent = formatCurrency(bp || 0);
+        if (diagnosticsEl) {
+            const diagnostics = result?.cash_diagnostics || {};
+            const raw = diagnostics.raw_summary_fields || {};
+            const details = [];
+            if (diagnostics.available_cash_source) {
+                details.push(`available cash source: ${diagnostics.available_cash_source}`);
+            }
+            if (diagnostics.cash_available_for_csp_source) {
+                details.push(`CSP cash source: ${diagnostics.cash_available_for_csp_source}`);
+            }
+            const rawFields = [
+                'us_avl_withdrawal_cash',
+                'us_cash',
+                'usd_net_cash_power',
+                'cash',
+                'available_cash',
+                'cash_available',
+                'buying_power',
+                'excess_liquidity',
+            ];
+            const nonZeroRaw = rawFields
+                .filter(field => raw[field] != null && Number(raw[field]) !== 0)
+                .map(field => `${field}=${formatCurrency(Number(raw[field]))}`);
+            if (nonZeroRaw.length > 0) {
+                details.push(`raw: ${nonZeroRaw.join(', ')}`);
+            }
+            diagnosticsEl.textContent = details.join(' | ');
+            diagnosticsEl.classList.toggle('d-none', details.length === 0);
+        }
     } else {
         bpIndicator.classList.add('d-none');
     }
@@ -822,6 +1041,23 @@ function initSignalTabs() {
 }
 
 /**
+ * Show market state badge based on _freshness metadata.
+ * @param {Object} freshness - _freshness object from API
+ */
+function showMarketStateBadge(freshness) {
+    const badge = document.getElementById('market-state-badge');
+    if (!badge) return;
+    if (!freshness || freshness.market_state === 'open') {
+        badge.classList.add('d-none');
+        return;
+    }
+    badge.classList.remove('d-none');
+    badge.textContent = 'Market closed — data from last session';
+    badge.className = 'badge bg-secondary text-white me-1';
+    badge.title = `Data generated at: ${freshness.generated_at || 'unknown'}`;
+}
+
+/**
  * Render the unified signal payload.
  * @param {Object} result - Full API response with signals
  * @param {string} timestamp - Generation timestamp
@@ -830,6 +1066,9 @@ function initSignalTabs() {
 function renderRecommendations(result, timestamp, cacheInfo = null) {
     if (!cardsContainer) return;
     signalsData = result;
+    
+    // Show market state badge (after-hours indicator)
+    showMarketStateBadge(result?._freshness);
     
     // Apply growth mode banner
     applyGrowthMode(result);
@@ -852,7 +1091,7 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
     if (result?.signals?.length > 0) {
         updateTimestamp(timestamp, cacheInfo);
     } else {
-        showEmpty();
+        showEmpty(result);
         updateTimestamp(null);
     }
 }
@@ -860,14 +1099,28 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
 /**
  * Load top recommendations from API
  */
-export async function loadTopRecommendations(manualRefresh = false) {
+export async function loadTopRecommendations(
+    manualRefresh = false,
+    includeLongOptions = true,
+    ignoreCashLimits = getIgnoreCashLimitsEnabled(),
+    screenerOverrides = getScreenerOverrides()
+) {
     if (_isLoading) {
-        console.debug('Top recommendations: already loading, skipping duplicate request');
+        pendingRecommendationRequest = {
+            manualRefresh,
+            includeLongOptions,
+            ignoreCashLimits: Boolean(ignoreCashLimits),
+            screenerOverrides,
+        };
+        updateBestPlaysHelp(ignoreCashLimits, true);
+        console.debug('Top recommendations: already loading, queued latest request');
         return;
     }
     if (manualRefresh) {
         resetGeneratingRetryState();
     }
+    lastIncludeLongOptions = includeLongOptions;
+    lastIgnoreCashLimits = Boolean(ignoreCashLimits);
     _isLoading = true;
     
     if (!container) initElements();
@@ -877,7 +1130,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
     }
     
     try {
-        const result = await fetchTopRecommendations(10, manualRefresh);
+        const result = await fetchTopRecommendations(3, manualRefresh, includeLongOptions, lastIgnoreCashLimits, screenerOverrides);
         
         if (result.error) {
             if (result.timedOut) {
@@ -893,6 +1146,8 @@ export async function loadTopRecommendations(manualRefresh = false) {
             return;
         }
         
+        applyGrowthMode(result);
+
         // Backend is still generating — don't replace what's on screen
         if (result.generating) {
             console.debug('Top recommendations: backend is generating fresh data');
@@ -901,14 +1156,25 @@ export async function loadTopRecommendations(manualRefresh = false) {
         }
 
         if (result.generation_timed_out) {
+            _isBackendGenerating = false;
+            _toggleRefreshInProgress = false;
             resetGeneratingRetryState();
             if (loadingBannerId) {
                 failPanelLoading(loadingBannerId, 'Signal generation timed out');
                 loadingBannerId = null;
             }
-            StateModel.showEmpty(
+            const details = [];
+            const blockedReason = getDominantBlockedReason(result);
+            const cashDiagnostic = getCashDiagnosticSummary(result);
+            const scanDiagnostic = getScanCoverageSummary(result);
+            if (blockedReason) details.push(`Dominant blocker: ${blockedReason}.`);
+            if (cashDiagnostic) details.push(cashDiagnostic);
+            if (scanDiagnostic) details.push(scanDiagnostic);
+            const diagText = details.length > 0 ? ` ${details.join(' ')}` : '';
+            StateModel.showError(
                 'top-recommendations-state',
-                result.message || 'Signal generation is taking too long. Try again after broker data catches up.'
+                result.message || `Signal generation timed out — scan did not finish within the retry budget.${diagText}`,
+                () => loadTopRecommendations()
             );
             if (contentEl) contentEl.classList.add('d-none');
             if (tabContainer) tabContainer.classList.add('d-none');
@@ -938,6 +1204,18 @@ export async function loadTopRecommendations(manualRefresh = false) {
         showError();
     } finally {
         _isLoading = false;
+        if (pendingRecommendationRequest) {
+            const nextRequest = pendingRecommendationRequest;
+            pendingRecommendationRequest = null;
+            setTimeout(() => {
+                loadTopRecommendations(
+                    nextRequest.manualRefresh,
+                    nextRequest.includeLongOptions,
+                    nextRequest.ignoreCashLimits,
+                    nextRequest.screenerOverrides
+                );
+            }, 0);
+        }
     }
 }
 
@@ -953,7 +1231,7 @@ function startAutoRefresh() {
     // Set up new interval
     autoRefreshInterval = setInterval(() => {
         if (isVisible) {
-            loadTopRecommendations();
+            loadTopRecommendations(false, lastIncludeLongOptions, lastIgnoreCashLimits);
         }
     }, REFRESH_INTERVAL_MS);
 }
@@ -976,7 +1254,7 @@ function handleVisibilityChange() {
     
     if (isVisible) {
         // Refresh when tab becomes visible again (in case data is stale)
-        loadTopRecommendations();
+        loadTopRecommendations(false, lastIncludeLongOptions, lastIgnoreCashLimits);
     }
 }
 
@@ -991,7 +1269,7 @@ function setupEventListeners() {
     const refreshBtn = document.getElementById('refresh-top-recommendations');
     if (refreshBtn) {
         refreshBtn.addEventListener('click', () => {
-            loadTopRecommendations(true); // manual refresh - bypass cache
+            loadTopRecommendations(true, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
         });
     }
     
@@ -999,7 +1277,46 @@ function setupEventListeners() {
     const retryBtn = document.getElementById('retry-top-recommendations');
     if (retryBtn) {
         retryBtn.addEventListener('click', () => {
-            loadTopRecommendations();
+            loadTopRecommendations(false, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
+        });
+    }
+
+    // Research-only long options button
+    const researchBtn = document.getElementById('research-long-options');
+    if (researchBtn) {
+        researchBtn.addEventListener('click', () => {
+            loadTopRecommendations(true, true, getIgnoreCashLimitsEnabled());
+        });
+    }
+
+    if (ignoreCashLimitsToggle) {
+        ignoreCashLimitsToggle.checked = false;
+        updateBestPlaysHelp(false);
+        ignoreCashLimitsToggle.addEventListener('change', () => {
+            const enabled = getIgnoreCashLimitsEnabled();
+            updateBestPlaysHelp(enabled);
+            _toggleRefreshInProgress = true;
+            loadTopRecommendations(true, lastIncludeLongOptions, enabled);
+        });
+    }
+
+    // Screener settings Apply button
+    const applyScreenerBtn = document.getElementById('apply-screener-settings');
+    if (applyScreenerBtn) {
+        applyScreenerBtn.addEventListener('click', () => {
+            loadTopRecommendations(true, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
+        });
+    }
+
+    // Screener settings Reset button
+    const resetScreenerBtn = document.getElementById('reset-screener-settings');
+    if (resetScreenerBtn) {
+        resetScreenerBtn.addEventListener('click', () => {
+            for (const id of SCREENER_INPUT_IDS) {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            }
+            loadTopRecommendations(true, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
         });
     }
     
@@ -1037,10 +1354,19 @@ export function cleanupTopRecommendations() {
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     signalsData = null;
     activeSignalType = 'all';
+    lastIncludeLongOptions = true;
+    pendingRecommendationRequest = null;
+    lastIgnoreCashLimits = false;
     isVisible = true;
     listenersBound = false;
     isInitialized = false;
     _isLoading = false;
     loadingBannerId = null;
     generatingRetryCount = 0;
+    _isBackendGenerating = false;
+    _toggleRefreshInProgress = false;
+    if (ignoreCashLimitsToggle) ignoreCashLimitsToggle.checked = false;
+    updateBestPlaysHelp(false);
 }
+
+export function isBackendGenerating() { return _isBackendGenerating; }

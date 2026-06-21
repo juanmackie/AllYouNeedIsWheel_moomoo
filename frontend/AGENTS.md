@@ -25,6 +25,8 @@
 - Keep dashboard JS modular by feature (`dashboard/`, `rollover/`, `portfolio/`, `utils/`).
 - Use existing formatting/state helpers before adding new browser utilities.
 - Maintain responsive behavior for tables, cards, modals, and navigation.
+- Use `escapeHtml` from `utils/formatters.js` for any API-fed content injected into the DOM to prevent XSS. Dashboard modules (`dashboard-cash.js`, `dashboard-regime.js`, `state-model.js`, `top-recommendations.js`) must use it on text-bearing inserts.
+- Break cross-feature import cycles with lazy dynamic accessors (e.g. `getOptionsTableActions`, `getRolloverActions`) and a registration pattern (`registerRolloverUiHandlers`) rather than direct static imports between `rollover/` and `dashboard/` modules.
 
 ## Verification
 

@@ -69,7 +69,7 @@ def create_contexts(host, port, security_firm):
     trd_ctx = OpenSecTradeContext(
         host=host,
         port=port,
-        filter_trdmarket=TrdMarket.US,
+        filter_trdmarket=TrdMarket.NONE,
         security_firm=security_firm,
     )
     return quote_ctx, trd_ctx

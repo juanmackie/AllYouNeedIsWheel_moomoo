@@ -3,7 +3,7 @@
  * Split from api.js (F041)
  */
 import { showAlert } from '../utils/alerts.js';
-import { readJsonSafely, isOpenDUnavailable, setConnectionStatusFromPayload, clearUnavailableStatus, isRealAccountUnavailableError, fetchWithTimeout } from './api.js';
+import { readJsonSafely, isOpenDUnavailable, setConnectionStatusFromPayload, clearUnavailableStatus, isRealAccountUnavailableError, fetchWithTimeout } from './api-core.js';
 
 export async function fetchOptionData(ticker, otmPercentage = 10, optionType = null, expiration = null) {
     try {
@@ -59,7 +59,7 @@ export async function fetchStockPrices(tickers) {
     }
 }
 
-export async function fetchOptionExpirations(ticker, optionType = null) {
+export async function fetchOptionExpirations(ticker, optionType = null, options = {}) {
     try {
         let url = `/api/options/expirations?ticker=${encodeURIComponent(ticker)}`;
         if (optionType) url += `&option_type=${encodeURIComponent(optionType)}`;
@@ -73,15 +73,25 @@ export async function fetchOptionExpirations(ticker, optionType = null) {
         return payload;
     } catch (error) {
         const isTimeout = error?.message?.includes('Request timed out');
+        if (isTimeout && options.quietTimeout) {
+            return { expirations: [], error: error.message, timedOut: true };
+        }
         (isTimeout ? console.warn : console.error)('Error fetching option expirations:', error);
         throw error;
     }
 }
 
-export async function fetchTopRecommendations(limit = 3, manualRefresh = false) {
+export async function fetchTopRecommendations(limit = 3, manualRefresh = false, includeLongOptions = false, ignoreCashLimits = false, screenerOverrides = null) {
     try {
         let url = `/api/options/top-recommendations?limit=${limit}`;
         if (manualRefresh) url += '&refresh=true';
+        if (includeLongOptions) url += '&include_long_options=true';
+        if (ignoreCashLimits) url += '&ignore_cash_limits=true';
+        if (screenerOverrides) {
+            for (const [key, val] of Object.entries(screenerOverrides)) {
+                if (val != null && val !== '') url += `&${key}=${encodeURIComponent(val)}`;
+            }
+        }
         const response = await fetchWithTimeout(url, {}, 30000);
         if (!response.ok) {
             const payload = await readJsonSafely(response);

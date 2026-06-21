@@ -32,7 +32,7 @@ bp = Blueprint('options', __name__, url_prefix='/api/options')
 _options_service_instance = None
 _generation_in_flight = {}  # cache_key -> started_at timestamp
 _generation_in_flight_lock = threading.Lock()
-GENERATION_IN_FLIGHT_TIMEOUT_SECONDS = 180
+GENERATION_IN_FLIGHT_TIMEOUT_SECONDS = 300
 
 
 def get_options_service():
@@ -44,7 +44,7 @@ def get_options_service():
     return _options_service_instance
 
 
-def _generate_in_background(cache_key, limit, portfolio_hash):
+def _generate_in_background(cache_key, limit, portfolio_hash, include_long_options=False, ignore_cash_limits=False, screener_overrides=None):
     """
     Generate top recommendations in a background thread.
     Manages the in-flight registry so duplicate cold generations don't stack.
@@ -59,7 +59,12 @@ def _generate_in_background(cache_key, limit, portfolio_hash):
     def generation_task():
         try:
             logger.info(f"Background generation started for {cache_key}")
-            result = get_options_service().get_top_recommendations(limit=limit)
+            result = get_options_service().get_top_recommendations(
+                limit=limit,
+                include_long_options=include_long_options,
+                ignore_cash_limits=ignore_cash_limits,
+                screener_overrides=screener_overrides or {},
+            )
 
             if "error" not in result:
                 result = _normalize_top_recommendations_payload(result)
@@ -104,9 +109,14 @@ def _normalize_top_recommendations_payload(payload):
         legacy_signals = list(normalized.get('recommendations') or normalized.get('best_plays') or [])
         if not legacy_signals and isinstance(normalized.get('lanes'), dict):
             lanes = normalized.get('lanes', {})
-            for lane_key in ('covered_calls', 'watchlist_csp'):
+            for lane_key in ('covered_calls', 'watchlist_csp', 'long_calls', 'long_puts'):
                 lane = lanes.get(lane_key, {}) or {}
                 legacy_signals.extend(lane.get('signals') or lane.get('recommendations') or [])
+        if not legacy_signals:
+            for lane_key in ('covered_calls', 'watchlist_csps', 'long_calls', 'long_puts'):
+                lane = normalized.get(lane_key, {}) or {}
+                if isinstance(lane, dict):
+                    legacy_signals.extend(lane.get('signals') or lane.get('recommendations') or [])
         normalized['signals'] = legacy_signals
 
     if 'blocked_signals' not in normalized and normalized.get('blocked_candidates') is not None:
@@ -417,16 +427,16 @@ def get_top_recommendations():
         if not allowed:
             return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
         
-        # Get limit parameter (default 5)
-        limit = request.args.get('limit', 5)
+        # Get limit parameter (default 3)
+        limit = request.args.get('limit', 3)
         try:
             limit = int(limit)
             if limit < 1:
-                limit = 5
+                limit = 3
             elif limit > 10:
                 limit = 10
         except (ValueError, TypeError):
-            limit = 5
+            limit = 3
         
         # Use a cached portfolio snapshot for the cache key so we do not block
         # the request on a slow broker refresh.
@@ -442,7 +452,27 @@ def get_top_recommendations():
         manual_refresh = request.args.get('refresh', 'false').lower() == 'true'
         
         # Create cache key based on limit and portfolio state
-        cache_key = f"top_recommendations:limit={limit}:hash={current_portfolio_hash}"
+        include_long_options = request.args.get('include_long_options', 'true').lower() == 'true'
+        ignore_cash_limits = request.args.get('ignore_cash_limits', 'false').lower() == 'true'
+
+        # Screener profile overrides (user-tunable from UI)
+        screener_overrides = {}
+        for param, key in [('csp_min_otm_pct', 'csp_min_otm_pct'), ('csp_max_otm_pct', 'csp_max_otm_pct'),
+                           ('csp_min_dte', 'csp_min_dte'), ('csp_max_dte', 'csp_max_dte'),
+                           ('csp_target_delta', 'csp_target_delta'), ('min_csp_buying_power', 'min_csp_buying_power'),
+                           ('min_volatility_pct', 'min_volatility_pct')]:
+            raw = request.args.get(param)
+            if raw is not None:
+                try:
+                    screener_overrides[key] = float(raw)
+                except (ValueError, TypeError):
+                    pass
+        screener_suffix = ':'.join(f'{k}={v}' for k, v in sorted(screener_overrides.items())) if screener_overrides else 'none'
+
+        cache_key = (
+            f"top_recommendations:limit={limit}:include_long_options={include_long_options}:"
+            f"ignore_cash_limits={ignore_cash_limits}:screener={screener_suffix}:hash={current_portfolio_hash}"
+        )
         
         # Check cache unless manual refresh requested
         if not manual_refresh:
@@ -456,7 +486,14 @@ def get_top_recommendations():
                 )
 
                 if cache_metadata['cache_status'] == 'STALE':
-                    _trigger_background_refresh(cache_key, limit, current_portfolio_hash)
+                    _trigger_background_refresh(
+                        cache_key,
+                        limit,
+                        current_portfolio_hash,
+                        include_long_options=include_long_options,
+                        ignore_cash_limits=ignore_cash_limits,
+                        screener_overrides=screener_overrides,
+                    )
 
                 return _build_top_recommendations_cache_response(
                     cached_result,
@@ -464,9 +501,16 @@ def get_top_recommendations():
                     cache_metadata['cache_status'],
                 )
         
-        # Cache miss or manual refresh â€” generate in background instead of blocking
+        # Cache miss or manual refresh ? generate in background instead of blocking
         logger.info(f"Generating fresh top recommendations in background (manual_refresh={manual_refresh})")
-        generation_started = _generate_in_background(cache_key, limit, current_portfolio_hash)
+        generation_started = _generate_in_background(
+            cache_key,
+            limit,
+            current_portfolio_hash,
+            include_long_options=include_long_options,
+            ignore_cash_limits=ignore_cash_limits,
+            screener_overrides=screener_overrides,
+        )
         generation_age = _get_generation_age(cache_key)
         # Try to serve stale cache while generation runs
         try:
@@ -476,7 +520,7 @@ def get_top_recommendations():
                 return _build_top_recommendations_stale_response(stale_result, stale_metadata)
         except Exception:
             logger.warning("Stale cache fallback for top_recommendations failed", exc_info=True)
-        # No stale data at all â€” return generating signal immediately
+        # No stale data at all ? return generating signal immediately
         if not generation_started and generation_age and generation_age > GENERATION_IN_FLIGHT_TIMEOUT_SECONDS:
             logger.warning(
                 "Top recommendations generation has been in flight for %.1fs; returning timeout diagnostic",
@@ -484,7 +528,7 @@ def get_top_recommendations():
             )
             return _build_top_recommendations_timeout_response()
 
-        logger.info("No cache available â€” returning generating signal to frontend")
+        logger.info("No cache available ? returning generating signal to frontend")
         return _build_top_recommendations_generating_response()
 
     except Exception as e:
@@ -521,14 +565,13 @@ def _catalyst_cache_key(limit, min_pn, min_volume, min_fresh, max_scan_tickers, 
 def _catalyst_empty_response(generated_at=None, thresholds=None, message=None, cache_age_seconds=None, served_from_cache=False):
     """Full-shape response when catalyst scanning has not produced data yet."""
     ts = (generated_at or datetime.datetime.now()).isoformat()
-    fallback_thresholds = {
-        "min_premium_notional": 1_000_000,
-        "min_fresh_volume_ratio": 5,
-        "min_volume": 500,
-        "max_expirations": 1,
-        "max_dte": 60,
-        "max_scan_tickers": 2,
-    }
+    from api.services.config import get_config
+    _cfg = get_config()
+    _cat = _cfg.get("catalyst_flow", {})
+    fallback_thresholds = {}
+    for k in ("min_premium_notional", "min_fresh_volume_ratio", "min_volume",
+              "max_expirations", "max_dte", "max_scan_tickers"):
+        fallback_thresholds[k] = _cat.get(k)
     if thresholds:
         fallback_thresholds.update({k: v for k, v in thresholds.items() if v is not None})
     return {
@@ -607,15 +650,15 @@ def catalyst_watch():
                 "rejected_by_threshold_count": 0,
                 "elapsed_seconds": 0,
                 "thresholds": {
-                    "min_premium_notional": 1_000_000,
-                    "min_fresh_volume_ratio": 5,
-                    "min_volume": 500,
-                    "max_expirations": 1,
-                    "max_dte": 60,
-                    "max_scan_tickers": 2,
+                    "min_premium_notional": catalyst_cfg.get("min_premium_notional", 1_000_000),
+                    "min_fresh_volume_ratio": catalyst_cfg.get("min_fresh_volume_ratio", 5),
+                    "min_volume": catalyst_cfg.get("min_volume", 500),
+                    "max_expirations": catalyst_cfg.get("max_expirations", 3),
+                    "max_dte": catalyst_cfg.get("max_dte", 60),
+                    "max_scan_tickers": catalyst_cfg.get("max_scan_tickers", 12),
                 },
             }, served_from_cache=False, cache_age_seconds=None, fresh_attempted=False, fresh_succeeded=False, last_successful_generated_at=None)
-            logger.debug("GET /catalyst-watch: disabled â€” fresh_attempted=false served_from_cache=false")
+            logger.debug("GET /catalyst-watch: disabled ? fresh_attempted=false served_from_cache=false")
             return jsonify(attach_source_policy(
                 payload,
                 build_research_source_policy('catalyst_watch', {}, fallback_sources_allowed=['yfinance']),
@@ -655,7 +698,7 @@ def catalyst_watch():
                     last_successful_generated_at=cached_result.get("generated_at"),
                 )
                 logger.debug(
-                    "GET /catalyst-watch: fast cache hit (age=%ss) â€” served_from_cache=true fresh_attempted=false",
+                    "GET /catalyst-watch: fast cache hit (age=%ss) ? served_from_cache=true fresh_attempted=false",
                     cached_age,
                 )
                 return _apply_source(payload)
@@ -697,7 +740,7 @@ def catalyst_watch():
                 last_successful_generated_at=cached_result.get("generated_at"),
             )
             logger.debug(
-                "GET /catalyst-watch: stale cache (age=%ss) + bg refresh â€” served_from_cache=true fresh_attempted=true",
+                "GET /catalyst-watch: stale cache (age=%ss) + bg refresh ? served_from_cache=true fresh_attempted=true",
                 bagr_age,
             )
             return _apply_source(payload)
@@ -718,7 +761,7 @@ def catalyst_watch():
                 last_successful_generated_at=cached_result.get("generated_at"),
             )
             logger.debug(
-                "GET /catalyst-watch: fresh scan succeeded â€” served_from_cache=false fresh_succeeded=true",
+                "GET /catalyst-watch: fresh scan succeeded ? served_from_cache=false fresh_succeeded=true",
             )
             return _apply_source(payload)
 
@@ -735,7 +778,7 @@ def catalyst_watch():
             cache_age_seconds=None,
         )
         logger.debug(
-            "GET /catalyst-watch: no cache, scan timed out â€” served_from_cache=false fresh_attempted=true fresh_succeeded=false",
+            "GET /catalyst-watch: no cache, scan timed out ? served_from_cache=false fresh_attempted=true fresh_succeeded=false",
         )
         return _apply_source(empty)
     except Exception as e:
@@ -777,7 +820,7 @@ def get_screening_config():
                 'preferred_dte': preferred_dte,
                 'otm_range': f"{min_otm_pct}-{max_otm_pct}",
                 'otm_pct': screener_profile.get('csp_default_otm_pct', 10),
-                'min_iv_rank': screener_profile.get('min_iv_rank', 45),
+                'min_volatility_pct': screener_profile.get('min_volatility_pct', 4.5),
             }
         })
     except Exception as e:
@@ -838,7 +881,7 @@ def get_cash_status():
                 })
         
         cash_available = max(0, available_cash - cash_reserved)
-        cash_available_for_csp = cash_available
+        cash_available_for_csp = max(0, broker_buying_power - cash_reserved)
         reserve_enabled = get_options_service().config.get('cash_reserve_enabled', True)
         
         return success_response(attach_source_policy({

@@ -42,7 +42,8 @@ class TestYFinanceTicker(unittest.TestCase):
         with patch('yfinance.Ticker') as mock_ticker:
             result = get_yfinance_ticker('AAPL')
         self.assertIs(result, mock_ticker.return_value)
-        mock_ticker.assert_called_once_with('AAPL')
+        self.assertEqual(mock_ticker.call_args.args[0], 'AAPL')
+        self.assertIn('session', mock_ticker.call_args.kwargs)
 
 
 class TestGetEffectiveWatchlist(unittest.TestCase):
@@ -74,7 +75,7 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
             'watchlist': ['AAPL'],
             'watchlist_mode': 'dynamic',
             'screening_criteria': {
-                'min_iv_rank': 30,
+                'min_volatility_pct': 3.0,
                 'min_volume': 1000000,
                 'max_stocks': 50,
             },
@@ -98,7 +99,7 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
             'watchlist': ['AAPL', 'TSLA'],
             'watchlist_mode': 'hybrid',
             'screening_criteria': {
-                'min_iv_rank': 30,
+                'min_volatility_pct': 3.0,
                 'min_volume': 1000000,
                 'max_stocks': 50,
             },
@@ -139,50 +140,6 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
         self.assertEqual(result, ['AAPL', 'TSLA'])
 
 
-class TestLazyServiceInitialization(unittest.TestCase):
-    """Test lazy initialization of optional services."""
-
-    def test_openbb_service_initially_none(self):
-        """_openbb_service should be None initially."""
-        service = OptionsService()
-        self.assertIsNone(service._openbb_service)
-
-    @patch('api.services.config.get_config')
-    @patch('api.services.openbb_service.get_openbb_service')
-    def test_openbb_service_disabled_by_default(self, mock_get_openbb_service, mock_get_config):
-        """OpenBB should stay disabled unless explicitly enabled in config."""
-        mock_config = MagicMock()
-        mock_config.get.side_effect = lambda key, default=None: {
-            'openbb_enabled': False,
-        }.get(key, default)
-        mock_get_config.return_value = mock_config
-
-        service = OptionsService()
-        result = service._get_openbb_service()
-
-        self.assertIsNone(result)
-        mock_get_openbb_service.assert_not_called()
-
-    def test_tvscreener_service_initially_none(self):
-        """_tvscreener_service should be None initially."""
-        service = OptionsService()
-        self.assertIsNone(service._tvscreener_service)
-
-    @patch('api.get_service')
-    def test_tvscreener_service_lazy_init(self, mock_get_service):
-        """_get_tvscreener_service should cache the result."""
-        mock_service = MagicMock()
-        mock_get_service.return_value = mock_service
-
-        service = OptionsService()
-        result1 = service._get_tvscreener_service()
-        result2 = service._get_tvscreener_service()
-
-        self.assertIs(result1, mock_service)
-        self.assertIs(result2, mock_service)
-        mock_get_service.assert_called_once()  # Only called once due to caching
-
-
 class TestOptionsServiceConnectionConfig(unittest.TestCase):
     def test_ensure_connection_propagates_portfolio_env(self):
         with patch('api.services.config.get_config') as mock_get_config, \
@@ -216,6 +173,7 @@ class TestOptionsServiceConnectionConfig(unittest.TestCase):
                 account_id=None,
                 portfolio_env='REAL',
                 security_firm='FUTUAU',
+                broker_cache_after_hours=True,
             )
 
 

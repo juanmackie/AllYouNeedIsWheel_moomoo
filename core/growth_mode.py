@@ -139,8 +139,8 @@ def should_block_for_data_quality(
     """
     if has_blockers:
         return True, "Hard blockers present"
-    if confidence_score < 40:
+    if confidence_score < 35:
         return True, "Very low confidence data, insufficient for execution"
-    if is_from_yfinance and confidence_score < 70:
+    if is_from_yfinance and confidence_score < 65:
         return True, "yfinance fallback data, insufficient confidence"
     return False, ""

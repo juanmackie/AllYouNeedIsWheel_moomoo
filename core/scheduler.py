@@ -1,8 +1,9 @@
 """
-In-process scheduler for the earnings calendar updater.
+In-process scheduler for earnings updater and warm cache scan.
 
 Schedule:
   - Earnings updater: every 6 hours
+  - Warm cache scan: every 30 minutes (override via WARM_CACHE_INTERVAL_MINUTES)
 
 One-click start: python run_api.py
 """
@@ -90,67 +91,43 @@ def _resolve_earnings_db(db=None):
         return db
 
     try:
-        from flask import current_app
-        app_db = current_app.config.get('database')
-        if app_db is not None:
-            return app_db
-    except Exception:
-        logger.warning("Could not resolve database from Flask app config", exc_info=True)
-
-    try:
         from db.database import OptionsDatabase
-        from api.services.config import get_config
-        cfg = get_config()
-        db_path = cfg.get('db_path', 'options.db') if cfg else 'options.db'
-        return OptionsDatabase(db_path)
+        return OptionsDatabase()
     except Exception as e:
         logger.error("Cannot resolve earnings database: %s", e)
         return None
 
 
-def _collect_earnings_update_tickers():
+def _collect_earnings_update_tickers(earnings_ticker_provider=None):
     tickers = set()
 
     try:
-        from api import get_service
-        portfolio_service = get_service('portfolio')
-        positions = portfolio_service.get_positions() or []
-        for position in positions:
-            symbol = str(position.get('symbol', '') or '').strip()
-            normalized = earnings_underlying_ticker(symbol)
-            if normalized:
-                tickers.add(normalized)
-    except Exception as e:
-        logger.debug("Could not collect portfolio tickers for earnings update: %s", e)
+        if earnings_ticker_provider is None:
+            return []
 
-    try:
-        from api.services.config import get_config
-        from api.services.watchlist_manager import WatchlistManager
-
-        cfg = get_config()
-        watchlist_manager = WatchlistManager(cfg)
-        growth_mode = cfg.get('growth_mode', {}) if cfg else {}
-        for ticker in watchlist_manager.get_effective_watchlist(growth_mode_config=growth_mode) or []:
+        for ticker in earnings_ticker_provider() or []:
             normalized = earnings_underlying_ticker(str(ticker).strip())
             if normalized:
                 tickers.add(normalized)
     except Exception as e:
-        logger.debug("Could not collect watchlist tickers for earnings update: %s", e)
+        logger.debug("Could not collect earnings update tickers: %s", e)
 
     return sorted(tickers)
 
 
-def _run_earnings_updater_job(db=None) -> None:
+def _run_earnings_updater_job(db=None, earnings_ticker_provider=None, earnings_service_provider=None) -> None:
     resolved_db = _resolve_earnings_db(db)
     if resolved_db is None:
         logger.error("Earnings updater database not available")
         return
 
-    from api.services.iv_earnings_service import IVEarningsService
-
     try:
-        service = IVEarningsService(resolved_db)
-        tickers = _collect_earnings_update_tickers()
+        if earnings_service_provider is None:
+            logger.debug("Earnings updater skipped: no service provider configured")
+            return
+
+        service = earnings_service_provider(resolved_db)
+        tickers = _collect_earnings_update_tickers(earnings_ticker_provider)
         if tickers:
             logger.info("Scheduled earnings updater: refreshing %d tickers", len(tickers))
             result = service.batch_update_earnings(tickers)
@@ -193,6 +170,35 @@ def _start_earnings_initializer(db) -> None:
     logger.info("Started one-time earnings initialization in background")
 
 
+# ---------------------------------------------------------------------------
+# Warm cache scan — periodic pre-fetch so the dashboard loads instantly
+# ---------------------------------------------------------------------------
+
+_WARM_CACHE_JOB_ID = "warm_cache_scan"
+_WARM_CACHE_INTERVAL_MINUTES = int(os.environ.get('WARM_CACHE_INTERVAL_MINUTES', '30'))
+
+
+def _run_warm_cache_job(warm_cache_service_provider=None) -> None:
+    try:
+        if warm_cache_service_provider is None:
+            logger.debug("Warm cache scan skipped: no service provider configured")
+            return
+
+        service = warm_cache_service_provider()
+        logger.info("Warm cache scan: fetching top recommendations...")
+        t0 = time.time()
+        result = service.get_top_recommendations(limit=5)
+        elapsed = time.time() - t0
+        signal_count = len(result.get('signals', []) if isinstance(result, dict) else [])
+        error = result.get('error') if isinstance(result, dict) else None
+        if error:
+            logger.warning("Warm cache scan completed with error (%.1fs): %s", elapsed, error)
+        else:
+            logger.info("Warm cache scan completed (%.1fs, %d signals cached)", elapsed, signal_count)
+    except Exception as e:
+        logger.warning("Warm cache scan failed: %s", e)
+
+
 def get_scheduler_info():
     """Return info about whether the in-process scheduler is running."""
     global _scheduler
@@ -212,7 +218,7 @@ _scheduler_lock = threading.Lock()
 _scheduler_started = False
 
 
-def start_scheduler(db=None, app=None) -> bool:
+def start_scheduler(db=None, app=None, earnings_ticker_provider=None, earnings_service_provider=None, warm_cache_service_provider=None) -> bool:
     """Start the APScheduler background scheduler with jobs.
 
     Args:
@@ -247,13 +253,22 @@ def start_scheduler(db=None, app=None) -> bool:
             trigger=IntervalTrigger(hours=6),
             id="earnings_updater_6h",
             name="Earnings updater (every 6h)",
-            kwargs={"db": db},
+            kwargs={"db": db, "earnings_ticker_provider": earnings_ticker_provider, "earnings_service_provider": earnings_service_provider},
+            replace_existing=True,
+        )
+
+        _scheduler.add_job(
+            _run_warm_cache_job,
+            trigger=IntervalTrigger(minutes=_WARM_CACHE_INTERVAL_MINUTES),
+            id=_WARM_CACHE_JOB_ID,
+            name=f"Warm cache scan (every {_WARM_CACHE_INTERVAL_MINUTES}m)",
+            kwargs={"warm_cache_service_provider": warm_cache_service_provider},
             replace_existing=True,
         )
 
         _scheduler.start()
         _scheduler_started = True
-        logger.info("Scheduler started: earnings updater every 6h")
+        logger.info("Scheduler started: earnings updater every 6h, warm cache scan every %dm", _WARM_CACHE_INTERVAL_MINUTES)
 
         if db is not None:
             _start_earnings_initializer(db)

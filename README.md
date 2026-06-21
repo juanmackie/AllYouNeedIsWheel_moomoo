@@ -1,8 +1,8 @@
 ﻿# AllYouNeedIsWheel (Moomoo Edition)
 
-A financial options signal desk for the "Wheel Strategy" powered by the [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). View your portfolio, analyze options chains for cash-secured puts and covered calls, and review signals through a local web dashboard.
+A focused premium velocity scanner for the Wheel Strategy, powered by [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html). Scans your watchlist for the top 3 cash-secured put and call opportunities ranked by return per day, so you can review quickly and execute when the US session opens.
 
-**Risk-Adjusted Scoring, IV Environment Analysis & Macro Regime Detection** â€” Intelligent option ranking with IV rank tracking, earnings warnings, dynamic expiration profiles, and FRED-powered macro economic context.
+**Premium velocity (premium / DTE) is the primary ranking axis.** The scan universe is your watchlist — free-tier OpenD rate limits demand focus, and ranking what you already care about is the fastest path to a trade you trust.
 
 <img width="1680" alt="Dashboard screenshot" src="https://github.com/user-attachments/assets/d27d525e-1fb4-4494-b5be-eba17e774322" />
 <img width="1321" alt="Portfolio screenshot" src="https://github.com/user-attachments/assets/24634bbf-3110-46fa-85c4-b05301e11a88" />
@@ -14,40 +14,23 @@ A financial options signal desk for the "Wheel Strategy" powered by the [Moomoo 
 ## Features
 
 ### Core Features
-- **Portfolio Dashboard** â€” positions, cash balance, margin metrics, and weekly option income
-- **Wheel Strategy Focus** â€” cash-secured puts and covered calls with OTM analysis
-- **Options Rollover** â€” roll positions approaching strike price to later expirations
-- **Signal-Only Workflow** â€” review opportunities in-app, then place trades in your broker
-- **OpenD Connection Status** â€” the web UI shows real-time OpenD connection and login state
-- **Auto Launch** â€” optional one-click start that can open OpenD for you on Windows
-- **Dynamic Watchlist** â€” optional TradingView-powered stock screening for wheel strategy candidates
-- **Catalyst Watch** â€” unusual options flow scans that can widen with Ape Wisdom social momentum, then confirm with broker data
-
-### Intelligent Option Scoring (Phase 1 & 2)
-- **Risk-Adjusted Scoring** â€” IV-adjusted returns, theta/delta risk ratio, expected value calculations
-- **IV Environment Awareness** â€” 30-day rolling IV rank tracking with color-coded badges (ðŸ”´ low, ðŸŸ¢ high)
-- **Dynamic Screening Profiles** â€” Auto-detects weekly/monthly/quarterly expirations with optimized parameters
-- **Earnings Integration** â€” Automatic earnings warnings with multi-source fallback and manual refresh UI
-- **APScheduler Earnings Job** â€” Earnings data refreshed every 6 hours via central APScheduler with one-shot initialization on startup
-- **Macro Regime Detection** â€” FRED-powered economic context (rates, credit stress, growth, inflation) influencing scores and recommendations
-
-### Macro Regime Detection (Phase 3)
-- **Interest Rate Environment** â€” Detects rising/falling/stable rate regimes from Fed funds data
-- **Credit Stress Monitoring** â€” Tracks high-yield corporate bond spreads for market stress signals
-- **Economic Growth Regime** â€” Uses yield curve slope (10y-2y) to detect expansion/slowdown risks
-- **Inflation Trends** â€” Monitors CPI trends for inflation context
-- **Score Impact** â€” Macro multiplier (0.80x to 1.05x) adjusts all option scores based on economic conditions
-- **Dashboard Integration** â€” Real-time macro regime card with actionable strategy advice
+- **Premium Velocity Ranking** ? cash-secured puts and calls sorted by return per day. Top 3 are surfaced; the rest are background noise.
+- **Watchlist-Centric Scan** ? scans your watchlist only. No broad-market screening, no ticker discovery. The app ranks what you already care about.
+- **Signal-Only Workflow** ? review opportunities in-app, then place trades in your broker. No autonomous execution.
+- **Portfolio Dashboard** ? positions, cash balance, and account summary from Moomoo.
+- **OpenD Connection Status** ? web UI shows real-time OpenD connection and login state.
+- **Auto Launch** ? optional one-click start that opens OpenD for you on Windows.
+- **Options Rollover** ? roll positions approaching strike price to later expirations.
 
 ### Scoring Methodology
 
 The system uses a sophisticated multi-factor scoring algorithm to rank option plays:
 
 **Risk-Adjusted Metrics (Phase 1):**
-- **IV-Adjusted Return** â€” Annualized return normalized by implied volatility (filters low IV danger)
-- **Theta/Delta Ratio** â€” Daily income per unit of directional risk
-- **Expected Value** â€” Probability-weighted outcome accounting for win rate and loss magnitude
-- **Capital Efficiency** â€” CSP optimization based on capital usage vs account size
+- **IV-Adjusted Return** ? Annualized return normalized by implied volatility (filters low IV danger)
+- **Theta/Delta Ratio** ? Daily income per unit of directional risk
+- **Expected Value** ? Probability-weighted outcome accounting for win rate and loss magnitude
+- **Capital Efficiency** ? CSP optimization based on capital usage vs account size
 
 **Weight Distribution (Fixed):**
 - **CALLs:** IV-Adjusted (25%), Theta/Delta (20%), Liquidity (18%), Expected Value (15%), Upside (12%), OTM Fit (10%)
@@ -56,21 +39,21 @@ The system uses a sophisticated multi-factor scoring algorithm to rank option pl
 **IV Environment Impact (Phase 2):**
 | IV Rank | Score Impact | Status |
 |---------|--------------|--------|
-| < 20% | -20% penalty | ðŸ”´ Extreme low - dangerous |
-| 20-30% | -10% penalty | ðŸŸ¡ Low IV warning |
+| < 20% | -20% penalty | ?? Extreme low - dangerous |
+| 20-30% | -10% penalty | ?? Low IV warning |
 | 30-40% | -5% penalty | Slightly below average |
 | 40-60% | Neutral | âœ“ Normal range |
 | 60-70% | +5% bonus | Slightly above average |
-| 70-80% | +10% bonus | ðŸŸ¢ Good premium environment |
-| > 80% | +20% bonus | ðŸŸ¢ Excellent IV |
+| 70-80% | +10% bonus | ?? Good premium environment |
+| > 80% | +20% bonus | ?? Excellent IV |
 
 **Earnings Impact (Phase 2):**
 | Days to Earnings | Score Impact | Warning |
 |------------------|--------------|---------|
-| Today | -30% | ðŸš¨ EARNINGS TODAY |
+| Today | -30% | ?? EARNINGS TODAY |
 | 1-3 days | -15% | âš ï¸ High assignment risk |
 | 4-7 days | -5% | Caution advised |
-| > 7 days | No impact | â€” |
+| > 7 days | No impact | ? |
 
 **Dynamic Profiles (Auto-Detected by DTE):**
 - **Weeklies (0-14 DTE):** Tighter delta targeting (0.16-0.22), higher liquidity weight (35%), lower premium threshold
@@ -158,8 +141,8 @@ To have the launcher open OpenD for you, edit `connection.json`:
 }
 ```
 
-- `auto_launch_opend` â€” set to `true` to start OpenD when you run the launcher
-- `opend_path` â€” path to `OpenD.exe` or `FutuOpenD.exe` on your machine
+- `auto_launch_opend` ? set to `true` to start OpenD when you run the launcher
+- `opend_path` ? path to `OpenD.exe` or `FutuOpenD.exe` on your machine
 - If `opend_path` is empty the launcher searches common install locations automatically
 
 ## Catalyst Watch Social Expansion
@@ -232,7 +215,7 @@ Live trading config. Not committed to version control.
   - *Uncomment the FRED_API_KEY line in your `.env` file after obtaining a free key* |
 | `FRED_ENABLED` | No | Enable/disable FRED integration (default: `true`) |
 | `OPENBB_ENABLED` | No | Enable/disable optional enrichment (default: `false`) |
-| `WATCHLIST_MODE` | No | Watchlist mode: `static`, `dynamic`, or `hybrid` (default: `hybrid`) |
+| `WATCHLIST_MODE` | No | Watchlist mode: `static`, `dynamic`, or `hybrid` (default: `static`) |
 | `WATCHLIST` | No | Comma-separated static watchlist tickers used as the fallback/static list from `.env` |
 | `SCREENING_MIN_IV_RANK` | No | Min IV rank for dynamic screening (default: `30`) |
 | `SCREENING_MIN_VOLUME` | No | Min volume for dynamic screening (default: `1000000`) |
@@ -263,7 +246,7 @@ The app exposes a full REST API for system status, portfolio data, options analy
 | **Analytics** | `GET /api/options/analytics/lifecycle`, `GET /api/options/analytics/leakage`, `POST /api/options/prefilled-close` |
 | **LLM** | `POST /api/llm/suggestions` |
 
-> ðŸ“– **Full API reference with request/response examples:** see [API.md](API.md)
+> ?? **Full API reference with request/response examples:** see [API.md](API.md)
 
 ## Web Pages
 
@@ -279,19 +262,19 @@ The app exposes a full REST API for system status, portfolio data, options analy
 
 | Document | Purpose |
 |---|---|
-| [README.md](README.md) | This file â€” features, quick start, configuration, troubleshooting |
+| [README.md](README.md) | This file ? features, quick start, configuration, troubleshooting |
 | [FREE_ONLY_REPO_SHORTLIST.md](FREE_ONLY_REPO_SHORTLIST.md) | Canonical free-only external repo shortlist and selection rules |
 | [API.md](API.md) | Complete API reference with request/response examples |
 | [SCORING.md](SCORING.md) | Detailed scoring algorithm, weights, and IV/earnings methodology |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
 | [tests/README.md](tests/README.md) | Unit tests and smoke test checklist |
 
-## Dynamic Watchlist (tvscreener Integration)
+## Optional Dynamic Watchlist (tvscreener Integration)
 
-**TradingView-Powered Stock Screening** â€” Automatically discover optimal wheel strategy candidates using free TradingView data.
+**TradingView-Powered Stock Screening** ? Optional screening for alternative watchlist candidates using free TradingView data.
 
 ### Overview
-The dynamic watchlist feature uses [tvscreener](https://github.com/deepentropy/tvscreener) to screen stocks based on:
+When enabled, the dynamic watchlist feature uses [tvscreener](https://github.com/deepentropy/tvscreener) to screen stocks based on:
 - **High Volatility** (TradingView's volatility metric as IV proxy)
 - **High Liquidity** (average daily volume)
 - **Configurable Criteria** (customize for your strategy)
@@ -299,16 +282,16 @@ The dynamic watchlist feature uses [tvscreener](https://github.com/deepentropy/t
 ### Watchlist Modes
 | Mode | Description |
 |---|---|
-| `static` | Uses the static watchlist from `WATCHLIST` (default fallback) |
+| `static` | Uses the static watchlist from `WATCHLIST` (default runtime mode) |
 | `dynamic` | Uses TradingView screening exclusively |
-| `hybrid` | Combines dynamic screening + static watchlist (default) |
+| `hybrid` | Combines dynamic screening + static watchlist |
 
 ### Configuration
 Edit `connection.json` or set environment variables:
 
 ```json
 {
-  "watchlist_mode": "hybrid",
+  "watchlist_mode": "static",
   "screening_criteria": {
     "min_iv_rank": 30,
     "min_volume": 1000000,
@@ -319,7 +302,7 @@ Edit `connection.json` or set environment variables:
 
 ### Environment Variables
 ```bash
-WATCHLIST_MODE=hybrid
+WATCHLIST_MODE=static
 WATCHLIST=AAPL,MSFT,GOOGL,AMZN,TSLA,NVDA,META,AMD,NFLX,UBER,SOFI,PLTR,BABA,DIS,BA,JPM,V,MA,KO,PEP,WMT,COST,HD,INTC,F
 SCREENING_MIN_IV_RANK=30
 SCREENING_MIN_VOLUME=1000000
@@ -334,10 +317,10 @@ SCREENING_MAX_STOCKS=50
 5. **Caching**: Results cached for 5 minutes to avoid rate limits
 
 ### Benefits
-- âœ… **No API key required** â€” tvscreener uses free TradingView data
-- âœ… **Automatic discovery** â€” find new opportunities automatically
-- âœ… **Graceful degradation** â€” always works, even if API fails
-- âœ… **Single-click start** â€” automatic installation via requirements.txt
+- âœ… **No API key required** ? tvscreener uses free TradingView data
+- âœ… **Automatic discovery** ? find new opportunities automatically
+- âœ… **Graceful degradation** ? always works, even if API fails
+- âœ… **Single-click start** ? automatic installation via requirements.txt
 
 ## Project Structure
 
@@ -406,7 +389,7 @@ The application uses SQLite (`options.db`) with automatic migrations. Key tables
 | `iv_history` | IV data over time for 30-day rolling IV rank (purged after 45 days) |
 | `earnings_calendar` | Earnings dates from Yahoo Finance (refreshed every 6 hours) |
 
-Caching: in-memory â€” 4 hours (IV), 24 hours (earnings). See [SCORING.md](SCORING.md) for full schema.
+Caching: in-memory ? 4 hours (IV), 24 hours (earnings). See [SCORING.md](SCORING.md) for full schema.
 
 ## Scoring Methodology
 
@@ -414,7 +397,7 @@ The system uses a multi-factor scoring algorithm (0-100) to rank option plays.
 
 **Core factors:** IV-adjusted return (25%), Theta/Delta risk ratio (20%), Expected Value (15-18%), Liquidity (15-18%), plus CALL/PUT-specific metrics.
 
-**IV Environment:** 30-day rolling IV rank applies -20% to +20% score adjustments, shown as color-coded badges (ðŸ”´ ðŸŸ¡ âš« ðŸŸ¢).
+**IV Environment:** 30-day rolling IV rank applies -20% to +20% score adjustments, shown as color-coded badges (?? ?? âš« ??).
 
 **Earnings Impact:** Background thread fetches earnings dates (Yahoo Finance, no API key). Score penalties: -30% (today), -15% (1-3 days), -5% (4-7 days).
 
@@ -425,7 +408,7 @@ The system uses a multi-factor scoring algorithm (0-100) to rank option plays.
 | Monthlies | 15-45 | 0.20-0.30 | 18% |
 | Quarterlies | 46-90 | 0.25-0.35 | 15% |
 
-> ðŸ“– **Full scoring algorithm, formulas, weights, and data models:** see [SCORING.md](SCORING.md)
+> ?? **Full scoring algorithm, formulas, weights, and data models:** see [SCORING.md](SCORING.md)
 
 ## Docker (Optional)
 
@@ -436,8 +419,8 @@ docker-compose up -d
 ```
 
 This starts:
-- `moomoo-opend` â€” OpenD gateway on port 11111
-- `all-you-need-is-wheel` â€” web app on port 8000
+- `moomoo-opend` ? OpenD gateway on port 11111
+- `all-you-need-is-wheel` ? web app on port 8000
 
 ## Troubleshooting
 
@@ -492,5 +475,5 @@ docker-compose logs opend
 
 ## Acknowledgments
 
-- [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html) â€” market data and trading API
-- [Flask](https://flask.palletsprojects.com/) â€” web framework
+- [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html) ? market data and trading API
+- [Flask](https://flask.palletsprojects.com/) ? web framework

@@ -10,6 +10,7 @@ from .schema import create_tables, migrate_database
 from .iv_repository import IVRepository
 from .earnings_repository import EarningsRepository
 from .trade_events_repository import TradeEventsRepository
+from .option_chain_repository import OptionChainRepository
 from .sqlite_pool import (
     pooled_connection,
     get_connection_pool_stats,
@@ -39,6 +40,16 @@ class OptionsDatabase:
         self._iv = IVRepository(self.db_path)
         self._earnings = EarningsRepository(self.db_path)
         self._trade_events = TradeEventsRepository(self.db_path)
+        self._option_chains = OptionChainRepository(self.db_path)
+
+        logger.info("OptionsDatabase initialized at %s", self.db_path)
+        logger.debug(
+            "Repositories: IV=%s Earnings=%s TradeEvents=%s OptionChains=%s",
+            type(self._iv).__name__,
+            type(self._earnings).__name__,
+            type(self._trade_events).__name__,
+            type(self._option_chains).__name__,
+        )
 
     @contextmanager
     def transaction(self):
@@ -53,8 +64,10 @@ class OptionsDatabase:
             try:
                 yield conn
                 conn.commit()
+                logger.debug("DB transaction committed")
             except Exception:
                 conn.rollback()
+                logger.warning("DB transaction rolled back", exc_info=True)
                 raise
 
     # --- IV History ---
@@ -105,11 +118,32 @@ class OptionsDatabase:
     def get_trade_analytics(self):
         return self._trade_events.get_trade_analytics()
 
+    # --- Option Chain Snapshots ---
+
+    def save_option_chain_snapshot(self, ticker, expiration, right, stock_price, chain_dict, source='broker', as_of=None):
+        return self._option_chains.save_snapshot(ticker, expiration, right, stock_price, chain_dict, source=source, as_of=as_of)
+
+    def get_option_chain_snapshot(self, ticker, expiration, right):
+        return self._option_chains.get_snapshot(ticker, expiration, right)
+
+    def get_latest_option_chain(self, ticker, right, max_age_hours=168):
+        return self._option_chains.get_latest_for_ticker(ticker, right, max_age_hours=max_age_hours)
+
+    def get_all_latest_option_chains(self, tickers, right, max_age_hours=168):
+        return self._option_chains.get_all_latest_for_tickers(tickers, right, max_age_hours=max_age_hours)
+
+    def clear_old_option_chain_snapshots(self, days=14):
+        return self._option_chains.clear_old_snapshots(days=days)
+
+    def get_option_chain_snapshot_stats(self):
+        return self._option_chains.get_stats()
+
     def close(self):
         if self._closed or not hasattr(self, 'db_path'):
             return
         release_pool_handle(self.db_path)
         self._closed = True
+        logger.info("OptionsDatabase closed: %s", self.db_path)
 
     def get_connection_pool_stats(self):
         return get_connection_pool_stats(self.db_path)

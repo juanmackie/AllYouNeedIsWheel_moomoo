@@ -143,7 +143,7 @@ def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
 
     if avg_volume < 1_000_000:
         notes.append("Stock volume is below the ideal signal threshold")
-    if spread_pct is not None and spread_pct > 18:
+    if spread_pct is not None and spread_pct > 25:
         blockers.append("Options spread is too wide")
     elif spread_pct is not None and spread_pct > 10:
         notes.append("Options spread is acceptable but not tight")

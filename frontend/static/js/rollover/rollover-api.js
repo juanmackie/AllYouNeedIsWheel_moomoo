@@ -4,6 +4,16 @@ import { formatCurrency } from '../utils/formatters.js';
 import { showAlert } from '../utils/alerts.js';
 import { fetchPositions, fetchOptionData, fetchStockPrices as apiFetchStockPrices, fetchRollPressure } from '../dashboard/api.js';
 
+let rolloverUiHandlers = {
+    clearRolloverSuggestions: () => {},
+    populateOptionsTable: () => {},
+    populateRolloverSuggestionsTable: () => {},
+};
+
+export function registerRolloverUiHandlers(handlers = {}) {
+    rolloverUiHandlers = { ...rolloverUiHandlers, ...handlers };
+}
+
 function getUnavailableRolloverMessage() {
     const status = window.appConnectionStatus || null;
     if (!status) {
@@ -16,6 +26,13 @@ function getUnavailableRolloverMessage() {
         return status.message || 'OpenD is unavailable. Rollover positions cannot be loaded.';
     }
     return 'Rollover positions are unavailable right now.';
+}
+
+function getRolloverUnderlying(option) {
+    if (option?.underlying) return option.underlying;
+    const symbol = String(option?.symbol || option?.ticker || '').split(' ')[0].replace(/^[A-Z]{2}\./, '');
+    const match = symbol.match(/^([A-Z0-9-]+)\d{6}[CP]\d+$/);
+    return match ? match[1] : symbol;
 }
 
 async function processOptionPositions(optionPositions) {
@@ -79,7 +96,6 @@ async function fetchStockPrices(tickers) {
 }
 
 async function loadOptionPositions() {
-    const { clearRolloverSuggestions, populateOptionsTable } = await import('./rollover-ui.js');
     try {
         const rollPressureData = await fetchRollPressure();
 
@@ -99,6 +115,7 @@ async function loadOptionPositions() {
                 profit_target_progress: pos.profit_target_progress,
                 wheel_decision: pos.wheel_decision,
                 symbol: pos.ticker,
+                underlying: pos.underlying,
                 contract: {
                     strike: pos.strike,
                     right: pos.option_type === 'PUT' ? 'P' : 'C',
@@ -112,10 +129,10 @@ async function loadOptionPositions() {
             }));
 
             rolloverState.optionsData = processedOptions;
-            populateOptionsTable(processedOptions);
+            rolloverUiHandlers.populateOptionsTable(processedOptions);
 
             if (!rolloverState.selectedOption && (!rolloverState.rolloverSuggestions || rolloverState.rolloverSuggestions.length === 0)) {
-                clearRolloverSuggestions();
+                rolloverUiHandlers.clearRolloverSuggestions();
             }
             return;
         }
@@ -124,7 +141,7 @@ async function loadOptionPositions() {
         if (!positionsData) {
             const unavailableMessage = getUnavailableRolloverMessage();
             rolloverState.optionsData = [];
-            populateOptionsTable([], unavailableMessage);
+            rolloverUiHandlers.populateOptionsTable([], unavailableMessage);
             return;
         }
 
@@ -133,10 +150,10 @@ async function loadOptionPositions() {
 
         const processedOptions = await processOptionPositions(optionPositions);
         rolloverState.optionsData = processedOptions;
-        populateOptionsTable(processedOptions);
+        rolloverUiHandlers.populateOptionsTable(processedOptions);
 
         if (!rolloverState.selectedOption && (!rolloverState.rolloverSuggestions || rolloverState.rolloverSuggestions.length === 0)) {
-            clearRolloverSuggestions();
+            rolloverUiHandlers.clearRolloverSuggestions();
         }
     } catch (error) {
         console.error('Error loading option positions:', error);
@@ -145,12 +162,9 @@ async function loadOptionPositions() {
 
 async function loadPendingOrders() {
     rolloverState.pendingOrders = [];
-    const { populatePendingOrdersTable } = await import('./rollover-ui.js');
-    populatePendingOrdersTable([]);
 }
 
 async function fetchRolloverSuggestions() {
-    const { populateRolloverSuggestionsTable } = await import('./rollover-ui.js');
     try {
         if (!rolloverState.selectedOption) {
             throw new Error('No option selected for rollover');
@@ -176,7 +190,7 @@ async function fetchRolloverSuggestions() {
             tableBody.appendChild(loadingRow);
         }
 
-        const ticker = st.symbol.split(' ')[0];
+        const ticker = getRolloverUnderlying(st);
 
         const stockPrices = await apiFetchStockPrices(ticker);
         const latestStockPrice = stockPrices[ticker] || st.stockPrice;
@@ -266,7 +280,7 @@ async function fetchRolloverSuggestions() {
             }
 
             rolloverState.rolloverSuggestions = [selectedNewOption];
-            populateRolloverSuggestionsTable(rolloverState.rolloverSuggestions);
+            rolloverUiHandlers.populateRolloverSuggestionsTable(rolloverState.rolloverSuggestions);
             return;
         }
 
@@ -317,7 +331,7 @@ async function fetchRolloverSuggestions() {
         }
 
         rolloverState.rolloverSuggestions = [selectedNewOption];
-        populateRolloverSuggestionsTable(rolloverState.rolloverSuggestions);
+        rolloverUiHandlers.populateRolloverSuggestionsTable(rolloverState.rolloverSuggestions);
     } catch (error) {
         console.error('Error fetching rollover suggestions:', error);
 

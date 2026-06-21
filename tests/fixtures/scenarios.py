@@ -197,7 +197,7 @@ def get_low_iv_scenario():
     }
     expected = {
         'pass': True,
-        'min_score': 72,
+        'min_score': 73,
         'has_warnings': True,
         'warning_contains': 'IV',
         'option_type': 'PUT',

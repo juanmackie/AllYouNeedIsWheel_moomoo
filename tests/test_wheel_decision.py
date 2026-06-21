@@ -1022,8 +1022,8 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         self.assertFalse(not_stale)
         missing_ts = _is_quote_stale({}, from_yfinance=False)
         self.assertFalse(missing_ts)
-        yfinance_always_stale = _is_quote_stale({}, from_yfinance=True)
-        self.assertTrue(yfinance_always_stale)
+        yfinance_missing_ts = _is_quote_stale({}, from_yfinance=True)
+        self.assertFalse(yfinance_missing_ts)
 
     def test_regression_wide_spread_hard_blocks(self):
         """Wide spread must hard-block with reason code — regression guard."""
@@ -1057,6 +1057,27 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         )
         self.assertTrue(result.hard_blockers)
         self.assertTrue(any('Insufficient cash' in b for b in result.hard_blockers))
+
+    def test_research_only_mode_keeps_insufficient_cash_visible(self):
+        """Research-only mode should surface CSP candidates without hard blockers."""
+        future_date = (datetime.now() + timedelta(days=21)).strftime('%Y%m%d')
+        opt = dict(self.base_option, expiration=future_date, strike=95.0)
+        portfolio = {
+            'positions': {}, 'cash_balance': 100.0, 'account_value': 100000.0,
+            'available_cash': 100.0, 'cash_available_for_csp': 100.0,
+            'broker_buying_power': 100.0, 'short_puts': {},
+        }
+        result = score_contract(
+            ticker="AAPL",
+            option=opt,
+            stock_price=100.0,
+            profile=self.base_profile,
+            portfolio_context=portfolio,
+            research_only_mode=True,
+        )
+        self.assertIsNotNone(result)
+        self.assertFalse(result.hard_blockers)
+        self.assertTrue(any('Research-only' in w for w in result.warnings))
 
     def test_short_puts_reduce_csp_buying_power(self):
         """Existing short puts should reduce cash_available_for_csp, blocking new CSPs."""

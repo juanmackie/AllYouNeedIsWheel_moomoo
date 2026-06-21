@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`db/` owns SQLite schema creation, migrations, connection pooling, and repositories for persisted recommendations, IV history, earnings, trade events, scan ledger, and playbook data.
+`db/` owns SQLite schema creation, migrations, connection pooling, and repositories for persisted earnings, IV history, trade events, option chains, and recommendation data.
 
 ## Ownership
 

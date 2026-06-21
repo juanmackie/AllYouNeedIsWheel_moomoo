@@ -163,7 +163,45 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         self.assertEqual(result['price_source'], 'broker')
         self.assertEqual(result['chain_source'], 'yfinance')
         self.assertEqual(result['iv_source'], 'yfinance')
-        self.assertTrue(result['from_yfinance'])
+
+    def test_process_options_chain_sorts_by_premium_velocity(self):
+        service = self._make_service()
+        service._screening_profile_provider.get_screening_profile.return_value = {}
+
+        fast_daily = {
+            'ticker': 'AAPL', 'option_type': 'PUT', 'strike': 200.0,
+            'expiration': '20260529', 'dte': 10, 'premium_per_contract': 100.0,
+            'annualized_return': 18.25, 'score': 80.0,
+            'wheel_decision': {'contract_score': 80.0},
+        }
+        slow_daily = {
+            'ticker': 'AAPL', 'option_type': 'PUT', 'strike': 50.0,
+            'expiration': '20260529', 'dte': 20, 'premium_per_contract': 120.0,
+            'annualized_return': 43.80, 'score': 90.0,
+            'wheel_decision': {'contract_score': 90.0},
+        }
+
+        def fake_build_candidate(ticker, option, stock_price, otm_percentage, profile, portfolio_context):
+            return fast_daily if option['strike'] == 200.0 else slow_daily
+
+        with patch.object(service, '_build_candidate', side_effect=fake_build_candidate):
+            result = service._process_options_chain(
+                [{'right': 'P', 'options': [
+                    {'strike': 200.0, 'expiration': '20260529', 'option_type': 'PUT'},
+                    {'strike': 50.0, 'expiration': '20260529', 'option_type': 'PUT'},
+                ]}],
+                'AAPL',
+                150.0,
+                10,
+                {'vix_regime': {}},
+            )
+
+        self.assertEqual(result['puts'][0]['strike'], 200.0)
+        self.assertGreater(
+            result['puts'][0]['premium_per_contract'] / result['puts'][0]['dte'],
+            result['puts'][1]['premium_per_contract'] / result['puts'][1]['dte'],
+        )
+        self.assertLess(result['puts'][0]['annualized_return'], result['puts'][1]['annualized_return'])
 
     @patch('api.services.options_data.get_macro_service')
     @patch('api.services.options_data.score_contract')
@@ -177,7 +215,7 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         decision.expiration = '20260529'
         decision.strike = 282.5
         decision.hard_blockers = []
-        decision.confidence_score = 65
+        decision.confidence_score = 64
         decision.contract_score = 77.0
         decision.price_source = 'yfinance'
         decision.chain_source = 'yfinance'

@@ -22,7 +22,7 @@ from core.scoring_factors import (
     _compute_size_fit,
     _compute_expected_move_buffer,
     _compute_recommended_contracts,
-    CALL_W_IV_ADJ, CALL_W_TDR, CALL_W_LIQ, CALL_W_EV, CALL_W_UPSIDE, CALL_W_OTM, CALL_W_EARNINGS,
+    CALL_W_IV_ADJ, CALL_W_TDR, CALL_W_LIQ, CALL_W_EV, CALL_W_UPSIDE, CALL_W_OTM, CALL_W_EARNINGS, CALL_W_CE,
     PUT_W_IV_ADJ, PUT_W_TDR, PUT_W_EV, PUT_W_LIQ, PUT_W_BUF, PUT_W_CE, PUT_W_EARNINGS, PUT_W_DELTA,
     CALL_MAX_LOSS_ESTIMATE_PCT, PUT_MAX_LOSS_ESTIMATE_PCT,
     STALE_QUOTE_THRESHOLD, ACCOUNT_VALUE_MIN,
@@ -201,6 +201,7 @@ def _create_failed_decision(ticker: str, option_type: str, strike: float, expira
     Create a WheelDecision that failed hard filters.
     Populates hard_blockers with the reason and blocked_reason_codes with machine-readable codes.
     """
+    logger.info("Hard blocker for %s %s at %.2f exp %s: %s", ticker, option_type, strike, expiration, reason)
     return WheelDecision(
         ticker=ticker,
         option_type=option_type,
@@ -279,6 +280,7 @@ def score_contract(
     earnings_info: dict | None = None,
     macro_regime: dict | None = None,
     growth_profile: dict | None = None,
+    research_only_mode: bool = False,
 ) -> WheelDecision:
     """
     Score a single option contract and return a WheelDecision.
@@ -462,7 +464,7 @@ def score_contract(
         # Data provenance (TODO 2.1)
         price_source=price_source,
         chain_source=chain_source,
-        greeks_source=('broker' if abs(delta) > 0.001 else 'Black-Scholes computed'),
+        greeks_source=(option.get('greeks_source') or ('broker' if abs(delta) > 0.001 else 'Black-Scholes computed')),
         iv_source=iv_source,
         macro_source=macro_regime.get('source', 'FRED/cache/disabled'),
         quote_timestamp=datetime.now().isoformat(),
@@ -521,13 +523,16 @@ def score_contract(
     # -- Hard blocker checks ------------------------------------------------
     macro_multiplier = macro_regime.get('macro_multiplier', 1.0)
 
+    profile_type = str(profile.get('profile_type', '') or '').lower()
+    is_long_research = research_only_mode and profile_type in {'long_call', 'long_put'}
+
     if option_type == 'CALL':
         if stock_price <= 0 or strike <= stock_price:
             return _create_failed_decision(ticker, 'CALL', strike, expiration, f"Strike {strike} not above stock price {stock_price}")
         max_contracts = max(int(shares_owned // 100), 0)
-        if max_contracts < 1:
+        if max_contracts < 1 and not is_long_research:
             return _create_failed_decision(ticker, 'CALL', strike, expiration, "No covered shares available")
-        decision.max_contracts = max_contracts
+        decision.max_contracts = max_contracts if max_contracts > 0 else 1
 
         otm_pct = ((strike - stock_price) / stock_price) * 100
         if_called_return = (((strike - stock_price) + mid_price) / stock_price) * 100 if stock_price > 0 else 0
@@ -544,6 +549,19 @@ def score_contract(
         ) * 100
         decision.upside_score = _score_positive_metric(if_called_return, 12) * 100
 
+        # Capital efficiency for covered calls — how much premium per dollar of account equity
+        capital_efficiency = 0.0
+        ce_score_val = 0.0
+        if account_value > 0:
+            call_capital = shares_owned * stock_price
+            if call_capital > 0:
+                capital_efficiency = annualized_return_raw / (call_capital / account_value)
+                ce_score_val = _score_positive_metric(
+                    capital_efficiency, profile.get('target_capital_efficiency', 100)
+                ) * 100
+        decision.capital_efficiency = round(capital_efficiency, 1)
+        decision.ce_score = round(ce_score_val, 1)
+
         # Earnings risk score from earnings_adjustment (e.g., -30 → 70, 0 → 100)
         earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
 
@@ -555,7 +573,8 @@ def score_contract(
         w_upside = CALL_W_UPSIDE
         w_otm = CALL_W_OTM
         w_earnings = CALL_W_EARNINGS
-        total_w = w_iv_adj + w_tdr + w_liq + w_ev + w_upside + w_otm + w_earnings
+        w_ce = CALL_W_CE
+        total_w = w_iv_adj + w_tdr + w_liq + w_ev + w_upside + w_otm + w_earnings + w_ce
         if total_w > 0:
             w_iv_adj /= total_w
             w_tdr /= total_w
@@ -564,6 +583,7 @@ def score_contract(
             w_upside /= total_w
             w_otm /= total_w
             w_earnings /= total_w
+            w_ce /= total_w
 
         base_score = (
             decision.iv_adjusted_score * w_iv_adj +
@@ -572,7 +592,8 @@ def score_contract(
             decision.ev_score * w_ev +
             decision.upside_score * w_upside +
             decision.otm_score * w_otm +
-            earnings_risk_score * w_earnings
+            earnings_risk_score * w_earnings +
+            decision.ce_score * w_ce
         )
 
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
@@ -632,6 +653,8 @@ def score_contract(
 
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
         decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context)
+        if is_long_research:
+            decision.warnings.append('Research-only long call signal - user executes manually')
 
     elif option_type == 'PUT':
         if stock_price <= 0 or strike >= stock_price:
@@ -662,11 +685,15 @@ def score_contract(
 
         # Cash-secured puts require true CSP cash, not margin buying power.
         if cash_required > cash_available_for_csp:
-            return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, CSP cash available ${cash_available_for_csp:.0f} (open short-put collateral ${cash_reserved_for_csp:.0f}; broker buying power ${broker_buying_power:.0f})")
+            if not research_only_mode:
+                return _create_failed_decision(ticker, 'PUT', strike, expiration, f"Insufficient cash: requires ${cash_required}, CSP cash available ${cash_available_for_csp:.0f} (open short-put collateral ${cash_reserved_for_csp:.0f}; broker buying power ${broker_buying_power:.0f})")
+            decision.warnings.append(
+                f'Research-only: requires ${cash_required:.0f} cash, CSP cash available ${cash_available_for_csp:.0f}'
+            )
 
         breakeven = strike - mid_price
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
-        capital_fit = 1.0 if cash_available_for_csp <= 0 else _clamp(cash_available_for_csp / cash_required)
+        capital_fit = 0.0 if cash_available_for_csp <= 0 else _clamp(cash_available_for_csp / cash_required)
 
         capital_efficiency = 0.0
         ce_score = 0.0
@@ -779,6 +806,8 @@ def score_contract(
 
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
         decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context)
+        if is_long_research:
+            decision.warnings.append('Research-only long put signal - user executes manually')
 
     else:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Unknown option type")
@@ -799,6 +828,22 @@ def score_contract(
         ticker=ticker,
     )
 
+    # Risk-budget gate: penalize trade scores that consume too much drawdown budget.
+    # Trades using >25% of the budget are progressively penalized so ranking
+    # reflects contribution-to-2x within the account's risk envelope.
+    _rbp = decision.risk_budget_used_pct
+    if _rbp > 25:
+        _penalty = max(0.0, 1.0 - ((_rbp - 25) / 150))
+        decision.contract_score = round(decision.contract_score * _penalty, 2)
+
+    if logger.isEnabledFor(logging.INFO):
+        logger.info(
+            "score_contract ticker=%s type=%s strike=%.2f exp=%s dte=%d score=%.1f "
+            "premium=%.2f delta=%.3f iv=%.2f blockers=%s",
+            ticker, option_type, strike, expiration, dte,
+            decision.contract_score, premium_per_contract, delta, implied_volatility,
+            decision.hard_blockers or [],
+        )
     return decision
 
 
@@ -902,6 +947,12 @@ def score_existing_position(
     elif otm_pct < 0:
         decision.warnings.append(f'Strike crossed ({abs(otm_pct):.1f}% ITM)')
 
+    logger.info(
+        "score_existing_position ticker=%s type=%s strike=%.2f exp=%s dte=%d "
+        "roll_pressure=%.1f profit_progress=%.1f extrinsic=%.2f",
+        ticker, option_type, strike, expiration, dte,
+        decision.roll_pressure, decision.profit_target_progress, extrinsic,
+    )
     return decision
 
 
@@ -911,8 +962,6 @@ def score_existing_position(
 
 def _is_quote_stale(option: dict, from_yfinance: bool) -> bool:
     """Determine if a quote is stale based on timestamp and data source."""
-    if from_yfinance:
-        return True
     quote_ts = option.get('quote_timestamp')
     if not quote_ts:
         return False
@@ -971,7 +1020,7 @@ def _apply_growth_scoring(
         data_source=decision.price_source,
         has_yfinance_fallback=from_yfinance,
         is_stale=is_stale,
-        spread_pct=option.get('spread_pct', 0),
+        spread_pct=decision.spread_pct,
         open_interest=option.get('open_interest', 0),
         has_iv=decision.implied_volatility > 0,
         has_greeks=abs(decision.delta) > 0.001,
@@ -990,7 +1039,7 @@ def _apply_growth_scoring(
         )
 
         if decision.covered_call_intent == "upside-capping risk" and annualized_return_raw < 12:
-            decision.hard_blockers.append('Low-premium CC caps upside without meaningful 2x acceleration')
+            decision.warnings.append('Low-premium CC caps upside without meaningful 2x acceleration')
         elif decision.covered_call_intent == "income" and annualized_return_raw < 6:
             decision.warnings.append('Low premium relative to growth target')
 

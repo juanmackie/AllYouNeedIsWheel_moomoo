@@ -530,6 +530,62 @@ class TestMoomooConnectionCaching(unittest.TestCase):
             mock_data
         )
 
+    def test_option_chain_cache_bypassed_when_data_filter_provided(self):
+        """Test that option chain cache is bypassed when data_filter is provided"""
+        MoomooConnection._instances.clear()
+        conn = MoomooConnection()
+
+        mock_chain_df = MagicMock()
+        mock_chain_df.empty = True
+        conn.quote_ctx = MagicMock()
+        conn.quote_ctx.get_option_chain.return_value = (RET_OK, mock_chain_df)
+
+        conn._cache_option_chain('AAPL', '20230616', 'C', {'cached': True})
+
+        from moomoo import OptionDataFilter
+        f = OptionDataFilter()
+        f.delta_min = 0.15
+
+        result = conn.get_option_chain('US.AAPL', '20230616', 'C', data_filter=f)
+
+        self.assertIsNotNone(result)
+        self.assertNotIn('cached', result)
+        conn.quote_ctx.get_option_chain.assert_called()
+
+    def test_broker_cache_after_hours_disabled(self):
+        """Test that broker_cache_after_hours=False disables after-hours cache serving"""
+        MoomooConnection._instances.clear()
+        conn = MoomooConnection(broker_cache_after_hours=False)
+        conn._cache_option_chain('AAPL', '20230616', 'C', {'chain': 'data'})
+
+        old_time = time.time() - 1000
+        with conn._cache_lock:
+            cache_key = 'AAPL_20230616_C'
+            if cache_key in conn._option_chain_cache:
+                data, _ = conn._option_chain_cache[cache_key]
+                conn._option_chain_cache[cache_key] = (data, old_time)
+
+        with patch('core.connection_manager.is_market_open', return_value=False):
+            result = conn._get_cached_option_chain('AAPL', '20230616', 'C')
+        self.assertIsNone(result)
+
+    def test_broker_cache_after_hours_enabled(self):
+        """Test that broker_cache_after_hours=True serves stale cache when market closed"""
+        MoomooConnection._instances.clear()
+        conn = MoomooConnection(broker_cache_after_hours=True)
+        conn._cache_option_chain('AAPL', '20230616', 'C', {'chain': 'data'})
+
+        old_time = time.time() - 10000
+        with conn._cache_lock:
+            cache_key = 'AAPL_20230616_C'
+            data, _ = conn._option_chain_cache[cache_key]
+            conn._option_chain_cache[cache_key] = (data, old_time)
+
+        with patch('core.connection_manager.is_market_open', return_value=False):
+            result = conn._get_cached_option_chain('AAPL', '20230616', 'C')
+        self.assertIsNotNone(result)
+        self.assertEqual(result, {'chain': 'data'})
+
 
 class TestMoomooConnectionExpirationCaching(unittest.TestCase):
     """Test option-expiration caching and pending-request reuse."""
@@ -652,6 +708,64 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         conn = MoomooConnection()
         conn.connect()
         return conn
+
+    def _make_acc_row(self, values):
+        class AccRow:
+            def __init__(self, data):
+                self.data = data
+
+            def get(self, key, default=None):
+                return self.data.get(key, default)
+
+        return AccRow(values)
+
+    def test_get_portfolio_keeps_cash_and_buying_power_separate(self):
+        conn = self._make_connected_conn()
+        acc_data = MagicMock()
+        acc_data.empty = False
+        acc_data.iloc.__getitem__.return_value = self._make_acc_row({
+            'acc_id': 'acct-123',
+            'us_avl_withdrawal_cash': 0,
+            'us_cash': 40000,
+            'usd_net_cash_power': 25000,
+            'cash': 0,
+        })
+        empty_positions = MagicMock()
+        empty_positions.empty = True
+        empty_positions.to_dict.return_value = []
+        self.mock_trd_ctx.accinfo_query.return_value = (RET_OK, acc_data)
+        self.mock_trd_ctx.position_list_query.return_value = (RET_OK, empty_positions)
+
+        result = conn.get_portfolio()
+
+        self.assertEqual(result['available_cash'], 40000)
+        self.assertEqual(result['available_cash_source'], 'us_cash')
+        self.assertEqual(result['buying_power'], 25000)
+        self.assertEqual(result['buying_power_source'], 'usd_net_cash_power')
+
+    def test_get_portfolio_falls_back_to_us_cash_when_no_usd_cash_field_exists(self):
+        conn = self._make_connected_conn()
+        acc_data = MagicMock()
+        acc_data.empty = False
+        acc_data.iloc.__getitem__.return_value = self._make_acc_row({
+            'acc_id': 'acct-123',
+            'us_avl_withdrawal_cash': 0,
+            'us_cash': 40000,
+            'usd_net_cash_power': 0,
+            'cash': 0,
+        })
+        empty_positions = MagicMock()
+        empty_positions.empty = True
+        empty_positions.to_dict.return_value = []
+        self.mock_trd_ctx.accinfo_query.return_value = (RET_OK, acc_data)
+        self.mock_trd_ctx.position_list_query.return_value = (RET_OK, empty_positions)
+
+        result = conn.get_portfolio()
+
+        self.assertEqual(result['available_cash'], 40000)
+        self.assertEqual(result['available_cash_source'], 'us_cash')
+        self.assertEqual(result['buying_power'], 0.0)
+        self.assertEqual(result['buying_power_source'], 'none')
 
     def test_get_stock_price_cached(self):
         conn = self._make_connected_conn()
@@ -792,6 +906,60 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         stats = MoomooConnection.get_connection_pool_stats()
         self.assertGreaterEqual(stats['cached_instances'], 2)
 
+    def test_get_user_security_group(self):
+        conn = self._make_connected_conn()
+        mock_df = MagicMock()
+        mock_df.empty = False
+        mock_df.to_dict.return_value = [{'group_id': 1, 'group_name': 'My Watchlist'}]
+        self.mock_quote_ctx.get_user_security_group.return_value = (RET_OK, mock_df)
+
+        ret, data = conn.get_user_security_group()
+
+        self.assertEqual(ret, RET_OK)
+        self.assertIsNotNone(data)
+        self.mock_quote_ctx.get_user_security_group.assert_called_once()
+
+    def test_get_user_security_group_with_group_type(self):
+        conn = self._make_connected_conn()
+        mock_df = MagicMock()
+        mock_df.empty = False
+        self.mock_quote_ctx.get_user_security_group.return_value = (RET_OK, mock_df)
+
+        from moomoo import UserSecurityGroupType
+        ret, data = conn.get_user_security_group(group_type=UserSecurityGroupType.CUSTOM)
+
+        self.assertEqual(ret, RET_OK)
+        self.mock_quote_ctx.get_user_security_group.assert_called_once_with(group_type=UserSecurityGroupType.CUSTOM)
+
+    def test_get_user_security_group_failure(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_user_security_group.return_value = (RET_ERROR, None)
+
+        ret, data = conn.get_user_security_group()
+
+        self.assertEqual(ret, RET_ERROR)
+
+    def test_get_user_security(self):
+        conn = self._make_connected_conn()
+        mock_df = MagicMock()
+        mock_df.empty = False
+        mock_df.to_dict.return_value = [{'code': 'US.AAPL', 'name': 'Apple Inc.'}]
+        self.mock_quote_ctx.get_user_security.return_value = (RET_OK, mock_df)
+
+        ret, data = conn.get_user_security('My Watchlist')
+
+        self.assertEqual(ret, RET_OK)
+        self.assertIsNotNone(data)
+        self.mock_quote_ctx.get_user_security.assert_called_once_with('My Watchlist')
+
+    def test_get_user_security_failure(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_user_security.return_value = (RET_ERROR, None)
+
+        ret, data = conn.get_user_security('My Watchlist')
+
+        self.assertEqual(ret, RET_ERROR)
+
     def test_get_option_expiration_dates(self):
         conn = self._make_connected_conn()
         mock_df = MagicMock()
@@ -799,6 +967,61 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
 
         result = conn.get_option_expiration_dates('US.AAPL')
         self.assertEqual(result, (RET_OK, mock_df))
+
+    def test_get_option_chain_with_data_filter(self):
+        conn = self._make_connected_conn()
+        mock_chain_df = MagicMock()
+        mock_chain_df.empty = True
+        self.mock_quote_ctx.get_option_chain.return_value = (RET_OK, mock_chain_df)
+
+        from moomoo import OptionDataFilter
+        f = OptionDataFilter()
+        f.delta_min = 0.15
+        f.delta_max = 0.35
+        result = conn.get_option_chain('US.AAPL', '20230616', 'C', data_filter=f)
+
+        self.assertIsNotNone(result)
+        call_kwargs = self.mock_quote_ctx.get_option_chain.call_args[1]
+        self.assertIn('data_filter', call_kwargs)
+        self.assertEqual(call_kwargs['data_filter'].delta_min, 0.15)
+
+    def test_query_subscription(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.query_subscription.return_value = (RET_OK, {'total_used': 5, 'remain': 95, 'own_used': 3})
+
+        ret, data = conn.query_subscription()
+
+        self.assertEqual(ret, RET_OK)
+        self.assertEqual(data['total_used'], 5)
+        self.mock_quote_ctx.query_subscription.assert_called_once()
+
+    def test_query_subscription_failure(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.query_subscription.return_value = (RET_ERROR, None)
+
+        ret, data = conn.query_subscription()
+
+        self.assertEqual(ret, RET_ERROR)
+
+    def test_get_opend_diagnostics_connected(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.query_subscription.return_value = (RET_OK, {'total_used': 3, 'remain': 97, 'own_used': 3})
+
+        diag = conn.get_opend_diagnostics()
+
+        self.assertTrue(diag['connected'])
+        self.assertTrue(diag['sdk_available'])
+        self.assertIn('sdk_version', diag)
+        self.assertIn('subscription', diag)
+        self.assertTrue(diag['option_data_filter_available'])
+
+    def test_get_opend_diagnostics_disconnected(self):
+        conn = MoomooConnection()
+        with patch.object(conn, '_ensure_quote_context', return_value=False):
+            diag = conn.get_opend_diagnostics()
+
+        self.assertFalse(diag['connected'])
+        self.assertIn('sdk_version', diag)
 
     def test_create_option_contract_found(self):
         conn = self._make_connected_conn()
@@ -814,6 +1037,108 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
 
         code = conn.create_option_contract('US.AAPL', '20240315', 200, 'CALL')
         self.assertEqual(code, 'US.AAPL240315C00200000')
+
+    def test_get_option_volatility_delegates_to_sdk(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_option_volatility.return_value = (RET_OK, {'iv': 0.35})
+        ret, data = conn.get_option_volatility('US.AAPL', query_time_period=2, hv_time_period=30)
+        self.assertEqual(ret, RET_OK)
+        self.assertEqual(data['iv'], 0.35)
+        call_args = self.mock_quote_ctx.get_option_volatility.call_args
+        self.assertEqual(call_args[0][0], 'US.AAPL')
+        self.assertEqual(call_args[1]['query_time_period'], 2)
+        self.assertEqual(call_args[1]['hv_time_period'], 30)
+
+    def test_get_option_volatility_graceful_fallback(self):
+        conn = self._make_connected_conn()
+        del self.mock_quote_ctx.get_option_volatility
+        ret, data = conn.get_option_volatility('US.AAPL')
+        self.assertEqual(ret, RET_ERROR)
+
+    def test_get_option_exercise_probability_delegates_to_sdk(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_option_exercise_probability.return_value = (RET_OK, {'probability': 0.72})
+        ret, data = conn.get_option_exercise_probability('US.AAPL')
+        self.assertEqual(ret, RET_OK)
+        self.assertEqual(data['probability'], 0.72)
+
+    def test_get_option_exercise_probability_graceful_fallback(self):
+        conn = self._make_connected_conn()
+        del self.mock_quote_ctx.get_option_exercise_probability
+        ret, data = conn.get_option_exercise_probability('US.AAPL')
+        self.assertEqual(ret, RET_ERROR)
+
+    def test_get_option_screen_delegates_to_sdk(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_option_screen.return_value = (RET_OK, {'matches': ['AAPL240315C00200000']})
+        ret, data = conn.get_option_screen(None)
+        self.assertEqual(ret, RET_OK)
+        self.assertIn('matches', data)
+
+    def test_get_option_screen_graceful_fallback(self):
+        conn = self._make_connected_conn()
+        del self.mock_quote_ctx.get_option_screen
+        ret, data = conn.get_option_screen(None)
+        self.assertEqual(ret, RET_ERROR)
+
+    def test_get_short_interest_delegates_to_sdk(self):
+        conn = self._make_connected_conn()
+        mock_us_df = MagicMock()
+        mock_hk_df = MagicMock()
+        self.mock_quote_ctx.get_short_interest.return_value = (RET_OK, mock_us_df, mock_hk_df)
+        ret, us_df, hk_df = conn.get_short_interest('US.AAPL')
+        self.assertEqual(ret, RET_OK)
+        self.assertIs(us_df, mock_us_df)
+        self.assertIs(hk_df, mock_hk_df)
+
+    def test_get_short_interest_passes_pagination_params(self):
+        conn = self._make_connected_conn()
+        mock_us_df = MagicMock()
+        mock_hk_df = MagicMock()
+        self.mock_quote_ctx.get_short_interest.return_value = (RET_OK, mock_us_df, mock_hk_df)
+        ret, us_df, hk_df = conn.get_short_interest('US.AAPL', next_key='abc', num=10)
+        self.assertEqual(ret, RET_OK)
+        call_kwargs = self.mock_quote_ctx.get_short_interest.call_args
+        self.assertEqual(call_kwargs[0][0], 'US.AAPL')
+        self.assertEqual(call_kwargs[1]['next_key'], 'abc')
+        self.assertEqual(call_kwargs[1]['num'], 10)
+
+    def test_get_short_interest_graceful_fallback(self):
+        conn = self._make_connected_conn()
+        del self.mock_quote_ctx.get_short_interest
+        ret, us_df, hk_df = conn.get_short_interest('US.AAPL')
+        self.assertEqual(ret, RET_ERROR)
+        self.assertIsNone(us_df)
+        self.assertIsNone(hk_df)
+
+    def test_get_financials_earnings_price_move_delegates(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_financials_earnings_price_move.return_value = (RET_OK, {'rows': []})
+        ret, data = conn.get_financials_earnings_price_move('US.AAPL', period_count=2)
+        self.assertEqual(ret, RET_OK)
+        self.assertIn('rows', data)
+        call_args = self.mock_quote_ctx.get_financials_earnings_price_move.call_args
+        self.assertEqual(call_args[0][0], 'US.AAPL')
+        self.assertEqual(call_args[1]['period_count'], 2)
+
+    def test_get_financials_earnings_price_move_graceful_fallback(self):
+        conn = self._make_connected_conn()
+        del self.mock_quote_ctx.get_financials_earnings_price_move
+        ret, data = conn.get_financials_earnings_price_move('US.AAPL')
+        self.assertEqual(ret, RET_ERROR)
+
+    def test_get_financials_earnings_price_history_delegates(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_financials_earnings_price_history.return_value = (RET_OK, {'history': []})
+        ret, data = conn.get_financials_earnings_price_history('US.AAPL')
+        self.assertEqual(ret, RET_OK)
+        self.assertIn('history', data)
+
+    def test_get_financials_earnings_price_history_graceful_fallback(self):
+        conn = self._make_connected_conn()
+        self.mock_quote_ctx.get_financials_earnings_price_history = None
+        ret, data = conn.get_financials_earnings_price_history('US.AAPL')
+        self.assertEqual(ret, RET_ERROR)
 
 
 class TestMoomooConnectionThreadSafety(unittest.TestCase):
@@ -896,6 +1221,7 @@ class TestMoomooConnectionAccountResolution(unittest.TestCase):
         trd_env, acc_id = conn._resolve_portfolio_account()
         self.assertEqual(trd_env, TrdEnv.REAL)
         self.assertEqual(acc_id, '')
+
     @patch('core.context_factory.OpenQuoteContext')
     @patch('core.context_factory.OpenSecTradeContext')
     def test_safe_disconnect_handles_exception_in_close(self, mock_trd_class, mock_quote_class):
