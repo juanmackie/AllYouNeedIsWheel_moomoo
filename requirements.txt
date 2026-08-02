@@ -12,9 +12,7 @@ fredapi>=0.4.2
 
 # Web application dependencies
 flask>=3.0.2
-flask-cors>=4.0.0
-gunicorn>=21.2.0
-waitress>=2.1.2  # Windows-compatible WSGI server alternative to gunicorn
+waitress>=2.1.2  # Windows single-process WSGI server
 werkzeug>=3.0.1
 
 # TradingView screener for dynamic stock screening (free, no API key)

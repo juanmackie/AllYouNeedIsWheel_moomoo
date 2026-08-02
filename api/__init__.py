@@ -18,10 +18,8 @@ import sqlite3
 import time
 import uuid
 from datetime import datetime
-from urllib.parse import urlparse
 
-from flask import Flask, current_app, g, jsonify, request
-from flask_cors import CORS
+from flask import Flask, current_app, g, request
 
 from core.context_factory import probe_opend_status
 from core.logging_config import get_logger
@@ -34,15 +32,6 @@ logger = get_logger("autotrader.api", "api")
 _service_registry = {}
 # Maps service name -> singleton instance
 _service_instances = {}
-
-
-def _is_trusted_cors_origin(origin):
-    parsed = urlparse(origin.strip())
-    return parsed.scheme in {"http", "https"} and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-
-
-def _supports_credentialed_cors(origins):
-    return bool(origins) and all(_is_trusted_cors_origin(origin) for origin in origins)
 
 
 def _resolve_secret_key(config=None):
@@ -130,13 +119,7 @@ def create_app(config=None):
     logger.info("Creating API application")
     app = Flask(__name__, static_folder="../frontend/static", template_folder="../frontend/templates")
 
-    # Enable CORS with configurable origins
-    allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
-    allowed_origins = [origin.strip() for origin in allowed_origins if origin.strip()]
-    supports_credentials = _supports_credentialed_cors(allowed_origins)
-    CORS(app, origins=allowed_origins, supports_credentials=supports_credentials)
-    logger.debug(f"CORS enabled for origins: {allowed_origins} (supports_credentials={supports_credentials})")
-
+    # Single-user loopback app: same-origin templates/JS only, no CORS.
     # Default configuration
     app.config.from_mapping(
         SECRET_KEY=_resolve_secret_key(config),
@@ -180,31 +163,6 @@ def create_app(config=None):
 
     app.register_blueprint(ledger.bp)
     logger.info("Registered API blueprints")
-
-    # Authentication middleware
-    api_key = os.environ.get("API_KEY", "")
-    if api_key:
-        logger.info("API key authentication enabled")
-
-        @app.before_request
-        def check_auth():
-            g.request_started_at = time.time()
-            g.request_id = request.headers.get("X-Request-Id", str(uuid.uuid4()))
-            if request.method == "OPTIONS":
-                return None
-            public_routes = ("/health", "/api/system/opend-status", "/static/")
-            if any(request.path.startswith(p) for p in public_routes):
-                return None
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header == f"Bearer {api_key}":
-                return None
-            logger.warning(
-                "Unauthorized API request method=%s path=%s request_id=%s",
-                request.method,
-                request.path,
-                g.request_id,
-            )
-            return jsonify({"success": False, "error": "Unauthorized"}), 401
 
     @app.before_request
     def log_request_start():

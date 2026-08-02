@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
 Auto-Trader API Server
-Script to start the Auto-Trader API server using platform-appropriate WSGI server
-(gunicorn for Unix/Linux/Mac, waitress for Windows)
+Starts the wheel app as one loopback-only Windows process (waitress).
 """
 
 import argparse
 import os
 import platform
 import shutil
-import subprocess
 import sys
 
 from dotenv import load_dotenv
@@ -61,9 +59,7 @@ def _parse_positive_int(name, value, *, maximum=None):
 
 
 def main():
-    """
-    Start the API server using appropriate WSGI server based on platform
-    """
+    """Start the API server as one loopback-only Windows process."""
     try:
         # Parse command line arguments
         parser = argparse.ArgumentParser(description="Start the Auto-Trader API server")
@@ -73,12 +69,11 @@ def main():
         args = parser.parse_args()
 
         # Set environment variable for connection config based on the flag
-        # Only override if not already set (e.g., from Docker environment)
+        # Only override if not already set
         if args.realmoney:
             if "CONNECTION_CONFIG" not in os.environ:
                 os.environ["CONNECTION_CONFIG"] = "connection_real.json"
             logger.warning("Using REAL MONEY connection configuration — signals only, no execution")
-            # MOOMOO_TRADING_PASSWORD no longer used — execution subsystem removed
         elif "CONNECTION_CONFIG" not in os.environ:
             os.environ["CONNECTION_CONFIG"] = "connection.json"
             logger.info("Using paper trading configuration (moomoo SIMULATE)")
@@ -89,7 +84,6 @@ def main():
 
         # Get port from environment variable or use default (changed from 5000 to 8000)
         port = _parse_positive_int("PORT", os.environ.get("PORT", "8000"), maximum=65535)
-        workers = _parse_positive_int("WORKERS", os.environ.get("WORKERS", "4"))
 
         # Check if port is available
         import socket
@@ -107,9 +101,8 @@ def main():
         is_windows = platform.system() == "Windows"
 
         if is_windows:
-            # Windows: Use waitress
+            # Windows: single waitress process, loopback only
             logger.info(f"Starting Auto-Trader API server on port {port} with waitress (Windows)")
-            # We need to import here to avoid issues if waitress is not installed
             try:
                 from waitress import serve
 
@@ -117,34 +110,18 @@ def main():
 
                 application = ensure_app()
                 start_runtime(application)
-                # Single-user local app: loopback only
-                serve(application, host="127.0.0.1", port=port, threads=workers)
+                serve(application, host="127.0.0.1", port=port, threads=2)
             except ImportError:
                 logger.error("Waitress is not installed. Please install it with: pip install waitress")
                 sys.exit(1)
         else:
-            # Unix/Linux/Mac: Use gunicorn
-            logger.info(f"Starting Auto-Trader API server on port {port} with {workers} workers using gunicorn")
-            try:
-                subprocess.run(
-                    [
-                        "gunicorn",
-                        f"--workers={workers}",
-                        f"--bind=127.0.0.1:{port}",
-                        "app:ensure_app()",
-                    ],
-                    check=True,
-                )
-            except Exception as e:
-                logger.error(f"Error starting gunicorn: {str(e)}")
+            # Non-Windows fallback: single Flask process, loopback only
+            logger.info(f"Starting Auto-Trader API server on port {port} (Flask, loopback)")
+            from app import ensure_app, start_runtime
 
-                # Fallback to Flask development server
-                logger.info("Falling back to Flask development server")
-                from app import ensure_app, start_runtime
-
-                application = ensure_app()
-                start_runtime(application)
-                application.run(host="127.0.0.1", port=port)
+            application = ensure_app()
+            start_runtime(application)
+            application.run(host="127.0.0.1", port=port)
 
     except Exception as e:
         logger.error(f"Error starting API server: {str(e)}")

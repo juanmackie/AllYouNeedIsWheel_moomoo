@@ -227,20 +227,6 @@ class TestApiLogging(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(any("request completed method=GET path=/health status=200" in msg for msg in log.output))
 
-    def test_unauthorized_request_logs_warning(self):
-        app = self._build_health_app({"API_KEY": "secret"})
-
-        with self.assertLogs("autotrader.api", level="WARNING") as log:
-            with app.test_client() as client:
-                resp = client.get("/portfolio", headers={"X-Request-Id": "req-unauth"})
-
-        self.assertEqual(resp.status_code, 401)
-        self.assertTrue(
-            any(
-                "Unauthorized API request method=GET path=/portfolio request_id=req-unauth" in msg for msg in log.output
-            )
-        )
-
     def test_health_probe_failures_log_warnings(self):
         mock_conn = MagicMock()
         mock_conn.__enter__.return_value = mock_conn
