@@ -88,6 +88,7 @@ function setupDOM() {
         <span class="underlying-quality-badge"></span>
         <span class="research-only-badge"></span>
         <span class="signal-data-source"></span>
+        <button type="button" class="btn btn-sm copy-ticket-btn">Copy ticket</button>
         <span class="recommendation-warnings"></span>
         <span class="otm-pct"></span>
         <span class="delta-value"></span>
@@ -525,3 +526,52 @@ describe('top-recommendations source badges', () => {
     expect(document.querySelector('.research-only-badge')?.classList.contains('d-none')).toBe(false);
   });
 });
+
+  it('copies an explicit ticket to the clipboard and reports success/failure', async () => {
+    setupDOM();
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/api.js'
+    );
+
+    fetchTopRecommendations.mockResolvedValue({
+      success: true,
+      signals: [{
+        rank: 1, ticker: 'AAPL', option_type: 'PUT', strike: 140, expiration: '20240315', dte: 21,
+        bid: 2.50, ask: 3.00, mid_price: 2.75, premium_per_contract: 275.0,
+        max_contracts: 1, cash_required: 14000.0, chain_source: 'broker',
+        signal_type: 'csp', profile_type: 'monthly',
+        wheel_decision: { confidence_score: 100 },
+      }],
+      count: 1,
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const btn = document.querySelector('.copy-ticket-btn');
+    expect(btn).toBeTruthy();
+    btn.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+    const text = writeText.mock.calls[0][0];
+    expect(text).toContain('SELL TO OPEN CSP');
+    expect(text).toContain('AAPL');
+    expect(text).toContain('140.00');
+    expect(text).toContain('x1');
+    expect(text).toContain('Source:');
+    await vi.waitFor(() => expect(btn.classList.contains('btn-success')).toBe(true));
+
+    // Failure path
+    writeText.mockRejectedValueOnce(new Error('denied'));
+    btn.click();
+    await vi.waitFor(() => expect(btn.classList.contains('btn-danger')).toBe(true));
+    vi.unstubAllGlobals();
+  });

@@ -138,6 +138,32 @@ function hideWaveLoading(waveId) {
     if (el) el.classList.add('d-none');
 }
 
+function copyRollTicket(pos, btn) {
+    const expiry = (pos.expiration || '').replace(/-/g, '');
+    const strike = (pos.strike || 0).toFixed(2);
+    const ticker = pos.ticker || '?';
+    const type = pos.option_type === 'PUT' ? 'PUT' : 'CALL';
+    const qty = Math.max(1, Math.abs(Number(pos.position || 0)) || 1);
+    const pressure = pos.roll_pressure != null ? pos.roll_pressure.toFixed(0) : '?';
+    const text = [
+        'ROLL — ' + ticker,
+        'BTC: ' + type + ' ' + ticker + ' ' + expiry + ' ' + strike + ' x' + qty,
+        'STO: ' + type + ' ' + ticker + ' <next expiry> ' + strike + ' x' + qty + ' — select next monthly expiry in broker',
+        'Reason: roll pressure ' + pressure + '/100',
+        'Source: Moomoo positions (read-only)',
+    ].join('\n');
+    const original = btn.innerHTML;
+    navigator.clipboard.writeText(text).then(() => {
+        btn.innerHTML = '<i class="bi bi-check-circle"></i> Copied';
+        btn.classList.add('btn-success');
+    }).catch(() => {
+        btn.innerHTML = '<i class="bi bi-x-circle"></i> Failed';
+        btn.classList.add('btn-danger');
+    }).finally(() => {
+        setTimeout(() => { btn.innerHTML = original; btn.classList.remove('btn-success', 'btn-danger'); }, 2000);
+    });
+}
+
 export async function loadPositionsCommandPanel() {
     const tbody = document.getElementById('positions-command-body');
     if (!tbody) return;
@@ -157,6 +183,7 @@ export async function loadPositionsCommandPanel() {
             else if (isItm) { statusBadge = 'Holding'; statusClass = 'bg-secondary'; btnHtml = '<span class="text-muted small">✓ Assign OK</span>'; }
             else if (pressure >= 70) { statusBadge = 'Urgent'; statusClass = 'bg-warning text-dark'; btnHtml = '<span class="text-warning small">Roll pressure high</span>'; }
             else { statusBadge = 'Active'; statusClass = 'bg-info'; btnHtml = '<span class="text-muted small">✓ On track</span>'; }
+            btnHtml += ' <button type="button" class="btn btn-outline-secondary btn-sm copy-roll-btn" title="Copy roll ticket (manual, read-only)">Copy roll</button>';
             const barWidth = Math.min(profit, 100);
             const barColor = profit >= 50 ? 'bg-success' : profit >= 30 ? 'bg-warning' : 'bg-secondary';
             const expiry = pos.expiration || '';
@@ -164,6 +191,9 @@ export async function loadPositionsCommandPanel() {
             const typeLabel = pos.option_type === 'PUT' ? 'Put' : 'Call';
             return `<tr><td><strong>${pos.ticker}</strong></td><td><span class="badge ${pos.option_type === 'PUT' ? 'bg-danger' : 'bg-success'}" aria-label="${typeLabel}">${pos.option_type}</span></td><td>$${(pos.strike || 0).toFixed(2)}</td><td class="small">${expiryDisplay}</td><td class="small">${renderEarningsBadge(daysToEarnings)}</td><td style="min-width:100px"><div class="progress" style="height:6px" role="progressbar" aria-valuenow="${profit.toFixed(0)}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar ${barColor}" style="width:${barWidth}%"></div></div><small class="${profit >= 50 ? 'text-success fw-bold' : 'text-muted'}">${profit.toFixed(0)}% profit</small></td><td><span class="badge ${statusClass}">${statusBadge}</span></td><td>${btnHtml}</td></tr>`;
         }).join('');
+        tbody.querySelectorAll('.copy-roll-btn').forEach((btn, index) => {
+            btn.addEventListener('click', () => copyRollTicket(positions[index], btn));
+        });
         const refreshBtn = document.getElementById('refresh-positions-command');
         if (refreshBtn) refreshBtn.onclick = () => loadPositionsCommandPanel();
     } catch (err) {

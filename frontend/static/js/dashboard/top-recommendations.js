@@ -224,6 +224,57 @@ function formatExpiration(expiration) {
  * @param {Object} rec - Recommendation data
  * @returns {HTMLElement} Card element
  */
+/**
+ * Build an explicit copy-to-ticket payload for a signal. No order is placed;
+ * this is manual ticket text for the broker UI.
+ */
+function buildTicketText(rec) {
+    const wd = rec.wheel_decision || {};
+    const action = getSignalType(rec) === 'covered_call' ? 'SELL TO OPEN COVERED CALL' : 'SELL TO OPEN CSP';
+    const optionType = rec.option_type || wd.option_type || '';
+    const ticker = rec.ticker || '?';
+    const expiry = (rec.expiration || '').replace(/-/g, '');
+    const strike = rec.strike != null ? Number(rec.strike).toFixed(2) : '?';
+    const qty = Math.max(1, Number(rec.max_contracts || rec.recommended_contracts || 1) || 1);
+    const limit = rec.bid != null && rec.ask != null
+        ? ((Number(rec.bid) + Number(rec.ask)) / 2).toFixed(2)
+        : (rec.mid_price != null ? Number(rec.mid_price).toFixed(2) : '?');
+    const premium = rec.premium_per_contract != null ? Number(rec.premium_per_contract).toFixed(2) : '?';
+    const dte = rec.dte != null ? rec.dte : '?';
+    const cashRequired = rec.cash_required != null
+        ? 'Cash required: $' + Number(rec.cash_required).toFixed(2)
+        : (rec.strike != null ? 'Cash required: $' + (Number(rec.strike) * 100).toFixed(2) : '');
+    const sourceInfo = getDataSourceInfo(rec);
+    const chainSource = rec.chain_source || wd.chain_source || 'moomoo';
+    const freshness = sourceInfo.freshness || 'unknown age';
+    const lines = [
+        action + ' — ' + ticker,
+        optionType + ' ' + ticker + ' ' + expiry + ' ' + strike + ' x' + qty,
+        'Limit $' + limit + ' (mid) — premium $' + premium + '/contract, DTE ' + dte,
+        cashRequired,
+        'Source: ' + chainSource + ' (Moomoo) — quote ' + freshness,
+    ];
+    return lines.filter(Boolean).join('\n');
+}
+
+async function copyTicket(rec, btn) {
+    const text = buildTicketText(rec);
+    const original = btn.innerHTML;
+    try {
+        await navigator.clipboard.writeText(text);
+        btn.innerHTML = '<i class="bi bi-check-circle"></i> Copied';
+        btn.classList.add('btn-success');
+    } catch (err) {
+        console.error('Clipboard failed:', err);
+        btn.innerHTML = '<i class="bi bi-x-circle"></i> Copy failed';
+        btn.classList.add('btn-danger');
+    }
+    setTimeout(() => {
+        btn.innerHTML = original;
+        btn.classList.remove('btn-success', 'btn-danger');
+    }, 2000);
+}
+
 function createRecommendationCard(rec, rankedNeighbor = null) {
     const template = document.getElementById('recommendation-card-template');
     if (!template) {
@@ -385,6 +436,12 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         }
     }
     
+    // Copy-to-ticket (explicit; clipboard success/failure feedback)
+    const copyBtn = clone.querySelector('.copy-ticket-btn');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', () => copyTicket(rec, copyBtn));
+    }
+
     // Details
     clone.querySelector('.otm-pct').textContent = rec.otm_pct != null ? `${rec.otm_pct.toFixed(1)}%` : 'N/A';
     clone.querySelector('.delta-value').textContent = rec.delta != null ? rec.delta.toFixed(3) : 'N/A';
