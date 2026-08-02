@@ -224,7 +224,7 @@ function formatExpiration(expiration) {
  * @param {Object} rec - Recommendation data
  * @returns {HTMLElement} Card element
  */
-function createRecommendationCard(rec) {
+function createRecommendationCard(rec, rankedNeighbor = null) {
     const template = document.getElementById('recommendation-card-template');
     if (!template) {
         throw new Error('Recommendation card template is missing');
@@ -354,6 +354,35 @@ function createRecommendationCard(rec) {
         warningsEl.innerHTML = warningHtml;
     } else {
         warningsEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> No warnings</span>';
+    }
+
+    // Missing-risk penalty: unknown earnings/risk metadata ranks below known-risk.
+    const riskBadge = clone.querySelector('.missing-risk-badge');
+    if (riskBadge && rec.days_to_earnings == null && !rec.earnings_date) {
+        riskBadge.textContent = 'unknown earnings/risk metadata — ranked below known-risk candidates';
+        riskBadge.classList.remove('d-none');
+    }
+
+    // Why this winner: premium/DTE velocity vs the next ranked candidate.
+    const whyEl = clone.querySelector('.why-winner');
+    if (whyEl) {
+        const velocity = rec.premium_per_contract != null && rec.dte
+            ? (rec.premium_per_contract / rec.dte).toFixed(2)
+            : null;
+        const next = rankedNeighbor;
+        if (velocity != null) {
+            if (next && next.premium_per_contract != null && next.dte) {
+                const nextVelocity = (next.premium_per_contract / next.dte).toFixed(2);
+                whyEl.textContent = `Why this pick: $${velocity}/day premium velocity` +
+                    (parseFloat(velocity) > parseFloat(nextVelocity)
+                        ? ` beats next candidate ($${nextVelocity}/day)`
+                        : ` (next candidate $${nextVelocity}/day)`);
+            } else {
+                whyEl.textContent = `Why this pick: $${velocity}/day premium velocity`;
+            }
+        } else {
+            whyEl.textContent = 'Why this pick: passed all hard gates';
+        }
     }
     
     // Details
@@ -935,8 +964,8 @@ function renderFilteredSignals() {
         : allSignals.filter(s => getSignalType(s) === activeSignalType);
 
     cardsContainer.innerHTML = '';
-    filtered.forEach(rec => {
-        const card = createRecommendationCard(rec);
+    filtered.forEach((rec, index) => {
+        const card = createRecommendationCard(rec, filtered[index + 1] || null);
         applyGrowthFieldsToCard(card, rec);
         cardsContainer.appendChild(card);
     });
