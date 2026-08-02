@@ -220,18 +220,6 @@ def start_runtime(app):
     Importing this module or ensure_app() must NOT start threads or
     background work; only start_runtime() does.
     """
-    # Server-side safety check: block REAL + readonly=false at startup
-    connection_config = app.config.get("connection_config", {})
-    if connection_config.get("portfolio_env") == "REAL" and not connection_config.get("readonly", True):
-        confirm = os.environ.get("CONFIRM_LIVE_TRADING", "").strip().lower()
-        if confirm not in {"1", "true", "yes", "y", "on"}:
-            logger.critical(
-                "STARTUP BLOCKED: portfolio_env=REAL with readonly=false requires "
-                "CONFIRM_LIVE_TRADING=true env var. Falling back to SIMULATE."
-            )
-            connection_config["portfolio_env"] = "SIMULATE"
-            connection_config["readonly"] = True
-
     # Start health monitor
     try:
         task_manager.start_health_monitor(interval=60)

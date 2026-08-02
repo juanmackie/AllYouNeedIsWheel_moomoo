@@ -14,7 +14,6 @@ def _parse_watchlist_env(raw_watchlist):
 DEFAULT_CONNECTION_CONFIG = {
     "host": "127.0.0.1",
     "port": 11111,
-    "readonly": True,
     "portfolio_env": "SIMULATE",
     "security_firm": "FUTUSECURITIES",
     "account_id": "",
@@ -98,7 +97,9 @@ def apply_env_overrides(config):
 
     readonly_override = os.environ.get("MOOMOO_READONLY")
     if readonly_override is not None and readonly_override != "":
-        config["readonly"] = readonly_override.strip().lower() in {"1", "true", "yes", "y", "on"}
+        # The app is structurally query-only; readonly is always True.
+        # Accept and ignore the variable rather than breaking existing configs.
+        logger.info("MOOMOO_READONLY accepted for compatibility; the app is query-only.")
 
     openbb_enabled = os.environ.get("OPENBB_ENABLED")
     if openbb_enabled is not None and openbb_enabled != "":
@@ -115,18 +116,6 @@ def apply_env_overrides(config):
     watchlist_env = os.environ.get("WATCHLIST")
     if watchlist_env is not None and watchlist_env != "":
         config["watchlist"] = _parse_watchlist_env(watchlist_env)
-
-    # Safety validation: prevent accidental live trading without explicit confirmation
-    if config.get("portfolio_env") == "REAL" and not config.get("readonly", True):
-        confirm = os.environ.get("CONFIRM_LIVE_TRADING", "").strip().lower()
-        if confirm not in {"1", "true", "yes", "y", "on"}:
-            logger.critical(
-                "BLOCKED: portfolio_env=REAL with readonly=false requires "
-                "CONFIRM_LIVE_TRADING=true environment variable. "
-                "Falling back to SIMULATE mode for safety."
-            )
-            config["portfolio_env"] = "SIMULATE"
-            config["readonly"] = True
 
     return config
 

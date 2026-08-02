@@ -294,21 +294,26 @@ class TestMoomooConnectionSingleton(unittest.TestCase):
     def test_different_instance_different_config(self):
         """Test that different config returns different instance"""
         conn1 = MoomooConnection(host="127.0.0.1", port=11111, readonly=True)
-        conn2 = MoomooConnection(host="127.0.0.1", port=11111, readonly=False)
+        conn2 = MoomooConnection(host="127.0.0.1", port=22222, readonly=True)
         self.assertIsNot(conn1, conn2)
+
+    def test_readonly_false_rejected(self):
+        """readonly=False is not a supported configuration (query-only app)"""
+        with self.assertRaises(ValueError):
+            MoomooConnection(readonly=False)
 
     def test_singleton_key_format(self):
         """Test that singleton key is properly formatted"""
         MoomooConnection(
             host="192.168.1.100",
             port=22222,
-            readonly=False,
+            readonly=True,
             account_id="12345",
             portfolio_env="REAL",
             security_firm="FUTUAU",
         )
 
-        expected_key = "192.168.1.100:22222:False:12345:REAL:FUTUAU"
+        expected_key = "192.168.1.100:22222:True:12345:REAL:FUTUAU"
         self.assertIn(expected_key, MoomooConnection._instances)
 
 
@@ -337,14 +342,14 @@ class TestMoomooConnectionInit(unittest.TestCase):
         conn = MoomooConnection(
             host="192.168.1.100",
             port=22222,
-            readonly=False,
+            readonly=True,
             account_id="12345",
             portfolio_env="REAL",
             security_firm="FUTUAU",
         )
         self.assertEqual(conn.host, "192.168.1.100")
         self.assertEqual(conn.port, 22222)
-        self.assertFalse(conn.readonly)
+        self.assertTrue(conn.readonly)
         self.assertEqual(conn.portfolio_env, TrdEnv.REAL)
         self.assertEqual(conn.security_firm, SecurityFirm.FUTUAU)
 
@@ -362,8 +367,10 @@ class TestMoomooConnectionInit(unittest.TestCase):
         self.assertEqual(conn.portfolio_env, TrdEnv.SIMULATE)
 
     def test_no_readonly_sets_real_env(self):
-        """Test that readonly=False sets portfolio_env to REAL"""
-        conn = MoomooConnection(readonly=False)
+        """readonly=False is rejected; REAL selection is explicit via portfolio_env."""
+        with self.assertRaises(ValueError):
+            MoomooConnection(readonly=False)
+        conn = MoomooConnection(readonly=True, portfolio_env="REAL")
         self.assertEqual(conn.portfolio_env, TrdEnv.REAL)
 
 

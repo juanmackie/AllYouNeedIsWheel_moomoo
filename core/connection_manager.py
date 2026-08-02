@@ -1,6 +1,9 @@
 """
-MoomooConnection - connection lifecycle, order management, and portfolio retrieval.
-Extracted from core/connection.py for maintainability.
+MoomooConnection - connection lifecycle and query-only portfolio retrieval.
+
+This class exposes ONLY query operations (accounts, positions, quotes,
+option chains, watchlist groups). There is no order/unlock surface;
+readonly=False is rejected at construction (see core/broker_protocol.py).
 """
 
 import os
@@ -37,6 +40,7 @@ except ImportError:
     UserSecurityGroupType = None
     OptionDataFilter = None
 
+from core.broker_protocol import FORBIDDEN_SDK_MEMBERS  # noqa: F401 - documented surface for tests
 from core.connection_constants import (
     _clean_account_id,
     _env_name,
@@ -203,6 +207,11 @@ class MoomooConnection:
         security_firm=None,
         broker_cache_after_hours=True,
     ):
+        if not readonly:
+            raise ValueError(
+                "readonly=False is not supported: the wheel app is structurally "
+                "query-only (see core/broker_protocol.py). There is no execution surface."
+            )
         self._broker_cache_after_hours = broker_cache_after_hours
         if self._initialized:
             return
