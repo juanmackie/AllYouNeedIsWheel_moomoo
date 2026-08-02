@@ -2,6 +2,7 @@
 Database module for SQLite logging of trades
 """
 
+import json
 import logging
 from contextlib import contextmanager
 from pathlib import Path
@@ -121,6 +122,109 @@ class OptionsDatabase:
             cur = conn.execute("DELETE FROM watchlist WHERE symbol = ?", (symbol,))
             conn.commit()
         return cur.rowcount > 0
+
+    # --- Completed wheel run snapshots + refresh attempts ---
+
+    def save_run_snapshot(self, snapshot):
+        """Persist a completed WheelRunSnapshot (one row, atomically)."""
+        payload = snapshot.to_dict()
+        run = snapshot.run
+        with pooled_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO run_metadata (run_id, generated_at, published_at, env, account_id, status, snapshot_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    published_at = excluded.published_at,
+                    status = excluded.status,
+                    snapshot_json = excluded.snapshot_json
+                """,
+                (
+                    run.run_id,
+                    run.generated_at,
+                    run.published_at,
+                    run.env,
+                    run.account_id,
+                    run.status,
+                    json.dumps(payload),
+                ),
+            )
+            conn.commit()
+        return run.run_id
+
+    def get_latest_snapshot(self, env=None):
+        """Return the most recently published snapshot dict for env (or any)."""
+        import json as _json
+
+        sql = "SELECT snapshot_json FROM run_metadata"
+        params: list = []
+        if env:
+            sql += " WHERE env = ?"
+            params.append(env)
+        sql += " ORDER BY published_at DESC, generated_at DESC LIMIT 1"
+        with pooled_connection(self.db_path) as conn:
+            row = conn.execute(sql, params).fetchone()
+        if row is None:
+            return None
+        try:
+            return _json.loads(row[0])
+        except (TypeError, ValueError):
+            return None
+
+    def save_refresh_attempt(self, attempt):
+        """Persist a RefreshAttempt row."""
+        with pooled_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO refresh_attempts (
+                    attempt_id, run_id, state, stage, progress,
+                    started_at, finished_at, latest_error, latest_failure_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(attempt_id) DO UPDATE SET
+                    run_id = excluded.run_id,
+                    state = excluded.state,
+                    stage = excluded.stage,
+                    progress = excluded.progress,
+                    started_at = excluded.started_at,
+                    finished_at = excluded.finished_at,
+                    latest_error = excluded.latest_error,
+                    latest_failure_at = excluded.latest_failure_at
+                """,
+                (
+                    attempt.attempt_id,
+                    attempt.run_id,
+                    attempt.state,
+                    attempt.stage,
+                    attempt.progress,
+                    attempt.started_at,
+                    attempt.finished_at,
+                    attempt.latest_error,
+                    attempt.latest_failure_at,
+                ),
+            )
+            conn.commit()
+        return attempt.attempt_id
+
+    def get_latest_attempt(self):
+        """Return the most recent RefreshAttempt row as a dict (or None)."""
+        with pooled_connection(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT attempt_id, run_id, state, stage, progress, started_at, finished_at, latest_error, latest_failure_at "
+                "FROM refresh_attempts ORDER BY created_at DESC, attempt_id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "attempt_id": row[0],
+            "run_id": row[1],
+            "state": row[2],
+            "stage": row[3],
+            "progress": row[4],
+            "started_at": row[5],
+            "finished_at": row[6],
+            "latest_error": row[7],
+            "latest_failure_at": row[8],
+        }
 
     # --- IV History ---
 

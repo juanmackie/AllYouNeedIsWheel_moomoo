@@ -158,6 +158,11 @@ def create_app(config=None):
 
     app.register_blueprint(watchlist.bp)
 
+    # Wheel run (immutable snapshots + refresh attempts)
+    from api.routes import run
+
+    app.register_blueprint(run.bp)
+
     # Extracted route modules (F008)
     from api.routes import alerts, roll_pressure
 
@@ -272,3 +277,17 @@ def _register_services():
         return IVEarningsService(db)
 
     register_service("ivearnings", _create_iv_earnings_service)
+
+    def _create_wheel_runner():
+        from flask import current_app
+
+        from core.wheel_runner import WheelRunner
+
+        config = current_app.config.get("connection_config", {})
+        return WheelRunner(
+            db=current_app.config.get("database"),
+            options_service=get_service("options"),
+            config=config,
+        )
+
+    register_service("wheel_runner", _create_wheel_runner)

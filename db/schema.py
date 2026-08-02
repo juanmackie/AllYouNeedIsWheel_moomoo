@@ -28,6 +28,34 @@ def create_tables(conn):
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS run_metadata (
+            run_id TEXT PRIMARY KEY,
+            generated_at TEXT NOT NULL,
+            published_at TEXT,
+            env TEXT NOT NULL,
+            account_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_run_metadata_env_published ON run_metadata(env, published_at)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS refresh_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT,
+            state TEXT NOT NULL,
+            stage TEXT NOT NULL DEFAULT 'idle',
+            progress REAL NOT NULL DEFAULT 0,
+            started_at TEXT,
+            finished_at TEXT,
+            latest_error TEXT,
+            latest_failure_at TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS recommendations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,

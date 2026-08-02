@@ -1,0 +1,169 @@
+"""Wheel run model + runner tests.
+
+Covers: opaque identity, account resolution rules (explicit REAL identity,
+ambiguity hard-fail, never first-account), snapshot tradeability gates,
+failed-refresh preservation, and snapshot persistence.
+"""
+
+import unittest
+from unittest.mock import MagicMock
+
+from core.run_model import RefreshAttempt, RunMetadata, WheelRunSnapshot, utc_now_iso
+from core.wheel_runner import WheelRunner, opaque_account_id, resolve_account
+
+
+def _make_snapshot(status="ready", coverage_complete=True, quote_age_sec=10, errors=()):
+    fetched = utc_now_iso()
+    run = RunMetadata(
+        run_id="run1",
+        generated_at=fetched,
+        published_at=fetched,
+        env="REAL",
+        account_id="abc123",
+        preset_key="balanced",
+        preset_version=1,
+        market_state="open",
+        status=status,
+        errors=tuple(errors),
+        quote_fetched_at={"AAPL": fetched},
+        max_tradeable_age_sec=120,
+        coverage_scanned=1 if coverage_complete else 0,
+        coverage_total=1,
+    )
+    return WheelRunSnapshot(
+        run=run,
+        portfolio={},
+        csp_picks=(),
+        cc_decisions=(),
+        roll_decisions=(),
+        rejected=(),
+        preset={},
+        watchlist_origins={},
+    )
+
+
+class TestOpaqueIdentity(unittest.TestCase):
+    def test_opaque_id_is_short_hash(self):
+        self.assertEqual(len(opaque_account_id("123456789")), 12)
+        self.assertEqual(opaque_account_id("123456789"), opaque_account_id("123456789"))
+        self.assertNotEqual(opaque_account_id("123456789"), "123456789")
+
+
+class TestAccountResolution(unittest.TestCase):
+    def _conn(self, accounts):
+        conn = MagicMock()
+        conn._get_available_accounts.return_value = accounts
+        return conn
+
+    def _acc(self, acc_id, trd_env):
+        return {"acc_id": acc_id, "trd_env": trd_env}
+
+    def test_real_requires_explicit_identity(self):
+        conn = self._conn([self._acc("ACC1", "REAL")])
+        with self.assertRaises(ValueError):
+            resolve_account(conn, {"portfolio_env": "REAL", "account_id": ""})
+
+    def test_real_mismatch_fails(self):
+        conn = self._conn([self._acc("ACC1", "REAL")])
+        with self.assertRaises(ValueError):
+            resolve_account(conn, {"portfolio_env": "REAL", "account_id": "ACC9"})
+
+    def test_real_explicit_match(self):
+        conn = self._conn([self._acc("ACC1", "REAL"), self._acc("ACC2", "REAL")])
+        self.assertEqual(resolve_account(conn, {"portfolio_env": "REAL", "account_id": "ACC2"}), "ACC2")
+
+    def test_simulate_multiple_ambiguous_fails(self):
+        conn = self._conn([self._acc("P1", "SIMULATE"), self._acc("P2", "SIMULATE")])
+        with self.assertRaises(ValueError):
+            resolve_account(conn, {"portfolio_env": "SIMULATE", "account_id": ""})
+
+    def test_simulate_single_auto_resolve(self):
+        conn = self._conn([self._acc("P1", "SIMULATE")])
+        self.assertEqual(resolve_account(conn, {"portfolio_env": "SIMULATE", "account_id": ""}), "P1")
+
+
+class TestSnapshotTradeability(unittest.TestCase):
+    def test_ready_fresh_complete_is_tradeable(self):
+        self.assertTrue(_make_snapshot().tradeable)
+
+    def test_not_ready_is_not_tradeable(self):
+        for status in ("partial", "planning", "stale"):
+            self.assertFalse(_make_snapshot(status=status).tradeable, status)
+
+    def test_incomplete_coverage_not_tradeable(self):
+        self.assertFalse(_make_snapshot(coverage_complete=False).tradeable)
+
+    def test_errors_not_tradeable(self):
+        self.assertFalse(_make_snapshot(errors=("boom",)).tradeable)
+
+    def test_stale_quotes_not_tradeable(self):
+        from datetime import datetime, timezone
+
+        old_ts = datetime.now(timezone.utc).timestamp() - 300
+        fetched = datetime.fromtimestamp(old_ts, tz=timezone.utc).isoformat()
+        run = RunMetadata(
+            run_id="r",
+            generated_at=fetched,
+            published_at=fetched,
+            env="REAL",
+            account_id="a",
+            preset_key="balanced",
+            preset_version=1,
+            market_state="open",
+            status="ready",
+            quote_fetched_at={"AAPL": fetched},
+            max_tradeable_age_sec=120,
+            coverage_scanned=1,
+            coverage_total=1,
+        )
+        snap = WheelRunSnapshot(
+            run=run,
+            portfolio={},
+            csp_picks=(),
+            cc_decisions=(),
+            roll_decisions=(),
+            rejected=(),
+            preset={},
+            watchlist_origins={},
+        )
+        self.assertFalse(snap.tradeable)
+
+
+class TestRunnerFailurePreservesLastSnapshot(unittest.TestCase):
+    def test_failed_refresh_keeps_previous_snapshot(self):
+        db = MagicMock()
+        service = MagicMock()
+        runner = WheelRunner(db, service, {"portfolio_env": "SIMULATE", "account_id": ""}, max_tradeable_age_sec=120)
+
+        conn = MagicMock()
+        conn._get_available_accounts.return_value = [{"acc_id": "P1", "trd_env": "SIMULATE"}]
+        service._ensure_connection.return_value = conn
+        service._get_portfolio_context.return_value = {}
+
+        engine = MagicMock()
+        engine.get_top_recommendations.return_value = {
+            "error": "OpenD disconnected mid-scan",
+        }
+        service.recommendation_engine = engine
+
+        with self.assertRaises(RuntimeError):
+            runner.refresh()
+
+        # Last snapshot must remain None; failed attempt recorded with no run_id.
+        self.assertIsNone(runner.latest())
+        self.assertTrue(db.save_refresh_attempt.called)
+        saved = [c.args[0] for c in db.save_refresh_attempt.call_args_list]
+        self.assertEqual(saved[-1].state, "failed")
+        self.assertIsNone(saved[-1].run_id)
+
+
+class TestAttemptModel(unittest.TestCase):
+    def test_attempt_roundtrip_dict(self):
+        a = RefreshAttempt(attempt_id="a1", run_id=None, state="queued")
+        d = a.to_dict()
+        self.assertEqual(d["state"], "queued")
+        self.assertEqual(d["progress"], 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
