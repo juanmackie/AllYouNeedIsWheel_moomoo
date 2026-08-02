@@ -66,3 +66,27 @@ nul
 test_otm.py
 test_score.py
 server_log.txt
+
+# ── Consolidation hygiene (2026-08-02) ──────────────────────────────
+# Vendored reference material and order-capable SDK examples are NOT part of
+# the daily wheel app. Official docs live at openwpt.moomoo.com / openapi.moomoo.com.
+opend-skills/
+moomoo-API-Doc-en-Python.md
+
+# Stale design artifacts (superseded by the live dashboard)
+_design/
+
+# Docker packaging removed; app is Windows/loopback single-process only
+Dockerfile
+docker-compose.yml
+connection_docker.json
+.dockerignore
+docker/
+
+# Python test/lint caches (regenerated)
+.pytest_cache/
+.ruff_cache/
+
+# Local secrets dir must contain only its own .gitignore, never credentials
+secrets/*
+!secrets/.gitignore
