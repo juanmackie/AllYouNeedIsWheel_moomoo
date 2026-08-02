@@ -522,3 +522,17 @@ Potential scoring improvements:
 
 **Last Updated:** 2026-05-31
 **Version:** 2.3.0 (Catalyst Watch Ape Wisdom expansion)
+
+
+---
+
+## Ranking contract (as built 2026-08-02)
+
+1. Hard gates qualify (cash fit, liquidity, DTE, missing critical data).
+2. Candidates with unknown optional risk metadata (e.g. earnings timing) sit
+   BELOW candidates with known metadata.
+3. Within each risk tier, raw premium velocity (premium / DTE) ranks.
+4. Presets (Conservative/Balanced/Aggressive, versioned, Balanced default)
+   set the strategy thresholds; effective values are read-only in the UI.
+5. Actionability requires a completed run with status `ready`, complete-union
+   coverage, and fresh Moomoo quotes (see core/run_model.py).

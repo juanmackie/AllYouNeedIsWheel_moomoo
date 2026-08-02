@@ -1,3 +1,5 @@
+<!-- As-built 2026-08-02 consolidation: run model, presets, Moomoo-only actionability, structural read-only. See root AGENTS.md + docs/migration-ledger.md. -->
+
 # GitHub Workflow DOX
 
 ## Purpose

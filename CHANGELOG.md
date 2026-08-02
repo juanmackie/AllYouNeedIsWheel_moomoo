@@ -1,3 +1,16 @@
+## 2026-08-02 — Consolidation (wheel app)
+
+- One-screen dashboard with operational strip, watchlist union, presets,
+  CSP/CC/roll actions, diagnostics, copy-to-ticket.
+- Atomic wheel run model (immutable snapshots + refresh attempts), explicit
+  REAL account identity, Moomoo-only actionability, complete-union coverage.
+- Removed: growth mode, LLM, macro/FRED, catalyst/social, dynamic screening,
+  long-option lanes, scheduler, Docker, multi-worker serving, yfinance
+  quote/chain fallbacks, granular screener overrides.
+- Structural read-only enforcement (broker protocol + scans); loopback-only
+  single process; locked env + Windows CI.
+- See docs/migration-ledger.md.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

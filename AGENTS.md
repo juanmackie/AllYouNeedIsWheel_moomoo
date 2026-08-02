@@ -30,14 +30,15 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and call o
 
 ## Architecture Map
 
-- `app.py` creates the Flask application, loads connection config, initializes the SQLite-backed data layer, starts background health/scheduler work (wiring provider callbacks to keep `core/scheduler.py` API-free), and serves top-level pages.
-- `config.py` owns application defaults and environment overrides.
-- `api/` owns Flask app setup, route blueprints, and service orchestration.
-- `core/` owns reusable trading, scoring, connection, cache, scheduler, and decision logic.
-- `db/` owns SQLite schema, migrations, pooling, and repositories.
-- `frontend/` owns Jinja templates, CSS, images, and browser JavaScript.
+- `app.py` creates the Flask application, loads connection config, initializes the SQLite-backed data layer, registers the one-screen dashboard, and serves top-level pages (portfolio/rollover/options redirect to the dashboard). Runtime services start only via explicit entry points (`run_api.py`, `python app.py`); importing the module never opens the DB or starts threads.
+- `config.py` owns application defaults and environment overrides, including the wheel risk preset default.
+- `api/` owns Flask app setup, route blueprints, and service orchestration (run, settings, watchlist, options, portfolio, roll pressure, alerts, earnings, ledger, source policy).
+- `core/` owns reusable trading, scoring, connection, cache, the wheel runner, the immutable run model, presets, and decision logic.
+- `db/` owns SQLite schema, migrations, pooling, and repositories (watchlist, settings, run snapshots, refresh attempts).
+- `frontend/` owns Jinja templates, CSS, images, and browser JavaScript (one-screen dashboard).
 - `tests/` owns Python, frontend, fixture, and e2e verification.
 - `.github/` owns GitHub Actions workflow automation.
+- `core/scheduler.py` and out-of-scope features (LLM, macro, catalyst, dynamic screening, long options) were removed in the 2026-08-02 consolidation; see `docs/migration-ledger.md`.
 - `docker/` owns OpenD container support used by the Docker Compose stack.
 - `Dockerfile` and `docker-compose.yml` own local container packaging and service wiring.
 
@@ -45,7 +46,11 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and call o
 
 - Keep import direction acyclic: `core` should not depend on `api`; `db` may depend on `core`; `api.services` may depend on `core` and `db`; `api.routes` should call services rather than duplicate business logic.
 - Use existing service factories and route patterns instead of creating global runtime state.
-- Keep expensive broker, market-data, and LLM calls behind existing cache, rate-limit, and source-policy mechanisms.
+- Keep expensive broker and market-data calls behind the existing cache, rate-limit, and source-policy mechanisms.
+- Keep the structural read-only contract: `core/broker_protocol.py` forbids unlock/order/cancel/modify members in runtime code; `readonly=False` is rejected; tests enforce this.
+- Keep the immutable run contract: one persisted `WheelRunSnapshot` per refresh, published atomically; refresh attempts are separate and never relabel old data.
+- Keep the Moomoo-only actionability contract: external data may diagnose but never create a pick; complete-union coverage and fresh Moomoo quotes gate copy actions.
+- Presets are versioned and immutable; effective values are read-only in the UI.
 - Prefer deterministic pure helpers for scoring, risk, and formatting logic so tests can exercise them without broker connectivity.
 - Preserve Windows local-run ergonomics because the app is designed around OpenD on Windows.
 
@@ -65,7 +70,7 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and call o
 
 - `.github/AGENTS.md` - GitHub Actions CI and repository automation.
 - `api/AGENTS.md` - Flask application factory, routes, services, and external-data orchestration.
-- `core/AGENTS.md` - Trading decisions, scoring logic, connection management, caches, scheduler, and shared utilities.
+- `core/AGENTS.md` - Trading decisions, scoring logic, connection management, caches, wheel runner/run model, presets, and shared utilities.
 - `db/AGENTS.md` - SQLite schema, migrations, pooling, and repositories.
 - `docker/AGENTS.md` - OpenD container assets and Docker runtime support.
 - `frontend/AGENTS.md` - Jinja templates, CSS, static assets, and browser JavaScript.
