@@ -9,6 +9,7 @@ import { fetchWeeklyOptionIncome } from './api.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
 import { initWatchlistPanel } from './watchlist-panel.js';
+import { initRunStrip } from './run-strip.js';
 
 let signalPanelsInitialized = false;
 
@@ -34,6 +35,7 @@ export async function initializeDashboard() {
         try {
             await loadPortfolioData();
         initWatchlistPanel();
+        initRunStrip();
             await updateCashReserveStatus();
         } catch (error) { console.error('Wave 1 error:', error); }
         hideWaveLoading('wave1');

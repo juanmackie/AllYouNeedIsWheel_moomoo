@@ -135,21 +135,21 @@ def register_web_routes(app):
 
     @app.route("/portfolio")
     def portfolio():
-        """Render the portfolio page"""
-        logger.info("Rendering portfolio page")
-        return render_template("portfolio.html")
+        """Portfolio info is folded into the one-screen dashboard."""
+        logger.info("Portfolio page accessed - redirecting to dashboard")
+        return redirect(url_for("index"))
 
     @app.route("/options")
     def options():
-        """Temporarily redirect options page to home"""
-        logger.info("Options page accessed but currently unavailable - redirecting to home")
+        """Options page retired - redirecting to dashboard"""
+        logger.info("Options page accessed - redirecting to dashboard")
         return redirect(url_for("index"))
 
     @app.route("/rollover")
     def rollover():
-        """Render the rollover page for options approaching strike price"""
-        logger.info("Rendering rollover page")
-        return render_template("rollover.html")
+        """Rollover info is folded into the one-screen dashboard."""
+        logger.info("Rollover page accessed - redirecting to dashboard")
+        return redirect(url_for("index"))
 
     @app.errorhandler(404)
     def page_not_found(e):

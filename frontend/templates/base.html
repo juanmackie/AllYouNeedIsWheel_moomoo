@@ -39,8 +39,6 @@
             <div class="ft-masthead__rule" style="height: 1px; background: var(--ft-ink);"></div>
             <nav class="ft-masthead__nav" aria-label="Primary">
                 <a class="ft-masthead__nav-link {% if request.path == '/' %}ft-masthead__nav-link--active{% endif %}" href="{{ url_for('index') if index is defined else '/' }}">Dashboard</a>
-                <a class="ft-masthead__nav-link {% if request.path.startswith('/portfolio') %}ft-masthead__nav-link--active{% endif %}" href="/portfolio">Portfolio</a>
-                <a class="ft-masthead__nav-link {% if request.path.startswith('/rollover') %}ft-masthead__nav-link--active{% endif %}" href="/rollover">Rollover</a>
             </nav>
             <div class="ft-masthead__rule" style="height: 1px; background: var(--ft-ink);"></div>
         </header>
