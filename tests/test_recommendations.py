@@ -3033,3 +3033,93 @@ class TestRecommendationNonDuplication(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRiskTierRanking(unittest.TestCase):
+    """Unknown optional risk metadata ranks below known-risk candidates."""
+
+    def setUp(self):
+        self.mock_connection_provider = MagicMock()
+        self.mock_config_provider = MagicMock()
+        self.mock_config_provider.config = {"cash_reserve_enabled": True}
+        self.mock_db = MagicMock()
+        self.mock_iv_earnings = MagicMock()
+        self.mock_portfolio_context_provider = MagicMock()
+        self.mock_portfolio_service_provider = MagicMock()
+        self.mock_watchlist_manager = MagicMock()
+        self.mock_options_data = MagicMock()
+        self.mock_cash_calculator = MagicMock()
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA"]
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = {
+            "positions": {},
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "broker_buying_power": 50000.0,
+            "cash_available_for_csp": 50000.0,
+            "cash_reserved_for_csp": 0.0,
+            "excess_liquidity": 50000.0,
+            "short_calls": {},
+            "short_puts": {},
+        }
+
+    def _import_engine(self):
+        from api.services.recommendations import RecommendationEngine
+
+        return RecommendationEngine(
+            self.mock_connection_provider,
+            self.mock_config_provider,
+            self.mock_db,
+            self.mock_iv_earnings,
+            self.mock_portfolio_context_provider,
+            self.mock_portfolio_service_provider,
+            self.mock_watchlist_manager,
+            self.mock_options_data,
+            self.mock_cash_calculator,
+        )
+
+    def test_unknown_earnings_metadata_ranks_below_known_risk(self):
+        engine = self._import_engine()
+        # Unknown-risk candidate has HIGHER premium velocity.
+        unknown_risk = {
+            "ticker": "AAA",
+            "stock_price": 100.0,
+            "option_type": "PUT",
+            "strike": 90.0,
+            "expiration": "20240315",
+            "dte": 10,
+            "mid_price": 1.00,
+            "premium_per_contract": 100.0,
+            "bid": 0.95,
+            "ask": 1.05,
+            "annualized_return": 18.0,
+            "iv_adjusted_return": 50.0,
+            "otm_pct": 10.0,
+            "delta": -0.25,
+            "implied_volatility": 0.35,
+            "open_interest": 500,
+            "volume": 200,
+            "score": 75.0,
+            "profile_type": "monthly",
+            "warnings": [],
+            "wheel_decision": {"contract_score": 75.0, "confidence_score": 100},
+            # earnings metadata missing -> unknown
+        }
+        known_risk = dict(unknown_risk)
+        known_risk["premium_per_contract"] = 50.0  # velocity 5 < 10
+        known_risk["earnings_date"] = "2026-07-15"
+        known_risk["days_to_earnings"] = 12
+
+        with patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[known_risk, unknown_risk]):
+            result = engine.get_top_recommendations(limit=3)
+
+        signals = result.get("signals", [])
+        self.assertGreaterEqual(len(signals), 1)
+        # The known-risk candidate must rank first despite lower velocity.
+        self.assertEqual(signals[0]["premium_per_contract"], 50.0)
+        self.assertEqual(signals[0]["days_to_earnings"], 12)
+        if len(signals) > 1:
+            self.assertEqual(signals[1]["premium_per_contract"], 100.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

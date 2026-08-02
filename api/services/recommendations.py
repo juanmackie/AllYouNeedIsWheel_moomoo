@@ -1097,7 +1097,15 @@ class RecommendationEngine:
             def _get_rank_score(x):
                 return premium_velocity_per_day(x.get("premium_per_contract", 0), x.get("dte", 0))
 
-            all_candidates.sort(key=_get_rank_score, reverse=True)
+            def _risk_tier(x):
+                """0 = known earnings/risk metadata; 1 = unknown (ranked below)."""
+                if x.get("earnings_date") or x.get("days_to_earnings") is not None:
+                    return 0
+                return 1
+
+            # Rank within risk tiers by raw premium velocity. Candidates with
+            # unknown optional risk metadata sit below known-risk candidates.
+            all_candidates.sort(key=lambda x: (_risk_tier(x), -_get_rank_score(x)))
 
             # ── Build lane results with diversity safeguard ──────────
             def _select_top(candidates, max_per=1):
