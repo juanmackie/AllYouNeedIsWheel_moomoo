@@ -34,7 +34,7 @@ class OptionsService:
         self.portfolio_service = None
         # Initialize composed services with explicit dependencies
         # Order matters: leaf dependencies first, then consumers
-        self.watchlist_manager = WatchlistManager(config_provider=self)
+        self.watchlist_manager = WatchlistManager(config_provider=self, db=self.db)
         # VIX/macro enrichment removed: wheel decisions use broker truth only.
         self.portfolio_context_helper = PortfolioContext(
             portfolio_service_provider=self,

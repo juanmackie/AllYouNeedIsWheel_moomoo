@@ -90,6 +90,38 @@ class OptionsDatabase:
             )
             conn.commit()
 
+    # --- App-managed watchlist symbols (SQLite) ---
+
+    def get_watchlist_symbols(self):
+        """Return app-managed watchlist symbols: [{symbol, origin, created_at}]."""
+        with pooled_connection(self.db_path) as conn:
+            rows = conn.execute("SELECT symbol, origin, created_at FROM watchlist ORDER BY symbol").fetchall()
+        return [{"symbol": row[0], "origin": row[1], "created_at": row[2]} for row in rows]
+
+    def upsert_watchlist_symbol(self, symbol: str, origin: str = "app"):
+        """Add/replace an app-managed watchlist symbol (canonicalized by caller)."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return False
+        with pooled_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO watchlist (symbol, origin, created_at) VALUES (?, ?, datetime('now'))
+                ON CONFLICT(symbol) DO UPDATE SET origin = excluded.origin, created_at = datetime('now')
+                """,
+                (symbol, origin),
+            )
+            conn.commit()
+        return True
+
+    def remove_watchlist_symbol(self, symbol: str):
+        """Remove an app-managed watchlist symbol."""
+        symbol = str(symbol or "").strip().upper()
+        with pooled_connection(self.db_path) as conn:
+            cur = conn.execute("DELETE FROM watchlist WHERE symbol = ?", (symbol,))
+            conn.commit()
+        return cur.rowcount > 0
+
     # --- IV History ---
 
     def save_iv_data(self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None):

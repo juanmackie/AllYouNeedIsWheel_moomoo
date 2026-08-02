@@ -132,6 +132,18 @@ class TestRecommendationEngine(unittest.TestCase):
         """P0.3: watchlist >12 tickers should be capped to MAX_COLD_SCAN_TICKERS."""
         tickers = [f"TICK{i}" for i in range(20)]
         self.mock_watchlist_manager.get_effective_watchlist.return_value = tickers
+        self.mock_watchlist_manager.get_effective_watchlist_with_origins.return_value = [
+            {"ticker": t, "origins": ["config"]} for t in tickers
+        ]
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": True,
+            "watchlist_size": 20,
+            "estimated_scan_sec": 60.0,
+            "freshness_window_sec": 120,
+            "chain_calls": 40,
+            "chain_quota_ok": True,
+            "recommended_max_size": 12,
+        }
         engine = self._import_engine()
 
         with patch.object(engine, "_fetch_watchlist_ticker_csp") as mock_fetch:
@@ -991,6 +1003,18 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         """P0.3: watchlist >12 tickers should be capped to MAX_COLD_SCAN_TICKERS."""
         tickers = [f"TICK{i}" for i in range(20)]
         self.mock_watchlist_manager.get_effective_watchlist.return_value = tickers
+        self.mock_watchlist_manager.get_effective_watchlist_with_origins.return_value = [
+            {"ticker": t, "origins": ["config"]} for t in tickers
+        ]
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": True,
+            "watchlist_size": 20,
+            "estimated_scan_sec": 60.0,
+            "freshness_window_sec": 120,
+            "chain_calls": 40,
+            "chain_quota_ok": True,
+            "recommended_max_size": 12,
+        }
         engine = self._import_engine()
 
         with patch.object(engine, "_fetch_watchlist_ticker_csp") as mock_fetch:
@@ -1943,6 +1967,9 @@ class TestRecommendationEngineDedup(unittest.TestCase):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = [
             "UBER",
             "US.UBER",
+        ]
+        self.mock_watchlist_manager.get_effective_watchlist_with_origins.return_value = [
+            {"ticker": "UBER", "origins": ["config"]},
         ]
         engine = self._import_engine()
 

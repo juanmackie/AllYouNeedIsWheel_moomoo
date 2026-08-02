@@ -744,20 +744,23 @@ class RecommendationEngine:
             short_calls = portfolio_context.get("short_calls", {})
             short_puts = portfolio_context.get("short_puts", {})
 
-            effective_watchlist = self._watchlist_provider.get_effective_watchlist(
+            # Canonical merged union: Moomoo group + app-managed SQLite + config.
+            # The manager deduplicates by canonical underlying and labels origins.
+            watchlist_with_origins = self._watchlist_provider.get_effective_watchlist_with_origins(
                 growth_mode_config=self._preset_profile,
                 portfolio_context=portfolio_context,
             )
-            # Deduplicate watchlist by canonical underlying (UBER vs US.UBER)
-            seen_canonical = set()
-            deduped_watchlist = []
-            for wt in effective_watchlist:
-                cu = canonical_underlying(wt)
-                if cu not in seen_canonical:
-                    seen_canonical.add(cu)
-                    deduped_watchlist.append(wt)
-            effective_watchlist = deduped_watchlist
-            logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers (after dedup)")
+            if not isinstance(watchlist_with_origins, list):
+                # Mock/stub providers: fall back to the plain list form.
+                plain = self._watchlist_provider.get_effective_watchlist(
+                    growth_mode_config=self._preset_profile,
+                    portfolio_context=portfolio_context,
+                )
+                plain = plain if isinstance(plain, list) else []
+                watchlist_with_origins = [{"ticker": str(t), "origins": ["config"]} for t in plain]
+            effective_watchlist = [item["ticker"] for item in watchlist_with_origins]
+            watchlist_origins = {item["ticker"]: item["origins"] for item in watchlist_with_origins}
+            logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers (canonical union)")
 
             if not positions and not effective_watchlist:
                 try:
@@ -807,10 +810,57 @@ class RecommendationEngine:
             csp_start = time.time()
             min_csp_buying_power = float(self._preset_profile.get("min_csp_buying_power", 5000) or 5000)
 
+            # ── Scan feasibility preflight ────────────────────────────────
+            # Every actionable run must scan the COMPLETE canonical union. If the
+            # union cannot fit the OpenD quota + freshness window, we publish
+            # planning diagnostics and direct the user to reduce a source list.
+            # We never silently truncate and still claim a global top three.
+            preflight = self._watchlist_provider.preflight_scan_feasibility(len(effective_watchlist))
+            if not isinstance(preflight, dict):
+                # Mock/stub providers in tests: assume feasible.
+                preflight = {
+                    "feasible": True,
+                    "watchlist_size": len(effective_watchlist),
+                    "estimated_scan_sec": 0.0,
+                    "freshness_window_sec": 120,
+                    "chain_calls": 0,
+                    "chain_quota_ok": True,
+                    "recommended_max_size": max(12, len(effective_watchlist)),
+                }
+            if not preflight["feasible"]:
+                logger.warning(
+                    "Scan infeasible: %d tickers, est %.0fs vs freshness window %ds",
+                    preflight["watchlist_size"],
+                    preflight["estimated_scan_sec"],
+                    preflight["freshness_window_sec"],
+                )
+                return {
+                    "success": True,
+                    "count": 0,
+                    "total_scored": 0,
+                    "generated_at": datetime.now().isoformat(),
+                    "signals": [],
+                    "broker_buying_power": broker_buying_power,
+                    "cash_available_for_csp": cash_available_for_csp,
+                    "cash_reserved_for_csp": cash_reserved_for_csp,
+                    "blocked_signals": [],
+                    "blocked_reason_counts": {},
+                    "state": "planning",
+                    "scan_coverage": {"scanned": 0, "total": len(effective_watchlist), "complete": False},
+                    "preflight": preflight,
+                    "message": (
+                        f"Full watchlist scan is infeasible within the freshness window "
+                        f"({preflight['watchlist_size']} tickers, est {preflight['estimated_scan_sec']:.0f}s "
+                        f"vs {preflight['freshness_window_sec']}s). Reduce the Moomoo watchlist group "
+                        f"or the app-managed list to at most {preflight['recommended_max_size']} symbols "
+                        f"for actionable top-three results."
+                    ),
+                }
+
             # Cap tickers per cold scan to bound scan time within the client retry
             # budget. Each ticker may need 2 option-chain calls (3s spacing each)
             # plus price/expiration calls, so ~10-15 tickers fits in ~120s worst case.
-            MAX_COLD_SCAN_TICKERS = 12
+            MAX_COLD_SCAN_TICKERS = preflight["recommended_max_size"]
             scan_watchlist = effective_watchlist[:MAX_COLD_SCAN_TICKERS]
             if len(effective_watchlist) > MAX_COLD_SCAN_TICKERS:
                 logger.info(
@@ -1165,6 +1215,12 @@ class RecommendationEngine:
                 "enrichment": enrichment_hint,
                 "blocked_signals": blocked_signals,
                 "blocked_reason_counts": dict(sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)),
+                "scan_coverage": {
+                    "scanned": len(scan_watchlist),
+                    "total": len(effective_watchlist),
+                    "complete": len(scan_watchlist) >= len(effective_watchlist),
+                },
+                "watchlist_origins": watchlist_origins,
                 "preset": {
                     "key": self._preset.key,
                     "version": self._preset.version,

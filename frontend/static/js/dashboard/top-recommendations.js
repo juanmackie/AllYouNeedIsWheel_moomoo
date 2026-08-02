@@ -682,6 +682,8 @@ function showEmpty(result = null) {
     if (blockedReason) details.push(`Dominant blocker: ${blockedReason}.`);
     if (cashDiagnostic) details.push(cashDiagnostic);
     if (scanDiagnostic) details.push(scanDiagnostic);
+    // Planning/partial runs carry an explicit directive (e.g. infeasible scan).
+    if (result?.message) details.push(result.message);
     const detailText = details.length > 0 ? ` ${details.join(' ')}` : ' Try refresh or adjust criteria.';
     StateModel.showEmpty('top-recommendations-state', `No ${label.toLowerCase()} available right now.${detailText}`);
     document.getElementById('top-recommendations-content').classList.add('d-none');

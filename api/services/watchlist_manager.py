@@ -26,11 +26,13 @@ logger = logging.getLogger("api.services.watchlist_manager")
 
 class WatchlistManager:
     """
-    Handles watchlist management (static, dynamic, hybrid) and screening profile configuration.
+    Handles watchlist management (merged Moomoo group + app-managed SQLite + config)
+    and screening profile configuration.
     """
 
-    def __init__(self, config_provider):
+    def __init__(self, config_provider, db=None):
         self._config_provider = config_provider
+        self._db = db
 
     @property
     def config(self):
@@ -61,11 +63,25 @@ class WatchlistManager:
     def _fetch_moomoo_watchlist(self):
         conn = self._get_moomoo_connection()
         if conn is None:
-            logger.warning("Moomoo watchlist: no connection, falling back to static watchlist")
-            return self.config.get("watchlist", [])
+            logger.warning("Moomoo watchlist: no connection available")
+            return []
+        # Fail fast: TCP probe before any SDK connect attempt (SDK connect can
+        # block with reconnect retries when OpenD is absent).
+        try:
+            from core.context_factory import probe_opend_status
+
+            probe = probe_opend_status(
+                host=str(self.config.get("host", "127.0.0.1")), port=int(self.config.get("port", 11111))
+            )
+            if probe.get("status") != "connected":
+                logger.warning("Moomoo watchlist: OpenD not reachable")
+                return []
+        except Exception as exc:
+            logger.warning(f"Moomoo watchlist: probe failed ({exc})")
+            return []
         if not conn.is_connected() and not conn.connect():
-            logger.warning("Moomoo watchlist: failed to connect, falling back to static watchlist")
-            return self.config.get("watchlist", [])
+            logger.warning("Moomoo watchlist: failed to connect")
+            return []
         group_name = self.config.get("moomoo_watchlist_group", "My Watchlist")
         try:
             ret, data = conn.get_user_security(group_name)
@@ -86,48 +102,89 @@ class WatchlistManager:
             logger.info(f"Moomoo watchlist: fetched {len(tickers)} tickers from group '{group_name}'")
             return tickers
         except Exception as e:
-            logger.warning(f"Moomoo watchlist fetch failed: {e}, falling back to static watchlist")
-            return self.config.get("watchlist", [])
+            logger.warning(f"Moomoo watchlist fetch failed: {e}")
+            return []
 
     def _get_tvscreener_service(self):
         """Dynamic screening is out of scope; always returns None."""
         return None
 
+    def get_watchlist_sources(self):
+        """Return each watchlist source as a labelled list.
+
+        Sources:
+          - moomoo: the named OpenD/Moomoo watchlist group
+          - app:    app-managed SQLite symbols
+          - config: legacy WATCHLIST env/connection.json list (compat)
+        """
+        sources = {"moomoo": [], "app": [], "config": []}
+        try:
+            sources["moomoo"] = self._fetch_moomoo_watchlist() or []
+        except Exception as exc:
+            logger.warning(f"Moomoo watchlist fetch failed: {exc}")
+            sources["moomoo"] = []
+        if self._db is not None:
+            try:
+                sources["app"] = [row["symbol"] for row in self._db.get_watchlist_symbols()]
+            except Exception as exc:
+                logger.warning(f"App watchlist load failed: {exc}")
+                sources["app"] = []
+        sources["config"] = list(self.config.get("watchlist", []) or [])
+        return sources
+
+    def get_effective_watchlist_with_origins(self, growth_mode_config=None, portfolio_context=None):
+        """Return the canonical merged union with per-ticker origin labels.
+
+        Returns a list of dicts: {"ticker": str, "origins": [str, ...]}. Tickers
+        are canonicalized (UBER vs US.UBER) and deduplicated.
+        """
+        from core.ticker_utils import canonical_underlying
+
+        sources = self.get_watchlist_sources()
+        merged: dict[str, list[str]] = {}
+        for origin, tickers in sources.items():
+            for raw in tickers:
+                ticker = str(raw or "").strip().upper()
+                if not ticker:
+                    continue
+                canonical = canonical_underlying(ticker)
+                if canonical not in merged:
+                    merged[canonical] = []
+                if origin not in merged[canonical]:
+                    merged[canonical].append(origin)
+        return [{"ticker": ticker, "origins": sorted(origins)} for ticker, origins in sorted(merged.items())]
+
+    def preflight_scan_feasibility(self, watchlist_size: int) -> dict:
+        """Estimate whether a full watchlist scan fits the quota + freshness budget.
+
+        Model: per symbol ~1 price + 1 expiration call (cheap) and 2 option-chain
+        calls spaced >= 3s by the chain rate limiter. Total chain time is
+        approximately 6s per symbol.
+        """
+        freshness_window = int(self.config.get("max_tradeable_quote_age_sec", 120) or 120)
+        chain_spacing_sec = 3.0
+        per_symbol_chain_sec = 2 * chain_spacing_sec
+        estimated_scan_sec = watchlist_size * per_symbol_chain_sec
+        # Chain calls also share the 30s/10-call quota
+        chain_calls = watchlist_size * 2
+        chain_quota_ok = chain_calls <= 10 * (max(1, freshness_window // 30))
+        feasible = watchlist_size > 0 and estimated_scan_sec <= freshness_window and chain_quota_ok
+        return {
+            "feasible": feasible,
+            "watchlist_size": watchlist_size,
+            "estimated_scan_sec": round(estimated_scan_sec, 1),
+            "freshness_window_sec": freshness_window,
+            "chain_calls": chain_calls,
+            "chain_quota_ok": chain_quota_ok,
+            "recommended_max_size": max(1, int(freshness_window // per_symbol_chain_sec)),
+        }
+
     def get_effective_watchlist(self, growth_mode_config=None, portfolio_context=None):
         """
-        Get the effective watchlist.
-
-        Supports static, moomoo, and hybrid (moomoo + static union) modes.
-        Dynamic broad-market screening is out of scope.
-
-        Args:
-            growth_mode_config: Optional growth mode config dict (retained for
-                                call-site compatibility; replaced by presets).
-            portfolio_context: Optional portfolio context dict. When provided,
-                               computes max_price from CSP cash.
-
-        Returns:
-            List of ticker symbols
+        Return the canonical merged watchlist (Moomoo group + app SQLite + config).
+        Tickers are canonicalized and deduplicated.
         """
-        static_watchlist = self.config.get("watchlist", [])
-        watchlist_mode = self.config.get("watchlist_mode", "static")
-
-        if watchlist_mode == "static":
-            return static_watchlist
-
-        if watchlist_mode == "moomoo":
-            return self._fetch_moomoo_watchlist()
-
-        if watchlist_mode == "hybrid":
-            moomoo_tickers = self._fetch_moomoo_watchlist() or []
-            combined = list(dict.fromkeys(list(moomoo_tickers) + list(static_watchlist)))
-            logger.info(
-                f"Hybrid watchlist: {len(moomoo_tickers)} moomoo + {len(static_watchlist)} static = {len(combined)} total"
-            )
-            return combined
-
-        # Unknown mode: fall back to static
-        return static_watchlist
+        return [item["ticker"] for item in self.get_effective_watchlist_with_origins()]
 
     def get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None, growth_mode_config=None):
         """

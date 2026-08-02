@@ -153,6 +153,11 @@ def create_app(config=None):
 
     app.register_blueprint(settings.bp)
 
+    # Watchlist (merged union with origins)
+    from api.routes import watchlist
+
+    app.register_blueprint(watchlist.bp)
+
     # Extracted route modules (F008)
     from api.routes import alerts, roll_pressure
 

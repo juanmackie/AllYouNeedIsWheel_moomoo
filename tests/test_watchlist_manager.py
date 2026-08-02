@@ -30,6 +30,7 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
         self.mock_context.config = {}
 
     def test_static_mode(self):
+        """Config list is one source of the merged union."""
         self.mock_context.config = {
             "watchlist": ["AAPL", "TSLA", "NVDA"],
             "watchlist_mode": "static",
@@ -38,9 +39,9 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         result = manager.get_effective_watchlist()
 
-        self.assertEqual(result, ["AAPL", "TSLA", "NVDA"])
+        self.assertEqual(result, ["AAPL", "NVDA", "TSLA"])
 
-    def test_static_mode_is_default(self):
+    def test_config_only_union(self):
         self.mock_context.config = {
             "watchlist": ["AAPL"],
         }
@@ -131,7 +132,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         result = manager.get_effective_watchlist()
 
-        self.assertEqual(result, ["AAPL", "TSLA", "NVDA"])
+        # Config fallback symbols are merged into the union too.
+        self.assertEqual(result, ["AAPL", "FALLBACK", "NVDA", "TSLA"])
         mock_conn.get_user_security.assert_called_once_with("My Watchlist")
 
     @patch.object(WatchlistManager, "_get_moomoo_connection")

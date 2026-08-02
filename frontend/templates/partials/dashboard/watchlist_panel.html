@@ -1,0 +1,19 @@
+<section class="ft-section" id="watchlist-section">
+    <div class="ft-section__head">
+        <div class="ft-section__head-left">
+            <span class="ft-section__num">01 &middot; WATCHLIST</span>
+            <h2 class="ft-section__title">Scan universe</h2>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <input id="watchlist-add-input" type="text" class="form-control form-control-sm" style="width:120px"
+                   placeholder="SYMBOL" maxlength="10" autocomplete="off" aria-label="Add watchlist symbol">
+            <button id="watchlist-add-btn" class="btn btn-outline-primary btn-sm" type="button">Add</button>
+            <button id="watchlist-refresh-btn" class="btn btn-outline-secondary btn-sm" type="button">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>
+    </div>
+    <div class="small text-muted mb-2" id="watchlist-summary">Loading…</div>
+    <div id="watchlist-infeasible" class="alert alert-warning d-none py-2 px-3 small mb-2" role="alert"></div>
+    <div id="watchlist-tags" class="d-flex flex-wrap gap-1"></div>
+</section>

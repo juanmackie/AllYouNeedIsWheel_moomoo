@@ -8,6 +8,7 @@ import { formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
+import { initWatchlistPanel } from './watchlist-panel.js';
 
 let signalPanelsInitialized = false;
 
@@ -32,6 +33,7 @@ export async function initializeDashboard() {
         showWaveLoading('wave1', 'Loading account data...');
         try {
             await loadPortfolioData();
+        initWatchlistPanel();
             await updateCashReserveStatus();
         } catch (error) { console.error('Wave 1 error:', error); }
         hideWaveLoading('wave1');

@@ -68,7 +68,7 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
         service = OptionsService()
         result = service.get_effective_watchlist()
 
-        self.assertEqual(result, ["AAPL", "TSLA", "NVDA"])
+        self.assertEqual(result, ["AAPL", "NVDA", "TSLA"])
 
 
 class TestOptionsServiceConnectionConfig(unittest.TestCase):
