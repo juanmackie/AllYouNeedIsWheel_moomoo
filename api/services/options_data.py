@@ -7,14 +7,7 @@ import logging
 import time
 from datetime import datetime
 
-import pandas as pd
-
-from api.services.utils import (
-    clean_yfinance_ticker,
-    get_yfinance_history,
-    get_yfinance_option_chain,
-    get_yfinance_options,
-)
+from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
 from core.scoring_factors import premium_velocity_per_day
 from core.utils import get_closest_friday, is_market_open
@@ -89,7 +82,6 @@ class OptionsDataService:
         self.iv_earnings_service = iv_earnings_service
         self._screening_profile_provider = screening_profile_provider
         self._portfolio_context_provider = portfolio_context_provider
-        self._yfinance_iv_cache = {}
         self._growth_profile = None  # Set by recommendation engine when growth mode is active
 
     def _get_config(self):
@@ -120,141 +112,24 @@ class OptionsDataService:
     def _strip_ticker_prefix(self, ticker):
         return clean_yfinance_ticker(ticker)
 
-    def _get_yfinance_price(self, ticker):
-        """Get stock price from yfinance as fallback when Moomoo lacks quote rights."""
-        try:
-            hist = get_yfinance_history(ticker, period="1d")
-            if hist is None or hist.empty:
-                logger.warning(f"yfinance: No price data for {self._strip_ticker_prefix(ticker)}")
-                return None
-            price = float(hist["Close"].iloc[-1])
-            logger.debug(f"yfinance: Got price {price} for {self._strip_ticker_prefix(ticker)}")
-            return price
-        except Exception as e:
-            logger.warning(f"yfinance: Failed to get price for {ticker}: {e}")
-            return None
-
-    def _get_yfinance_option_chain(self, ticker, expiration, option_type):
-        """Get option chain from yfinance as fallback when Moomoo lacks quote rights."""
-        try:
-            bare_ticker = self._strip_ticker_prefix(ticker)
-            exp_formatted = expiration.replace("-", "")
-            if len(exp_formatted) == 8:
-                exp_yf = f"{exp_formatted[0:4]}-{exp_formatted[4:6]}-{exp_formatted[6:8]}"
-            else:
-                exp_yf = expiration
-
-            all_exps = get_yfinance_options(bare_ticker)
-            if not all_exps:
-                return None
-
-            target_exp = None
-            for exp in all_exps:
-                if exp == exp_yf or exp.startswith(exp_formatted[:10]):
-                    target_exp = exp
-                    break
-
-            if not target_exp:
-                logger.debug(f"yfinance: Expiration {expiration} not found for {ticker}, using closest")
-                today = datetime.now()
-                for exp in all_exps:
-                    exp_date = datetime.strptime(exp, "%Y-%m-%d")
-                    dte = (exp_date - today).days
-                    if 7 <= dte <= 45:
-                        target_exp = exp
-                        break
-                if not target_exp:
-                    target_exp = all_exps[0]
-
-            chain = get_yfinance_option_chain(bare_ticker, target_exp)
-            if not chain:
-                return None
-            df = chain["calls"] if option_type == "C" else chain["puts"]
-
-            if df is None or df.empty:
-                return None
-
-            options = []
-            for _, row in df.iterrows():
-                opt = {
-                    "strike": float(row.get("strike", 0)),
-                    "expiration": target_exp.replace("-", ""),
-                    "option_type": "CALL" if option_type == "C" else "PUT",
-                    "bid": float(row.get("bid", 0)) if not pd.isna(row.get("bid")) else 0,
-                    "ask": float(row.get("ask", 0)) if not pd.isna(row.get("ask")) else 0,
-                    "last": float(row.get("lastPrice", 0)) if not pd.isna(row.get("lastPrice")) else 0,
-                    "volume": int(row.get("volume", 0)) if not pd.isna(row.get("volume")) else 0,
-                    "open_interest": int(row.get("openInterest", 0)) if not pd.isna(row.get("openInterest")) else 0,
-                    "implied_volatility": float(row.get("impliedVolatility", 0))
-                    if not pd.isna(row.get("impliedVolatility"))
-                    else 0,
-                    "delta": None,
-                    "gamma": None,
-                    "theta": None,
-                    "vega": None,
-                }
-                options.append(opt)
-
-            result = {
-                "symbol": ticker,
-                "expiration": target_exp.replace("-", ""),
-                "stock_price": None,
-                "right": option_type,
-                "options": options,
-            }
-            result = _annotate_chain_sources(
-                result,
-                price_source="yfinance",
-                chain_source="yfinance",
-                iv_source="yfinance",
-                from_yfinance=True,
-            )
-            logger.debug(f"yfinance: Got {len(options)} options for {ticker} {expiration} {option_type}")
-            return result
-        except Exception as e:
-            logger.warning(f"yfinance: Failed to get option chain for {ticker}: {e}")
-            return None
-
-    def _get_yfinance_expiration_dates(self, ticker, profile=None):
-        """Return yfinance expirations filtered to the active DTE profile."""
-        try:
-            bare_ticker = self._strip_ticker_prefix(ticker)
-            all_exps = get_yfinance_options(bare_ticker)
-            if not all_exps:
-                return []
-
-            today = datetime.now().date()
-            min_dte = (profile or {}).get("min_dte", 0)
-            max_dte = (profile or {}).get("max_dte", 365)
-            filtered = []
-            fallback = []
-
-            for exp in all_exps:
-                exp_date = _parse_expiration_date(exp)
-                if not exp_date:
-                    continue
-                dte = (exp_date - today).days
-                if dte <= 0:
-                    continue
-                item = (_normalize_expiration(exp), dte)
-                fallback.append(item)
-                if min_dte <= dte <= max_dte:
-                    filtered.append(item)
-
-            expirations = filtered or fallback
-            expirations.sort(key=lambda item: item[1])
-            return expirations[: (profile or {}).get("max_expirations", 50)]
-        except Exception as e:
-            logger.debug(f"yfinance: Failed to get expirations for {ticker}: {e}")
-            return []
-
     def _build_candidate(self, ticker, option, stock_price, desired_otm, profile, portfolio_context):
         """
         Build a scored candidate for a single option contract.
 
-        Delegates to the unified WheelDecision engine, then converts
-        the result back to the legacy dict format for API compatibility.
+        Actionability contract: only broker-sourced chains ("broker" or
+        "persisted-broker") may become candidates. Any external chain data is
+        rejected here, before scoring.
         """
+        chain_source = str(option.get("chain_source", "") or "").strip().lower()
+        if chain_source not in ("broker", "persisted-broker"):
+            logger.debug(
+                "Rejecting %s %s: chain_source=%r is not broker data",
+                ticker,
+                option.get("option_type", ""),
+                chain_source,
+            )
+            return None
+
         # Gather IV / earnings context (macro enrichment is out of scope)
         option["expiration"] = _normalize_expiration(option.get("expiration", ""))
 
@@ -279,21 +154,7 @@ class OptionsDataService:
         earnings_info = self.iv_earnings_service.get_earnings_info(ticker)
         macro_regime = disabled_macro_context()
 
-        # -- Enrich option with yfinance IV and computed BS Greeks --------------
-        from core.greeks import prepare_option_for_scoring
-
-        iv, _ = prepare_option_for_scoring(
-            option,
-            ticker,
-            stock_price,
-            self._yfinance_iv_cache,
-            chain_fetcher=get_yfinance_option_chain,
-        )
-
-        # -- Update IV context with enriched IV --------------------------------
-        if iv > 0:
-            iv_env_adjustment, iv_rank, iv_status = self.iv_earnings_service.get_iv_environment_score(ticker, iv)
-
+        # Broker chains carry IV/greeks; no external enrichment is applied.
         # Delegate to unified scorer
         decision = score_contract(
             ticker=ticker,
@@ -548,20 +409,12 @@ class OptionsDataService:
         }
 
         try:
+            # Actionable candidates require a fresh Moomoo quote. No external
+            # price fallback (portfolio fallback prices lack a quote timestamp).
             stock_price_source = "broker"
             stock_price = conn.get_stock_price(ticker)
             if stock_price is None or stock_price <= 0:
-                logger.debug(f"Moomoo returned no/invalid price for {ticker}, trying yfinance fallback")
-                stock_price = self._get_yfinance_price(ticker)
-                if stock_price is not None and stock_price > 0:
-                    stock_price_source = "yfinance"
-            if stock_price is None or stock_price <= 0:
-                position = portfolio_context.get("positions", {}).get(ticker, {})
-                stock_price = float(position.get("market_price", 0) or position.get("avg_cost", 0) or 0)
-                if stock_price > 0:
-                    stock_price_source = "portfolio fallback"
-            if stock_price is None or stock_price <= 0:
-                result["error"] = "Unable to obtain valid stock price from any source"
+                result["error"] = "Unable to obtain a fresh Moomoo stock price"
                 return result
 
             position = portfolio_context.get("positions", {}).get(ticker, {})
@@ -599,14 +452,14 @@ class OptionsDataService:
                             snapshot = self.db.get_latest_option_chain(
                                 ticker, "C" if side == "CALL" else "P", max_age_hours=168
                             )
-                            if snapshot and snapshot.get("chain_data"):
+                            if snapshot and snapshot.get("chain_data") and snapshot.get("source") == "broker":
                                 chain = snapshot["chain_data"]
                                 chain = _annotate_chain_sources(
                                     chain,
                                     price_source=stock_price_source,
-                                    chain_source=snapshot.get("source", "persisted"),
-                                    iv_source=snapshot.get("source", "persisted"),
-                                    from_yfinance=snapshot.get("source") == "yfinance",
+                                    chain_source="persisted-broker",
+                                    iv_source="persisted-broker",
+                                    from_yfinance=False,
                                 )
                                 chain["quote_timestamp"] = snapshot.get("as_of", "")
                                 chain["data_source"] = "persisted"
@@ -640,29 +493,9 @@ class OptionsDataService:
                                 logger.debug("Could not persist broker chain snapshot", exc_info=True)
                         else:
                             logger.debug(
-                                f"Moomoo returned no options for {ticker} {expiry} {side}, trying yfinance fallback"
+                                f"Moomoo returned no options for {ticker} {expiry} {side}; "
+                                "no external chain fallback is permitted"
                             )
-                            yf_chain = self._get_yfinance_option_chain(ticker, expiry, "C" if side == "CALL" else "P")
-                            if yf_chain and yf_chain.get("options"):
-                                yf_chain = _annotate_chain_sources(
-                                    yf_chain,
-                                    price_source=stock_price_source,
-                                    chain_source="yfinance",
-                                    iv_source="yfinance",
-                                    from_yfinance=True,
-                                )
-                                options_chains.append(yf_chain)
-                                try:
-                                    self.db.save_option_chain_snapshot(
-                                        ticker,
-                                        expiry,
-                                        "C" if side == "CALL" else "P",
-                                        stock_price,
-                                        yf_chain,
-                                        source="yfinance",
-                                    )
-                                except Exception:
-                                    logger.debug("Could not persist yfinance chain snapshot", exc_info=True)
                     except Exception as chain_exc:
                         logger.exception(f"Error getting option chain for {ticker} {expiry} {side}: {chain_exc}")
 

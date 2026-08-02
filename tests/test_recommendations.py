@@ -1058,17 +1058,990 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertNotIn("best_plays", result)
         self.assertNotIn("lanes", result)
 
+    def _import_engine(self):
+        from api.services.recommendations import RecommendationEngine
+
+        return RecommendationEngine(
+            self.mock_connection_provider,
+            self.mock_config_provider,
+            self.mock_db,
+            self.mock_iv_earnings,
+            self.mock_portfolio_context_provider,
+            self.mock_portfolio_service_provider,
+            self.mock_watchlist_manager,
+            self.mock_options_data,
+            self.mock_cash_calculator,
+        )
+
+    def test_init_stores_context(self):
+        engine = self._import_engine()
+        self.assertIs(engine._connection_provider, self.mock_connection_provider)
+        self.assertIs(engine.config, self.mock_config_provider.config)
+        self.assertIs(engine.db, self.mock_db)
+
+    def test_get_top_recommendations_no_connection(self):
+        self.mock_connection_provider._ensure_connection.return_value = None
+        engine = self._import_engine()
+
+        result = engine.get_top_recommendations(limit=5)
+
+        self.assertIn("error", result)
+
+    def test_get_top_recommendations_empty_portfolio(self):
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = {
+            "positions": {},
+            "cash_balance": 0,
+            "short_calls": {},
+            "short_puts": {},
+        }
+        engine = self._import_engine()
+
+        result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["count"], 0)
+
+    def test_ignore_cash_limits_does_not_cash_cap_watchlist_universe(self):
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = {
+            "positions": {},
+            "cash_balance": 0,
+            "available_cash": 0,
+            "cash_available_for_csp": 0,
+            "cash_reserved_for_csp": 0,
+            "broker_buying_power": 0,
+            "short_calls": {},
+            "short_puts": {},
+        }
+        engine = self._import_engine()
+
+        result = engine.get_top_recommendations(limit=5, ignore_cash_limits=True)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["ignore_cash_limits"])
+        # When ignore_cash_limits=True, the engine widens OTM/DTE for unconstrained mode
+        self.mock_watchlist_manager.get_effective_watchlist.assert_called_with(
+            growth_mode_config={
+                "screener_profile": {
+                    "csp_min_otm_pct": 2,
+                    "csp_max_otm_pct": 25,
+                    "csp_min_dte": 7,
+                    "csp_max_dte": 60,
+                }
+            },
+            portfolio_context=None,
+        )
+
+    def test_get_top_recommendations_caps_scan_tickers_at_12(self):
+        """P0.3: watchlist >12 tickers should be capped to MAX_COLD_SCAN_TICKERS."""
+        tickers = [f"TICK{i}" for i in range(20)]
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = tickers
+        engine = self._import_engine()
+
+        with patch.object(engine, "_fetch_watchlist_ticker_csp") as mock_fetch:
+            mock_fetch.return_value = []
+            with patch("api.services.recommendations.is_market_open", return_value=True):
+                engine.get_top_recommendations(limit=5)
+
+        self.assertLessEqual(mock_fetch.call_count, 12)
+        called_tickers = [call[0][0] for call in mock_fetch.call_args_list]
+        self.assertEqual(called_tickers, tickers[:12])
+
+    def test_get_top_recommendations_includes_research_only_long_lanes(self):
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+        engine = self._import_engine()
+        long_call = {
+            "ticker": "AAPL",
+            "stock_price": 150.0,
+            "option_type": "CALL",
+            "strike": 162.0,
+            "expiration": "20240315",
+            "dte": 21,
+            "mid_price": 2.05,
+            "premium_per_contract": 205.0,
+            "bid": 2.0,
+            "ask": 2.1,
+            "annualized_return": 23.0,
+            "iv_adjusted_return": 50.0,
+            "otm_pct": 8.0,
+            "delta": 0.25,
+            "implied_volatility": 0.35,
+            "open_interest": 500,
+            "volume": 100,
+            "score": 82.0,
+            "profile_type": "long_call",
+            "research_only": True,
+            "warnings": ["Research-only long call signal - verify before trading"],
+            "wheel_decision": {"contract_score": 82.0, "confidence_score": 100},
+        }
+        long_put = {
+            "ticker": "AAPL",
+            "stock_price": 150.0,
+            "option_type": "PUT",
+            "strike": 138.0,
+            "expiration": "20240315",
+            "dte": 21,
+            "mid_price": 1.8,
+            "premium_per_contract": 180.0,
+            "bid": 1.75,
+            "ask": 1.85,
+            "annualized_return": 22.0,
+            "iv_adjusted_return": 45.0,
+            "otm_pct": 8.0,
+            "delta": -0.25,
+            "implied_volatility": 0.36,
+            "open_interest": 400,
+            "volume": 90,
+            "score": 80.0,
+            "profile_type": "long_put",
+            "research_only": True,
+            "warnings": ["Research-only long put signal - verify before trading"],
+            "wheel_decision": {"contract_score": 80.0, "confidence_score": 100},
+        }
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]),
+            patch.object(
+                engine, "_fetch_watchlist_long_options", return_value={"calls": [long_call], "puts": [long_put]}
+            ),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations(limit=5, include_long_options=True)
+
+        self.assertEqual(result["long_calls"]["count"], 1)
+        self.assertEqual(result["long_puts"]["count"], 1)
+        self.assertTrue(result["long_calls"]["signals"][0]["research_only"])
+        self.assertTrue(result["long_puts"]["signals"][0]["research_only"])
+        self.assertEqual(result["long_calls"]["signals"][0]["signal_type"], "call")
+        self.assertEqual(result["long_puts"]["signals"][0]["signal_type"], "put")
+
+    def test_get_top_recommendations_ranks_by_premium_velocity(self):
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA", "BBB"]
+        engine = self._import_engine()
+
+        faster_daily = {
+            "ticker": "AAA",
+            "stock_price": 200.0,
+            "option_type": "PUT",
+            "strike": 200.0,
+            "expiration": "20240315",
+            "dte": 10,
+            "mid_price": 1.00,
+            "premium_per_contract": 100.0,
+            "bid": 0.95,
+            "ask": 1.05,
+            "annualized_return": 18.25,
+            "iv_adjusted_return": 30.0,
+            "otm_pct": 5.0,
+            "delta": -0.20,
+            "implied_volatility": 0.30,
+            "open_interest": 500,
+            "volume": 100,
+            "score": 80.0,
+            "profile_type": "monthly",
+            "research_only": False,
+            "warnings": [],
+            "wheel_decision": {"contract_score": 80.0, "confidence_score": 100},
+        }
+        slower_daily = {
+            "ticker": "BBB",
+            "stock_price": 50.0,
+            "option_type": "PUT",
+            "strike": 50.0,
+            "expiration": "20240315",
+            "dte": 20,
+            "mid_price": 1.20,
+            "premium_per_contract": 120.0,
+            "bid": 1.15,
+            "ask": 1.25,
+            "annualized_return": 43.80,
+            "iv_adjusted_return": 45.0,
+            "otm_pct": 5.0,
+            "delta": -0.20,
+            "implied_volatility": 0.30,
+            "open_interest": 500,
+            "volume": 100,
+            "score": 90.0,
+            "profile_type": "monthly",
+            "research_only": False,
+            "warnings": [],
+            "wheel_decision": {"contract_score": 90.0, "confidence_score": 100},
+        }
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", side_effect=[[faster_daily], [slower_daily]]),
+            patch.object(engine, "_fetch_watchlist_long_options", return_value={"calls": [], "puts": []}),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertGreater(len(result["signals"]), 1)
+        self.assertEqual(result["signals"][0]["ticker"], "AAA")
+        self.assertLess(result["signals"][0]["annualized_return"], result["signals"][1]["annualized_return"])
+        self.assertGreater(
+            result["signals"][0]["premium_per_contract"] / result["signals"][0]["dte"],
+            result["signals"][1]["premium_per_contract"] / result["signals"][1]["dte"],
+        )
+
+    def test_get_top_recommendations_skips_long_options_by_default(self):
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+        engine = self._import_engine()
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]),
+            patch.object(engine, "_fetch_watchlist_long_options") as mock_long,
+        ):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertEqual(result["long_calls"]["count"], 0)
+        self.assertEqual(result["long_puts"]["count"], 0)
+        mock_long.assert_not_called()
+
+    def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+        engine = self._import_engine()
+        csp = {
+            "ticker": "AAPL",
+            "stock_price": 150.0,
+            "option_type": "PUT",
+            "strike": 140.0,
+            "expiration": "20240315",
+            "dte": 21,
+            "mid_price": 1.55,
+            "premium_per_contract": 155.0,
+            "bid": 1.5,
+            "ask": 1.6,
+            "annualized_return": 20.0,
+            "iv_adjusted_return": 50.0,
+            "otm_pct": 6.7,
+            "delta": -0.18,
+            "implied_volatility": 0.35,
+            "open_interest": 300,
+            "volume": 200,
+            "score": 85.0,
+            "profile_type": "monthly",
+            "warnings": [],
+            "wheel_decision": {"contract_score": 85.0, "confidence_score": 100},
+        }
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[csp]),
+            patch.object(engine, "_fetch_watchlist_long_options", return_value={"calls": [], "puts": []}),
+        ):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertEqual(result["watchlist_csps"]["count"], 1)
+        self.assertEqual(result["enrichment"]["mode"], "none")
+
+    def test_get_top_recommendations_processes_positions(self):
+        engine = self._import_engine()
+
+        with patch("api.services.recommendations.score_contract") as mock_score:
+            mock_decision = MagicMock()
+            mock_decision.contract_score = 85.0
+            mock_decision.strike = 160
+            mock_decision.expiration = "20240315"
+            mock_decision.dte = 21
+            mock_decision.mid_price = 2.05
+            mock_decision.premium_per_contract = 205.0
+            mock_decision.annualized_return = 35.0
+            mock_decision.iv_adjusted_return = 30.0
+            mock_decision.otm_pct = 6.67
+            mock_decision.delta = 0.20
+            mock_decision.implied_volatility = 0.30
+            mock_decision.open_interest = 500
+            mock_decision.volume = 100
+            mock_decision.iv_rank = 0.6
+            mock_decision.iv_status = "normal"
+            mock_decision.iv_env_adjustment = 0
+            mock_decision.profile_type = "monthly"
+            mock_decision.size_fit = 1.0
+            mock_decision.expected_move_buffer = 0.05
+            mock_decision.breakeven = 158.0
+            mock_decision.breakeven_buffer_pct = 0.05
+            mock_decision.cash_required = 16000.0
+            mock_decision.score_details = {}
+            mock_decision.rationale = ["Good premium"]
+            mock_decision.warnings = []
+            mock_decision.to_dict.return_value = {"score": 85.0}
+            mock_score.return_value = mock_decision
+
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result["success"])
+        self.assertGreater(result["total_scored"], 0)
+        self.assertIn("signals", result)
+        self.assertIn("blocked_signals", result)
+        self.assertIn("covered_calls", result)
+        self.assertIn("watchlist_csps", result)
+        self.assertNotIn("recommendations", result)
+        self.assertNotIn("best_plays", result)
+        self.assertNotIn("lanes", result)
+        self.assertNotIn("blocked_candidates", result)
+
+    def test_get_top_recommendations_respects_limit(self):
+        engine = self._import_engine()
+
+        with patch("api.services.recommendations.score_contract") as mock_score:
+            mock_decision = MagicMock()
+            mock_decision.contract_score = 85.0
+            mock_decision.strike = 160
+            mock_decision.expiration = "20240315"
+            mock_decision.dte = 21
+            mock_decision.mid_price = 2.05
+            mock_decision.premium_per_contract = 205.0
+            mock_decision.annualized_return = 35.0
+            mock_decision.iv_adjusted_return = 30.0
+            mock_decision.otm_pct = 6.67
+            mock_decision.delta = 0.20
+            mock_decision.implied_volatility = 0.30
+            mock_decision.open_interest = 500
+            mock_decision.volume = 100
+            mock_decision.iv_rank = 0.6
+            mock_decision.iv_status = "normal"
+            mock_decision.iv_env_adjustment = 0
+            mock_decision.profile_type = "monthly"
+            mock_decision.size_fit = 1.0
+            mock_decision.expected_move_buffer = 0.05
+            mock_decision.breakeven = 158.0
+            mock_decision.breakeven_buffer_pct = 0.05
+            mock_decision.cash_required = 16000.0
+            mock_decision.score_details = {}
+            mock_decision.rationale = ["Good premium"]
+            mock_decision.warnings = []
+            mock_decision.to_dict.return_value = {}
+            mock_score.return_value = mock_decision
+
+            result = engine.get_top_recommendations(limit=1)
+
+        self.assertTrue(result["success"])
+        self.assertLessEqual(result["count"], 1)
+
+
+class TestRecommendationEngineStripPrefix(unittest.TestCase):
+    """Test ticker prefix stripping delegates to utils."""
+
+    def test_strip_ticker_prefix_delegates(self):
+        with patch("api.services.recommendations.clean_yfinance_ticker") as mock_clean:
+            mock_clean.return_value = "AAPL"
+            from api.services.recommendations import RecommendationEngine
+
+            engine = RecommendationEngine(
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+            )
+            result = engine._strip_ticker_prefix("US.AAPL")
+
+            self.assertEqual(result, "AAPL")
+            mock_clean.assert_called_once_with("US.AAPL")
+
+
+class TestRecommendationEngineSignals(unittest.TestCase):
+    """Test the unified signal recommendation structure."""
+
+    def setUp(self):
+        self.mock_connection_provider = MagicMock()
+        self.mock_config_provider = MagicMock()
+        self.mock_config_provider.config = {"cash_reserve_enabled": True}
+        self.mock_db = MagicMock()
+        self.mock_iv_earnings = MagicMock()
+        self.mock_portfolio_context_provider = MagicMock()
+        self.mock_portfolio_service_provider = MagicMock()
+        self.mock_watchlist_manager = MagicMock()
+        self.mock_options_data = MagicMock()
+        self.mock_cash_calculator = MagicMock()
+        self.mock_iv_earnings.get_iv_environment_score.return_value = (0, 0.5, "normal")
+        self.mock_iv_earnings.get_earnings_score_impact.return_value = (0, None)
+        self.mock_iv_earnings.get_earnings_info.return_value = {}
+
+        self.mock_conn = MagicMock()
+        self.mock_conn.get_stock_price.return_value = 150.0
+        self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
+
+        self.mock_portfolio_context = {
+            "positions": {
+                "AAPL": {"position": 200, "market_price": 150.0, "avg_cost": 145.0},
+            },
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "broker_buying_power": 50000.0,
+            "broker_buying_power_source": "available_cash",
+            "cash_available_for_csp": 50000.0,
+            "cash_reserved_for_csp": 0.0,
+            "open_short_put_collateral": 0.0,
+            "excess_liquidity": 50000.0,
+            "short_calls": {},
+            "short_puts": {},
+            "vix_regime": {"regime": "normal", "vix": 18.0},
+        }
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = self.mock_portfolio_context
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = []
+
+        self.mock_options_data._process_ticker_for_otm.return_value = {
+            "calls": [
+                {
+                    "strike": 160,
+                    "expiration": "20240315",
+                    "bid": 2.0,
+                    "ask": 2.10,
+                    "last": 2.05,
+                    "delta": 0.20,
+                    "implied_volatility": 0.30,
+                    "open_interest": 500,
+                    "volume": 100,
+                    "dte": 21,
+                },
+            ],
+            "puts": [
+                {
+                    "strike": 140,
+                    "expiration": "20240315",
+                    "bid": 1.50,
+                    "ask": 1.60,
+                    "last": 1.55,
+                    "delta": 0.18,
+                    "implied_volatility": 0.35,
+                    "open_interest": 300,
+                    "volume": 200,
+                    "dte": 21,
+                },
+            ],
+        }
+
+    def test_format_recommendation_preserves_source_fields(self):
+        engine = self._import_engine()
+
+        rec = engine._format_recommendation(
+            {
+                "ticker": "AAPL",
+                "option_type": "PUT",
+                "strike": 150.0,
+                "expiration": "20260529",
+                "dte": 21,
+                "mid_price": 1.25,
+                "premium_per_contract": 125.0,
+                "score": 88.0,
+                "annualized_return": 21.0,
+                "iv_adjusted_return": 18.0,
+                "otm_pct": 7.5,
+                "delta": -0.18,
+                "iv_rank": 52.0,
+                "iv_status": "normal",
+                "days_to_earnings": None,
+                "earnings_date": None,
+                "warnings": [],
+                "rationale": ["Strong"],
+                "max_contracts": 1,
+                "existing_position": 0,
+                "profile_type": "monthly",
+                "stock_price": 162.0,
+                "bid": 1.20,
+                "ask": 1.30,
+                "open_interest": 500,
+                "volume": 100,
+                "implied_volatility": 0.32,
+                "score_details": {},
+                "size_fit": 1.0,
+                "expected_move_buffer": 0.0,
+                "wheel_decision": {
+                    "price_source": "broker",
+                    "chain_source": "yfinance",
+                    "iv_source": "yfinance",
+                },
+                "from_watchlist": True,
+                "held_position": False,
+                "cash_required": 15000,
+                "breakeven": 148.75,
+                "breakeven_buffer_pct": 1.5,
+                "macro_multiplier": 1.0,
+                "score_rationale": "Balanced",
+                "remaining_gap_to_target": 0,
+                "risk_budget_used_pct": 0,
+                "stress_loss": 0,
+                "confidence_score": 72,
+                "covered_call_intent": "",
+                "signal_type": "csp",
+                "strategy": "wheel",
+                "broker_feasible": True,
+                "capital_required": 15000,
+                "risk_budget_used": 0,
+                "data_source": "broker",
+                "confidence": 72,
+                "price_source": "broker",
+                "chain_source": "yfinance",
+                "iv_source": "yfinance",
+                "from_yfinance": True,
+                "quote_quality": "tradable",
+                "blocked_reason_codes": [],
+                "research_only": False,
+            },
+            rank=1,
+        )
+
+        self.assertEqual(rec["price_source"], "broker")
+        self.assertEqual(rec["chain_source"], "yfinance")
+        self.assertEqual(rec["iv_source"], "yfinance")
+        self.assertTrue(rec["from_yfinance"])
+
+    def test_get_top_recommendations_keeps_low_confidence_yfinance_candidates_as_research_only(self):
+        engine = self._import_engine()
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+        self.mock_options_data._process_ticker_for_otm.return_value = {"calls": [], "puts": []}
+
+        low_conf_candidate = {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": 150.0,
+            "expiration": "20260529",
+            "dte": 21,
+            "mid_price": 1.25,
+            "premium_per_contract": 125.0,
+            "score": 88.0,
+            "annualized_return": 21.0,
+            "iv_adjusted_return": 18.0,
+            "otm_pct": 7.5,
+            "delta": -0.18,
+            "iv_rank": 52.0,
+            "iv_status": "normal",
+            "days_to_earnings": None,
+            "earnings_date": None,
+            "warnings": [],
+            "rationale": ["Fallback"],
+            "max_contracts": 1,
+            "existing_position": 0,
+            "profile_type": "monthly",
+            "stock_price": 162.0,
+            "bid": 1.20,
+            "ask": 1.30,
+            "open_interest": 500,
+            "volume": 100,
+            "implied_volatility": 0.32,
+            "score_details": {},
+            "size_fit": 1.0,
+            "expected_move_buffer": 0.0,
+            "wheel_decision": {
+                "contract_score": 88.0,
+                "confidence_score": 65,
+                "price_source": "yfinance",
+                "chain_source": "yfinance",
+                "iv_source": "yfinance",
+            },
+            "from_watchlist": True,
+            "held_position": False,
+            "cash_required": 15000,
+            "breakeven": 148.75,
+            "breakeven_buffer_pct": 1.5,
+            "macro_multiplier": 1.0,
+            "score_rationale": "Fallback",
+            "remaining_gap_to_target": 0,
+            "risk_budget_used_pct": 0,
+            "stress_loss": 0,
+            "confidence_score": 65,
+            "covered_call_intent": "",
+            "signal_type": "csp",
+            "strategy": "wheel",
+            "broker_feasible": True,
+            "capital_required": 15000,
+            "risk_budget_used": 0,
+            "data_source": "yfinance",
+            "confidence": 65,
+            "price_source": "yfinance",
+            "chain_source": "yfinance",
+            "iv_source": "yfinance",
+            "from_yfinance": True,
+            "quote_quality": "tradable",
+            "blocked_reason_codes": [],
+            "research_only": False,
+        }
+
+        with patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[low_conf_candidate]):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["blocked_reason_counts"].get("data_quality_blocked", 0), 0)
+        self.assertFalse(result["blocked_signals"])
+        self.assertTrue(result["signals"][0]["research_only"])
+        self.assertTrue(any("yfinance" in warning.lower() for warning in result["signals"][0]["warnings"]))
+
+    def test_get_top_recommendations_blocks_hard_blocked_yfinance_candidates(self):
+        engine = self._import_engine()
+        self.mock_portfolio_context["positions"] = {}
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+        self.mock_options_data._process_ticker_for_otm.return_value = {"calls": [], "puts": []}
+
+        hard_blocked_candidate = {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": 150.0,
+            "expiration": "20260529",
+            "dte": 21,
+            "mid_price": 1.25,
+            "premium_per_contract": 125.0,
+            "score": 88.0,
+            "annualized_return": 21.0,
+            "iv_adjusted_return": 18.0,
+            "otm_pct": 7.5,
+            "delta": -0.18,
+            "iv_rank": 52.0,
+            "iv_status": "normal",
+            "days_to_earnings": None,
+            "earnings_date": None,
+            "warnings": [],
+            "rationale": ["Fallback"],
+            "max_contracts": 1,
+            "existing_position": 0,
+            "profile_type": "monthly",
+            "stock_price": 162.0,
+            "bid": 1.20,
+            "ask": 1.30,
+            "open_interest": 500,
+            "volume": 100,
+            "implied_volatility": 0.32,
+            "score_details": {},
+            "size_fit": 1.0,
+            "expected_move_buffer": 0.0,
+            "wheel_decision": {
+                "contract_score": 88.0,
+                "confidence_score": 65,
+                "price_source": "yfinance",
+                "chain_source": "yfinance",
+                "iv_source": "yfinance",
+            },
+            "hard_blockers": ["missing_iv"],
+            "blocked_reason_codes": [],
+            "from_watchlist": True,
+            "held_position": False,
+            "cash_required": 15000,
+            "breakeven": 148.75,
+            "breakeven_buffer_pct": 1.5,
+            "macro_multiplier": 1.0,
+            "score_rationale": "Fallback",
+            "remaining_gap_to_target": 0,
+            "risk_budget_used_pct": 0,
+            "stress_loss": 0,
+            "confidence_score": 65,
+            "covered_call_intent": "",
+            "signal_type": "csp",
+            "strategy": "wheel",
+            "broker_feasible": True,
+            "capital_required": 15000,
+            "risk_budget_used": 0,
+            "data_source": "yfinance",
+            "confidence": 65,
+            "price_source": "yfinance",
+            "chain_source": "yfinance",
+            "iv_source": "yfinance",
+            "from_yfinance": True,
+            "quote_quality": "tradable",
+            "research_only": False,
+        }
+
+        with patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[hard_blocked_candidate]):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["blocked_reason_counts"].get("data_quality_blocked"), 1)
+        self.assertEqual(result["blocked_signals"][0]["reason_text"], "Hard blockers present")
+        self.assertTrue(result["blocked_signals"][0]["from_yfinance"])
+
+    def test_zero_cash_watchlist_csp_skips_before_chain(self):
+        engine = self._import_engine()
+        self.mock_portfolio_context["positions"] = {}
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+        self.mock_portfolio_context["cash_available_for_csp"] = 0.0
+        moomoo = pytest.importorskip("moomoo")
+        future_exp = (datetime.now() + timedelta(days=35)).strftime("%Y%m%d")
+
+        class FakeConnection:
+            def is_connected(self):
+                return True
+
+            def get_cached_stock_price(self, ticker):
+                return 150.0
+
+            def get_stock_price(self, ticker):
+                return 150.0
+
+            def get_option_expiration_dates(self, ticker):
+                return moomoo.RET_OK, pd.DataFrame({"expiration_date": [future_exp]})
+
+            def get_option_chain(self, ticker, exp_str, right, target_strike=None):
+                return {
+                    "options": [
+                        {
+                            "strike": 140.0,
+                            "expiration": exp_str,
+                            "option_type": "PUT",
+                            "dte": 35,
+                            "bid": 1.5,
+                            "ask": 1.6,
+                            "last": 1.55,
+                            "open_interest": 300,
+                            "volume": 200,
+                            "delta": -0.18,
+                            "gamma": 0.02,
+                            "theta": -0.03,
+                            "vega": 0.04,
+                        }
+                    ]
+                }
+
+        fake_decision = MagicMock()
+        fake_decision.hard_blockers = []
+        fake_decision.contract_score = 75.0
+        fake_decision.max_contracts = 1
+        fake_decision.recommended_contracts = 1
+        fake_decision.strike = 140.0
+        fake_decision.expiration = future_exp
+        fake_decision.dte = 21
+        fake_decision.mid_price = 1.55
+        fake_decision.premium_per_contract = 155.0
+        fake_decision.bid = 1.5
+        fake_decision.ask = 1.6
+        fake_decision.annualized_return = 18.0
+        fake_decision.iv_adjusted_return = 16.0
+        fake_decision.otm_pct = 6.7
+        fake_decision.delta = -0.18
+        fake_decision.implied_volatility = 0.32
+        fake_decision.open_interest = 300
+        fake_decision.volume = 200
+        fake_decision.iv_rank = 50.0
+        fake_decision.iv_status = "normal"
+        fake_decision.iv_env_adjustment = 0
+        fake_decision.profile_type = "monthly"
+        fake_decision.earnings_date = None
+        fake_decision.days_to_earnings = None
+        fake_decision.earnings_adjustment = 0
+        fake_decision.size_fit = 1.0
+        fake_decision.expected_move_buffer = 0.0
+        fake_decision.wheel_decision = {}
+        fake_decision.score_details = {}
+        fake_decision.rationale = ["Good premium"]
+        fake_decision.warnings = []
+        fake_decision.breakeven = 138.45
+        fake_decision.breakeven_buffer_pct = 1.0
+        fake_decision.cash_required = 14000.0
+        fake_decision.from_yfinance = False
+        fake_decision.price_source = "broker"
+        fake_decision.chain_source = "broker"
+        fake_decision.iv_source = "broker"
+        fake_decision.data_source = "broker"
+        fake_decision.to_dict.return_value = {}
+
+        with (
+            patch.object(engine, "_get_connection", return_value=FakeConnection()),
+            patch.object(engine, "_score_csp_contract", return_value=fake_decision),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine._fetch_watchlist_csp_moomoo("AAPL", self.mock_portfolio_context)
+
+        self.assertIsInstance(result, list)
+        self.assertTrue(result[0].get("_skip_diagnostic"))
+        self.assertEqual(result[0].get("reason_code"), "no_cash_fit")
+
+    def _import_engine(self):
+        from api.services.recommendations import RecommendationEngine
+
+        return RecommendationEngine(
+            self.mock_connection_provider,
+            self.mock_config_provider,
+            self.mock_db,
+            self.mock_iv_earnings,
+            self.mock_portfolio_context_provider,
+            self.mock_portfolio_service_provider,
+            self.mock_watchlist_manager,
+            self.mock_options_data,
+            self.mock_cash_calculator,
+        )
+
+    def test_signals_present_in_response(self):
+        """Response should contain a unified signals list and no legacy wrappers."""
+        engine = self._import_engine()
+        with patch("api.services.recommendations.score_contract") as mock_score:
+            mock_decision = MagicMock()
+            mock_decision.contract_score = 85.0
+            mock_decision.strike = 160
+            mock_decision.expiration = "20240315"
+            mock_decision.dte = 21
+            mock_decision.mid_price = 2.05
+            mock_decision.premium_per_contract = 205.0
+            mock_decision.annualized_return = 35.0
+            mock_decision.iv_adjusted_return = 30.0
+            mock_decision.otm_pct = 6.67
+            mock_decision.delta = 0.20
+            mock_decision.implied_volatility = 0.30
+            mock_decision.open_interest = 500
+            mock_decision.volume = 100
+            mock_decision.iv_rank = 0.6
+            mock_decision.iv_status = "normal"
+            mock_decision.profile_type = "monthly"
+            mock_decision.size_fit = 1.0
+            mock_decision.expected_move_buffer = 0.05
+            mock_decision.breakeven = 158.0
+            mock_decision.breakeven_buffer_pct = 0.05
+            mock_decision.cash_required = 16000.0
+            mock_decision.score_details = {}
+            mock_decision.rationale = ["Good premium"]
+            mock_decision.warnings = []
+            mock_decision.to_dict.return_value = {"score": 85.0}
+            mock_score.return_value = mock_decision
+
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertIn("signals", result)
+        self.assertIn("blocked_signals", result)
+        self.assertNotIn("lanes", result)
+        self.assertNotIn("best_plays", result)
+        self.assertNotIn("recommendations", result)
+        self.assertNotIn("blocked_candidates", result)
+        self.assertIn("broker_buying_power", result)
+        self.assertIn("cash_available_for_csp", result)
+        self.assertIn("cash_reserved_for_csp", result)
+
+    def test_signals_contains_only_calls_for_covered_call_signals(self):
+        """Covered call signals should only contain CALL options."""
+        engine = self._import_engine()
+        with patch("api.services.recommendations.score_contract") as mock_score:
+            mock_decision = MagicMock()
+            mock_decision.contract_score = 85.0
+            mock_decision.strike = 160
+            mock_decision.expiration = "20240315"
+            mock_decision.dte = 21
+            mock_decision.mid_price = 2.05
+            mock_decision.premium_per_contract = 205.0
+            mock_decision.annualized_return = 35.0
+            mock_decision.iv_adjusted_return = 30.0
+            mock_decision.otm_pct = 6.67
+            mock_decision.delta = 0.20
+            mock_decision.implied_volatility = 0.30
+            mock_decision.open_interest = 500
+            mock_decision.volume = 100
+            mock_decision.iv_rank = 0.6
+            mock_decision.iv_status = "normal"
+            mock_decision.iv_env_adjustment = 0
+            mock_decision.profile_type = "monthly"
+            mock_decision.size_fit = 1.0
+            mock_decision.expected_move_buffer = 0.05
+            mock_decision.breakeven = 158.0
+            mock_decision.breakeven_buffer_pct = 0.05
+            mock_decision.cash_required = 16000.0
+            mock_decision.score_details = {}
+            mock_decision.rationale = ["Good premium"]
+            mock_decision.warnings = []
+            mock_decision.to_dict.return_value = {"score": 85.0}
+            mock_score.return_value = mock_decision
+
+            result = engine.get_top_recommendations(limit=5)
+
+        for rec in result["signals"]:
+            if rec["signal_type"] != "covered_call":
+                continue
+            self.assertEqual(rec["option_type"], "CALL")
+
+    def test_held_position_flag_in_watchlist_csp(self):
+        """Watchlist CSP signals should have held_position flag."""
+        engine = self._import_engine()
+
+        # Set up watchlist with AAPL (which is already in positions)
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+
+        with patch("api.services.recommendations.score_contract") as mock_score:
+            mock_decision = MagicMock()
+            mock_decision.contract_score = 85.0
+            mock_decision.strike = 160
+            mock_decision.expiration = "20240315"
+            mock_decision.dte = 21
+            mock_decision.mid_price = 2.05
+            mock_decision.premium_per_contract = 205.0
+            mock_decision.annualized_return = 35.0
+            mock_decision.iv_adjusted_return = 30.0
+            mock_decision.otm_pct = 6.67
+            mock_decision.delta = 0.20
+            mock_decision.implied_volatility = 0.30
+            mock_decision.open_interest = 500
+            mock_decision.volume = 100
+            mock_decision.iv_rank = 0.6
+            mock_decision.iv_status = "normal"
+            mock_decision.iv_env_adjustment = 0
+            mock_decision.profile_type = "monthly"
+            mock_decision.size_fit = 1.0
+            mock_decision.expected_move_buffer = 0.05
+            mock_decision.breakeven = 158.0
+            mock_decision.breakeven_buffer_pct = 0.05
+            mock_decision.cash_required = 16000.0
+            mock_decision.score_details = {}
+            mock_decision.rationale = ["Good premium"]
+            mock_decision.warnings = []
+            mock_decision.to_dict.return_value = {"score": 85.0}
+            mock_score.return_value = mock_decision
+
+            result = engine.get_top_recommendations(limit=5)
+
+        # Check that held_position appears in the CSP signal subset
+        for rec in result["signals"]:
+            if rec["signal_type"] != "csp":
+                continue
+            self.assertIn("held_position", rec)
+
+    def test_legacy_recommendation_fields_removed(self):
+        """Legacy top-level recommendation fields should no longer be present."""
+        engine = self._import_engine()
+        with patch("api.services.recommendations.score_contract") as mock_score:
+            mock_decision = MagicMock()
+            mock_decision.contract_score = 85.0
+            mock_decision.strike = 160
+            mock_decision.expiration = "20240315"
+            mock_decision.dte = 21
+            mock_decision.mid_price = 2.05
+            mock_decision.premium_per_contract = 205.0
+            mock_decision.annualized_return = 35.0
+            mock_decision.iv_adjusted_return = 30.0
+            mock_decision.otm_pct = 6.67
+            mock_decision.delta = 0.20
+            mock_decision.implied_volatility = 0.30
+            mock_decision.open_interest = 500
+            mock_decision.volume = 100
+            mock_decision.iv_rank = 0.6
+            mock_decision.iv_status = "normal"
+            mock_decision.iv_env_adjustment = 0
+            mock_decision.profile_type = "monthly"
+            mock_decision.size_fit = 1.0
+            mock_decision.expected_move_buffer = 0.05
+            mock_decision.breakeven = 158.0
+            mock_decision.breakeven_buffer_pct = 0.05
+            mock_decision.cash_required = 16000.0
+            mock_decision.score_details = {}
+            mock_decision.rationale = ["Good premium"]
+            mock_decision.warnings = []
+            mock_decision.to_dict.return_value = {"score": 85.0}
+            mock_score.return_value = mock_decision
+
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertIn("signals", result)
+        self.assertNotIn("recommendations", result)
+        self.assertNotIn("best_plays", result)
+        self.assertNotIn("lanes", result)
+
     def test_yfinance_csp_skips_chain_when_no_research_only_strike_fits(self):
         """Research-only mode still skips impossible CSPs before chain fetch."""
         engine = self._import_engine()
         portfolio_context = dict(self.mock_portfolio_context)
         portfolio_context["cash_available_for_csp"] = 100.0
 
-        mock_ticker = MagicMock()
-        mock_ticker.history.return_value = pd.DataFrame({"Close": [200.0]})
-
-        with patch("api.services.recommendations.get_yfinance_ticker", return_value=mock_ticker):
-            result = engine._fetch_yfinance_csp_candidates("AAPL", portfolio_context)
+        with patch.object(engine, "_fetch_watchlist_csp_moomoo") as mock_fetch:
+            mock_fetch.return_value = [
+                engine._make_skip_diagnostic("AAPL", "no_cash_fit", "No CSP strike fits buying power")
+            ]
+            result = engine._fetch_watchlist_ticker_csp("AAPL", portfolio_context)
 
         self.assertTrue(any(r.get("reason_code") == "no_cash_fit" for r in result))
 
@@ -1904,12 +2877,9 @@ class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
         )
 
         with patch.object(engine, "_fetch_watchlist_csp_moomoo") as mock_fetch:
-            # Return a candidate that score_contract would normally block for no_bid
-            mock_fetch.side_effect = lambda t, pc, **kwargs: None  # Trigger yfinance fallback
-            with patch.object(engine, "_fetch_yfinance_csp_candidates") as mock_yf:
-                mock_yf.return_value = [
-                    engine._make_skip_diagnostic("BLOCKED", "no_bid", "No executable bid - ask-only quote")
-                ]
+            mock_fetch.return_value = [
+                engine._make_skip_diagnostic("BLOCKED", "no_bid", "No executable bid - ask-only quote")
+            ]
             result = engine.get_top_recommendations(limit=5, include_long_options=True)
 
         self.assertIn("blocked_signals", result)
@@ -2258,30 +3228,6 @@ class TestCSPCashFit(unittest.TestCase):
 
         self.assertTrue(decision.hard_blockers)
         self.assertIn("missing_iv", decision.blocked_reason_codes)
-
-    def test_yfinance_csp_returns_no_cash_fit_when_no_strike_fits(self):
-        """yfinance path returns no_cash_fit diagnostic when no OTM strike fits."""
-        engine = self._import_engine()
-        portfolio = {
-            "cash_available_for_csp": 5000.0,
-            "available_cash": 5000.0,
-            "broker_buying_power": 5000.0,
-        }
-        mock_ticker = MagicMock()
-        mock_ticker.history.return_value = pd.DataFrame({"Close": [100.0]})
-
-        mock_conn = MagicMock()
-        mock_conn.get_cached_stock_price.return_value = None
-        with (
-            patch("api.services.recommendations.get_yfinance_ticker", return_value=mock_ticker),
-            patch.object(engine, "_get_connection", return_value=mock_conn),
-        ):
-            result = engine._fetch_yfinance_csp_candidates("EXPENSIVE", portfolio)
-
-        self.assertEqual(len(result), 1)
-        self.assertTrue(result[0].get("_skip_diagnostic"))
-        self.assertEqual(result[0]["reason_code"], "no_cash_fit")
-        mock_ticker.option_chain.assert_not_called()
 
 
 if __name__ == "__main__":

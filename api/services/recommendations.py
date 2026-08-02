@@ -7,15 +7,7 @@ import logging
 import time
 from datetime import datetime
 
-import pandas as pd
-
-from api.services.utils import (
-    clean_yfinance_ticker,
-    get_yfinance_history,
-    get_yfinance_option_chain,
-    get_yfinance_options,
-    get_yfinance_ticker,
-)
+from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
 from core.scoring_factors import premium_velocity_per_day
 from core.ticker_utils import canonical_underlying
@@ -202,7 +194,6 @@ class RecommendationEngine:
         self._options_data_provider = options_data_provider
         self._cash_calculator_provider = cash_calculator_provider
         self._yfinance_cache = {}
-        self._yfinance_iv_cache = {}
         self._yfinance_cache_ttl = 300  # 5 minutes
 
     def _get_connection(self):
@@ -315,16 +306,9 @@ class RecommendationEngine:
     def _score_csp_contract(
         self, contract, ticker, stock_price, dte, portfolio_context, macro_regime, research_only_mode: bool = False
     ):
-        """Enrich missing IV/greeks and score a CSP contract. Used by both moomoo and yfinance paths."""
-        from core.greeks import prepare_option_for_scoring
-
-        iv_val, delta_val = prepare_option_for_scoring(
-            contract,
-            ticker,
-            stock_price,
-            self._yfinance_iv_cache,
-            chain_fetcher=get_yfinance_option_chain,
-        )
+        """Score a CSP contract from broker data (no external enrichment)."""
+        iv_val = float(contract.get("implied_volatility", 0) or 0)
+        delta_val = float(contract.get("delta", 0) or 0)
         if iv_val <= 0:
             return _make_failed_csp_decision(
                 ticker, contract, "Missing implied volatility after enrichment", ["missing_iv"]
@@ -373,14 +357,10 @@ class RecommendationEngine:
 
     def _fetch_watchlist_ticker_csp(self, ticker, portfolio_context, ignore_cash_limits: bool = False):
         """
-        Fetch CSP candidates for a watchlist ticker.
-        Tries Moomoo first, falls back to yfinance.
+        Fetch CSP candidates for a watchlist ticker (Moomoo broker data only).
         Returns list of candidate dicts, a list with a skip diagnostic, or None on error.
         """
-        candidates = self._fetch_watchlist_csp_moomoo(ticker, portfolio_context, ignore_cash_limits=ignore_cash_limits)
-        if candidates is not None:
-            return candidates
-        return self._fetch_yfinance_csp_candidates(ticker, portfolio_context, ignore_cash_limits=ignore_cash_limits)
+        return self._fetch_watchlist_csp_moomoo(ticker, portfolio_context, ignore_cash_limits=ignore_cash_limits)
 
     def _fetch_watchlist_long_options(self, ticker, portfolio_context):
         """Fetch lean research-only long Call/Put ideas from the existing scorer."""
@@ -757,259 +737,6 @@ class RecommendationEngine:
 
         except Exception as e:
             logger.debug(f"Watchlist {ticker}: Moomoo CSP path failed ({e}), will try yfinance")
-            return None
-
-    def _fetch_yfinance_csp_candidates(self, ticker, portfolio_context, ignore_cash_limits: bool = False):
-        """
-        Fallback CSP fetch using yfinance.
-        Returns list of candidate dicts, a list with a skip diagnostic, or None on error.
-        """
-        try:
-            cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", 0) or 0)
-            min_csp_buying_power = (
-                float(
-                    (getattr(self, "_growth_screener_config", {}) or {})
-                    .get("screener_profile", {})
-                    .get("min_csp_buying_power", 5000)
-                )
-                if getattr(self, "_growth_screener_config", None)
-                else 5000.0
-            )
-            research_only_mode = ignore_cash_limits or cash_available_for_csp < min_csp_buying_power
-            require_cash_fit = not ignore_cash_limits
-            if cash_available_for_csp < min_csp_buying_power and not ignore_cash_limits:
-                logger.debug(
-                    f"Watchlist {ticker}: CSP cash ${cash_available_for_csp:.2f} below minimum "
-                    f"${min_csp_buying_power:.2f}; skipping yfinance fallback"
-                )
-                return [
-                    self._make_skip_diagnostic(
-                        ticker, "no_cash_fit", f"No CSP strike fits buying power (${cash_available_for_csp:.0f})"
-                    )
-                ]
-
-            # Try cached Moomoo price first (zero API calls).
-            cached_price = None
-            conn = self._get_connection()
-            if conn:
-                cached_price = conn.get_cached_stock_price(ticker)
-            if cached_price is not None and cached_price > 0:
-                if not self._has_any_affordable_otm_strike(
-                    cached_price, portfolio_context, require_cash_fit=require_cash_fit
-                ):
-                    logger.debug(
-                        f"Watchlist {ticker}: no OTM strike fits cached price ${cached_price:.2f} "
-                        f"and buying power ${cash_available_for_csp:.2f} (yfinance pre-check)"
-                    )
-                    return [
-                        self._make_skip_diagnostic(
-                            ticker, "no_cash_fit", f"No CSP strike fits buying power (${cash_available_for_csp:.0f})"
-                        )
-                    ]
-
-            hist = get_yfinance_history(ticker, period="1d", ticker_factory=get_yfinance_ticker)
-            if hist is None or hist.empty:
-                logger.warning(f"Watchlist {ticker}: yfinance history empty")
-                return [self._make_skip_diagnostic(ticker, "no_yfinance_data", "yfinance history empty")]
-            stock_price = float(hist["Close"].iloc[-1])
-
-            # Re-check affordability with the live yfinance price.
-            if not self._has_any_affordable_otm_strike(
-                stock_price, portfolio_context, require_cash_fit=require_cash_fit
-            ):
-                logger.debug(
-                    f"Watchlist {ticker}: no OTM strike in 5-15% range fits buying power ${cash_available_for_csp:.2f}"
-                )
-                return [
-                    self._make_skip_diagnostic(
-                        ticker, "no_cash_fit", f"No CSP strike fits buying power (${cash_available_for_csp:.0f})"
-                    )
-                ]
-
-            opts = get_yfinance_options(ticker, ticker_factory=get_yfinance_ticker)
-            if not opts:
-                logger.warning(f"Watchlist {ticker}: no option expirations available from yfinance")
-                return [self._make_skip_diagnostic(ticker, "no_option_chain", "No option expirations from yfinance")]
-
-            growth_cfg = getattr(self, "_growth_screener_config", None)
-            sp = (growth_cfg.get("screener_profile", {}) or {}) if growth_cfg else {}
-            min_dte = sp.get("csp_min_dte", 30)
-            max_dte = sp.get("csp_max_dte", 45)
-            pref_dte = sp.get("csp_preferred_dte", 37)
-
-            today = datetime.now()
-            valid_expirations = []
-            for exp in opts:
-                try:
-                    exp_date = datetime.strptime(exp, "%Y-%m-%d")
-                    dte = (exp_date - today).days
-                    if min_dte <= dte <= max_dte:
-                        valid_expirations.append(exp)
-                except ValueError:
-                    continue
-
-            if not valid_expirations:
-                logger.warning(f"Watchlist {ticker}: no expiration with DTE {min_dte}-{max_dte} found")
-                return [
-                    self._make_skip_diagnostic(
-                        ticker, "no_valid_dte", f"No expiration with DTE {min_dte}-{max_dte} found"
-                    )
-                ]
-
-            valid_expirations = sorted(
-                valid_expirations, key=lambda e: abs(pref_dte - (datetime.strptime(e, "%Y-%m-%d") - today).days)
-            )
-            expirations_to_check = valid_expirations[:2]
-
-            candidates = []
-            blocked_count = 0
-
-            from core.wheel_decision import disabled_macro_context
-
-            macro_regime = disabled_macro_context()
-
-            for target_exp in expirations_to_check:
-                try:
-                    chain = get_yfinance_option_chain(
-                        ticker,
-                        target_exp,
-                        ticker_factory=get_yfinance_ticker,
-                    )
-                    if not chain:
-                        continue
-                    puts = chain.get("puts")
-                    if puts is None or puts.empty:
-                        continue
-                    puts = puts.copy()
-
-                    # Build list of affordable OTM strikes, pick highest affordable
-                    affordable_strikes = []
-                    for _, put_row in puts.iterrows():
-                        strike = float(put_row["strike"])
-                        if strike >= stock_price:
-                            continue
-                        cash_required = strike * 100
-                        if require_cash_fit and cash_required > cash_available_for_csp:
-                            continue
-                        otm_pct = ((stock_price - strike) / stock_price) * 100
-                        min_otm_pct = float(sp.get("csp_min_otm_pct", 5) or 5)
-                        max_otm_pct = float(sp.get("csp_max_otm_pct", 15) or 15)
-                        if otm_pct < min_otm_pct or otm_pct > max_otm_pct:
-                            continue
-                        affordable_strikes.append((strike, put_row))
-
-                    # Pick the highest affordable strike (closest to ATM within OTM range)
-                    affordable_strikes.sort(key=lambda x: x[0], reverse=True)
-
-                    for strike, put_row in affordable_strikes:
-                        bid = float(put_row["bid"]) if not pd.isna(put_row["bid"]) else 0
-                        ask = float(put_row["ask"]) if not pd.isna(put_row["ask"]) else 0
-                        last_price = float(put_row["lastPrice"]) if not pd.isna(put_row["lastPrice"]) else 0
-
-                        if bid <= 0 and ask <= 0 and last_price <= 0:
-                            continue
-
-                        mid_price = (bid + ask) / 2 if bid > 0 and ask > 0 else max(bid, ask, last_price)
-                        spread_pct = ((ask - bid) / mid_price) * 100 if bid > 0 and ask > 0 and mid_price > 0 else 100
-                        if spread_pct > 100:
-                            continue
-
-                        dte = (datetime.strptime(target_exp, "%Y-%m-%d") - today).days
-
-                        contract = {
-                            "strike": strike,
-                            "expiration": target_exp.replace("-", ""),
-                            "option_type": "PUT",
-                            "bid": bid,
-                            "ask": ask,
-                            "last": last_price,
-                            "dte": dte,
-                            "implied_volatility": float(put_row["impliedVolatility"])
-                            if not pd.isna(put_row.get("impliedVolatility"))
-                            else 0,
-                            "open_interest": int(put_row["openInterest"])
-                            if not pd.isna(put_row["openInterest"])
-                            else 0,
-                            "volume": int(put_row["volume"]) if not pd.isna(put_row["volume"]) else 0,
-                        }
-
-                        contract["from_yfinance"] = True
-                        contract["price_source"] = "yfinance"
-                        contract["chain_source"] = "yfinance"
-                        contract["iv_source"] = "yfinance"
-                        contract["data_source"] = "yfinance"
-
-                        if not _is_valid_external_option(contract, stock_price):
-                            continue
-
-                        decision = self._score_csp_contract(
-                            contract,
-                            ticker,
-                            stock_price,
-                            dte,
-                            portfolio_context,
-                            macro_regime,
-                            research_only_mode=research_only_mode,
-                        )
-
-                        if decision is None or decision.hard_blockers:
-                            blocked_count += 1
-                            if decision and decision.hard_blockers and decision.blocked_reason_codes:
-                                candidates.append(
-                                    self._make_skip_diagnostic(
-                                        ticker, decision.blocked_reason_codes[0], decision.hard_blockers[0]
-                                    )
-                                )
-                            continue
-
-                        premium_velocity_per_day(decision.premium_per_contract, decision.dte)
-
-                        result = _format_decision_to_candidate(
-                            ticker,
-                            stock_price,
-                            decision,
-                            extra_warnings=["Data from yfinance (not Moomoo) - verify before trading"],
-                            cash_reserve_enabled=self.config.get("cash_reserve_enabled", True),
-                        )
-                        reason = (
-                            "Best-plays mode: cash and buying-power limits ignored for ranking"
-                            if ignore_cash_limits
-                            else "Research-only yfinance fallback candidate - verify before trading"
-                        )
-                        _mark_research_only_candidate(
-                            result,
-                            reason,
-                        )
-                        candidates.append(result)
-
-                except Exception:
-                    logger.warning("YFinance candidate scoring failed for %s", ticker, exc_info=True)
-                    continue
-
-            if not candidates:
-                return [self._make_skip_diagnostic(ticker, "blocked_by_scoring", "All candidates filtered by scoring")]
-
-            # Separate actual candidates from diagnostics
-            real_candidates = [c for c in candidates if not c.get("_skip_diagnostic")]
-            diagnostics = [c for c in candidates if c.get("_skip_diagnostic")]
-
-            if not real_candidates:
-                return diagnostics or [
-                    self._make_skip_diagnostic(ticker, "blocked_by_scoring", "All candidates filtered by scoring")
-                ]
-
-            real_candidates.sort(
-                key=lambda x: (
-                    premium_velocity_per_day(x.get("premium_per_contract", 0), x.get("dte", 0)),
-                    x.get("annualized_return", 0),
-                    x.get("score", 0) or 0,
-                ),
-                reverse=True,
-            )
-            return real_candidates[:3]
-
-        except Exception as e:
-            logger.warning(f"Watchlist {ticker}: yfinance CSP fetch failed: {e}")
             return None
 
     def _make_skip_diagnostic(self, ticker, reason_code, reason_text):

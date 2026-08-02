@@ -141,7 +141,7 @@ def _attach_top_recommendations_policy(payload):
         build_research_source_policy(
             "top_recommendations",
             payload,
-            fallback_sources_allowed=["yfinance", "openbb", "alpha_vantage"],
+            fallback_sources_allowed=[],
         ),
     )
 
@@ -312,7 +312,7 @@ def otm_options():
             build_research_source_policy(
                 "otm_options",
                 result,
-                fallback_sources_allowed=["yfinance"],
+                fallback_sources_allowed=[],
             ),
         )
     )
@@ -416,7 +416,7 @@ def get_option_expirations():
                 build_research_source_policy(
                     "option_expirations",
                     result,
-                    fallback_sources_allowed=["yfinance"],
+                    fallback_sources_allowed=[],
                 ),
             )
         )
