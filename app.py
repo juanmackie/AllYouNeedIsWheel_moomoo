@@ -8,9 +8,10 @@ import json
 import os
 
 from dotenv import load_dotenv
-from flask import current_app, redirect, render_template, request, url_for
 
 load_dotenv()  # Load .env before any config is read
+
+from flask import current_app, redirect, render_template, request, url_for
 
 from api import create_app
 from config import apply_env_overrides
@@ -24,6 +25,12 @@ logger = get_logger("autotrader.app", "api")
 
 # Global task manager for background tasks
 task_manager = BackgroundTaskManager()
+
+# Module-level app handle. Built lazily by ensure_app() so that importing
+# this module never opens the database, starts threads, or writes to disk.
+_app = None
+
+__all__ = ["create_application", "ensure_app", "start_runtime"]
 
 
 def _resolve_local_path(path_value, base_dir):
@@ -153,112 +160,110 @@ def create_application():
     return app
 
 
-# Create the application
-app = create_application()
+def register_web_routes(app):
+    """Register page routes on an application instance (called once)."""
 
-# Server-side safety check: block REAL + readonly=false at startup
-connection_config = app.config.get("connection_config", {})
-if connection_config.get("portfolio_env") == "REAL" and not connection_config.get("readonly", True):
-    confirm = os.environ.get("CONFIRM_LIVE_TRADING", "").strip().lower()
-    if confirm not in {"1", "true", "yes", "y", "on"}:
-        logger.critical(
-            "STARTUP BLOCKED: portfolio_env=REAL with readonly=false requires "
-            "CONFIRM_LIVE_TRADING=true env var. Falling back to SIMULATE."
+    @app.route("/")
+    def index():
+        """Render the dashboard page"""
+        logger.info("Rendering dashboard page")
+        return render_template("dashboard.html")
+
+    @app.route("/favicon.ico")
+    def favicon():
+        return "", 204
+
+    @app.route("/portfolio")
+    def portfolio():
+        """Render the portfolio page"""
+        logger.info("Rendering portfolio page")
+        return render_template("portfolio.html")
+
+    @app.route("/options")
+    def options():
+        """Temporarily redirect options page to home"""
+        logger.info("Options page accessed but currently unavailable - redirecting to home")
+        return redirect(url_for("index"))
+
+    @app.route("/rollover")
+    def rollover():
+        """Render the rollover page for options approaching strike price"""
+        logger.info("Rendering rollover page")
+        return render_template("rollover.html")
+
+    @app.errorhandler(404)
+    def page_not_found(e):
+        """Handle 404 errors"""
+        logger.warning(f"404 error: {request.path}")
+        return render_template("error.html", error_code=404, message="Page not found"), 404
+
+    @app.errorhandler(500)
+    def server_error(e):
+        """Handle 500 errors"""
+        logger.error(f"500 error: {str(e)}")
+        return render_template("error.html", error_code=500, message="Server error"), 500
+
+
+def ensure_app():
+    """Build (once) and return the application. Explicit entry points only."""
+    global _app
+    if _app is None:
+        _app = create_application()
+        register_web_routes(_app)
+    return _app
+
+
+def start_runtime(app):
+    """Start runtime services (safety gate, health monitor, scheduler).
+
+    Called only from explicit entry points (run_api.py, python app.py).
+    Importing this module or ensure_app() must NOT start threads or
+    background work; only start_runtime() does.
+    """
+    # Server-side safety check: block REAL + readonly=false at startup
+    connection_config = app.config.get("connection_config", {})
+    if connection_config.get("portfolio_env") == "REAL" and not connection_config.get("readonly", True):
+        confirm = os.environ.get("CONFIRM_LIVE_TRADING", "").strip().lower()
+        if confirm not in {"1", "true", "yes", "y", "on"}:
+            logger.critical(
+                "STARTUP BLOCKED: portfolio_env=REAL with readonly=false requires "
+                "CONFIRM_LIVE_TRADING=true env var. Falling back to SIMULATE."
+            )
+            connection_config["portfolio_env"] = "SIMULATE"
+            connection_config["readonly"] = True
+
+    # Start health monitor
+    try:
+        task_manager.start_health_monitor(interval=60)
+        atexit.register(task_manager.stop_health_monitor)
+    except Exception as e:
+        logger.error(f"Failed to start health monitor: {e}")
+
+    # Start background scheduler (earnings updater)
+    try:
+        from core.scheduler import start_scheduler, stop_scheduler
+
+        started = start_scheduler(
+            db=app.config.get("database"),
+            app=app,
+            earnings_ticker_provider=_build_scheduler_earnings_ticker_provider(app),
+            earnings_service_provider=_build_scheduler_earnings_service_provider(),
+            warm_cache_service_provider=_build_scheduler_warm_cache_provider(),
         )
-        connection_config["portfolio_env"] = "SIMULATE"
-        connection_config["readonly"] = True
-
-# Start health monitor
-try:
-    task_manager.start_health_monitor(interval=60)
-    atexit.register(task_manager.stop_health_monitor)
-except Exception as e:
-    logger.error(f"Failed to start health monitor: {e}")
-
-# Start background scheduler (earnings updater)
-try:
-    from core.scheduler import start_scheduler, stop_scheduler
-
-    started = start_scheduler(
-        db=app.config.get("database"),
-        app=app,
-        earnings_ticker_provider=_build_scheduler_earnings_ticker_provider(app),
-        earnings_service_provider=_build_scheduler_earnings_service_provider(),
-        warm_cache_service_provider=_build_scheduler_warm_cache_provider(),
-    )
-    if started:
-        logger.info("Background scheduler started (this process owns the lock)")
-    else:
-        logger.info("Background scheduler skipped (another process owns the lock)")
-    atexit.register(stop_scheduler)
-except Exception as e:
-    logger.error(f"Failed to start background scheduler: {e}")
-
-
-# Web routes
-@app.route("/")
-def index():
-    """
-    Render the dashboard page
-    """
-    logger.info("Rendering dashboard page")
-    return render_template("dashboard.html")
-
-
-@app.route("/favicon.ico")
-def favicon():
-    return "", 204
-
-
-@app.route("/portfolio")
-def portfolio():
-    """
-    Render the portfolio page
-    """
-    logger.info("Rendering portfolio page")
-    return render_template("portfolio.html")
-
-
-@app.route("/options")
-def options():
-    """
-    Temporarily redirect options page to home
-    """
-    logger.info("Options page accessed but currently unavailable - redirecting to home")
-    return redirect(url_for("index"))
-
-
-@app.route("/rollover")
-def rollover():
-    """
-    Render the rollover page for options approaching strike price
-    """
-    logger.info("Rendering rollover page")
-    return render_template("rollover.html")
-
-
-@app.errorhandler(404)
-def page_not_found(e):
-    """
-    Handle 404 errors
-    """
-    logger.warning(f"404 error: {request.path}")
-    return render_template("error.html", error_code=404, message="Page not found"), 404
-
-
-@app.errorhandler(500)
-def server_error(e):
-    """
-    Handle 500 errors
-    """
-    logger.error(f"500 error: {str(e)}")
-    return render_template("error.html", error_code=500, message="Server error"), 500
+        if started:
+            logger.info("Background scheduler started (this process owns the lock)")
+        else:
+            logger.info("Background scheduler skipped (another process owns the lock)")
+        atexit.register(stop_scheduler)
+    except Exception as e:
+        logger.error(f"Failed to start background scheduler: {e}")
 
 
 if __name__ == "__main__":
-    # Get port from environment variable or use default
+    application = ensure_app()
+    start_runtime(application)
     port = int(os.environ.get("PORT", 8000))
 
-    # Run the application
+    # Run the application (loopback only; single-user local app)
     logger.info(f"Starting Flask development server on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    application.run(host="127.0.0.1", port=port, debug=False)

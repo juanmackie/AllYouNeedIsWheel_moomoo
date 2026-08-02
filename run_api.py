@@ -113,10 +113,12 @@ def main():
             try:
                 from waitress import serve
 
-                from app import app
+                from app import ensure_app, start_runtime
 
-                # Start the server
-                serve(app, host="0.0.0.0", port=port, threads=workers)
+                application = ensure_app()
+                start_runtime(application)
+                # Single-user local app: loopback only
+                serve(application, host="127.0.0.1", port=port, threads=workers)
             except ImportError:
                 logger.error("Waitress is not installed. Please install it with: pip install waitress")
                 sys.exit(1)
@@ -128,8 +130,8 @@ def main():
                     [
                         "gunicorn",
                         f"--workers={workers}",
-                        f"--bind=0.0.0.0:{port}",
-                        "app:app",
+                        f"--bind=127.0.0.1:{port}",
+                        "app:ensure_app()",
                     ],
                     check=True,
                 )
@@ -138,9 +140,11 @@ def main():
 
                 # Fallback to Flask development server
                 logger.info("Falling back to Flask development server")
-                from app import app
+                from app import ensure_app, start_runtime
 
-                app.run(host="0.0.0.0", port=port)
+                application = ensure_app()
+                start_runtime(application)
+                application.run(host="127.0.0.1", port=port)
 
     except Exception as e:
         logger.error(f"Error starting API server: {str(e)}")

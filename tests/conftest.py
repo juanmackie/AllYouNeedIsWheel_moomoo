@@ -30,6 +30,9 @@ os.environ["TMP"] = str(_test_temp_root)
 os.environ["TMPDIR"] = str(_test_temp_root)
 tempfile.tempdir = str(_test_temp_root)
 
+# Route application logging away from the repository tree (import-time safety)
+os.environ.setdefault("WHEEL_LOG_DIR", str(_test_temp_root / "logs"))
+
 
 def _safe_mkdtemp(suffix="", prefix="tmp", dir=None):
     base_dir = Path(dir) if dir else _test_temp_root

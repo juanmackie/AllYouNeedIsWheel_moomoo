@@ -7,15 +7,27 @@ import logging
 import os
 from datetime import datetime
 
-# Base directory for logs
-LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
-
-# Ensure log directories exist
-for subdir in ["api", "moomoo", "server", "general"]:
-    os.makedirs(os.path.join(LOGS_DIR, subdir), exist_ok=True)
+# Base directory for logs. Overridable for tests/tools via WHEEL_LOG_DIR
+# so importing the app never writes into the repository tree.
+LOGS_DIR = os.environ.get(
+    "WHEEL_LOG_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"),
+)
 
 # Log file name format with timestamp
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+_initialized_dirs = set()
+
+
+def _ensure_log_dirs():
+    """Create log subdirectories once, at first use (never at import time)."""
+    for subdir in ["api", "moomoo", "server", "general"]:
+        path = os.path.join(LOGS_DIR, subdir)
+        if path not in _initialized_dirs:
+            os.makedirs(path, exist_ok=True)
+            _initialized_dirs.add(path)
 
 
 def get_log_path(log_type):
@@ -67,6 +79,9 @@ def configure_logging(module_name, log_type=None, console_level=logging.INFO, fi
     # Determine log type directory
     if not log_type:
         log_type = "general"
+
+    # Create log directories lazily (never at import time)
+    _ensure_log_dirs()
 
     # First, clean up old logs to maintain only max_logs=5
     cleanup_old_logs(log_type, max_logs=5)
