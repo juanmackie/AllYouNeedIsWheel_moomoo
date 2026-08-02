@@ -2,11 +2,11 @@
 Rate limiting for Moomoo API calls.
 """
 
+import logging
 import threading
 import time
-import logging
 
-logger = logging.getLogger('autotrader.rate_limiter')
+logger = logging.getLogger("autotrader.rate_limiter")
 
 
 class RateLimiter:
@@ -16,12 +16,11 @@ class RateLimiter:
 
     _min_request_spacing = 0.1
     _burst_cooldown_seconds = 5.0
-    
-    def __init__(self, max_requests_per_window=8, rate_limit_window=30,
-                 burst_threshold=5, burst_window=5):
+
+    def __init__(self, max_requests_per_window=8, rate_limit_window=30, burst_threshold=5, burst_window=5):
         """
         Initialize rate limiter.
-        
+
         Args:
             max_requests_per_window: Maximum requests allowed per time window (default 8)
             rate_limit_window: Time window in seconds (default 30)
@@ -32,12 +31,12 @@ class RateLimiter:
         self.rate_limit_window = rate_limit_window
         self.burst_threshold = burst_threshold
         self.burst_window = burst_window
-        
+
         self._request_timestamps = []
         self._lock = threading.Lock()
         self._rate_limit_waits = 0
         self._api_calls_count = 0
-        
+
     def check_rate_limit(self):
         """
         Check and enforce rate limiting for API requests.
@@ -49,10 +48,7 @@ class RateLimiter:
 
         with self._lock:
             now = time.time()
-            self._request_timestamps = [
-                ts for ts in self._request_timestamps 
-                if now - ts < self.rate_limit_window
-            ]
+            self._request_timestamps = [ts for ts in self._request_timestamps if now - ts < self.rate_limit_window]
 
             scheduled_time = now
 
@@ -92,14 +88,14 @@ class RateLimiter:
             if wait_reason:
                 logger.warning(f"{wait_reason} Waiting {wait_time:.1f}s...")
             time.sleep(wait_time)
-            
+
     def get_stats(self):
         """Return rate limiting statistics."""
         with self._lock:
             return {
-                'api_calls_count': self._api_calls_count,
-                'rate_limit_waits': self._rate_limit_waits,
-                'current_queue_length': len(self._request_timestamps),
-                'max_requests_per_window': self.max_requests_per_window,
-                'rate_limit_window': self.rate_limit_window,
+                "api_calls_count": self._api_calls_count,
+                "rate_limit_waits": self._rate_limit_waits,
+                "current_queue_length": len(self._request_timestamps),
+                "max_requests_per_window": self.max_requests_per_window,
+                "rate_limit_window": self.rate_limit_window,
             }

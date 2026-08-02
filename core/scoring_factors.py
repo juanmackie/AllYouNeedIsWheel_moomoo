@@ -152,62 +152,53 @@ def _compute_shared_subscores(decision, profile: dict, growth_mode_weights: dict
     growth-oriented priorities (premium, capital efficiency, theta decay).
     """
     _growth_w = growth_mode_weights or {}
-    _growth_active = bool(_growth_w.get('enabled', True))
-    decision.oi_score = _score_positive_metric(decision.open_interest, profile['ideal_open_interest']) * 100
-    decision.volume_score = _score_positive_metric(decision.volume, profile['ideal_volume']) * 100
-    decision.spread_score = _clamp(1 - (decision.spread_pct / max(profile['ideal_spread_pct'], 1)), 0, 1) * 100
+    _growth_active = bool(_growth_w.get("enabled", True))
+    decision.oi_score = _score_positive_metric(decision.open_interest, profile["ideal_open_interest"]) * 100
+    decision.volume_score = _score_positive_metric(decision.volume, profile["ideal_volume"]) * 100
+    decision.spread_score = _clamp(1 - (decision.spread_pct / max(profile["ideal_spread_pct"], 1)), 0, 1) * 100
 
     if _growth_active:
         # Growth-tuned liquidity: volume matters more (ease of entry/exit)
-        liquidity_raw = (
-            decision.oi_score * 0.35 +
-            decision.volume_score * 0.35 +
-            decision.spread_score * 0.30
-        ) / 100
+        liquidity_raw = (decision.oi_score * 0.35 + decision.volume_score * 0.35 + decision.spread_score * 0.30) / 100
     else:
-        liquidity_raw = (
-            decision.oi_score * 0.45 +
-            decision.volume_score * 0.2 +
-            decision.spread_score * 0.35
-        ) / 100
-    liq_mult = profile.get('liquidity_weight_multiplier', 1.0)
+        liquidity_raw = (decision.oi_score * 0.45 + decision.volume_score * 0.2 + decision.spread_score * 0.35) / 100
+    liq_mult = profile.get("liquidity_weight_multiplier", 1.0)
     decision.liquidity_score = _clamp(liquidity_raw * liq_mult) * 100
 
     if decision.iv_adjusted_return > 0:
-        target_iv_adj = profile.get('target_iv_adjusted', 50)
+        target_iv_adj = profile.get("target_iv_adjusted", 50)
         if _growth_active:
             target_iv_adj = max(target_iv_adj, 60)  # higher bar for IV-adjusted return in growth mode
-        decision.iv_adjusted_score = _score_positive_metric(
-            decision.iv_adjusted_return, target_iv_adj
-        ) * 100
+        decision.iv_adjusted_score = _score_positive_metric(decision.iv_adjusted_return, target_iv_adj) * 100
 
     if decision.stock_price > 0 and abs(decision.delta) > 0:
         decision._theta_delta_ratio = abs(decision.theta) / (abs(decision.delta) * decision.stock_price)
-    decision.tdr_score = _score_positive_metric(
-        decision._theta_delta_ratio, profile.get('target_theta_delta_ratio', 0.005)
-    ) * 100
+    decision.tdr_score = (
+        _score_positive_metric(decision._theta_delta_ratio, profile.get("target_theta_delta_ratio", 0.005)) * 100
+    )
 
     if decision.premium_per_contract > 0:
         decision.ev_score = _clamp(decision.expected_value / max(decision.premium_per_contract, 0.01)) * 100
 
     logger.debug(
-        "shared_subscores ticker=%s option_type=%s dte=%d liquidity=%.1f iv_adj=%.1f "
-        "delta_score=%.1f dte_score=%.1f",
-        getattr(decision, 'ticker', '?'), getattr(decision, 'option_type', '?'),
-        decision.dte, decision.liquidity_score, decision.iv_adjusted_score,
-        decision.delta_score, decision.dte_score,
+        "shared_subscores ticker=%s option_type=%s dte=%d liquidity=%.1f iv_adj=%.1f delta_score=%.1f dte_score=%.1f",
+        getattr(decision, "ticker", "?"),
+        getattr(decision, "option_type", "?"),
+        decision.dte,
+        decision.liquidity_score,
+        decision.iv_adjusted_score,
+        decision.delta_score,
+        decision.dte_score,
     )
-    decision.delta_score = _score_proximity(
-        abs(decision.delta), profile['target_delta'], profile['delta_tolerance']
-    ) * 100
-    decision.dte_score = _score_proximity(
-        decision.dte, profile['preferred_dte'], max(profile['preferred_dte'], 10)
-    ) * 100
+    decision.delta_score = (
+        _score_proximity(abs(decision.delta), profile["target_delta"], profile["delta_tolerance"]) * 100
+    )
+    decision.dte_score = (
+        _score_proximity(decision.dte, profile["preferred_dte"], max(profile["preferred_dte"], 10)) * 100
+    )
 
-    desired_otm = profile.get('default_otm_pct', 10)
-    decision.otm_score = _score_proximity(
-        decision.otm_pct, desired_otm, max(desired_otm * 0.75, 6)
-    ) * 100
+    desired_otm = profile.get("default_otm_pct", 10)
+    decision.otm_score = _score_proximity(decision.otm_pct, desired_otm, max(desired_otm * 0.75, 6)) * 100
 
 
 def _compute_roll_pressure(decision) -> float:
@@ -219,7 +210,7 @@ def _compute_roll_pressure(decision) -> float:
     """
     dte_component = _clamp(1 - (decision.dte / 45)) * 100 if decision.dte >= 0 else 100
 
-    if decision.option_type == 'CALL':
+    if decision.option_type == "CALL":
         if decision.strike > 0 and decision.stock_price > 0:
             distance_pct = ((decision.strike - decision.stock_price) / decision.strike) * 100
         else:
@@ -255,12 +246,7 @@ def _compute_roll_pressure(decision) -> float:
     else:
         theta_component = 0
 
-    pressure = (
-        dte_component * 0.35 +
-        distance_component * 0.40 +
-        extrinsic_component * 0.10 +
-        theta_component * 0.15
-    )
+    pressure = dte_component * 0.35 + distance_component * 0.40 + extrinsic_component * 0.10 + theta_component * 0.15
     return round(_clamp(pressure / 100) * 100, 1)
 
 
@@ -286,8 +272,8 @@ def _compute_size_fit(decision, portfolio_context: dict) -> float:
     For CALLs: based on shares owned vs contracts needed.
     For PUTs: based on cash available vs cash required.
     """
-    if decision.option_type == 'CALL':
-        shares_owned = float(portfolio_context.get('positions', {}).get(decision.ticker, {}).get('position', 0) or 0)
+    if decision.option_type == "CALL":
+        shares_owned = float(portfolio_context.get("positions", {}).get(decision.ticker, {}).get("position", 0) or 0)
         if shares_owned <= 0:
             return 0.0
         needed = decision.max_contracts * 100
@@ -295,8 +281,10 @@ def _compute_size_fit(decision, portfolio_context: dict) -> float:
             return 0.0
         fit = _clamp(shares_owned / needed) * 100
     else:
-        cash_balance = float(portfolio_context.get('cash_balance', 0) or 0)
-        available_cash = float(portfolio_context.get('cash_available_for_csp', portfolio_context.get('available_cash', cash_balance)) or 0)
+        cash_balance = float(portfolio_context.get("cash_balance", 0) or 0)
+        available_cash = float(
+            portfolio_context.get("cash_available_for_csp", portfolio_context.get("available_cash", cash_balance)) or 0
+        )
         if decision.cash_required <= 0:
             return 50.0
         if available_cash <= 0:
@@ -314,11 +302,11 @@ def _compute_recommended_contracts(decision, portfolio_context: dict) -> int:
     Aims for no more than 10% of account value per position for PUTs,
     and all available shares for CALLs (subject to diversification).
     """
-    account_value = max(float(portfolio_context.get('account_value', 0) or 0), ACCOUNT_VALUE_MIN)
-    total_positions = max(len(portfolio_context.get('positions', {})), 1)
+    account_value = max(float(portfolio_context.get("account_value", 0) or 0), ACCOUNT_VALUE_MIN)
+    max(len(portfolio_context.get("positions", {})), 1)
     max_contracts = max(decision.max_contracts, 1)
 
-    if decision.option_type == 'CALL':
+    if decision.option_type == "CALL":
         return max_contracts
 
     cash_required = max(decision.cash_required, 1)

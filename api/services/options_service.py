@@ -4,27 +4,33 @@ Refactored from monolithic 1627-line file into focused modules.
 """
 
 import logging
-from api.services.options_data import OptionsDataService
-from api.services.watchlist_manager import WatchlistManager
-from api.services.recommendations import RecommendationEngine
-from api.services.portfolio_context import PortfolioContext
-from api.services.vix_regime_service import VixRegimeService
 
-logger = logging.getLogger('api.services.options')
+from api.services.options_data import OptionsDataService
+from api.services.portfolio_context import PortfolioContext
+from api.services.recommendations import RecommendationEngine
+from api.services.vix_regime_service import VixRegimeService
+from api.services.watchlist_manager import WatchlistManager
+
+logger = logging.getLogger("api.services.options")
+
 
 class OptionsService:
     """
     Service for handling options data operations.
     Now a thin orchestrator that delegates to focused modules.
     """
+
     def __init__(self):
         from api.services.config import get_config
+
         self.config = get_config()
         self.connection = None
-        db_path = self.config.get('db_path')
+        db_path = self.config.get("db_path")
         from db.database import OptionsDatabase
+
         self.db = OptionsDatabase(db_path)
         from api.services.iv_earnings_service import IVEarningsService
+
         self.iv_earnings_service = IVEarningsService(self.db)
         self.portfolio_service = None
         # Initialize composed services with explicit dependencies
@@ -57,7 +63,7 @@ class OptionsService:
             options_data_provider=self.options_data,
             cash_calculator_provider=self.portfolio_context_helper,
         )
-        
+
     def _ensure_connection(self):
         """
         Ensure that the moomoo connection exists and is connected.
@@ -79,14 +85,15 @@ class OptionsService:
             logger.info("Creating new moomoo connection")
 
             from core.connection import MoomooConnection
+
             self.connection = MoomooConnection(
-                host=str(self.config.get('host', '127.0.0.1')),
-                port=int(self.config.get('port', 11111)),
-                readonly=bool(self.config.get('readonly', True)),
-                account_id=self.config.get('account_id'),
-                portfolio_env=self.config.get('portfolio_env'),
-                security_firm=self.config.get('security_firm'),
-                broker_cache_after_hours=self.config.get('broker_cache_after_hours', True),
+                host=str(self.config.get("host", "127.0.0.1")),
+                port=int(self.config.get("port", 11111)),
+                readonly=bool(self.config.get("readonly", True)),
+                account_id=self.config.get("account_id"),
+                portfolio_env=self.config.get("portfolio_env"),
+                security_firm=self.config.get("security_firm"),
+                broker_cache_after_hours=self.config.get("broker_cache_after_hours", True),
             )
 
             if not self.connection.connect():
@@ -102,13 +109,11 @@ class OptionsService:
             return None
 
     # Delegate methods to composed services
-    
+
     def get_effective_watchlist(self):
         """Get effective watchlist (delegates to watchlist_manager)"""
-        return self.watchlist_manager.get_effective_watchlist(
-            growth_mode_config=self.config.get('growth_mode', {})
-        )
-    
+        return self.watchlist_manager.get_effective_watchlist(growth_mode_config=self.config.get("growth_mode", {}))
+
     def _get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None):
         """Get screening profile (delegates to watchlist_manager)"""
         return self.watchlist_manager.get_screening_profile(
@@ -116,13 +121,13 @@ class OptionsService:
             dte,
             profile_type,
             vix_regime,
-            growth_mode_config=self.config.get('growth_mode', {}),
+            growth_mode_config=self.config.get("growth_mode", {}),
         )
-    
+
     def _get_candidate_expirations(self, conn, ticker, profile, expiration=None):
         """Get candidate expirations (delegates to options_data)"""
         return self.options_data._get_candidate_expirations(conn, ticker, profile, expiration)
-    
+
     def _build_candidate(self, ticker, option, stock_price, desired_otm, profile, portfolio_context):
         """Build candidate (delegates to options_data)"""
         return self.options_data._build_candidate(ticker, option, stock_price, desired_otm, profile, portfolio_context)
@@ -131,13 +136,21 @@ class OptionsService:
         """Get OTM options (delegates to options_data)"""
         return self.options_data.get_otm_options(ticker, otm_percentage, option_type, expiration)
 
-    def _process_ticker_for_otm(self, conn, ticker, otm_percentage, portfolio_context, expiration=None, option_type=None):
+    def _process_ticker_for_otm(
+        self, conn, ticker, otm_percentage, portfolio_context, expiration=None, option_type=None
+    ):
         """Process ticker for OTM (delegates to options_data)"""
-        return self.options_data._process_ticker_for_otm(conn, ticker, otm_percentage, portfolio_context, expiration, option_type)
+        return self.options_data._process_ticker_for_otm(
+            conn, ticker, otm_percentage, portfolio_context, expiration, option_type
+        )
 
-    def _process_options_chain(self, options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type=None):
+    def _process_options_chain(
+        self, options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type=None
+    ):
         """Process options chain (delegates to options_data)"""
-        return self.options_data._process_options_chain(options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type)
+        return self.options_data._process_options_chain(
+            options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type
+        )
 
     def get_option_expirations(self, ticker, option_type=None):
         """Get option expirations (delegates to options_data)"""
@@ -147,7 +160,9 @@ class OptionsService:
         """Get stock price (delegates to options_data)"""
         return self.options_data.get_stock_price(ticker)
 
-    def get_top_recommendations(self, limit=3, include_long_options=False, ignore_cash_limits=False, screener_overrides=None):
+    def get_top_recommendations(
+        self, limit=3, include_long_options=False, ignore_cash_limits=False, screener_overrides=None
+    ):
         """Get top signals (delegates to recommendation_engine)."""
         return self.recommendation_engine.get_top_recommendations(
             limit,
@@ -180,12 +195,18 @@ class OptionsService:
         if not result or not isinstance(result, dict):
             return
         import math
+
         def sanitize_dict(d):
-            if not isinstance(d, dict): return
+            if not isinstance(d, dict):
+                return
             for key, value in d.items():
-                if isinstance(value, float) and math.isnan(value): d[key] = 0
-                elif isinstance(value, dict): sanitize_dict(value)
+                if isinstance(value, float) and math.isnan(value):
+                    d[key] = 0
+                elif isinstance(value, dict):
+                    sanitize_dict(value)
                 elif isinstance(value, list):
                     for item in value:
-                        if isinstance(item, dict): sanitize_dict(item)
+                        if isinstance(item, dict):
+                            sanitize_dict(item)
+
         sanitize_dict(result)

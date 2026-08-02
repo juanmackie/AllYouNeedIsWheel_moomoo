@@ -5,19 +5,20 @@ Manages background tasks with health monitoring and auto-restart capabilities.
 Designed to handle multiple tasks with automatic failure recovery.
 """
 
-import threading
 import logging
+import threading
 import time
-from datetime import datetime
-from typing import Callable, Optional, Dict, Any
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Callable, Dict, Optional
 
-logger = logging.getLogger('autotrader.background')
+logger = logging.getLogger("autotrader.background")
 
 
 @dataclass
 class TaskConfig:
     """Configuration for a background task."""
+
     name: str
     worker_fn: Callable[[], None]
     restart_on_failure: bool = True
@@ -29,6 +30,7 @@ class TaskConfig:
 @dataclass
 class TaskState:
     """Runtime state of a background task."""
+
     thread: Optional[threading.Thread] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     restart_count: int = 0
@@ -76,7 +78,7 @@ class BackgroundTaskManager:
                 logger.error(f"Cannot start unknown task: {name}")
                 return False
 
-            config = self._tasks[name]
+            self._tasks[name]
             state = self._states[name]
 
             if state.thread and state.thread.is_alive():
@@ -89,12 +91,7 @@ class BackgroundTaskManager:
             state.is_healthy = True
 
             # Create thread
-            thread = threading.Thread(
-                target=self._worker_wrapper,
-                args=(name,),
-                daemon=True,
-                name=f"bg_task_{name}"
-            )
+            thread = threading.Thread(target=self._worker_wrapper, args=(name,), daemon=True, name=f"bg_task_{name}")
             state.thread = thread
             state.last_start_time = datetime.now()
 
@@ -139,22 +136,19 @@ class BackgroundTaskManager:
             is_alive = state.thread.is_alive() if state.thread else False
 
             return {
-                'name': name,
-                'running': is_alive,
-                'healthy': state.is_healthy,
-                'restart_count': state.restart_count,
-                'last_start_time': state.last_start_time.isoformat() if state.last_start_time else None,
-                'last_error': state.last_error,
-                'restart_on_failure': config.restart_on_failure,
-                'max_restart_attempts': config.max_restart_attempts,
+                "name": name,
+                "running": is_alive,
+                "healthy": state.is_healthy,
+                "restart_count": state.restart_count,
+                "last_start_time": state.last_start_time.isoformat() if state.last_start_time else None,
+                "last_error": state.last_error,
+                "restart_on_failure": config.restart_on_failure,
+                "max_restart_attempts": config.max_restart_attempts,
             }
 
     def get_all_status(self) -> Dict[str, Dict[str, Any]]:
         """Get status of all registered tasks."""
-        return {
-            name: self.get_status(name)
-            for name in self._tasks.keys()
-        }
+        return {name: self.get_status(name) for name in self._tasks.keys()}
 
     def _worker_wrapper(self, name: str) -> None:
         """Internal wrapper that handles restarts and error tracking."""
@@ -207,11 +201,7 @@ class BackgroundTaskManager:
 
                 time.sleep(interval)
 
-        self._health_check_thread = threading.Thread(
-            target=health_check_loop,
-            daemon=True,
-            name="health_monitor"
-        )
+        self._health_check_thread = threading.Thread(target=health_check_loop, daemon=True, name="health_monitor")
         self._health_check_thread.start()
         logger.info("Health monitor started")
 

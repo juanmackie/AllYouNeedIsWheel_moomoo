@@ -1,23 +1,25 @@
 """Tests for catalyst-watch route freshness metadata."""
 
-from api.routes.options import _add_freshness_metadata, _catalyst_empty_response, CATALYST_SYNC_WAIT_SECONDS
-from api.routes.source_policy import build_research_source_policy, detect_external_sources
-
 from unittest.mock import patch
 
-_overlay_map_patch = patch('api.services.catalyst_flow_service.fetch_signal_overlay_map', return_value={})
+from api.routes.options import CATALYST_SYNC_WAIT_SECONDS, _add_freshness_metadata, _catalyst_empty_response
+from api.routes.source_policy import build_research_source_policy, detect_external_sources
+
+_overlay_map_patch = patch("api.services.catalyst_flow_service.fetch_signal_overlay_map", return_value={})
 _overlay_map_patch.start()
 
 
 def test_catalyst_empty_response_marks_scan_pending_and_preserves_thresholds():
-    payload = _catalyst_empty_response(thresholds={
-        "min_premium_notional": 250_000,
-        "min_fresh_volume_ratio": 2,
-        "min_volume": 100,
-        "max_expirations": 1,
-        "max_dte": 60,
-        "max_scan_tickers": 4,
-    })
+    payload = _catalyst_empty_response(
+        thresholds={
+            "min_premium_notional": 250_000,
+            "min_fresh_volume_ratio": 2,
+            "min_volume": 100,
+            "max_expirations": 1,
+            "max_dte": 60,
+            "max_scan_tickers": 4,
+        }
+    )
 
     assert payload["scan_pending"] is True
     assert payload["message"] == "Catalyst scan is still waiting for broker flow data."
@@ -146,6 +148,7 @@ def test_add_freshness_metadata_preserves_existing_fields():
 # ApeWisdom metadata & source policy
 # ---------------------------------------------------------------------------
 
+
 def test_catalyst_service_result_includes_apewisdom_metadata():
     """get_signals() return dict always contains 'apewisdom' metadata."""
     from unittest.mock import MagicMock
@@ -235,6 +238,7 @@ def test_add_freshness_metadata_preserves_apewisdom_key():
 # CATALYST_SYNC_WAIT_SECONDS constant
 # ---------------------------------------------------------------------------
 
+
 def test_catalyst_sync_wait_seconds_is_less_than_frontend_auto_timeout():
     """Backend sync wait (25s) must be less than frontend auto timeout (60s)."""
     assert CATALYST_SYNC_WAIT_SECONDS == 25
@@ -249,6 +253,7 @@ def test_catalyst_sync_wait_seconds_is_less_than_frontend_manual_timeout():
 # ---------------------------------------------------------------------------
 # Pending response shape
 # ---------------------------------------------------------------------------
+
 
 def test_catalyst_empty_response_pending_has_required_fields():
     """Pending response contains all fields the frontend expects."""

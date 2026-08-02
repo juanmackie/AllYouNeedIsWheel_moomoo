@@ -9,9 +9,9 @@ import logging
 import time
 from datetime import datetime
 
+from api.services.signal_overlay_service import apply_signal_overlay, fetch_signal_overlay_map
 from core.catalyst_flow_decision import ACTION_BUCKETS, classify_catalyst_flow
 from core.ticker_utils import canonical_underlying
-from api.services.signal_overlay_service import apply_signal_overlay, fetch_signal_overlay_map
 
 logger = logging.getLogger("api.services.catalyst_flow")
 
@@ -41,6 +41,7 @@ class CatalystFlowService:
         if self.connection is not None and self.connection.is_connected():
             return self.connection
         from core.connection import MoomooConnection
+
         host = str(self.config.get("host", "127.0.0.1"))
         port = int(self.config.get("port", 11111))
         self.connection = MoomooConnection(
@@ -61,17 +62,15 @@ class CatalystFlowService:
         manager = self._watchlist_provider
         if manager is None:
             from api.services.watchlist_manager import WatchlistManager
+
             manager = WatchlistManager(config_provider=self._config_provider)
-        return manager.get_effective_watchlist(
-            growth_mode_config=self.config.get("growth_mode", {})
-        )
+        return manager.get_effective_watchlist(growth_mode_config=self.config.get("growth_mode", {}))
 
     def _get_apewisdom_service(self):
         if self._apewisdom_service is None:
             from api.services.apewisdom_service import ApeWisdomService
-            self._apewisdom_service = ApeWisdomService(
-                config=self._get_catalyst_config().get("apewisdom", {})
-            )
+
+            self._apewisdom_service = ApeWisdomService(config=self._get_catalyst_config().get("apewisdom", {}))
         return self._apewisdom_service
 
     def get_signals(
@@ -260,13 +259,8 @@ class CatalystFlowService:
             elif bucket in MEANINGFUL_BUCKETS:
                 item["action_bucket"] = "CONFLICT_WATCH"
                 item["action_label"] = ACTION_BUCKETS["CONFLICT_WATCH"]
-                item["action_reason"] = (
-                    f"Both bullish and bearish flow on {canon} — "
-                    "conflicting signals, watch only"
-                )
-                item["blockers"] = list(set(
-                    item.get("blockers", []) + ["Conflicting directional flow on same ticker"]
-                ))
+                item["action_reason"] = f"Both bullish and bearish flow on {canon} — conflicting signals, watch only"
+                item["blockers"] = list(set(item.get("blockers", []) + ["Conflicting directional flow on same ticker"]))
 
         # Attach the shared overlay after catalyst classification so the
         # card can show capital/technical/derivatives context without
@@ -280,7 +274,10 @@ class CatalystFlowService:
                     seen_overlay_tickers.add(ticker)
                     overlay_tickers.append(ticker)
             overlay_map = fetch_signal_overlay_map(overlay_tickers)
-            all_signals = [apply_signal_overlay(item, overlay_map.get(canonical_underlying(item.get("ticker", "")), {})) for item in all_signals]
+            all_signals = [
+                apply_signal_overlay(item, overlay_map.get(canonical_underlying(item.get("ticker", "")), {}))
+                for item in all_signals
+            ]
         except Exception as exc:
             logger.debug("Catalyst overlay attachment skipped: %s", exc)
 
@@ -377,8 +374,10 @@ class CatalystFlowService:
             return None
 
         from db.database import OptionsDatabase
+
         db_path = self.config.get("db_path", "options.db")
         from api.services.iv_earnings_service import IVEarningsService
+
         try:
             db_earn = OptionsDatabase(db_path)
             iv_svc = IVEarningsService(db_earn)
@@ -435,6 +434,7 @@ class CatalystFlowService:
         """Get stock price from yfinance as fallback."""
         try:
             from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
+
             bare = clean_yfinance_ticker(ticker)
             hist = get_yfinance_ticker(bare).history(period="1d")
             if not hist.empty:

@@ -6,7 +6,7 @@ Read-only endpoint for the multi-dimensional moomoo overlay.
 
 from flask import Blueprint, request
 
-from api.routes.utils import error_response, success_response, normalize_ticker_list, enforce_route_rate_limit
+from api.routes.utils import enforce_route_rate_limit, error_response, normalize_ticker_list, success_response
 
 bp = Blueprint("signals", __name__, url_prefix="/api/signals")
 
@@ -25,6 +25,7 @@ def _load_on_demand_evidence(tickers):
 
     try:
         from api.services.catalyst_flow_service import CatalystFlowService
+
         catalyst_svc = CatalystFlowService()
         for ticker in tickers:
             catalyst_warnings[ticker] = catalyst_svc.get_ticker_warnings(ticker)
@@ -33,6 +34,7 @@ def _load_on_demand_evidence(tickers):
 
     try:
         from api.services.underlying_quality import get_underlying_quality
+
         for ticker in tickers:
             try:
                 underlying_quality[ticker] = get_underlying_quality(ticker)
@@ -64,6 +66,7 @@ def get_signal_overlay():
         refresh = request.args.get("refresh", "false").lower() == "true"
         try:
             import api
+
             overlay_svc = api.get_service("signal_overlay")
         except Exception as exc:
             return error_response(f"Overlay service unavailable: {exc}", status_code=500)

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from .sqlite_pool import pooled_connection
 
-logger = logging.getLogger('db.option_chain')
+logger = logging.getLogger("db.option_chain")
 
 
 class OptionChainRepository:
@@ -14,10 +14,10 @@ class OptionChainRepository:
     def __init__(self, db_path):
         self.db_path = db_path
 
-    def save_snapshot(self, ticker, expiration, right, stock_price, chain_dict, source='broker', as_of=None):
+    def save_snapshot(self, ticker, expiration, right, stock_price, chain_dict, source="broker", as_of=None):
         """Persist or update an option chain snapshot, keyed by (ticker, expiration, right)."""
         if as_of is None:
-            as_of = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+            as_of = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         with pooled_connection(self.db_path) as conn:
             conn.execute(
                 """
@@ -64,7 +64,7 @@ class OptionChainRepository:
                 ORDER BY as_of DESC
                 LIMIT 1
                 """,
-                (ticker, right, f'-{max_age_hours} hours'),
+                (ticker, right, f"-{max_age_hours} hours"),
             ).fetchone()
             return self._row_to_dict(row) if row else None
 
@@ -78,7 +78,7 @@ class OptionChainRepository:
         """
         if not tickers:
             return {}
-        placeholders = ','.join('?' for _ in tickers)
+        placeholders = ",".join("?" for _ in tickers)
         with pooled_connection(self.db_path, row_factory=sqlite3.Row) as conn:
             rows = conn.execute(
                 f"""
@@ -88,14 +88,16 @@ class OptionChainRepository:
                   AND datetime(as_of) >= datetime('now', ?)
                 GROUP BY ticker
                 """,
-                (*tickers, right, f'-{max_age_hours} hours'),
+                (*tickers, right, f"-{max_age_hours} hours"),
             ).fetchall()
-            return {row['ticker']: self._row_to_dict(row) for row in rows}
+            return {row["ticker"]: self._row_to_dict(row) for row in rows}
 
     def clear_old_snapshots(self, days=14):
         """Remove snapshots older than the specified days."""
         with pooled_connection(self.db_path) as conn:
-            conn.execute("DELETE FROM option_chain_snapshots WHERE datetime(as_of) < datetime('now', ?)", (f'-{days} days',))
+            conn.execute(
+                "DELETE FROM option_chain_snapshots WHERE datetime(as_of) < datetime('now', ?)", (f"-{days} days",)
+            )
             conn.commit()
             logger.info("Cleared option chain snapshots older than %d days", days)
 
@@ -122,9 +124,9 @@ class OptionChainRepository:
         if row is None:
             return None
         d = dict(row)
-        if 'chain_json' in d and isinstance(d['chain_json'], str):
+        if "chain_json" in d and isinstance(d["chain_json"], str):
             try:
-                d['chain_data'] = json.loads(d['chain_json'])
+                d["chain_data"] = json.loads(d["chain_json"])
             except (json.JSONDecodeError, TypeError):
-                d['chain_data'] = None
+                d["chain_data"] = None
         return d

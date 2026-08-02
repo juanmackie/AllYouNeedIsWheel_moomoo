@@ -8,12 +8,11 @@ It does not create, stage, or execute orders.
 import logging
 import math
 import time
-from datetime import datetime
 from collections import Counter
+from datetime import datetime
 from typing import Iterable
 
-from api.services.utils import clean_yfinance_ticker
-from api.services.utils import get_yfinance_ticker
+from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
 from core.earnings_vol_decision import EarningsVolSignal, classify_earnings_vol_signal
 
 logger = logging.getLogger("api.services.earnings_vol")
@@ -74,11 +73,13 @@ class EarningsVolSignalService:
             signal = self._build_signal(ticker)
         except Exception as exc:
             logger.warning("Failed to build earnings vol signal for %s: %s", ticker, exc)
-            signal = classify_earnings_vol_signal({
-                "ticker": ticker,
-                "earnings_date": None,
-                "days_to_earnings": None,
-            })
+            signal = classify_earnings_vol_signal(
+                {
+                    "ticker": ticker,
+                    "earnings_date": None,
+                    "days_to_earnings": None,
+                }
+            )
             signal.blockers.append("Market data unavailable")
 
         self._cache[ticker] = {"timestamp": time.time(), "signal": signal}
@@ -129,16 +130,18 @@ class EarningsVolSignalService:
                 if front.get("mid") is not None and back.get("mid") is not None:
                     debit = round(max(back["mid"] - front["mid"], 0) * 100, 2)
 
-                metrics.update({
-                    "front_iv": front_iv,
-                    "back_iv": back_iv,
-                    "atm_strike": front.get("strike"),
-                    "estimated_calendar_debit": debit,
-                    "max_risk_per_contract": debit,
-                    "spread_pct": front.get("spread_pct"),
-                    "open_interest": front.get("open_interest"),
-                    "option_volume": front.get("volume"),
-                })
+                metrics.update(
+                    {
+                        "front_iv": front_iv,
+                        "back_iv": back_iv,
+                        "atm_strike": front.get("strike"),
+                        "estimated_calendar_debit": debit,
+                        "max_risk_per_contract": debit,
+                        "spread_pct": front.get("spread_pct"),
+                        "open_interest": front.get("open_interest"),
+                        "option_volume": front.get("volume"),
+                    }
+                )
 
         return classify_earnings_vol_signal(metrics)
 
@@ -202,14 +205,16 @@ class EarningsVolSignalService:
             last = float(row.get("lastPrice") or 0)
             mid = (bid + ask) / 2 if bid > 0 and ask > 0 else last if last > 0 else None
             spread_pct = ((ask - bid) / mid * 100) if bid > 0 and ask > 0 and mid else None
-            candidates.append({
-                "strike": float(row.get("strike") or 0),
-                "iv": float(row.get("impliedVolatility") or 0),
-                "mid": mid,
-                "spread_pct": spread_pct,
-                "open_interest": int(row.get("openInterest") or 0),
-                "volume": int(row.get("volume") or 0),
-            })
+            candidates.append(
+                {
+                    "strike": float(row.get("strike") or 0),
+                    "iv": float(row.get("impliedVolatility") or 0),
+                    "mid": mid,
+                    "spread_pct": spread_pct,
+                    "open_interest": int(row.get("openInterest") or 0),
+                    "volume": int(row.get("volume") or 0),
+                }
+            )
 
         if not candidates:
             return None

@@ -10,9 +10,9 @@ import logging
 import os
 import threading
 from datetime import datetime
-from typing import Optional, Dict, Any, TypedDict
+from typing import Any, Dict, Optional, TypedDict
 
-logger = logging.getLogger('api.services.macro_regime')
+logger = logging.getLogger("api.services.macro_regime")
 
 
 class CacheEntry(TypedDict):
@@ -50,23 +50,23 @@ class MacroRegimeService:
 
     # Essential FRED series (minimal set, maximum signal)
     FRED_SERIES = {
-        'fed_funds_rate': 'DFF',               # Federal funds effective rate
-        'treasury_10y': 'DGS10',               # 10-year Treasury yield
-        'treasury_2y': 'DGS2',                 # 2-year Treasury yield
-        'high_yield_spread': 'BAMLH0A0HYM2',   # ICE BofA High Yield OAS (credit stress)
-        'gdp': 'GDP',                          # Gross Domestic Product
-        'cpi': 'CPIAUCSL',                    # Consumer Price Index for All Urban Consumers
+        "fed_funds_rate": "DFF",  # Federal funds effective rate
+        "treasury_10y": "DGS10",  # 10-year Treasury yield
+        "treasury_2y": "DGS2",  # 2-year Treasury yield
+        "high_yield_spread": "BAMLH0A0HYM2",  # ICE BofA High Yield OAS (credit stress)
+        "gdp": "GDP",  # Gross Domestic Product
+        "cpi": "CPIAUCSL",  # Consumer Price Index for All Urban Consumers
     }
 
     # Regime thresholds
     CREDIT_STRESS_THRESHOLDS = {
-        'low': 4.0,      # HY spread < 4% = calm credit markets
-        'high': 7.0,     # HY spread > 7% = stressed credit markets
+        "low": 4.0,  # HY spread < 4% = calm credit markets
+        "high": 7.0,  # HY spread > 7% = stressed credit markets
     }
 
     YIELD_CURVE_THRESHOLDS = {
-        'inverted': -0.5,   # 10y-2y < -0.5% = inverted (recession signal)
-        'flat': 0.5,        # 10y-2y < 0.5% = flat (caution)
+        "inverted": -0.5,  # 10y-2y < -0.5% = inverted (recession signal)
+        "flat": 0.5,  # 10y-2y < 0.5% = flat (caution)
     }
 
     def __init__(self):
@@ -86,7 +86,7 @@ class MacroRegimeService:
             if self._initialized:
                 return self._fred is not None
 
-            api_key = os.environ.get('FRED_API_KEY')
+            api_key = os.environ.get("FRED_API_KEY")
             if not api_key:
                 logger.warning("FRED_API_KEY not set. Macro regime detection disabled.")
                 self._initialized = True
@@ -94,6 +94,7 @@ class MacroRegimeService:
 
             try:
                 from fredapi import Fred
+
                 self._fred = Fred(api_key=api_key)
                 self._initialized = True
                 logger.info("FRED API client initialized successfully")
@@ -112,19 +113,16 @@ class MacroRegimeService:
         with self._cache_lock:
             if self._cache is None:
                 return None
-            age = (datetime.now() - self._cache['timestamp']).total_seconds()
+            age = (datetime.now() - self._cache["timestamp"]).total_seconds()
             if age > self._cache_ttl_seconds:
                 self._cache = None
                 return None
-            return self._cache['data']
+            return self._cache["data"]
 
     def _set_cache(self, data: RegimeData) -> None:
         """Cache macro regime data."""
         with self._cache_lock:
-            self._cache = {
-                'data': data,
-                'timestamp': datetime.now()
-            }
+            self._cache = {"data": data, "timestamp": datetime.now()}
 
     def get_macro_regime(self) -> RegimeData:
         """
@@ -167,8 +165,8 @@ class MacroRegimeService:
 
         # Detect regimes
         regime = self._detect_regimes(data)
-        regime['fetched_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-        regime['enabled'] = True
+        regime["fetched_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        regime["enabled"] = True
 
         # Cache and return
         self._set_cache(regime)
@@ -198,7 +196,7 @@ class MacroRegimeService:
             logger.warning(f"FRED fetch warnings: {', '.join(errors)}")
 
         # Need at least fed_funds_rate and hy_spread for meaningful regime detection
-        if 'fed_funds_rate' not in result:
+        if "fed_funds_rate" not in result:
             logger.error("Critical FRED series missing: fed_funds_rate")
             return None
 
@@ -209,109 +207,112 @@ class MacroRegimeService:
         Detect macro regimeses from current FRED data.
         """
         # --- Interest Rate Regime ---
-        fed_funds = data.get('fed_funds_rate', 0)
-        treasury_10y = data.get('treasury_10y', 0)
-        treasury_2y = data.get('treasury_2y', 0)
+        fed_funds = data.get("fed_funds_rate", 0)
+        treasury_10y = data.get("treasury_10y", 0)
+        treasury_2y = data.get("treasury_2y", 0)
 
         # Rate level classification
         if fed_funds < 1.0:
-            rate_regime = 'falling'  # Near-zero rates = accommodative
-            rate_description = 'Near-zero rates - accommodative policy'
+            rate_regime = "falling"  # Near-zero rates = accommodative
+            rate_description = "Near-zero rates - accommodative policy"
         elif fed_funds < 3.0:
-            rate_regime = 'stable'   # Moderate rates = neutral
-            rate_description = 'Moderate rates - neutral policy'
+            rate_regime = "stable"  # Moderate rates = neutral
+            rate_description = "Moderate rates - neutral policy"
         elif fed_funds < 5.0:
-            rate_regime = 'rising'   # Elevated rates = restrictive
-            rate_description = 'Elevated rates - restrictive policy'
+            rate_regime = "rising"  # Elevated rates = restrictive
+            rate_description = "Elevated rates - restrictive policy"
         else:
-            rate_regime = 'rising'   # High rates = very restrictive
-            rate_description = 'High rates - very restrictive policy'
+            rate_regime = "rising"  # High rates = very restrictive
+            rate_description = "High rates - very restrictive policy"
 
         # --- Credit Stress ---
-        hy_spread = data.get('high_yield_spread', 0)
-        if hy_spread < self.CREDIT_STRESS_THRESHOLDS['low']:
-            credit_stress = 'low'
-            credit_description = 'Calm credit markets - low default risk'
-        elif hy_spread < self.CREDIT_STRESS_THRESHOLDS['high']:
-            credit_stress = 'moderate'
-            credit_description = 'Moderate credit stress - monitor spreads'
+        hy_spread = data.get("high_yield_spread", 0)
+        if hy_spread < self.CREDIT_STRESS_THRESHOLDS["low"]:
+            credit_stress = "low"
+            credit_description = "Calm credit markets - low default risk"
+        elif hy_spread < self.CREDIT_STRESS_THRESHOLDS["high"]:
+            credit_stress = "moderate"
+            credit_description = "Moderate credit stress - monitor spreads"
         else:
-            credit_stress = 'high'
-            credit_description = 'High credit stress - elevated default risk'
+            credit_stress = "high"
+            credit_description = "High credit stress - elevated default risk"
 
         # --- Yield Curve Slope (recession signal) ---
         yield_curve_slope = treasury_10y - treasury_2y if (treasury_10y and treasury_2y) else 0
 
-        if yield_curve_slope < self.YIELD_CURVE_THRESHOLDS['inverted']:
-            yield_curve_status = 'inverted'
-            yield_curve_warning = '⚠️ Yield curve inverted - historical recession signal'
-        elif yield_curve_slope < self.YIELD_CURVE_THRESHOLDS['flat']:
-            yield_curve_status = 'flat'
-            yield_curve_warning = 'Yield curve flatting - economic uncertainty'
+        if yield_curve_slope < self.YIELD_CURVE_THRESHOLDS["inverted"]:
+            yield_curve_status = "inverted"
+            yield_curve_warning = "⚠️ Yield curve inverted - historical recession signal"
+        elif yield_curve_slope < self.YIELD_CURVE_THRESHOLDS["flat"]:
+            yield_curve_status = "flat"
+            yield_curve_warning = "Yield curve flatting - economic uncertainty"
         else:
-            yield_curve_status = 'normal'
-            yield_curve_warning = 'Normal yield curve - growth environment'
+            yield_curve_status = "normal"
+            yield_curve_warning = "Normal yield curve - growth environment"
 
         # --- Growth Regime (proxied by yield curve + rate level) ---
         # Note: GDP updates quarterly, so we use yield curve as a faster signal
-        if yield_curve_status == 'inverted' and rate_regime == 'rising':
-            growth_regime = 'slowdown'
-            growth_description = 'Inverted curve + high rates - slowdown risk'
-        elif yield_curve_status == 'inverted':
-            growth_regime = 'slowdown'
-            growth_description = 'Yield curve inverted - economic slowdown risk'
-        elif rate_regime == 'falling' and credit_stress == 'low':
-            growth_regime = 'expansion'
-            growth_description = 'Accommodative rates + calm credit - expansion'
+        if yield_curve_status == "inverted" and rate_regime == "rising":
+            growth_regime = "slowdown"
+            growth_description = "Inverted curve + high rates - slowdown risk"
+        elif yield_curve_status == "inverted":
+            growth_regime = "slowdown"
+            growth_description = "Yield curve inverted - economic slowdown risk"
+        elif rate_regime == "falling" and credit_stress == "low":
+            growth_regime = "expansion"
+            growth_description = "Accommodative rates + calm credit - expansion"
         else:
-            growth_regime = 'expansion'  # Default to expansion unless signals disagree
-            growth_description = 'Standard growth environment'
+            growth_regime = "expansion"  # Default to expansion unless signals disagree
+            growth_description = "Standard growth environment"
 
         # --- Inflation Trend (proxied by rate regime + yield curve) ---
         # Note: CPI updates monthly, use current rate environment as proxy
-        if rate_regime == 'rising' and yield_curve_status == 'inverted':
-            inflation_trend = 'stable'  # Fed fighting inflation, may be overdoing it
-            inflation_description = 'Rates elevated - inflation being addressed'
-        elif rate_regime == 'falling':
-            inflation_trend = 'falling'
-            inflation_description = 'Rates falling - inflation subsiding'
+        if rate_regime == "rising" and yield_curve_status == "inverted":
+            inflation_trend = "stable"  # Fed fighting inflation, may be overdoing it
+            inflation_description = "Rates elevated - inflation being addressed"
+        elif rate_regime == "falling":
+            inflation_trend = "falling"
+            inflation_description = "Rates falling - inflation subsiding"
         else:
-            inflation_trend = 'stable'
-            inflation_description = 'Inflation stable - no major concerns'
+            inflation_trend = "stable"
+            inflation_description = "Inflation stable - no major concerns"
 
         # --- Macro Multiplier (score impact) ---
-        macro_multiplier = self._calculate_multiplier(
-            rate_regime, credit_stress, growth_regime, yield_curve_status
-        )
+        macro_multiplier = self._calculate_multiplier(rate_regime, credit_stress, growth_regime, yield_curve_status)
 
         # --- Summary & Advice ---
         summary, advice = self._generate_summary_and_advice(
-            rate_regime, credit_stress, growth_regime, inflation_trend,
-            yield_curve_status, macro_multiplier, fed_funds, hy_spread
+            rate_regime,
+            credit_stress,
+            growth_regime,
+            inflation_trend,
+            yield_curve_status,
+            macro_multiplier,
+            fed_funds,
+            hy_spread,
         )
 
         return {
-            'rate_regime': rate_regime,
-            'rate_description': rate_description,
-            'credit_stress': credit_stress,
-            'credit_description': credit_description,
-            'growth_regime': growth_regime,
-            'growth_description': growth_description,
-            'inflation_trend': inflation_trend,
-            'inflation_description': inflation_description,
-            'yield_curve_slope': round(yield_curve_slope, 2),
-            'yield_curve_status': yield_curve_status,
-            'yield_curve_warning': yield_curve_warning,
-            'fed_funds_rate': round(fed_funds, 2),
-            'hy_spread': round(hy_spread, 2),
-            'macro_multiplier': macro_multiplier,
-            'summary': summary,
-            'advice': advice,
+            "rate_regime": rate_regime,
+            "rate_description": rate_description,
+            "credit_stress": credit_stress,
+            "credit_description": credit_description,
+            "growth_regime": growth_regime,
+            "growth_description": growth_description,
+            "inflation_trend": inflation_trend,
+            "inflation_description": inflation_description,
+            "yield_curve_slope": round(yield_curve_slope, 2),
+            "yield_curve_status": yield_curve_status,
+            "yield_curve_warning": yield_curve_warning,
+            "fed_funds_rate": round(fed_funds, 2),
+            "hy_spread": round(hy_spread, 2),
+            "macro_multiplier": macro_multiplier,
+            "summary": summary,
+            "advice": advice,
         }
 
     def _calculate_multiplier(
-        self, rate_regime: str, credit_stress: str,
-        growth_regime: str, yield_curve_status: str
+        self, rate_regime: str, credit_stress: str, growth_regime: str, yield_curve_status: str
     ) -> float:
         """
         Calculate macro multiplier for option score adjustment.
@@ -322,34 +323,43 @@ class MacroRegimeService:
         multiplier = 1.0
 
         # Credit stress is the biggest risk factor
-        if credit_stress == 'high':
+        if credit_stress == "high":
             multiplier -= 0.10
-        elif credit_stress == 'moderate':
+        elif credit_stress == "moderate":
             multiplier -= 0.03
 
         # Yield curve inversion signals caution
-        if yield_curve_status == 'inverted':
+        if yield_curve_status == "inverted":
             multiplier -= 0.05
-        elif yield_curve_status == 'flat':
+        elif yield_curve_status == "flat":
             multiplier -= 0.02
 
         # Growth slowdown
-        if growth_regime == 'slowdown':
+        if growth_regime == "slowdown":
             multiplier -= 0.05
 
         # Favorable environment bonus
-        if (credit_stress == 'low' and
-            growth_regime == 'expansion' and
-            yield_curve_status == 'normal' and
-            rate_regime in ('stable', 'falling')):
+        if (
+            credit_stress == "low"
+            and growth_regime == "expansion"
+            and yield_curve_status == "normal"
+            and rate_regime in ("stable", "falling")
+        ):
             multiplier = max(multiplier, 1.05)
 
         # Clamp to valid range
         return round(max(0.80, min(1.05, multiplier)), 2)
 
     def _generate_summary_and_advice(
-        self, rate_regime, credit_stress, growth_regime, inflation_trend,
-        yield_curve_status, macro_multiplier, fed_funds, hy_spread
+        self,
+        rate_regime,
+        credit_stress,
+        growth_regime,
+        inflation_trend,
+        yield_curve_status,
+        macro_multiplier,
+        fed_funds,
+        hy_spread,
     ) -> tuple:
         """Generate human-readable summary and actionable advice."""
 
@@ -357,72 +367,69 @@ class MacroRegimeService:
         if macro_multiplier <= 0.80:
             return (
                 "Macro stress: High credit stress + economic slowdown",
-                "⚠️ Defensive posture recommended. Reduce position sizes, prefer shorter DTE (7-14 days), avoid high-beta stocks for CSPs."
+                "⚠️ Defensive posture recommended. Reduce position sizes, prefer shorter DTE (7-14 days), avoid high-beta stocks for CSPs.",
             )
 
         # Stressful scenario
         if macro_multiplier < 1.0:
-            if credit_stress == 'high':
+            if credit_stress == "high":
                 return (
                     f"Credit stress elevated (HY spread: {hy_spread:.1f}%)",
-                    "Caution advised. Focus on high-quality names, reduce tech/growth exposure for wheel strategy."
+                    "Caution advised. Focus on high-quality names, reduce tech/growth exposure for wheel strategy.",
                 )
-            elif yield_curve_status == 'inverted':
+            elif yield_curve_status == "inverted":
                 return (
                     "Yield curve inverted - recession warning",
-                    "Historically signals slowdown. Prefer defensive sectors (XLP, XLU, XLV) for CSPs."
+                    "Historically signals slowdown. Prefer defensive sectors (XLP, XLU, XLV) for CSPs.",
                 )
             else:
                 return (
                     "Macro headwinds present",
-                    "Monitor closely. Consider shorter DTE and higher premium thresholds."
+                    "Monitor closely. Consider shorter DTE and higher premium thresholds.",
                 )
 
         # Favorable scenario
         if macro_multiplier > 1.0:
             return (
                 "Favorable macro environment",
-                "Ideal conditions for wheel strategy. Standard position sizing, full sector coverage."
+                "Ideal conditions for wheel strategy. Standard position sizing, full sector coverage.",
             )
 
         # Neutral scenario
-        if rate_regime == 'rising':
+        if rate_regime == "rising":
             return (
                 f"Rising rate environment (Fed funds: {fed_funds:.2f}%)",
-                "Consider shorter DTE (14-21 days) to capture elevated premiums. Avoid long-dated options."
+                "Consider shorter DTE (14-21 days) to capture elevated premiums. Avoid long-dated options.",
             )
-        elif rate_regime == 'falling':
-            return (
-                "Declining rate environment",
-                "Premiums may compress. Extend DTE to 30-45 days for better returns."
-            )
+        elif rate_regime == "falling":
+            return ("Declining rate environment", "Premiums may compress. Extend DTE to 30-45 days for better returns.")
         else:
             return (
                 "Stable macro environment",
-                "Standard wheel strategy parameters apply. No macro adjustments needed."
+                "Standard wheel strategy parameters apply. No macro adjustments needed.",
             )
 
     def _get_neutral_regime(self) -> RegimeData:
         """Return neutral macro regime when FRED is unavailable."""
         return {
-            'rate_regime': 'stable',
-            'rate_description': 'FRED not configured - using neutral assumption',
-            'credit_stress': 'moderate',
-            'credit_description': 'FRED not configured - using neutral assumption',
-            'growth_regime': 'expansion',
-            'growth_description': 'FRED not configured - using neutral assumption',
-            'inflation_trend': 'stable',
-            'inflation_description': 'FRED not configured - using neutral assumption',
-            'yield_curve_slope': 0.0,
-            'yield_curve_status': 'normal',
-            'yield_curve_warning': 'Unknown (FRED not configured)',
-            'fed_funds_rate': 0.0,
-            'hy_spread': 0.0,
-            'macro_multiplier': 1.0,
-            'summary': 'Macro detection disabled (no FRED API key)',
-            'advice': 'Add FRED_API_KEY to .env for macro regime detection. Get free key: https://fred.stlouisfed.org/docs/api/api_key.html',
-            'fetched_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
-            'enabled': False,
+            "rate_regime": "stable",
+            "rate_description": "FRED not configured - using neutral assumption",
+            "credit_stress": "moderate",
+            "credit_description": "FRED not configured - using neutral assumption",
+            "growth_regime": "expansion",
+            "growth_description": "FRED not configured - using neutral assumption",
+            "inflation_trend": "stable",
+            "inflation_description": "FRED not configured - using neutral assumption",
+            "yield_curve_slope": 0.0,
+            "yield_curve_status": "normal",
+            "yield_curve_warning": "Unknown (FRED not configured)",
+            "fed_funds_rate": 0.0,
+            "hy_spread": 0.0,
+            "macro_multiplier": 1.0,
+            "summary": "Macro detection disabled (no FRED API key)",
+            "advice": "Add FRED_API_KEY to .env for macro regime detection. Get free key: https://fred.stlouisfed.org/docs/api/api_key.html",
+            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "enabled": False,
         }
 
     def clear_cache(self) -> None:
@@ -435,12 +442,12 @@ class MacroRegimeService:
         """Get cache status for monitoring."""
         with self._cache_lock:
             if not self._cache:
-                return {'cached': False, 'age_seconds': None}
-            age = (datetime.now() - self._cache['timestamp']).total_seconds()
+                return {"cached": False, "age_seconds": None}
+            age = (datetime.now() - self._cache["timestamp"]).total_seconds()
             return {
-                'cached': True,
-                'age_seconds': round(age, 0),
-                'ttl_seconds': self._cache_ttl_seconds,
+                "cached": True,
+                "age_seconds": round(age, 0),
+                "ttl_seconds": self._cache_ttl_seconds,
             }
 
 

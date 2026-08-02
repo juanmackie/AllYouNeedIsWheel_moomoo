@@ -5,18 +5,19 @@ Single endpoint that gathers all trading data and returns AI-generated
 trade suggestions (opens, closes, rolls).
 """
 
-from flask import Blueprint
 import logging
 import traceback
 
-from api.routes.utils import success_response, error_response
+from flask import Blueprint
 
-logger = logging.getLogger('api.routes.llm')
+from api.routes.utils import error_response, success_response
 
-bp = Blueprint('llm', __name__, url_prefix='/api/llm')
+logger = logging.getLogger("api.routes.llm")
+
+bp = Blueprint("llm", __name__, url_prefix="/api/llm")
 
 
-@bp.route('/status', methods=['GET'])
+@bp.route("/status", methods=["GET"])
 def get_status():
     """Return LLM advisor availability for UI gating."""
     try:
@@ -29,7 +30,7 @@ def get_status():
         return error_response(str(exc), status_code=500)
 
 
-@bp.route('/suggestions', methods=['POST'])
+@bp.route("/suggestions", methods=["POST"])
 def get_suggestions():
     logger.info("POST /suggestions — generating trade suggestions")
 
@@ -38,9 +39,9 @@ def get_suggestions():
 
         result = _get_suggestions()
 
-        if result['success']:
+        if result["success"]:
             return success_response(result)
-        return error_response(result.get('error', 'LLM service unavailable'), status_code=503)
+        return error_response(result.get("error", "LLM service unavailable"), status_code=503)
 
     except Exception as exc:
         logger.error(f"Error in /api/llm/suggestions: {exc}")

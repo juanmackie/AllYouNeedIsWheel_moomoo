@@ -13,19 +13,21 @@ Services are lazily initialized after app creation to prevent circular import is
 """
 
 import os
+import secrets
 import sqlite3
 import time
 import uuid
-import secrets
 from datetime import datetime
 from urllib.parse import urlparse
-from flask import Flask, current_app, request, jsonify, g
+
+from flask import Flask, current_app, g, jsonify, request
 from flask_cors import CORS
-from core.logging_config import get_logger
+
 from core.context_factory import probe_opend_status
+from core.logging_config import get_logger
 
 # Configure logging
-logger = get_logger('autotrader.api', 'api')
+logger = get_logger("autotrader.api", "api")
 
 # Service registry for lazy initialization
 # Maps service name -> factory function that creates the service
@@ -36,7 +38,7 @@ _service_instances = {}
 
 def _is_trusted_cors_origin(origin):
     parsed = urlparse(origin.strip())
-    return parsed.scheme in {'http', 'https'} and parsed.hostname in {'localhost', '127.0.0.1', '::1'}
+    return parsed.scheme in {"http", "https"} and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
 
 
 def _supports_credentialed_cors(origins):
@@ -45,25 +47,25 @@ def _supports_credentialed_cors(origins):
 
 def _resolve_secret_key(config=None):
     config = config or {}
-    secret_key = config.get('SECRET_KEY') or os.environ.get('SECRET_KEY')
-    if secret_key and secret_key != 'dev':
+    secret_key = config.get("SECRET_KEY") or os.environ.get("SECRET_KEY")
+    if secret_key and secret_key != "dev":
         return secret_key
 
-    env_name = (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV') or '').strip().lower()
+    env_name = (os.environ.get("APP_ENV") or os.environ.get("FLASK_ENV") or "").strip().lower()
     in_dev_or_test = bool(
-        config.get('TESTING')
-        or config.get('DEBUG')
-        or env_name in {'dev', 'development', 'test', 'testing'}
-        or os.environ.get('PYTEST_CURRENT_TEST')
-        or os.environ.get('FLASK_DEBUG', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+        config.get("TESTING")
+        or config.get("DEBUG")
+        or env_name in {"dev", "development", "test", "testing"}
+        or os.environ.get("PYTEST_CURRENT_TEST")
+        or os.environ.get("FLASK_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
     )
 
-    if secret_key == 'dev' and not in_dev_or_test:
+    if secret_key == "dev" and not in_dev_or_test:
         logger.warning("Ignoring insecure default SECRET_KEY=dev outside dev/test")
     elif not secret_key and not in_dev_or_test:
         logger.warning("SECRET_KEY was not set; using an ephemeral fallback secret")
 
-    if in_dev_or_test and secret_key == 'dev':
+    if in_dev_or_test and secret_key == "dev":
         return secret_key
 
     return secrets.token_urlsafe(32)
@@ -126,15 +128,10 @@ def create_app(config=None):
         Flask: Configured Flask application
     """
     logger.info("Creating API application")
-    app = Flask(__name__,
-                static_folder='../frontend/static',
-                template_folder='../frontend/templates')
+    app = Flask(__name__, static_folder="../frontend/static", template_folder="../frontend/templates")
 
     # Enable CORS with configurable origins
-    allowed_origins = os.environ.get(
-        'CORS_ALLOWED_ORIGINS',
-        'http://localhost:8000,http://127.0.0.1:8000'
-    ).split(',')
+    allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
     allowed_origins = [origin.strip() for origin in allowed_origins if origin.strip()]
     supports_credentials = _supports_credentialed_cors(allowed_origins)
     CORS(app, origins=allowed_origins, supports_credentials=supports_credentials)
@@ -143,8 +140,8 @@ def create_app(config=None):
     # Default configuration
     app.config.from_mapping(
         SECRET_KEY=_resolve_secret_key(config),
-        DATABASE='sqlite:///:memory:',
-        LLM_ENABLED=os.environ.get('LLM_ENABLED', 'false'),
+        DATABASE="sqlite:///:memory:",
+        LLM_ENABLED=os.environ.get("LLM_ENABLED", "false"),
     )
 
     # Override with passed config
@@ -158,7 +155,8 @@ def create_app(config=None):
     _register_services()
 
     # Register blueprints
-    from api.routes import portfolio, options, macro, llm
+    from api.routes import llm, macro, options, portfolio
+
     app.register_blueprint(portfolio.bp)
     app.register_blueprint(options.bp)
     app.register_blueprint(macro.bp)
@@ -166,36 +164,39 @@ def create_app(config=None):
 
     # Register new feature blueprints
     from api.routes import earnings, risk
+
     app.register_blueprint(earnings.bp)
     app.register_blueprint(risk.bp)
 
     # Extracted route modules (F008)
-    from api.routes import roll_pressure, alerts, signals
+    from api.routes import alerts, roll_pressure, signals
+
     app.register_blueprint(roll_pressure.bp)
     app.register_blueprint(alerts.bp)
     app.register_blueprint(signals.bp)
 
     # Wheel Scan Ledger
     from api.routes import ledger
+
     app.register_blueprint(ledger.bp)
     logger.info("Registered API blueprints")
 
     # Authentication middleware
-    api_key = os.environ.get('API_KEY', '')
+    api_key = os.environ.get("API_KEY", "")
     if api_key:
         logger.info("API key authentication enabled")
 
         @app.before_request
         def check_auth():
             g.request_started_at = time.time()
-            g.request_id = request.headers.get('X-Request-Id', str(uuid.uuid4()))
-            if request.method == 'OPTIONS':
+            g.request_id = request.headers.get("X-Request-Id", str(uuid.uuid4()))
+            if request.method == "OPTIONS":
                 return None
-            public_routes = ('/health', '/api/system/opend-status', '/static/')
+            public_routes = ("/health", "/api/system/opend-status", "/static/")
             if any(request.path.startswith(p) for p in public_routes):
                 return None
-            auth_header = request.headers.get('Authorization', '')
-            if auth_header == f'Bearer {api_key}':
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header == f"Bearer {api_key}":
                 return None
             logger.warning(
                 "Unauthorized API request method=%s path=%s request_id=%s",
@@ -203,20 +204,20 @@ def create_app(config=None):
                 request.path,
                 g.request_id,
             )
-            return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
 
     @app.before_request
     def log_request_start():
         g.request_started_at = time.time()
-        g.request_id = request.headers.get('X-Request-Id', str(uuid.uuid4()))
+        g.request_id = request.headers.get("X-Request-Id", str(uuid.uuid4()))
 
     @app.after_request
     def log_request_end(response):
-        started_at = getattr(g, 'request_started_at', None)
+        started_at = getattr(g, "request_started_at", None)
         elapsed_ms = int((time.time() - started_at) * 1000) if started_at else None
-        request_id = getattr(g, 'request_id', '')
-        if request.path.startswith('/static/'):
-            response.headers.setdefault('X-Request-Id', request_id)
+        request_id = getattr(g, "request_id", "")
+        if request.path.startswith("/static/"):
+            response.headers.setdefault("X-Request-Id", request_id)
             return response
 
         if elapsed_ms is None:
@@ -236,61 +237,62 @@ def create_app(config=None):
                 elapsed_ms,
                 request_id,
             )
-        response.headers.setdefault('X-Request-Id', request_id)
+        response.headers.setdefault("X-Request-Id", request_id)
         return response
 
-    @app.route('/health')
+    @app.route("/health")
     def health_check():
         logger.debug("Health check endpoint called")
 
         # Check tvscreener availability
-        tvscreener_status = 'unknown'
+        tvscreener_status = "unknown"
         try:
             from api import get_service
-            tvscreener = get_service('tvscreener')
+
+            tvscreener = get_service("tvscreener")
             if tvscreener and tvscreener._ensure_initialized():
-                tvscreener_status = 'available'
+                tvscreener_status = "available"
             else:
-                tvscreener_status = 'unavailable'
+                tvscreener_status = "unavailable"
         except Exception as exc:
             logger.warning("Health check tvscreener probe failed: %s", exc, exc_info=True)
-            tvscreener_status = 'error'
+            tvscreener_status = "error"
 
-        database_status = 'unknown'
+        database_status = "unknown"
         try:
-            database = current_app.config.get('database')
+            database = current_app.config.get("database")
             if database is not None:
                 with sqlite3.connect(str(database.db_path)) as conn:
-                    conn.execute('SELECT 1')
-                database_status = 'available'
+                    conn.execute("SELECT 1")
+                database_status = "available"
             else:
-                database_status = 'unavailable'
+                database_status = "unavailable"
         except Exception as exc:
             logger.warning("Health check database probe failed: %s", exc, exc_info=True)
-            database_status = 'error'
+            database_status = "error"
 
         try:
             opend_status = probe_opend_status(
-                host=current_app.config.get('connection_config', {}).get('host', '127.0.0.1'),
-                port=current_app.config.get('connection_config', {}).get('port', 11111),
+                host=current_app.config.get("connection_config", {}).get("host", "127.0.0.1"),
+                port=current_app.config.get("connection_config", {}).get("port", 11111),
             )
         except Exception as exc:
             logger.warning("Health check OpenD probe failed: %s", exc, exc_info=True)
-            opend_status = {'status': 'error'}
+            opend_status = {"status": "error"}
 
         return {
-            'status': 'healthy',
-            'tvscreener': tvscreener_status,
-            'database': database_status,
-            'opend': opend_status.get('status', 'unknown'),
-            'timestamp': datetime.now().isoformat()
+            "status": "healthy",
+            "tvscreener": tvscreener_status,
+            "database": database_status,
+            "opend": opend_status.get("status", "unknown"),
+            "timestamp": datetime.now().isoformat(),
         }
 
-    @app.route('/api/system/opend-status')
+    @app.route("/api/system/opend-status")
     def opend_status():
-        connection_config = current_app.config.get('connection_config', {})
-        host = connection_config.get('host', '127.0.0.1')
-        port = connection_config.get('port', 11111)
+        connection_config = current_app.config.get("connection_config", {})
+        host = connection_config.get("host", "127.0.0.1")
+        port = connection_config.get("port", 11111)
         return probe_opend_status(host=host, port=port)
 
     logger.info("API application created successfully")
@@ -311,26 +313,29 @@ def _register_services():
     from api.services.tvscreener_service import create_tvscreener_service
 
     # Register service factories (not instances yet)
-    register_service('options', OptionsService)
-    register_service('portfolio', PortfolioService)
-    register_service('signal_overlay', get_signal_overlay_service)
-    register_service('tvscreener', create_tvscreener_service)
+    register_service("options", OptionsService)
+    register_service("portfolio", PortfolioService)
+    register_service("signal_overlay", get_signal_overlay_service)
+    register_service("tvscreener", create_tvscreener_service)
 
     def _create_iv_earnings_service():
         from api.services.config import get_config
-        from db.database import OptionsDatabase
         from api.services.iv_earnings_service import IVEarningsService
-        db = OptionsDatabase(get_config().get('db_path'))
+        from db.database import OptionsDatabase
+
+        db = OptionsDatabase(get_config().get("db_path"))
         return IVEarningsService(db)
 
-    register_service('ivearnings', _create_iv_earnings_service)
+    register_service("ivearnings", _create_iv_earnings_service)
 
     def _create_earnings_vol_signal_service():
         from flask import current_app
+
         from api.services.earnings_vol_service import EarningsVolSignalService
+
         return EarningsVolSignalService(
-            config=current_app.config.get('connection_config', {}),
-            iv_earnings_service=get_service('ivearnings'),
+            config=current_app.config.get("connection_config", {}),
+            iv_earnings_service=get_service("ivearnings"),
         )
 
-    register_service('earnings_vol', _create_earnings_vol_signal_service)
+    register_service("earnings_vol", _create_earnings_vol_signal_service)

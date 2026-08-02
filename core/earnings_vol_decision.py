@@ -51,12 +51,14 @@ class EarningsVolSignal:
 
 
 def _has_complete_trade_plan(metrics: dict) -> bool:
-    return all([
-        metrics.get("atm_strike") is not None,
-        bool(metrics.get("front_expiration")),
-        bool(metrics.get("back_expiration")),
-        metrics.get("estimated_calendar_debit") is not None,
-    ])
+    return all(
+        [
+            metrics.get("atm_strike") is not None,
+            bool(metrics.get("front_expiration")),
+            bool(metrics.get("back_expiration")),
+            metrics.get("estimated_calendar_debit") is not None,
+        ]
+    )
 
 
 def _build_plan_text(signal: str, days, blockers, incomplete_plan_fields: bool = False):
@@ -206,7 +208,10 @@ def classify_earnings_vol_signal(metrics: dict) -> EarningsVolSignal:
         label = "Avoid"
 
     structure, entry_plan, exit_plan, profit_target, invalidation = _build_plan_text(
-        signal, days, blockers, incomplete_plan_fields=incomplete_plan_fields,
+        signal,
+        days,
+        blockers,
+        incomplete_plan_fields=incomplete_plan_fields,
     )
 
     return EarningsVolSignal(

@@ -5,11 +5,11 @@ Provides wheel strategy candidate screening via TradingView.
 
 import logging
 import threading
-from typing import Optional, List
+from typing import List, Optional
 
 from core.ttl_cache import make_ttl_cache
 
-logger = logging.getLogger('api.services.tvscreener')
+logger = logging.getLogger("api.services.tvscreener")
 
 
 class TvscreenerService:
@@ -31,6 +31,7 @@ class TvscreenerService:
                 return self._tvscreener is not None
             try:
                 import tvscreener
+
                 self._tvscreener = tvscreener
                 self._initialized = True
                 logger.info("tvscreener SDK initialized")
@@ -44,10 +45,9 @@ class TvscreenerService:
                 self._initialized = True  # Mark as initialized to avoid retry
                 return False
 
-    def get_wheel_candidates(self, min_volatility_pct: float = 3.0,
-                            min_volume: int = 1000000,
-                            limit: int = 50,
-                            max_price: float = None) -> Optional[List[str]]:
+    def get_wheel_candidates(
+        self, min_volatility_pct: float = 3.0, min_volume: int = 1000000, limit: int = 50, max_price: float = None
+    ) -> Optional[List[str]]:
         """
         Fetch stocks suitable for wheel strategy.
 
@@ -73,7 +73,7 @@ class TvscreenerService:
 
         # Fetch from API
         try:
-            from tvscreener import StockScreener, StockField
+            from tvscreener import StockField, StockScreener
 
             screener = StockScreener()
             # TradingView exposes daily volatility percent, not IV rank. The
@@ -92,7 +92,7 @@ class TvscreenerService:
             if df is None or df.empty:
                 symbols = []
             else:
-                symbols = df['symbol'].tolist() if 'symbol' in df.columns else []
+                symbols = df["symbol"].tolist() if "symbol" in df.columns else []
 
             # Cache result
             with self._cache_lock:

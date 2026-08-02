@@ -16,7 +16,7 @@ rather than hallucinate.
 """
 
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -40,23 +40,44 @@ class EvidenceBlock:
 @dataclass
 class WheelAdvisorEvidence:
     portfolio: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="portfolio", label="Portfolio"))
-    positions: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="positions", label="Open Positions"))
-    opportunities: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="opportunities", label="Top Opportunities"))
-    signal_overlays: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="signal_overlays", label="Multi-Dimensional Signal Overlay"))
+    positions: EvidenceBlock = field(
+        default_factory=lambda: EvidenceBlock(category="positions", label="Open Positions")
+    )
+    opportunities: EvidenceBlock = field(
+        default_factory=lambda: EvidenceBlock(category="opportunities", label="Top Opportunities")
+    )
+    signal_overlays: EvidenceBlock = field(
+        default_factory=lambda: EvidenceBlock(category="signal_overlays", label="Multi-Dimensional Signal Overlay")
+    )
     macro: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="macro", label="Macro Regime"))
     vix: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="vix", label="VIX Regime"))
     iv_environment: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="iv", label="IV Environment"))
-    earnings: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="earnings", label="Earnings Calendar"))
-    technical: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="technical", label="Technical Regime"))
-    playbook_hypotheses: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="playbook", label="Active Playbook Hypotheses"))
-    scan_ledger: EvidenceBlock = field(default_factory=lambda: EvidenceBlock(category="scan", label="Recent Scan Summary"))
+    earnings: EvidenceBlock = field(
+        default_factory=lambda: EvidenceBlock(category="earnings", label="Earnings Calendar")
+    )
+    technical: EvidenceBlock = field(
+        default_factory=lambda: EvidenceBlock(category="technical", label="Technical Regime")
+    )
+    playbook_hypotheses: EvidenceBlock = field(
+        default_factory=lambda: EvidenceBlock(category="playbook", label="Active Playbook Hypotheses")
+    )
+    scan_ledger: EvidenceBlock = field(
+        default_factory=lambda: EvidenceBlock(category="scan", label="Recent Scan Summary")
+    )
 
     def all_blocks(self) -> list[EvidenceBlock]:
         return [
-            self.portfolio, self.positions, self.opportunities,
-            self.signal_overlays, self.macro, self.vix, self.iv_environment,
-            self.earnings, self.technical,
-            self.playbook_hypotheses, self.scan_ledger,
+            self.portfolio,
+            self.positions,
+            self.opportunities,
+            self.signal_overlays,
+            self.macro,
+            self.vix,
+            self.iv_environment,
+            self.earnings,
+            self.technical,
+            self.playbook_hypotheses,
+            self.scan_ledger,
         ]
 
     def to_prompt(self) -> str:
@@ -87,20 +108,28 @@ def build_evidence_from_context(context: dict) -> WheelAdvisorEvidence:
     pf = context.get("portfolio", {})
     if pf.get("account_value"):
         evidence.portfolio = EvidenceBlock(
-            category="portfolio", label="Portfolio",
+            category="portfolio",
+            label="Portfolio",
             content=f"Account value: ${pf['account_value']:,.2f}, Available cash: ${pf.get('available_cash', 0):,.2f}",
-            source="moomoo", available=True, fetched_at=datetime.now().isoformat(),
+            source="moomoo",
+            available=True,
+            fetched_at=datetime.now().isoformat(),
         )
 
     pos = context.get("positions", [])
     if pos:
         lines = []
         for s in pos:
-            lines.append(f"{s['ticker']}: {s['shares']} shares @ ${s['avg_cost']:.2f} avg, current ${s['market_price']:.2f}")
+            lines.append(
+                f"{s['ticker']}: {s['shares']} shares @ ${s['avg_cost']:.2f} avg, current ${s['market_price']:.2f}"
+            )
         evidence.positions = EvidenceBlock(
-            category="positions", label="Open Positions",
-            content=" | ".join(lines), source="moomoo",
-            available=True, fetched_at=datetime.now().isoformat(),
+            category="positions",
+            label="Open Positions",
+            content=" | ".join(lines),
+            source="moomoo",
+            available=True,
+            fetched_at=datetime.now().isoformat(),
         )
 
     opt = context.get("scored_positions", [])
@@ -117,9 +146,12 @@ def build_evidence_from_context(context: dict) -> WheelAdvisorEvidence:
                 parts.append(f"warnings={'; '.join(o['warnings'])}")
             lines.append(" | ".join(parts))
         evidence.positions = EvidenceBlock(
-            category="scored_positions", label="Open Positions (Scored)",
-            content="\n".join(lines), source="wheel_decision",
-            available=True, fetched_at=datetime.now().isoformat(),
+            category="scored_positions",
+            label="Open Positions (Scored)",
+            content="\n".join(lines),
+            source="wheel_decision",
+            available=True,
+            fetched_at=datetime.now().isoformat(),
         )
 
     opp = context.get("opportunities", [])
@@ -142,16 +174,19 @@ def build_evidence_from_context(context: dict) -> WheelAdvisorEvidence:
                 if r.get("signal_overlay_fit") and r.get("signal_overlay_fit") != "unknown":
                     overlay_bits.append(f"fit={r.get('signal_overlay_fit')}")
             lines.append(
-                f"#{i+1} {r['ticker']} {r['option_type']} ${r['strike']:.1f} "
+                f"#{i + 1} {r['ticker']} {r['option_type']} ${r['strike']:.1f} "
                 f"exp {r['expiration']} premium=${r['premium_per_contract']:.2f} "
                 f"delta={r['delta']:.3f} DTE={r['dte']} "
                 f"ann_return={r['annualized_return']:.1f}% score={r['score']:.0f}"
                 + (f" | {' | '.join(overlay_bits)}" if overlay_bits else "")
             )
         evidence.opportunities = EvidenceBlock(
-            category="opportunities", label="Top Opportunities",
-            content="\n".join(lines), source="wheel_scorer",
-            available=True, fetched_at=datetime.now().isoformat(),
+            category="opportunities",
+            label="Top Opportunities",
+            content="\n".join(lines),
+            source="wheel_scorer",
+            available=True,
+            fetched_at=datetime.now().isoformat(),
         )
 
     signal_overlays = context.get("signal_overlays", [])
@@ -200,18 +235,23 @@ def build_evidence_from_context(context: dict) -> WheelAdvisorEvidence:
             f"Summary: {macro.get('summary', 'N/A')}",
         ]
         evidence.macro = EvidenceBlock(
-            category="macro", label="Macro Regime",
-            content=" | ".join(lines), source=macro.get("source", "FRED"),
-            available=True, fetched_at=datetime.now().isoformat(),
+            category="macro",
+            label="Macro Regime",
+            content=" | ".join(lines),
+            source=macro.get("source", "FRED"),
+            available=True,
+            fetched_at=datetime.now().isoformat(),
         )
 
     vix = context.get("vix", {})
     if vix:
         evidence.vix = EvidenceBlock(
-            category="vix", label="VIX Regime",
+            category="vix",
+            label="VIX Regime",
             content=f"VIX: {vix.get('vix', 'N/A')} ({vix.get('regime', 'unknown')}) — {vix.get('description', '')}",
             source=vix.get("source", "yahoo"),
-            available=True, fetched_at=datetime.now().isoformat(),
+            available=True,
+            fetched_at=datetime.now().isoformat(),
         )
 
     return evidence

@@ -17,7 +17,7 @@ This is read-only for users but inspectable via `/api/ledger`.
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -77,12 +77,26 @@ def extract_data_sources(portfolio_context: dict, decisions: list | None = None)
         for d in decisions:
             wd = d if hasattr(d, "to_dict") else d.get("wheel_decision", d)
             if isinstance(wd, dict):
-                for key in ("price_source", "chain_source", "greeks_source", "iv_source", "earnings_source", "macro_source"):
+                for key in (
+                    "price_source",
+                    "chain_source",
+                    "greeks_source",
+                    "iv_source",
+                    "earnings_source",
+                    "macro_source",
+                ):
                     val = wd.get(key, "")
                     if val and val not in ("missing", ""):
                         sources.add(val)
             elif hasattr(wd, "price_source"):
-                for attr in ("price_source", "chain_source", "greeks_source", "iv_source", "earnings_source", "macro_source"):
+                for attr in (
+                    "price_source",
+                    "chain_source",
+                    "greeks_source",
+                    "iv_source",
+                    "earnings_source",
+                    "macro_source",
+                ):
                     val = getattr(wd, attr, "")
                     if val and val not in ("missing", ""):
                         sources.add(val)
@@ -97,6 +111,7 @@ class ScanLedger:
     def _connect(self):
         if self._conn is None:
             from db.sqlite_pool import pooled_connection
+
             self._conn_ctx = pooled_connection(self.db.db_path)
             self._conn = self._conn_ctx.__enter__()
         return self._conn
@@ -150,9 +165,7 @@ class ScanLedger:
                     (scan_type, limit),
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    "SELECT * FROM scan_ledger ORDER BY id DESC LIMIT ?", (limit,)
-                ).fetchall()
+                rows = conn.execute("SELECT * FROM scan_ledger ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
             return [_row_to_dict(r) for r in rows]
         except Exception as exc:
             logger.error("Failed to query scan ledger: %s", exc)
@@ -161,9 +174,7 @@ class ScanLedger:
     def get_by_id(self, entry_id: int) -> dict | None:
         try:
             conn = self._connect()
-            row = conn.execute(
-                "SELECT * FROM scan_ledger WHERE id = ?", (entry_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM scan_ledger WHERE id = ?", (entry_id,)).fetchone()
             return _row_to_dict(row) if row else None
         except Exception as exc:
             logger.error("Failed to get scan ledger entry %s: %s", entry_id, exc)

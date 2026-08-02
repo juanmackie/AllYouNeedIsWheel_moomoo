@@ -2,8 +2,10 @@
 Tests for TvscreenerService - Simplified
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from api.services.tvscreener_service import TvscreenerService
 
 
@@ -70,7 +72,7 @@ class TestTvscreenerServiceGetWheelCandidates:
         """Test returns None when not initialized."""
         service = TvscreenerService()
         # Mock _ensure_initialized to return False (simulate tvscreener not available)
-        with patch.object(service, '_ensure_initialized', return_value=False):
+        with patch.object(service, "_ensure_initialized", return_value=False):
             result = service.get_wheel_candidates()
             assert result is None
 
@@ -85,7 +87,7 @@ class TestTvscreenerServiceGetWheelCandidates:
         service._initialized = True
         service._tvscreener = MagicMock()
 
-        with patch('tvscreener.StockScreener', side_effect=Exception("API Error")):
+        with patch("tvscreener.StockScreener", side_effect=Exception("API Error")):
             result = service.get_wheel_candidates()
             assert result is None
 
@@ -98,12 +100,13 @@ class TestTvscreenerServiceGetWheelCandidates:
         mock_screener = MagicMock()
 
         import pandas as pd
-        mock_screener.get.return_value = pd.DataFrame({'symbol': ['CHEAP1']})
 
-        with patch('tvscreener.StockScreener', return_value=mock_screener):
+        mock_screener.get.return_value = pd.DataFrame({"symbol": ["CHEAP1"]})
+
+        with patch("tvscreener.StockScreener", return_value=mock_screener):
             result = service.get_wheel_candidates(max_price=133.6)
 
-        assert result == ['CHEAP1']
+        assert result == ["CHEAP1"]
         # 3 where() calls: volatility, volume, price
         assert mock_screener.where.call_count == 3
 
@@ -116,12 +119,13 @@ class TestTvscreenerServiceGetWheelCandidates:
         mock_screener = MagicMock()
 
         import pandas as pd
-        mock_screener.get.return_value = pd.DataFrame({'symbol': ['ANY']})
 
-        with patch('tvscreener.StockScreener', return_value=mock_screener):
+        mock_screener.get.return_value = pd.DataFrame({"symbol": ["ANY"]})
+
+        with patch("tvscreener.StockScreener", return_value=mock_screener):
             result = service.get_wheel_candidates(max_price=None)
 
-        assert result == ['ANY']
+        assert result == ["ANY"]
         # Only 2 where() calls: volatility + volume (no price)
         assert mock_screener.where.call_count == 2
 
@@ -134,12 +138,13 @@ class TestTvscreenerServiceGetWheelCandidates:
         mock_screener = MagicMock()
 
         import pandas as pd
-        mock_screener.get.return_value = pd.DataFrame({'symbol': ['ANY']})
 
-        with patch('tvscreener.StockScreener', return_value=mock_screener):
+        mock_screener.get.return_value = pd.DataFrame({"symbol": ["ANY"]})
+
+        with patch("tvscreener.StockScreener", return_value=mock_screener):
             result = service.get_wheel_candidates(min_volatility_pct=4.5, max_price=None)
 
-        assert result == ['ANY']
+        assert result == ["ANY"]
         volatility_filter = mock_screener.where.call_args_list[0][0][0]
         assert volatility_filter.value == 4.5
 
@@ -150,5 +155,6 @@ class TestCreateTvscreenerService:
     def test_create_service(self):
         """Test factory function creates service."""
         from api.services.tvscreener_service import create_tvscreener_service
+
         service = create_tvscreener_service()
         assert isinstance(service, TvscreenerService)

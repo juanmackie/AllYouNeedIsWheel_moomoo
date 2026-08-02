@@ -2,30 +2,30 @@
 Database module for SQLite logging of trades
 """
 
+import logging
 from contextlib import contextmanager
 from pathlib import Path
-import logging
 
-from .schema import create_tables, migrate_database
-from .iv_repository import IVRepository
 from .earnings_repository import EarningsRepository
-from .trade_events_repository import TradeEventsRepository
+from .iv_repository import IVRepository
 from .option_chain_repository import OptionChainRepository
+from .schema import create_tables, migrate_database
 from .sqlite_pool import (
-    pooled_connection,
     get_connection_pool_stats,
+    pooled_connection,
     register_pool_handle,
     release_pool_handle,
 )
+from .trade_events_repository import TradeEventsRepository
 
-logger = logging.getLogger('db.database')
+logger = logging.getLogger("db.database")
 
 
 class OptionsDatabase:
     def __init__(self, db_name=None):
         self._closed = False
         if db_name is None:
-            self.db_path = Path(__file__).parent.parent / 'options.db'
+            self.db_path = Path(__file__).parent.parent / "options.db"
         else:
             self.db_path = Path(db_name).resolve()
 
@@ -73,7 +73,9 @@ class OptionsDatabase:
     # --- IV History ---
 
     def save_iv_data(self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None):
-        return self._iv.save_iv_data(ticker, implied_volatility, stock_price=stock_price, option_type=option_type, expiration=expiration, dte=dte)
+        return self._iv.save_iv_data(
+            ticker, implied_volatility, stock_price=stock_price, option_type=option_type, expiration=expiration, dte=dte
+        )
 
     def get_iv_history(self, ticker, days=30):
         return self._iv.get_iv_history(ticker, days=days)
@@ -86,13 +88,28 @@ class OptionsDatabase:
 
     # --- Earnings Calendar ---
 
-    def save_earnings_date(self, ticker, earnings_date, fetch_status='success', error_message=None,
-                           time_of_day=None, fiscal_date_ending=None, estimate=None,
-                           currency=None, earnings_source=None):
+    def save_earnings_date(
+        self,
+        ticker,
+        earnings_date,
+        fetch_status="success",
+        error_message=None,
+        time_of_day=None,
+        fiscal_date_ending=None,
+        estimate=None,
+        currency=None,
+        earnings_source=None,
+    ):
         return self._earnings.save_earnings_date(
-            ticker, earnings_date, fetch_status=fetch_status, error_message=error_message,
-            time_of_day=time_of_day, fiscal_date_ending=fiscal_date_ending,
-            estimate=estimate, currency=currency, earnings_source=earnings_source,
+            ticker,
+            earnings_date,
+            fetch_status=fetch_status,
+            error_message=error_message,
+            time_of_day=time_of_day,
+            fiscal_date_ending=fiscal_date_ending,
+            estimate=estimate,
+            currency=currency,
+            earnings_source=earnings_source,
         )
 
     def get_earnings_date(self, ticker):
@@ -120,8 +137,12 @@ class OptionsDatabase:
 
     # --- Option Chain Snapshots ---
 
-    def save_option_chain_snapshot(self, ticker, expiration, right, stock_price, chain_dict, source='broker', as_of=None):
-        return self._option_chains.save_snapshot(ticker, expiration, right, stock_price, chain_dict, source=source, as_of=as_of)
+    def save_option_chain_snapshot(
+        self, ticker, expiration, right, stock_price, chain_dict, source="broker", as_of=None
+    ):
+        return self._option_chains.save_snapshot(
+            ticker, expiration, right, stock_price, chain_dict, source=source, as_of=as_of
+        )
 
     def get_option_chain_snapshot(self, ticker, expiration, right):
         return self._option_chains.get_snapshot(ticker, expiration, right)
@@ -139,7 +160,7 @@ class OptionsDatabase:
         return self._option_chains.get_stats()
 
     def close(self):
-        if self._closed or not hasattr(self, 'db_path'):
+        if self._closed or not hasattr(self, "db_path"):
             return
         release_pool_handle(self.db_path)
         self._closed = True

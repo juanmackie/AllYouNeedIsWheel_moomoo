@@ -4,14 +4,14 @@ Extracted from core/connection.py for maintainability.
 """
 
 import re
-import time
 import threading
+import time
 
 from core.logging_config import get_logger
 
-logger = get_logger('autotrader.connection', 'moomoo')
+logger = get_logger("autotrader.connection", "moomoo")
 
-_OPTION_CODE_RE = re.compile(r'^(?P<underlying>[A-Z0-9-]+)(?P<expiry>\d{6})(?P<right>[CP])(?P<strike>\d+)$')
+_OPTION_CODE_RE = re.compile(r"^(?P<underlying>[A-Z0-9-]+)(?P<expiry>\d{6})(?P<right>[CP])(?P<strike>\d+)$")
 
 
 class TickerCache:
@@ -69,7 +69,7 @@ class TickerCache:
 
 def format_symbol(symbol):
     """Format symbol to moomoo format (e.g., US.AAPL)."""
-    if '.' not in symbol:
+    if "." not in symbol:
         return f"US.{symbol}"
     return symbol
 
@@ -79,28 +79,28 @@ def canonical_underlying(ticker):
     Normalize a ticker to its canonical (bare) form for deduplication.
     Strips known exchange prefixes (US., HK., etc.) and returns the
     bare ticker used for grouping recommendations and display.
-    
+
     Examples:
         'US.UBER' -> 'UBER'
         'UBER' -> 'UBER'
         'US.BRK.B' -> 'BRK-B'
         'HK.0700' -> '0700'
-    
+
     This is a standalone implementation (no cross-package imports) so it
     can be safely used from core, api, or frontend JS equivalents.
     """
     if not ticker or not isinstance(ticker, str):
-        return ticker or ''
+        return ticker or ""
     s = ticker
-    if ':' in s:
-        s = s.split(':', 1)[-1]
-    if '.' in s:
-        parts = s.split('.', 1)
-        known = {'US', 'HK', 'SZ', 'SH', 'SS', 'SG', 'JP', 'UK', 'DE', 'FR', 'IT', 'CA', 'AU', 'NZ'}
+    if ":" in s:
+        s = s.split(":", 1)[-1]
+    if "." in s:
+        parts = s.split(".", 1)
+        known = {"US", "HK", "SZ", "SH", "SS", "SG", "JP", "UK", "DE", "FR", "IT", "CA", "AU", "NZ"}
         if len(parts) == 2 and parts[0] in known:
             s = parts[1]
-    s = s.replace('.', '-')
-    s = s.replace('/', '-').replace('$', '-')
+    s = s.replace(".", "-")
+    s = s.replace("/", "-").replace("$", "-")
     return s
 
 
@@ -112,18 +112,18 @@ def earnings_underlying_ticker(ticker):
     never receive full option contract codes.
     """
     if not ticker or not isinstance(ticker, str):
-        return ticker or ''
+        return ticker or ""
 
     raw = ticker.strip()
     if not raw:
-        return ''
+        return ""
 
     s = canonical_underlying(raw).strip().upper()
     if not s:
-        return ''
+        return ""
 
     match = _OPTION_CODE_RE.match(s)
     if match:
-        return match.group('underlying')
+        return match.group("underlying")
 
     return s

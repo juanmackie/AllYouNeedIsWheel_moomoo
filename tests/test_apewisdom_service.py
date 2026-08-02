@@ -8,6 +8,7 @@ from api.services.apewisdom_service import ApeWisdomService
 # _parse_entry
 # ---------------------------------------------------------------------------
 
+
 class TestParseEntry:
     def test_normalizes_string_numbers(self):
         raw = {
@@ -51,9 +52,10 @@ class TestParseEntry:
 # _compute_momentum
 # ---------------------------------------------------------------------------
 
+
 class TestComputeMomentum:
     def test_growing_mentions_scores_higher(self):
-        e1 = {"mentions": 100, "mentions_24h_ago": 10}   # growth
+        e1 = {"mentions": 100, "mentions_24h_ago": 10}  # growth
         e2 = {"mentions": 100, "mentions_24h_ago": 100}  # flat
         assert ApeWisdomService._compute_momentum(e1) > ApeWisdomService._compute_momentum(e2)
 
@@ -71,6 +73,7 @@ class TestComputeMomentum:
 # ---------------------------------------------------------------------------
 # _apply_filters
 # ---------------------------------------------------------------------------
+
 
 class TestApplyFilters:
     def test_filters_by_min_mentions(self):
@@ -101,6 +104,7 @@ class TestApplyFilters:
 # ---------------------------------------------------------------------------
 # get_momentum_candidates
 # ---------------------------------------------------------------------------
+
 
 class TestGetMomentumCandidates:
     def test_returns_empty_when_disabled(self):
@@ -181,6 +185,7 @@ class TestGetMomentumCandidates:
 # ---------------------------------------------------------------------------
 # fetch_all_stocks
 # ---------------------------------------------------------------------------
+
 
 class TestFetchAllStocks:
     def test_successful_fetch(self):

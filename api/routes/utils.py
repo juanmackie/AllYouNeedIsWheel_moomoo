@@ -8,8 +8,8 @@ Error envelope:   {'success': False, 'error': 'message'}
 Success envelope: {'success': True,  ...merged(data)...}
 """
 
-import os
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -18,21 +18,21 @@ from pathlib import Path
 
 from flask import jsonify
 
-from api.services.utils import validate_ticker, clean_yfinance_ticker
+from api.services.utils import clean_yfinance_ticker, validate_ticker
 
-_logger = logging.getLogger('api.routes.utils')
+_logger = logging.getLogger("api.routes.utils")
 
-_SANITIZE_ERRORS = os.environ.get('SANITIZE_ERRORS', 'true').lower() in ('1', 'true', 'yes')
+_SANITIZE_ERRORS = os.environ.get("SANITIZE_ERRORS", "true").lower() in ("1", "true", "yes")
 _RATE_LIMIT_LOCK = threading.Lock()
 _RATE_LIMIT_INIT_LOCK = threading.Lock()
-_RATE_LIMIT_STORE_PATH = Path(__file__).resolve().parents[2] / '_tmp' / 'route_rate_limits.db'
+_RATE_LIMIT_STORE_PATH = Path(__file__).resolve().parents[2] / "_tmp" / "route_rate_limits.db"
 _RATE_LIMIT_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _clear_rate_limit_store() -> None:
     try:
         with sqlite3.connect(str(_RATE_LIMIT_STORE_PATH), timeout=5) as conn:
-            conn.execute('DELETE FROM route_rate_limits')
+            conn.execute("DELETE FROM route_rate_limits")
             conn.commit()
     except sqlite3.Error:
         pass
@@ -41,23 +41,23 @@ def _clear_rate_limit_store() -> None:
 def _ensure_rate_limit_store() -> None:
     with _RATE_LIMIT_INIT_LOCK:
         with sqlite3.connect(str(_RATE_LIMIT_STORE_PATH), timeout=5) as conn:
-            conn.execute('PRAGMA journal_mode=WAL')
-            conn.execute('PRAGMA busy_timeout=3000')
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=3000")
             conn.execute(
-                '''
+                """
                 CREATE TABLE IF NOT EXISTS route_rate_limits (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     route_name TEXT NOT NULL,
                     client_key TEXT NOT NULL,
                     ts REAL NOT NULL
                 )
-                '''
+                """
             )
             conn.execute(
-                '''
+                """
                 CREATE INDEX IF NOT EXISTS idx_route_rate_limits_lookup
                 ON route_rate_limits(route_name, client_key, ts)
-                '''
+                """
             )
             conn.commit()
 
@@ -88,7 +88,7 @@ def normalize_ticker_list(tickers_param: str) -> tuple[list[str], list[str]]:
         return valid_tickers, invalid_tickers
 
     seen = set()
-    for raw_ticker in tickers_param.split(','):
+    for raw_ticker in tickers_param.split(","):
         ticker = clean_yfinance_ticker(raw_ticker.strip())
         if not ticker:
             continue
@@ -102,7 +102,9 @@ def normalize_ticker_list(tickers_param: str) -> tuple[list[str], list[str]]:
     return valid_tickers, invalid_tickers
 
 
-def enforce_route_rate_limit(route_name: str, client_key: str, max_requests: int = 60, window_seconds: int = 60) -> tuple[bool, int]:
+def enforce_route_rate_limit(
+    route_name: str, client_key: str, max_requests: int = 60, window_seconds: int = 60
+) -> tuple[bool, int]:
     """Return ``(allowed, retry_after_seconds)`` for a route/client bucket."""
     now = time.time()
     key = f"{route_name}:{client_key}"
@@ -111,17 +113,17 @@ def enforce_route_rate_limit(route_name: str, client_key: str, max_requests: int
             _ensure_rate_limit_store()
             cutoff = now - window_seconds
             with sqlite3.connect(str(_RATE_LIMIT_STORE_PATH), timeout=5, isolation_level=None) as conn:
-                conn.execute('PRAGMA journal_mode=WAL')
-                conn.execute('PRAGMA busy_timeout=3000')
-                conn.execute('BEGIN IMMEDIATE')
-                conn.execute('DELETE FROM route_rate_limits WHERE ts < ?', (cutoff,))
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=3000")
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("DELETE FROM route_rate_limits WHERE ts < ?", (cutoff,))
 
                 row = conn.execute(
-                    '''
+                    """
                     SELECT COUNT(*), MIN(ts)
                     FROM route_rate_limits
                     WHERE route_name = ? AND client_key = ?
-                    ''',
+                    """,
                     (route_name, client_key),
                 ).fetchone()
                 count = int(row[0] or 0) if row else 0
@@ -133,7 +135,7 @@ def enforce_route_rate_limit(route_name: str, client_key: str, max_requests: int
                     return False, retry_after
 
                 conn.execute(
-                    'INSERT INTO route_rate_limits (route_name, client_key, ts) VALUES (?, ?, ?)',
+                    "INSERT INTO route_rate_limits (route_name, client_key, ts) VALUES (?, ?, ?)",
                     (route_name, client_key, now),
                 )
                 conn.commit()
@@ -167,9 +169,9 @@ def error_response(message, status_code=500, **extra):
     """
     if _SANITIZE_ERRORS and status_code >= 500:
         _logger.warning(f"Sanitized internal error (original: {message})")
-        body = {'success': False, 'error': 'Internal server error'}
+        body = {"success": False, "error": "Internal server error"}
     else:
-        body = {'success': False, 'error': message}
+        body = {"success": False, "error": message}
     if extra:
         body.update(extra)
     return jsonify(body), status_code
@@ -186,12 +188,12 @@ def success_response(data=None, status_code=200):
     Returns:
         Flask response tuple (Response, status_code).
     """
-    body = {'success': True}
+    body = {"success": True}
     if data is not None:
         if isinstance(data, dict):
             body.update(data)
         else:
-            body['data'] = data
+            body["data"] = data
     return jsonify(body), status_code
 
 
@@ -208,11 +210,9 @@ def opend_unavailable_response(probe_result):
     Returns:
         Flask response tuple (Response, 503).
     """
-    status = probe_result.get('status', 'unavailable')
-    message = probe_result.get('message', 'OpenD is unavailable.')
-    error_code = (
-        'opend_login_required' if status == 'login_required' else 'opend_unavailable'
-    )
+    status = probe_result.get("status", "unavailable")
+    message = probe_result.get("message", "OpenD is unavailable.")
+    error_code = "opend_login_required" if status == "login_required" else "opend_unavailable"
     return error_response(
         message,
         status_code=503,

@@ -3,18 +3,16 @@ Tests for core/scan_ledger.py — Wheel Scan Ledger
 """
 
 import unittest
-import json
-import hashlib
-from unittest.mock import MagicMock, patch
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 from core.scan_ledger import (
-    ScanLedgerEntry,
     ScanLedger,
+    ScanLedgerEntry,
+    _stable_json,
     compute_config_hash,
     compute_portfolio_hash,
     extract_data_sources,
-    _stable_json,
 )
 
 
@@ -66,6 +64,7 @@ class TestScanLedgerSources(unittest.TestCase):
 
     def test_extract_data_sources_from_decisions(self):
         from core.wheel_decision import WheelDecision
+
         d = WheelDecision(
             ticker="AAPL",
             price_source="moomoo",
@@ -82,6 +81,7 @@ class TestScanLedgerSources(unittest.TestCase):
 
     def test_extract_data_sources_ignores_missing(self):
         from core.wheel_decision import WheelDecision
+
         d = WheelDecision(ticker="AAPL", price_source="missing")
         sources = extract_data_sources({}, [d])
         self.assertEqual(sources, [])
@@ -190,8 +190,12 @@ class TestScanLedgerDB(unittest.TestCase):
     def test_get_stats(self, mock_pool):
         mock_conn = MagicMock()
         mock_row = {
-            "total": 10, "errors": 2, "avg_elapsed": 1.5,
-            "avg_candidates": 5, "avg_passed": 3, "avg_blocked": 2,
+            "total": 10,
+            "errors": 2,
+            "avg_elapsed": 1.5,
+            "avg_candidates": 5,
+            "avg_passed": 3,
+            "avg_blocked": 2,
         }
         mock_conn.execute.return_value.fetchone.return_value = mock_row
         mock_pool.return_value.__enter__.return_value = mock_conn
@@ -221,7 +225,9 @@ class TestScanLedgerWritesFromRecommendations(unittest.TestCase):
         from core.scan_ledger import ScanLedgerEntry, compute_config_hash, compute_portfolio_hash, extract_data_sources
 
         portfolio_context = {
-            "positions": {}, "available_cash": 0, "broker_buying_power": 0,
+            "positions": {},
+            "available_cash": 0,
+            "broker_buying_power": 0,
         }
         entry = ScanLedgerEntry(
             scan_type="recommendations",
@@ -279,19 +285,27 @@ class TestScanLedgerWritesFromRecommendations(unittest.TestCase):
         entry = ScanLedgerEntry(
             scan_type="recommendations",
             blocked_candidates=[
-                {"ticker": "CHEAP", "_skip_diagnostic": True, "reason_code": "no_cash_fit",
-                 "reason_text": "No CSP strike fits buying power ($200)"},
-                {"ticker": "ILLIQ", "_skip_diagnostic": True, "reason_code": "low_liquidity",
-                 "reason_text": "Open interest below threshold"},
+                {
+                    "ticker": "CHEAP",
+                    "_skip_diagnostic": True,
+                    "reason_code": "no_cash_fit",
+                    "reason_text": "No CSP strike fits buying power ($200)",
+                },
+                {
+                    "ticker": "ILLIQ",
+                    "_skip_diagnostic": True,
+                    "reason_code": "low_liquidity",
+                    "reason_text": "Open interest below threshold",
+                },
             ],
             total_candidates=10,
             passed_count=0,
             blocked_count=2,
         )
-        blocked_dict = {b['ticker']: b for b in entry.blocked_candidates}
-        self.assertEqual(blocked_dict['CHEAP']['reason_code'], 'no_cash_fit')
-        self.assertEqual(blocked_dict['ILLIQ']['reason_code'], 'low_liquidity')
-        self.assertIn('No CSP strike fits buying power', blocked_dict['CHEAP']['reason_text'])
+        blocked_dict = {b["ticker"]: b for b in entry.blocked_candidates}
+        self.assertEqual(blocked_dict["CHEAP"]["reason_code"], "no_cash_fit")
+        self.assertEqual(blocked_dict["ILLIQ"]["reason_code"], "low_liquidity")
+        self.assertIn("No CSP strike fits buying power", blocked_dict["CHEAP"]["reason_text"])
 
     def test_blocked_candidate_to_dict_roundtrip_preserves_reason_code(self):
         """to_dict preserves reason_code in blocked_candidates for downstream display."""
@@ -300,16 +314,20 @@ class TestScanLedgerWritesFromRecommendations(unittest.TestCase):
         entry = ScanLedgerEntry(
             scan_type="recommendations",
             blocked_candidates=[
-                {"ticker": "CHEAP", "_skip_diagnostic": True, "reason_code": "no_cash_fit",
-                 "reason_text": "No CSP strike fits buying power ($200)"},
+                {
+                    "ticker": "CHEAP",
+                    "_skip_diagnostic": True,
+                    "reason_code": "no_cash_fit",
+                    "reason_text": "No CSP strike fits buying power ($200)",
+                },
             ],
             total_candidates=5,
             passed_count=0,
             blocked_count=1,
         )
         d = entry.to_dict()
-        self.assertEqual(d['blocked_candidates'][0]['reason_code'], 'no_cash_fit')
-        self.assertEqual(d['blocked_candidates'][0]['reason_text'], 'No CSP strike fits buying power ($200)')
+        self.assertEqual(d["blocked_candidates"][0]["reason_code"], "no_cash_fit")
+        self.assertEqual(d["blocked_candidates"][0]["reason_text"], "No CSP strike fits buying power ($200)")
 
 
 class TestScanLedgerIntegrationWrite(unittest.TestCase):

@@ -19,6 +19,7 @@ from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+
 from core.ticker_utils import earnings_underlying_ticker
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 _LOCK_FILE = None
 _LOCK_FILE_PATH: Optional[Path] = None
-_DEFAULT_LOCK_STALE_TIMEOUT = int(os.environ.get('SCHEDULER_LOCK_STALE_TIMEOUT_SECONDS', '1800'))
+_DEFAULT_LOCK_STALE_TIMEOUT = int(os.environ.get("SCHEDULER_LOCK_STALE_TIMEOUT_SECONDS", "1800"))
 
 
 def _lock_path() -> Path:
@@ -92,6 +93,7 @@ def _resolve_earnings_db(db=None):
 
     try:
         from db.database import OptionsDatabase
+
         return OptionsDatabase()
     except Exception as e:
         logger.error("Cannot resolve earnings database: %s", e)
@@ -143,13 +145,13 @@ def _earnings_database_needs_initialization(db) -> bool:
     if db is None:
         return False
 
-    db_path = getattr(db, 'db_path', None)
+    db_path = getattr(db, "db_path", None)
     if not db_path:
         return False
 
     try:
         with sqlite3.connect(str(db_path)) as conn:
-            row = conn.execute('SELECT COUNT(*) FROM earnings_calendar').fetchone()
+            row = conn.execute("SELECT COUNT(*) FROM earnings_calendar").fetchone()
             return not row or row[0] == 0
     except Exception as e:
         logger.warning("Could not inspect earnings database state: %s", e)
@@ -162,9 +164,9 @@ def _start_earnings_initializer(db) -> None:
 
     thread = threading.Thread(
         target=_run_earnings_updater_job,
-        kwargs={'db': db},
+        kwargs={"db": db},
         daemon=True,
-        name='earnings_initializer',
+        name="earnings_initializer",
     )
     thread.start()
     logger.info("Started one-time earnings initialization in background")
@@ -175,7 +177,7 @@ def _start_earnings_initializer(db) -> None:
 # ---------------------------------------------------------------------------
 
 _WARM_CACHE_JOB_ID = "warm_cache_scan"
-_WARM_CACHE_INTERVAL_MINUTES = int(os.environ.get('WARM_CACHE_INTERVAL_MINUTES', '30'))
+_WARM_CACHE_INTERVAL_MINUTES = int(os.environ.get("WARM_CACHE_INTERVAL_MINUTES", "30"))
 
 
 def _run_warm_cache_job(warm_cache_service_provider=None) -> None:
@@ -189,8 +191,8 @@ def _run_warm_cache_job(warm_cache_service_provider=None) -> None:
         t0 = time.time()
         result = service.get_top_recommendations(limit=5)
         elapsed = time.time() - t0
-        signal_count = len(result.get('signals', []) if isinstance(result, dict) else [])
-        error = result.get('error') if isinstance(result, dict) else None
+        signal_count = len(result.get("signals", []) if isinstance(result, dict) else [])
+        error = result.get("error") if isinstance(result, dict) else None
         if error:
             logger.warning("Warm cache scan completed with error (%.1fs): %s", elapsed, error)
         else:
@@ -202,10 +204,10 @@ def _run_warm_cache_job(warm_cache_service_provider=None) -> None:
 def get_scheduler_info():
     """Return info about whether the in-process scheduler is running."""
     global _scheduler
-    running = _scheduler is not None and getattr(_scheduler, 'running', False)
+    running = _scheduler is not None and getattr(_scheduler, "running", False)
     return {
-        'running': running,
-        'state': {},
+        "running": running,
+        "state": {},
     }
 
 
@@ -218,7 +220,9 @@ _scheduler_lock = threading.Lock()
 _scheduler_started = False
 
 
-def start_scheduler(db=None, app=None, earnings_ticker_provider=None, earnings_service_provider=None, warm_cache_service_provider=None) -> bool:
+def start_scheduler(
+    db=None, app=None, earnings_ticker_provider=None, earnings_service_provider=None, warm_cache_service_provider=None
+) -> bool:
     """Start the APScheduler background scheduler with jobs.
 
     Args:
@@ -253,7 +257,11 @@ def start_scheduler(db=None, app=None, earnings_ticker_provider=None, earnings_s
             trigger=IntervalTrigger(hours=6),
             id="earnings_updater_6h",
             name="Earnings updater (every 6h)",
-            kwargs={"db": db, "earnings_ticker_provider": earnings_ticker_provider, "earnings_service_provider": earnings_service_provider},
+            kwargs={
+                "db": db,
+                "earnings_ticker_provider": earnings_ticker_provider,
+                "earnings_service_provider": earnings_service_provider,
+            },
             replace_existing=True,
         )
 
@@ -268,7 +276,9 @@ def start_scheduler(db=None, app=None, earnings_ticker_provider=None, earnings_s
 
         _scheduler.start()
         _scheduler_started = True
-        logger.info("Scheduler started: earnings updater every 6h, warm cache scan every %dm", _WARM_CACHE_INTERVAL_MINUTES)
+        logger.info(
+            "Scheduler started: earnings updater every 6h, warm cache scan every %dm", _WARM_CACHE_INTERVAL_MINUTES
+        )
 
         if db is not None:
             _start_earnings_initializer(db)

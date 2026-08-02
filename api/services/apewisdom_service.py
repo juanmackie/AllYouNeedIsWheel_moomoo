@@ -102,9 +102,7 @@ class ApeWisdomService:
             )
             if resp.status_code == 200:
                 return resp.json() if resp.text else {}
-            logger.warning(
-                "ApeWisdom HTTP %d from %s", resp.status_code, url
-            )
+            logger.warning("ApeWisdom HTTP %d from %s", resp.status_code, url)
             return None
         except Exception as exc:
             logger.warning("ApeWisdom request failed: %s", exc)
@@ -133,9 +131,7 @@ class ApeWisdomService:
             "mentions": ApeWisdomService._safe_int(raw.get("mentions")),
             "upvotes": ApeWisdomService._safe_int(raw.get("upvotes")),
             "rank_24h_ago": ApeWisdomService._safe_int(raw.get("rank_24h_ago")),
-            "mentions_24h_ago": ApeWisdomService._safe_int(
-                raw.get("mentions_24h_ago")
-            ),
+            "mentions_24h_ago": ApeWisdomService._safe_int(raw.get("mentions_24h_ago")),
         }
 
     def _parse_results(self, raw: dict) -> list[dict]:
@@ -153,13 +149,7 @@ class ApeWisdomService:
         """Apply min_mentions and exclude_tickers filters."""
         excluded = self._exclude_tickers
         min_mentions = self._min_mentions
-        return [
-            e
-            for e in entries
-            if e["ticker"]
-            and e["mentions"] >= min_mentions
-            and e["ticker"] not in excluded
-        ]
+        return [e for e in entries if e["ticker"] and e["mentions"] >= min_mentions and e["ticker"] not in excluded]
 
     @staticmethod
     def _compute_momentum(entry: dict) -> float:

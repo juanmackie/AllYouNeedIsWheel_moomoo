@@ -1,77 +1,73 @@
-import os
 import json
 import logging
+import os
 
-logger = logging.getLogger('autotrader.config')
+logger = logging.getLogger("autotrader.config")
 
 
 def _parse_watchlist_env(raw_watchlist):
     if not raw_watchlist:
         return []
-    return [ticker.strip().upper() for ticker in raw_watchlist.split(',') if ticker.strip()]
+    return [ticker.strip().upper() for ticker in raw_watchlist.split(",") if ticker.strip()]
 
 
 DEFAULT_CONNECTION_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 11111,
-    'readonly': True,
-    'portfolio_env': 'SIMULATE',
-    'security_firm': 'FUTUSECURITIES',
-    'account_id': '',
-    'db_path': 'options.db',
-    'auto_launch_opend': False,
-    'opend_path': '',
-    'openbb_enabled': False,
-    'fred_enabled': True,
-    'cash_reserve_enabled': True,
-    'watchlist_mode': 'static',  # 'static', 'dynamic', 'hybrid', 'moomoo'
-    'moomoo_watchlist_group': 'My Watchlist',
-    'broker_cache_after_hours': True,  # use cached broker data outside US market hours
-    'screening_criteria': {
-        'min_volatility_pct': 3.0,
-        'min_volume': 1000000,
-        'max_stocks': 50
-    },
-    'watchlist': _parse_watchlist_env(os.environ.get('WATCHLIST')),
-    'growth_mode': {
-        'enabled': True,
-        'objective': 'time_to_2x',
-        'target_account_multiple': 2.0,
-        'max_drawdown_pct': 0.40,
-        'execution_scope': 'short_premium_wheel',
-        'long_options_mode': 'research_only',
-        'screener_profile': {
-            'csp_target_delta': 0.30,
-            'csp_delta_tolerance': 0.12,
-            'csp_min_dte': 30,
-            'csp_max_dte': 45,
-            'csp_preferred_dte': 37,
-            'csp_default_otm_pct': 10,
-            'call_default_otm_pct': 10,
-            'csp_min_otm_pct': 5,
-            'csp_max_otm_pct': 15,
-            'min_csp_buying_power': 5000,
-            'min_volatility_pct': 4.5,
-            'max_watchlist_tickers': 25,
-            'require_cash_fit': True,
+    "host": "127.0.0.1",
+    "port": 11111,
+    "readonly": True,
+    "portfolio_env": "SIMULATE",
+    "security_firm": "FUTUSECURITIES",
+    "account_id": "",
+    "db_path": "options.db",
+    "auto_launch_opend": False,
+    "opend_path": "",
+    "openbb_enabled": False,
+    "fred_enabled": True,
+    "cash_reserve_enabled": True,
+    "watchlist_mode": "static",  # 'static', 'dynamic', 'hybrid', 'moomoo'
+    "moomoo_watchlist_group": "My Watchlist",
+    "broker_cache_after_hours": True,  # use cached broker data outside US market hours
+    "screening_criteria": {"min_volatility_pct": 3.0, "min_volume": 1000000, "max_stocks": 50},
+    "watchlist": _parse_watchlist_env(os.environ.get("WATCHLIST")),
+    "growth_mode": {
+        "enabled": True,
+        "objective": "time_to_2x",
+        "target_account_multiple": 2.0,
+        "max_drawdown_pct": 0.40,
+        "execution_scope": "short_premium_wheel",
+        "long_options_mode": "research_only",
+        "screener_profile": {
+            "csp_target_delta": 0.30,
+            "csp_delta_tolerance": 0.12,
+            "csp_min_dte": 30,
+            "csp_max_dte": 45,
+            "csp_preferred_dte": 37,
+            "csp_default_otm_pct": 10,
+            "call_default_otm_pct": 10,
+            "csp_min_otm_pct": 5,
+            "csp_max_otm_pct": 15,
+            "min_csp_buying_power": 5000,
+            "min_volatility_pct": 4.5,
+            "max_watchlist_tickers": 25,
+            "require_cash_fit": True,
         },
     },
     # ── Catalyst flow feature flags ────────────────────────────────────
-    'catalyst_flow': {
-        'enabled': True,
-        'research_only': True,
-        'min_premium_notional': 1_000_000,
-        'min_fresh_volume_ratio': 5,
-        'min_volume': 500,
-        'max_expirations': 3,
-        'max_dte': 60,
-        'max_scan_tickers': 12,
-        'apewisdom': {
-            'enabled': True,
-            'filter': 'all-stocks',
-            'max_boost_tickers': 8,
-            'min_mentions': 5,
-            'exclude_tickers': ['SPY', 'QQQ', 'VOO', 'VTI', 'VT', 'TQQQ', 'SQQQ'],
+    "catalyst_flow": {
+        "enabled": True,
+        "research_only": True,
+        "min_premium_notional": 1_000_000,
+        "min_fresh_volume_ratio": 5,
+        "min_volume": 500,
+        "max_expirations": 3,
+        "max_dte": 60,
+        "max_scan_tickers": 12,
+        "apewisdom": {
+            "enabled": True,
+            "filter": "all-stocks",
+            "max_boost_tickers": 8,
+            "min_mentions": 5,
+            "exclude_tickers": ["SPY", "QQQ", "VOO", "VTI", "VT", "TQQQ", "SQQQ"],
         },
     },
 }
@@ -79,19 +75,19 @@ DEFAULT_CONNECTION_CONFIG = {
 
 def apply_env_overrides(config):
     env_mapping = {
-        'host': 'MOOMOO_OPEND_HOST',
-        'port': 'MOOMOO_OPEND_PORT',
-        'portfolio_env': 'MOOMOO_PORTFOLIO_ENV',
-        'security_firm': 'MOOMOO_SECURITY_FIRM',
-        'account_id': 'MOOMOO_ACCOUNT_ID'
+        "host": "MOOMOO_OPEND_HOST",
+        "port": "MOOMOO_OPEND_PORT",
+        "portfolio_env": "MOOMOO_PORTFOLIO_ENV",
+        "security_firm": "MOOMOO_SECURITY_FIRM",
+        "account_id": "MOOMOO_ACCOUNT_ID",
     }
 
     for key, env_var in env_mapping.items():
         env_value = os.environ.get(env_var)
-        if env_value is None or env_value == '':
+        if env_value is None or env_value == "":
             continue
 
-        if key == 'port':
+        if key == "port":
             try:
                 config[key] = int(env_value)
             except ValueError:
@@ -100,49 +96,50 @@ def apply_env_overrides(config):
 
         config[key] = env_value
 
-    readonly_override = os.environ.get('MOOMOO_READONLY')
-    if readonly_override is not None and readonly_override != '':
-        config['readonly'] = readonly_override.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+    readonly_override = os.environ.get("MOOMOO_READONLY")
+    if readonly_override is not None and readonly_override != "":
+        config["readonly"] = readonly_override.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-    openbb_enabled = os.environ.get('OPENBB_ENABLED')
-    if openbb_enabled is not None and openbb_enabled != '':
-        config['openbb_enabled'] = openbb_enabled.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+    openbb_enabled = os.environ.get("OPENBB_ENABLED")
+    if openbb_enabled is not None and openbb_enabled != "":
+        config["openbb_enabled"] = openbb_enabled.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-    fred_enabled = os.environ.get('FRED_ENABLED')
-    if fred_enabled is not None and fred_enabled != '':
-        config['fred_enabled'] = fred_enabled.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+    fred_enabled = os.environ.get("FRED_ENABLED")
+    if fred_enabled is not None and fred_enabled != "":
+        config["fred_enabled"] = fred_enabled.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-    cash_reserve_enabled = os.environ.get('CASH_RESERVE_ENABLED')
-    if cash_reserve_enabled is not None and cash_reserve_enabled != '':
-        config['cash_reserve_enabled'] = cash_reserve_enabled.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+    cash_reserve_enabled = os.environ.get("CASH_RESERVE_ENABLED")
+    if cash_reserve_enabled is not None and cash_reserve_enabled != "":
+        config["cash_reserve_enabled"] = cash_reserve_enabled.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-    watchlist_env = os.environ.get('WATCHLIST')
-    if watchlist_env is not None and watchlist_env != '':
-        config['watchlist'] = _parse_watchlist_env(watchlist_env)
+    watchlist_env = os.environ.get("WATCHLIST")
+    if watchlist_env is not None and watchlist_env != "":
+        config["watchlist"] = _parse_watchlist_env(watchlist_env)
 
     # Safety validation: prevent accidental live trading without explicit confirmation
-    if config.get('portfolio_env') == 'REAL' and not config.get('readonly', True):
-        confirm = os.environ.get('CONFIRM_LIVE_TRADING', '').strip().lower()
-        if confirm not in {'1', 'true', 'yes', 'y', 'on'}:
+    if config.get("portfolio_env") == "REAL" and not config.get("readonly", True):
+        confirm = os.environ.get("CONFIRM_LIVE_TRADING", "").strip().lower()
+        if confirm not in {"1", "true", "yes", "y", "on"}:
             logger.critical(
                 "BLOCKED: portfolio_env=REAL with readonly=false requires "
                 "CONFIRM_LIVE_TRADING=true environment variable. "
                 "Falling back to SIMULATE mode for safety."
             )
-            config['portfolio_env'] = 'SIMULATE'
-            config['readonly'] = True
+            config["portfolio_env"] = "SIMULATE"
+            config["readonly"] = True
 
     return config
+
 
 class Config:
     """
     Configuration class for the AutoTrader application
     """
-    
+
     def __init__(self, default_config=None, config_file=None):
         """
         Initialize the configuration with default values and load from a file if provided
-        
+
         Args:
             default_config (dict, optional): Default configuration values. Defaults to None.
             config_file (str, optional): Path to a JSON configuration file. Defaults to None.
@@ -152,34 +149,34 @@ class Config:
         if default_config:
             self.config.update(default_config)
         apply_env_overrides(self.config)
-        
+
         # If config_file is not provided, check environment variable
         if config_file is None:
-            env_config_file = os.environ.get('CONNECTION_CONFIG', 'connection.json')
+            env_config_file = os.environ.get("CONNECTION_CONFIG", "connection.json")
             if os.path.exists(env_config_file):
                 config_file = env_config_file
                 logger.info(f"Using connection config from environment: {env_config_file}")
-        
+
         # Load from file if provided
         if config_file and os.path.exists(config_file):
             self.load_from_file(config_file)
             logger.info(f"Configuration loaded from: {config_file}")
             logger.debug(f"Connection port: {self.get('port')}")
-            
+
     def load_from_file(self, config_file):
         """
         Load configuration from a JSON file
-        
+
         Args:
             config_file (str): Path to a JSON configuration file
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            with open(config_file, 'r') as f:
+            with open(config_file, "r") as f:
                 file_config = json.load(f)
-                
+
             # Update our configuration with values from the file
             self.config.update(file_config)
             apply_env_overrides(self.config)
@@ -187,53 +184,53 @@ class Config:
         except Exception as e:
             logger.error(f"Error loading configuration from {config_file}: {str(e)}")
             return False
-            
+
     def get(self, key, default=None):
         """
         Get a configuration value
-        
+
         Args:
             key (str): Configuration key
             default: Default value to return if the key is not found
-            
+
         Returns:
             The configuration value or default
         """
         return self.config.get(key, default)
-        
+
     def set(self, key, value):
         """
         Set a configuration value
-        
+
         Args:
             key (str): Configuration key
             value: Value to set
         """
         self.config[key] = value
-        
+
     def to_dict(self):
         """
         Get the entire configuration as a dictionary
-        
+
         Returns:
             dict: Configuration dictionary
         """
         return self.config.copy()
-        
+
     def save_to_file(self, config_file):
         """
         Save the configuration to a JSON file
-        
+
         Args:
             config_file (str): Path to a JSON configuration file
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            with open(config_file, 'w') as f:
+            with open(config_file, "w") as f:
                 json.dump(self.config, f, indent=4)
             return True
         except Exception as e:
             logger.error(f"Error saving configuration to {config_file}: {str(e)}")
-            return False 
+            return False

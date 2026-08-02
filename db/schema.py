@@ -1,9 +1,9 @@
-import traceback
 import logging
+import traceback
 
 from .sqlite_pool import pooled_connection
 
-logger = logging.getLogger('db.schema')
+logger = logging.getLogger("db.schema")
 
 SCHEMA_VERSION = 6
 
@@ -11,7 +11,7 @@ SCHEMA_VERSION = 6
 def create_tables(conn):
     cursor = conn.cursor()
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS recommendations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
@@ -23,14 +23,14 @@ def create_tables(conn):
             premium REAL,
             details TEXT
         )
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_timestamp
         ON recommendations(ticker, timestamp)
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS iv_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -41,14 +41,14 @@ def create_tables(conn):
             expiration TEXT,
             dte INTEGER
         )
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_iv_history_ticker_timestamp
         ON iv_history(ticker, timestamp)
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS earnings_calendar (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -63,19 +63,19 @@ def create_tables(conn):
             earnings_source TEXT,
             UNIQUE(ticker)
         )
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date
         ON earnings_calendar(ticker, earnings_date)
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated
         ON earnings_calendar(last_updated)
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
@@ -95,15 +95,15 @@ def create_tables(conn):
             reason TEXT,
             details TEXT
         )
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_trade_events_ticker_timestamp
         ON trade_events(ticker, timestamp)
-    ''')
+    """)
 
     # ── Wheel Scan Ledger (borrowed from Vibe-Trading run cards) ────────────
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS scan_ledger (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_type           TEXT NOT NULL,
@@ -122,20 +122,20 @@ def create_tables(conn):
             error_message       TEXT,
             created_at          TEXT DEFAULT (datetime('now'))
         )
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_scan_ledger_timestamp
         ON scan_ledger(timestamp)
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_scan_ledger_type_ts
         ON scan_ledger(scan_type, timestamp)
-    ''')
+    """)
 
     # ── Wheel Playbook Hypotheses (borrowed from Vibe-Trading hypothesis registry) ──
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS playbook_hypotheses (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             hypothesis_id   TEXT NOT NULL UNIQUE,
@@ -148,15 +148,15 @@ def create_tables(conn):
             created_at      TEXT DEFAULT (datetime('now')),
             updated_at      TEXT DEFAULT (datetime('now'))
         )
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status
         ON playbook_hypotheses(status)
-    ''')
+    """)
 
     # ── Option Chain Snapshots (persistent cache for after-hours / broker-unavailable) ──
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS option_chain_snapshots (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker      TEXT NOT NULL,
@@ -169,17 +169,17 @@ def create_tables(conn):
             created_at  TEXT DEFAULT (datetime('now')),
             UNIQUE(ticker, expiration, right)
         )
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_ticker
         ON option_chain_snapshots(ticker)
-    ''')
+    """)
 
-    cursor.execute('''
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_as_of
         ON option_chain_snapshots(as_of)
-    ''')
+    """)
 
 
 def migrate_database(db_path):
@@ -187,7 +187,7 @@ def migrate_database(db_path):
         with pooled_connection(db_path) as conn:
             cursor = conn.cursor()
 
-            current_version = cursor.execute('PRAGMA user_version').fetchone()[0]
+            current_version = cursor.execute("PRAGMA user_version").fetchone()[0]
             if current_version >= SCHEMA_VERSION:
                 logger.info("Database schema already at version %s", current_version)
                 return
@@ -204,18 +204,18 @@ def migrate_database(db_path):
                     earnings_cols = {row[1] for row in cursor.fetchall()}
 
                     for col, col_type in [
-                        ('time_of_day', 'TEXT'),
-                        ('fiscal_date_ending', 'TEXT'),
-                        ('estimate', 'REAL'),
-                        ('currency', 'TEXT'),
-                        ('earnings_source', 'TEXT'),
+                        ("time_of_day", "TEXT"),
+                        ("fiscal_date_ending", "TEXT"),
+                        ("estimate", "REAL"),
+                        ("currency", "TEXT"),
+                        ("earnings_source", "TEXT"),
                     ]:
                         if col not in earnings_cols:
                             logger.info("Running migration: Adding %s to earnings_calendar", col)
                             cursor.execute("ALTER TABLE earnings_calendar ADD COLUMN %s %s" % (col, col_type))
                             logger.info("Migration completed: %s column added", col)
 
-                cursor.execute('PRAGMA user_version = 1')
+                cursor.execute("PRAGMA user_version = 1")
                 conn.commit()
 
             if current_version < 2:
@@ -240,7 +240,9 @@ def migrate_database(db_path):
                     )
                 """)
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_scan_ledger_timestamp ON scan_ledger(timestamp)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_scan_ledger_type_ts ON scan_ledger(scan_type, timestamp)")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_scan_ledger_type_ts ON scan_ledger(scan_type, timestamp)"
+                )
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS playbook_hypotheses (
                         id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -255,32 +257,40 @@ def migrate_database(db_path):
                         updated_at      TEXT DEFAULT (datetime('now'))
                     )
                 """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status ON playbook_hypotheses(status)")
-                cursor.execute('PRAGMA user_version = 2')
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status ON playbook_hypotheses(status)"
+                )
+                cursor.execute("PRAGMA user_version = 2")
                 conn.commit()
 
             if current_version < 3:
                 # Drop evaluator/calibrator tables — feature fully retired.
                 # Historical outcomes are no longer used for training.
                 for table in (
-                    'evaluator_signals',
-                    'evaluator_feedback_bias',
-                    'evaluator_feedback_events',
-                    'evaluator_calibrations',
-                    'evaluator_scheduler_state',
+                    "evaluator_signals",
+                    "evaluator_feedback_bias",
+                    "evaluator_feedback_events",
+                    "evaluator_calibrations",
+                    "evaluator_scheduler_state",
                 ):
                     cursor.execute(f"DROP TABLE IF EXISTS {table}")
                     logger.info("Migration: Dropped %s table (evaluator/calibrator retired)", table)
-                cursor.execute('PRAGMA user_version = 3')
+                cursor.execute("PRAGMA user_version = 3")
                 conn.commit()
 
             if current_version < 4:
                 # Add missing indexes for recommendations and earnings_calendar
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_timestamp ON recommendations(ticker, timestamp)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date ON earnings_calendar(ticker, earnings_date)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_timestamp ON recommendations(ticker, timestamp)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date ON earnings_calendar(ticker, earnings_date)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)"
+                )
                 logger.info("Migration: Added missing indexes for recommendations and earnings_calendar")
-                cursor.execute('PRAGMA user_version = 4')
+                cursor.execute("PRAGMA user_version = 4")
                 conn.commit()
 
             if current_version < 5:
@@ -322,11 +332,17 @@ def migrate_database(db_path):
                 """)
                 cursor.execute("DROP TABLE earnings_calendar")
                 cursor.execute("ALTER TABLE earnings_calendar_new RENAME TO earnings_calendar")
-                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_earnings_calendar_ticker ON earnings_calendar(ticker)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date ON earnings_calendar(ticker, earnings_date)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)")
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_earnings_calendar_ticker ON earnings_calendar(ticker)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date ON earnings_calendar(ticker, earnings_date)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)"
+                )
                 logger.info("Migration: Deduplicated earnings_calendar by ticker")
-                cursor.execute('PRAGMA user_version = 5')
+                cursor.execute("PRAGMA user_version = 5")
                 conn.commit()
 
             if current_version < 6:
@@ -344,10 +360,14 @@ def migrate_database(db_path):
                         UNIQUE(ticker, expiration, right)
                     )
                 """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_ticker ON option_chain_snapshots(ticker)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_as_of ON option_chain_snapshots(as_of)")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_ticker ON option_chain_snapshots(ticker)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_option_chain_snapshots_as_of ON option_chain_snapshots(as_of)"
+                )
                 logger.info("Migration: Created option_chain_snapshots table for persistent chain cache")
-                cursor.execute('PRAGMA user_version = 6')
+                cursor.execute("PRAGMA user_version = 6")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

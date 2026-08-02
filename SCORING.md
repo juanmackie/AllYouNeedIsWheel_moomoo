@@ -287,14 +287,14 @@ else:
 #### Weekly (0-14 DTE)
 ```python
 {
-    'min_dte': 3,
-    'max_dte': 14,
-    'preferred_dte': 7,
-    'target_delta': 0.18,  # Tighter
-    'delta_tolerance': 0.14,
-    'min_premium_per_contract': 8,  # Lower bar
-    'liquidity_weight_multiplier': 1.5,  # 35% effective
-    'delta_fit_weight_multiplier': 0.5,  # 8% effective
+    "min_dte": 3,
+    "max_dte": 14,
+    "preferred_dte": 7,
+    "target_delta": 0.18,  # Tighter
+    "delta_tolerance": 0.14,
+    "min_premium_per_contract": 8,  # Lower bar
+    "liquidity_weight_multiplier": 1.5,  # 35% effective
+    "delta_fit_weight_multiplier": 0.5,  # 8% effective
 }
 ```
 
@@ -303,14 +303,14 @@ else:
 #### Monthly (15-45 DTE) — Default
 ```python
 {
-    'min_dte': 5,
-    'max_dte': 35,
-    'preferred_dte': 14,
-    'target_delta': 0.24,
-    'delta_tolerance': 0.18,
-    'min_premium_per_contract': 12,
-    'liquidity_weight_multiplier': 1.0,
-    'delta_fit_weight_multiplier': 1.0,
+    "min_dte": 5,
+    "max_dte": 35,
+    "preferred_dte": 14,
+    "target_delta": 0.24,
+    "delta_tolerance": 0.18,
+    "min_premium_per_contract": 12,
+    "liquidity_weight_multiplier": 1.0,
+    "delta_fit_weight_multiplier": 1.0,
 }
 ```
 
@@ -319,14 +319,14 @@ else:
 #### Quarterly (46-90 DTE)
 ```python
 {
-    'min_dte': 46,
-    'max_dte': 90,
-    'preferred_dte': 60,
-    'target_delta': 0.28,  # Wider
-    'delta_tolerance': 0.22,
-    'min_premium_per_contract': 25,  # Higher bar
-    'liquidity_weight_multiplier': 0.75,  # 15% effective
-    'delta_fit_weight_multiplier': 1.2,  # 18% effective
+    "min_dte": 46,
+    "max_dte": 90,
+    "preferred_dte": 60,
+    "target_delta": 0.28,  # Wider
+    "delta_tolerance": 0.22,
+    "min_premium_per_contract": 25,  # Higher bar
+    "liquidity_weight_multiplier": 0.75,  # 15% effective
+    "delta_fit_weight_multiplier": 1.2,  # 18% effective
 }
 ```
 
@@ -339,13 +339,13 @@ else:
 ```python
 # Base Phase 1 score
 base_score = (
-    iv_adjusted_score * 0.30 +
-    tdr_score * 0.15 +
-    liquidity_score * 0.15 +
-    ev_score * 0.10 +
-    upside_score * 0.15 +
-    otm_score * 0.10 +
-    earnings_risk_score * 0.05
+    iv_adjusted_score * 0.30
+    + tdr_score * 0.15
+    + liquidity_score * 0.15
+    + ev_score * 0.10
+    + upside_score * 0.15
+    + otm_score * 0.10
+    + earnings_risk_score * 0.05
 )
 
 # Phase 2 adjustments
@@ -358,14 +358,14 @@ final_score = clamp((iv_adjusted * macro_multiplier * (0.65 + 0.35 * cost_basis_
 ```python
 # Base score. Raw weights are normalized before use because they sum to 110.
 base_score = (
-    iv_adjusted_score * 0.30 +
-    tdr_score * 0.15 +
-    ev_score * 0.10 +
-    liquidity_score * 0.15 +
-    buffer_score * 0.10 +
-    ce_score * 0.15 +
-    earnings_risk_score * 0.05 +
-    delta_score * 0.10
+    iv_adjusted_score * 0.30
+    + tdr_score * 0.15
+    + ev_score * 0.10
+    + liquidity_score * 0.15
+    + buffer_score * 0.10
+    + ce_score * 0.15
+    + earnings_risk_score * 0.05
+    + delta_score * 0.10
 )
 
 # Phase 2 adjustments (same as CALL)
@@ -443,12 +443,12 @@ All targets are stored in `_get_screening_profile()` and can be modified:
 
 ```python
 base_profile = {
-    'target_iv_adjusted': 50,
-    'target_theta_delta_ratio': 0.005,
-    'target_capital_efficiency': 100,
-    'min_iv_percentile_for_bonus': 60,
-    'max_iv_percentile_for_penalty': 30,
-    'earnings_warning_days': 7,
+    "target_iv_adjusted": 50,
+    "target_theta_delta_ratio": 0.005,
+    "target_capital_efficiency": 100,
+    "min_iv_percentile_for_bonus": 60,
+    "max_iv_percentile_for_penalty": 30,
+    "earnings_warning_days": 7,
 }
 ```
 

@@ -259,9 +259,13 @@ def classify_catalyst_flow(
             action_bucket = f"{side}_RESEARCH"
             action_label = ACTION_BUCKETS[f"{side}_RESEARCH"]
             if side == "CALL":
-                action_reason = "Bullish call flow — research long calls or call spreads. Research-only, not a trade signal."
+                action_reason = (
+                    "Bullish call flow — research long calls or call spreads. Research-only, not a trade signal."
+                )
             else:
-                action_reason = "Bearish put flow — research long puts or put spreads. Research-only, not a trade signal."
+                action_reason = (
+                    "Bearish put flow — research long puts or put spreads. Research-only, not a trade signal."
+                )
 
         # -- Signal tier --#
         if score >= 65:

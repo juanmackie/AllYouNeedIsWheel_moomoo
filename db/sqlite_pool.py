@@ -6,12 +6,12 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-logger = logging.getLogger('db.sqlite_pool')
+logger = logging.getLogger("db.sqlite_pool")
 
 _POOLS = {}
 _POOL_HANDLES = {}
 _POOLS_LOCK = threading.Lock()
-_DEFAULT_POOL_SIZE = max(1, int(os.environ.get('SQLITE_POOL_SIZE', '4')))
+_DEFAULT_POOL_SIZE = max(1, int(os.environ.get("SQLITE_POOL_SIZE", "4")))
 
 
 class SQLiteConnectionPool:
@@ -88,12 +88,12 @@ class SQLiteConnectionPool:
     def stats(self):
         with self._lock:
             return {
-                'db_path': self.db_path,
-                'pool_size': self._available.qsize(),
-                'created': self._created,
-                'borrowed': self._borrowed,
-                'maxsize': self.maxsize,
-                'handle_count': _POOL_HANDLES.get(self.db_path, 0),
+                "db_path": self.db_path,
+                "pool_size": self._available.qsize(),
+                "created": self._created,
+                "borrowed": self._borrowed,
+                "maxsize": self.maxsize,
+                "handle_count": _POOL_HANDLES.get(self.db_path, 0),
             }
 
 
@@ -159,11 +159,15 @@ def get_connection_pool_stats(db_path):
     with _POOLS_LOCK:
         pool = _POOLS.get(resolved)
         handle_count = _POOL_HANDLES.get(resolved, 0)
-        return pool.stats() if pool is not None else {
-            'db_path': resolved,
-            'pool_size': 0,
-            'created': 0,
-            'borrowed': 0,
-            'maxsize': _DEFAULT_POOL_SIZE,
-            'handle_count': handle_count,
-        }
+        return (
+            pool.stats()
+            if pool is not None
+            else {
+                "db_path": resolved,
+                "pool_size": 0,
+                "created": 0,
+                "borrowed": 0,
+                "maxsize": _DEFAULT_POOL_SIZE,
+                "handle_count": handle_count,
+            }
+        )

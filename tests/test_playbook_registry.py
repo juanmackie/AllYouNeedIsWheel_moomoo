@@ -2,21 +2,19 @@
 Tests for core/playbook_registry.py — Wheel Playbook Hypothesis Registry
 """
 
-import unittest
 import json
+import unittest
 from unittest.mock import MagicMock, patch
-from datetime import datetime
 
 from core.playbook_registry import (
-    PlaybookHypothesis,
-    HypothesisRegistry,
-    VALID_STATUSES,
     DEFAULT_HYPOTHESES,
+    VALID_STATUSES,
+    HypothesisRegistry,
+    PlaybookHypothesis,
 )
 
 
 class TestValidStatuses(unittest.TestCase):
-
     def test_all_valid_statuses(self):
         expected = {"exploring", "testing", "validated", "rejected", "monitoring"}
         self.assertEqual(VALID_STATUSES, expected)
@@ -43,7 +41,6 @@ class TestValidStatuses(unittest.TestCase):
 
 
 class TestPlaybookHypothesis(unittest.TestCase):
-
     def test_default_creation(self):
         h = PlaybookHypothesis()
         self.assertEqual(h.hypothesis_id, "")
@@ -105,7 +102,6 @@ class TestPlaybookHypothesis(unittest.TestCase):
 
 
 class TestHypothesisRegistryConnect(unittest.TestCase):
-
     def setUp(self):
         self.mock_db = MagicMock()
         self.mock_db.db_path = ":memory:"
@@ -261,7 +257,6 @@ class TestHypothesisRegistryConnect(unittest.TestCase):
 
 
 class TestHypothesisRegistryWithRows(unittest.TestCase):
-
     def setUp(self):
         self.mock_db = MagicMock()
         self.mock_db.db_path = ":memory:"
@@ -350,7 +345,6 @@ class TestHypothesisRegistryWithRows(unittest.TestCase):
 
 
 class TestDefaultHypothesesContent(unittest.TestCase):
-
     def test_earnings_avoid_5d(self):
         hyp = next(h for h in DEFAULT_HYPOTHESES if h["hypothesis_id"] == "earnings_avoid_5d")
         self.assertEqual(hyp["category"], "earnings")

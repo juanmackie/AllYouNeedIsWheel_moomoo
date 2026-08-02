@@ -184,7 +184,11 @@ class SignalOverlayService:
                     overlays[ticker] = cached
                     continue
 
-                payload = self._build_overlay(conn, ticker) if conn else self._unknown_overlay(ticker, "Moomoo connection unavailable")
+                payload = (
+                    self._build_overlay(conn, ticker)
+                    if conn
+                    else self._unknown_overlay(ticker, "Moomoo connection unavailable")
+                )
                 self._store_cache(ticker, payload)
                 overlays[ticker] = payload
             except Exception as exc:
@@ -279,13 +283,18 @@ class SignalOverlayService:
         if not signals:
             signals = ["No structured overlay signals"]
 
-        summary = " | ".join(
-            part for part in [
-                capital.summary,
-                technical.summary,
-                derivatives.summary,
-            ] if part
-        ) or "No structured overlay signals"
+        summary = (
+            " | ".join(
+                part
+                for part in [
+                    capital.summary,
+                    technical.summary,
+                    derivatives.summary,
+                ]
+                if part
+            )
+            or "No structured overlay signals"
+        )
 
         raw = {
             "capital": capital.raw or {},
@@ -319,7 +328,10 @@ class SignalOverlayService:
         warnings = []
         for dim in dimensions:
             for signal in dim.signals or []:
-                if any(token in signal.lower() for token in ("overbought", "death cross", "bearish", "breakdown", "short pressure", "put skew")):
+                if any(
+                    token in signal.lower()
+                    for token in ("overbought", "death cross", "bearish", "breakdown", "short pressure", "put skew")
+                ):
                     warnings.append(signal)
         return warnings[:5]
 
@@ -356,7 +368,11 @@ class SignalOverlayService:
         if flow_rows:
             recent_rows = flow_rows[-5:]
             recent_flow = sum(_as_float(row.get("in_flow")) for row in recent_rows)
-            recent_main_flow = sum(_as_float(row.get("main_in_flow")) for row in recent_rows if row.get("main_in_flow") not in (None, "N/A"))
+            recent_main_flow = sum(
+                _as_float(row.get("main_in_flow"))
+                for row in recent_rows
+                if row.get("main_in_flow") not in (None, "N/A")
+            )
 
         short_enabled = bool(snap_row.get("enable_short_sell"))
         short_sell_rate = _as_float(snap_row.get("short_sell_rate"))
@@ -408,7 +424,8 @@ class SignalOverlayService:
                 "short_sell_rate": round(short_sell_rate, 2),
                 "short_available_volume": short_available,
                 "short_enabled": short_enabled,
-                "update_time": dist_row.get("update_time") or (flow_rows[-1].get("capital_flow_item_time") if flow_rows else None),
+                "update_time": dist_row.get("update_time")
+                or (flow_rows[-1].get("capital_flow_item_time") if flow_rows else None),
             },
         )
 
@@ -424,7 +441,9 @@ class SignalOverlayService:
         vol_col = "volume" if "volume" in frame.columns else None
 
         if not close_col or not high_col or not low_col:
-            return _DimensionResult(summary="price history missing core fields", signals=["price history missing core fields"])
+            return _DimensionResult(
+                summary="price history missing core fields", signals=["price history missing core fields"]
+            )
 
         closes = pd.to_numeric(frame[close_col], errors="coerce").dropna()
         highs = pd.to_numeric(frame[high_col], errors="coerce").dropna()
@@ -435,7 +454,11 @@ class SignalOverlayService:
         closes = closes.reset_index(drop=True)
         highs = highs.reset_index(drop=True)
         lows = lows.reset_index(drop=True)
-        volumes = pd.to_numeric(frame[vol_col], errors="coerce").fillna(0).reset_index(drop=True) if vol_col else pd.Series([0] * len(closes))
+        volumes = (
+            pd.to_numeric(frame[vol_col], errors="coerce").fillna(0).reset_index(drop=True)
+            if vol_col
+            else pd.Series([0] * len(closes))
+        )
 
         ema20 = closes.ewm(span=20, adjust=False).mean()
         ema50 = closes.ewm(span=50, adjust=False).mean()
@@ -463,11 +486,19 @@ class SignalOverlayService:
         rsi_last = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
         macd_hist_last = float(macd_hist.iloc[-1]) if not pd.isna(macd_hist.iloc[-1]) else 0.0
         vol_last = float(volumes.iloc[-1]) if len(volumes) else 0.0
-        vol_avg20 = float(volumes.rolling(20).mean().iloc[-1]) if len(volumes) >= 20 and not pd.isna(volumes.rolling(20).mean().iloc[-1]) else 0.0
+        vol_avg20 = (
+            float(volumes.rolling(20).mean().iloc[-1])
+            if len(volumes) >= 20 and not pd.isna(volumes.rolling(20).mean().iloc[-1])
+            else 0.0
+        )
         high20 = float(highs.tail(20).max())
         low20 = float(lows.tail(20).min())
-        upper_band = float((closes.rolling(20).mean() + closes.rolling(20).std() * 2).iloc[-1]) if len(closes) >= 20 else last
-        lower_band = float((closes.rolling(20).mean() - closes.rolling(20).std() * 2).iloc[-1]) if len(closes) >= 20 else last
+        upper_band = (
+            float((closes.rolling(20).mean() + closes.rolling(20).std() * 2).iloc[-1]) if len(closes) >= 20 else last
+        )
+        lower_band = (
+            float((closes.rolling(20).mean() - closes.rolling(20).std() * 2).iloc[-1]) if len(closes) >= 20 else last
+        )
 
         bullish = 0
         bearish = 0
@@ -557,7 +588,13 @@ class SignalOverlayService:
         expirations = []
         if exp_ret == RET_OK and exp_data is not None:
             if isinstance(exp_data, pd.DataFrame) and not exp_data.empty:
-                col = "expiration_date" if "expiration_date" in exp_data.columns else "strike_time" if "strike_time" in exp_data.columns else None
+                col = (
+                    "expiration_date"
+                    if "expiration_date" in exp_data.columns
+                    else "strike_time"
+                    if "strike_time" in exp_data.columns
+                    else None
+                )
                 if col:
                     for raw in exp_data[col].tolist():
                         exp = str(raw).replace("-", "")[:8]
@@ -571,7 +608,9 @@ class SignalOverlayService:
 
         expirations = expirations[:2]
         if not expirations:
-            return _DimensionResult(summary="option expirations unavailable", signals=["option expirations unavailable"])
+            return _DimensionResult(
+                summary="option expirations unavailable", signals=["option expirations unavailable"]
+            )
 
         call_oi = 0
         put_oi = 0
@@ -643,7 +682,9 @@ class SignalOverlayService:
         else:
             summary = f"balanced options flow {pcr_oi:.2f} PCR"
 
-        score = _clamp(50.0 + (1 - min(pcr_oi, 2.0)) * 20.0 - max(pcr_oi - 1.0, 0) * 15.0 + (5.0 if unusual_hits else 0.0))
+        score = _clamp(
+            50.0 + (1 - min(pcr_oi, 2.0)) * 20.0 - max(pcr_oi - 1.0, 0) * 15.0 + (5.0 if unusual_hits else 0.0)
+        )
         confidence = _clamp((call_count + put_count) * 10.0 + (10.0 if avg_iv else 0.0))
 
         return _DimensionResult(
@@ -735,14 +776,21 @@ def apply_signal_overlay(signal: dict, overlay: dict | None) -> dict:
     return enriched
 
 
-def fetch_signal_overlay_map(tickers: list[str], overlay_service: SignalOverlayService | None = None, refresh: bool = False) -> dict[str, dict]:
+def fetch_signal_overlay_map(
+    tickers: list[str], overlay_service: SignalOverlayService | None = None, refresh: bool = False
+) -> dict[str, dict]:
     service = overlay_service or get_signal_overlay_service()
     if service is None:
         return {}
     return service.get_overlay_map(tickers, refresh=refresh)
 
 
-def enrich_signals_with_overlay(signals: list[dict], overlay_map: dict[str, dict] | None = None, overlay_service: SignalOverlayService | None = None, refresh: bool = False) -> list[dict]:
+def enrich_signals_with_overlay(
+    signals: list[dict],
+    overlay_map: dict[str, dict] | None = None,
+    overlay_service: SignalOverlayService | None = None,
+    refresh: bool = False,
+) -> list[dict]:
     if not signals:
         return []
     if overlay_map is None:
@@ -761,6 +809,7 @@ def enrich_signals_with_overlay(signals: list[dict], overlay_map: dict[str, dict
         overlay = overlay_map.get(ticker) if overlay_map else None
         enriched.append(apply_signal_overlay(signal, overlay))
     return enriched
+
 
 def get_signal_overlay_service():
     from api.services.config import get_config

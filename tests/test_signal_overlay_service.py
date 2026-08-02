@@ -37,36 +37,42 @@ class TestSignalOverlayService(unittest.TestCase):
         mock_conn.is_connected.return_value = True
         mock_conn.get_capital_distribution.return_value = (
             0,
-            pd.DataFrame([
-                {
-                    "capital_in_super": 1200,
-                    "capital_in_big": 500,
-                    "capital_in_mid": 100,
-                    "capital_in_small": 50,
-                    "capital_out_super": 120,
-                    "capital_out_big": 40,
-                    "capital_out_mid": 20,
-                    "capital_out_small": 10,
-                    "update_time": "2026-06-04 10:00:00",
-                }
-            ]),
+            pd.DataFrame(
+                [
+                    {
+                        "capital_in_super": 1200,
+                        "capital_in_big": 500,
+                        "capital_in_mid": 100,
+                        "capital_in_small": 50,
+                        "capital_out_super": 120,
+                        "capital_out_big": 40,
+                        "capital_out_mid": 20,
+                        "capital_out_small": 10,
+                        "update_time": "2026-06-04 10:00:00",
+                    }
+                ]
+            ),
         )
         mock_conn.get_capital_flow.return_value = (
             0,
-            pd.DataFrame([
-                {"in_flow": 100, "main_in_flow": 75},
-                {"in_flow": 80, "main_in_flow": 50},
-            ]),
+            pd.DataFrame(
+                [
+                    {"in_flow": 100, "main_in_flow": 75},
+                    {"in_flow": 80, "main_in_flow": 50},
+                ]
+            ),
         )
         mock_conn.get_market_snapshot.return_value = (
             0,
-            pd.DataFrame([
-                {
-                    "enable_short_sell": True,
-                    "short_sell_rate": 2.5,
-                    "short_available_volume": 22000,
-                }
-            ]),
+            pd.DataFrame(
+                [
+                    {
+                        "enable_short_sell": True,
+                        "short_sell_rate": 2.5,
+                        "short_available_volume": 22000,
+                    }
+                ]
+            ),
         )
         mock_conn.get_history_kline.return_value = (
             0,
@@ -82,10 +88,12 @@ class TestSignalOverlayService(unittest.TestCase):
         )
         mock_conn.get_option_expiration_dates.return_value = (
             0,
-            pd.DataFrame([
-                {"expiration_date": "20260619"},
-                {"expiration_date": "20260717"},
-            ]),
+            pd.DataFrame(
+                [
+                    {"expiration_date": "20260619"},
+                    {"expiration_date": "20260717"},
+                ]
+            ),
         )
         mock_conn.get_option_chain.side_effect = lambda ticker, exp, right: (
             0,

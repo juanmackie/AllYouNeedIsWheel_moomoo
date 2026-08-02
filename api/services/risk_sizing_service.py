@@ -9,12 +9,12 @@ Formula:
 """
 
 import logging
-from typing import Dict, Any, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker, validate_ticker
 from core.ttl_cache import make_ttl_cache
 
-logger = logging.getLogger('api.services.risk_sizing')
+logger = logging.getLogger("api.services.risk_sizing")
 
 
 class SizingResult(TypedDict):
@@ -29,11 +29,17 @@ class SizingResult(TypedDict):
     current_price: float
     warnings: List[str]
 
+
 try:
-    import yfinance as yf
+    import importlib
+    import importlib.util
+
     import pandas as pd
-    import numpy as np
-    YFINANCE_AVAILABLE = True
+
+    # `yf` module binding is a test seam (tests patch risk_sizing_service.yf)
+    # and doubles as the availability probe. Deliberately not used directly.
+    yf = importlib.import_module("yfinance")
+    YFINANCE_AVAILABLE = importlib.util.find_spec("yfinance") is not None
 except ImportError:
     logger.warning("yfinance/pandas/numpy not available — RiskSizingService will use fallback")
     YFINANCE_AVAILABLE = False
@@ -42,11 +48,11 @@ except ImportError:
 class RiskSizingService:
     """
     Service for calculating position sizes based on ATR risk.
-    
+
     Ensures that a 1-ATR adverse move costs no more than
     a configured percentage of the account (default 1%).
     """
-    
+
     CACHE_TTL_SECONDS = 900  # 15 minutes
 
     def __init__(self):
@@ -69,11 +75,11 @@ class RiskSizingService:
     def calculate_atr(self, ticker: str, period: int = 14) -> float:
         """
         Calculate ATR (Average True Range) for a ticker.
-        
+
         Args:
             ticker: Stock symbol
             period: ATR period (default 14)
-            
+
         Returns:
             ATR value as float, or 0.0 if calculation fails
         """
@@ -89,27 +95,23 @@ class RiskSizingService:
             clean_ticker = clean_yfinance_ticker(ticker)
             stock = get_yfinance_ticker(clean_ticker)
             # Fetch 3x period to have enough data
-            hist = stock.history(period='2mo', interval='1d')
+            hist = stock.history(period="2mo", interval="1d")
 
             if hist.empty or len(hist) < period:
                 logger.warning(f"Insufficient data for {ticker} ATR (got {len(hist)} days)")
                 return 0.0
 
             # Calculate True Range
-            high = hist['High'].values
-            low = hist['Low'].values
-            close = hist['Close'].values
+            high = hist["High"].values
+            low = hist["Low"].values
+            close = hist["Close"].values
 
             tr_list = []
             for i in range(len(hist)):
                 if i == 0:
                     tr = high[i] - low[i]
                 else:
-                    tr = max(
-                        high[i] - low[i],
-                        abs(high[i] - close[i-1]),
-                        abs(low[i] - close[i-1])
-                    )
+                    tr = max(high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1]))
                 tr_list.append(tr)
 
             # Calculate ATR as SMA of True Range
@@ -123,21 +125,17 @@ class RiskSizingService:
             return 0.0
 
     def calculate_position_size(
-        self,
-        ticker: str,
-        account_value: float,
-        risk_pct: float = 0.01,
-        atr_period: int = 14
+        self, ticker: str, account_value: float, risk_pct: float = 0.01, atr_period: int = 14
     ) -> SizingResult:
         """
         Calculate position size based on ATR risk.
-        
+
         Args:
             ticker: Stock symbol
             account_value: Total account value
             risk_pct: Risk percentage (0.01 = 1%)
             atr_period: ATR period
-            
+
         Returns:
             dict: {
                 'ticker': str,
@@ -159,63 +157,63 @@ class RiskSizingService:
             return cached
 
         result = {
-            'ticker': ticker,
-            'atr': 0.0,
-            'atr_period': atr_period,
-            'account_value': account_value,
-            'risk_pct': risk_pct,
-            'risk_amount': round(account_value * risk_pct, 2),
-            'risk_per_contract': 0.0,
-            'max_contracts': 1,
-            'current_price': 0.0,
-            'warnings': [],
+            "ticker": ticker,
+            "atr": 0.0,
+            "atr_period": atr_period,
+            "account_value": account_value,
+            "risk_pct": risk_pct,
+            "risk_amount": round(account_value * risk_pct, 2),
+            "risk_per_contract": 0.0,
+            "max_contracts": 1,
+            "current_price": 0.0,
+            "warnings": [],
         }
 
         if not YFINANCE_AVAILABLE:
-            result['warnings'].append('yfinance not available — using default size')
+            result["warnings"].append("yfinance not available — using default size")
             return result
 
         # ── Defense in depth: reject invalid tickers before any yfinance call ──
         if not validate_ticker(ticker):
             logger.debug(f"Risk sizing: Skipping invalid ticker '{ticker}'")
-            result['warnings'].append(f'Invalid ticker: {ticker}')
+            result["warnings"].append(f"Invalid ticker: {ticker}")
             return result
 
         try:
             # Get current price
             clean_ticker = clean_yfinance_ticker(ticker)
             stock = get_yfinance_ticker(clean_ticker)
-            hist = stock.history(period='5d', interval='1d')
-            
+            hist = stock.history(period="5d", interval="1d")
+
             if hist.empty:
-                result['warnings'].append('No price data available')
+                result["warnings"].append("No price data available")
                 return result
 
-            current_price = float(hist['Close'].iloc[-1])
-            result['current_price'] = current_price
+            current_price = float(hist["Close"].iloc[-1])
+            result["current_price"] = current_price
 
             # Calculate ATR
             atr = self.calculate_atr(ticker, atr_period)
             if atr <= 0:
-                result['warnings'].append('ATR calculation failed — using default size')
+                result["warnings"].append("ATR calculation failed — using default size")
                 return result
 
-            result['atr'] = atr
+            result["atr"] = atr
 
             # Risk calculations
             risk_amount = account_value * risk_pct
             risk_per_contract = atr * 100  # 100 shares per contract
             max_contracts = max(1, int(risk_amount // risk_per_contract))
 
-            result['risk_amount'] = round(risk_amount, 2)
-            result['risk_per_contract'] = round(risk_per_contract, 2)
-            result['max_contracts'] = max_contracts
+            result["risk_amount"] = round(risk_amount, 2)
+            result["risk_per_contract"] = round(risk_per_contract, 2)
+            result["max_contracts"] = max_contracts
 
             # Add warnings
             if max_contracts < 1:
-                result['warnings'].append('ATR risk exceeds 1% — consider higher risk_pct')
+                result["warnings"].append("ATR risk exceeds 1% — consider higher risk_pct")
             elif max_contracts > 10:
-                result['warnings'].append('High contract count — verify available capital')
+                result["warnings"].append("High contract count — verify available capital")
 
             # Cache the result
             self._set_cached(cache_key, result)
@@ -224,7 +222,7 @@ class RiskSizingService:
 
         except Exception as e:
             logger.error(f"Error calculating position size for {ticker}: {e}")
-            result['warnings'].append(f'Error: {str(e)}')
+            result["warnings"].append(f"Error: {str(e)}")
             return result
 
     def clear_cache(self, ticker: Optional[str] = None) -> None:

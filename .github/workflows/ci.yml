@@ -2,59 +2,95 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.11"]
+  windows-quality-gate:
+    name: Windows quality gate (backend, frontend, hygiene)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: pip
-        cache-dependency-path: requirements.txt
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.x"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Lint with ruff
-      run: |
-        pip install ruff
-        ruff check . --select=F
+      - name: Sync locked Python environment
+        run: uv sync --locked --all-groups
 
-    - name: Run tests with coverage
-      run: |
-        pytest tests/ -v --cov=. --cov-report=xml --cov-report=term-missing --cov-fail-under=50
+      - name: Ruff lint
+        run: uv run ruff check .
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v5
-      with:
-        file: ./coverage.xml
-        fail_ci_if_error: false
+      - name: Dependency drift check (pyproject vs requirements.txt)
+        run: |
+          uv run python - <<'PY'
+          import re, tomllib
+          from pathlib import Path
+          with open("pyproject.toml", "rb") as fh:
+              py_deps = set(re.split(r"[<>=!~;]", d.strip())[0].lower()
+                            for d in tomllib.load(fh)["project"]["dependencies"])
+          req_deps = set()
+          for line in Path("requirements.txt").read_text().splitlines():
+              line = line.split("#")[0].strip()
+              if not line or line.startswith("-"):
+                  continue
+              req_deps.add(re.split(r"[<>=!~;]", line)[0].strip().lower())
+          missing = py_deps - req_deps
+          extra = req_deps - py_deps
+          assert not missing, f"requirements.txt missing: {sorted(missing)}"
+          assert not extra, f"requirements.txt has extras not in pyproject: {sorted(extra)}"
+          print("dependency drift check: OK", len(py_deps), "deps aligned")
+          PY
 
-  security:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
+      - name: Backend tests (locked env)
+        run: uv run python scripts/ci_pytest.py tests/ -q
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
+      - name: Frontend tests
+        run: |
+          npm ci
+          npm test --silent
 
-    - name: Scan for secrets
-      uses: gitleaks/gitleaks-action@v2
-      with:
-        args: detect --source . --redact --no-banner
+      - name: Hygiene scan — no order-capable runtime surface
+        run: |
+          $hits = Get-ChildItem -Recurse -File -Include *.py |
+            Where-Object { $_.FullName -notmatch '\\tests\\' } |
+            Select-String -Pattern 'place_order|modify_order|unlock_trade|cancel_order' -SimpleMatch:$false |
+            Select-Object -First 20
+          if ($hits) {
+            $hits | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
+            exit 1
+          }
+          Write-Host "hygiene scan: no order-capable runtime code found"
+
+      - name: Hygiene scan — no tracked generated artifacts
+        run: |
+          $bad = git ls-files | Where-Object {
+            $_ -match '(^|/)(node_modules|__pycache__|\.pytest_cache|\.ruff_cache|\.venv|logs?)/' -or
+            $_ -match '\.(db|db-wal|db-shm|pyc|log)$' -or
+            $_ -match '(^|/)\.env$' -or
+            $_ -match 'opend-skills'
+          }
+          if ($bad) { Write-Error "tracked artifacts:"; $bad | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "hygiene scan: no tracked generated artifacts"
+
+      - name: Fresh-clone smoke (backend import + health endpoint)
+        run: |
+          $tmp = Join-Path $env:TEMP "ayniw-smoke-$([guid]::NewGuid().ToString('N'))"
+          git clone -q . $tmp
+          Push-Location $tmp
+          uv sync --locked --all-groups
+          uv run python -c "from app import create_application; app = create_application(); print('app import OK')"
+          Pop-Location
+          Remove-Item -Recurse -Force $tmp

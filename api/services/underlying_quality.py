@@ -16,25 +16,25 @@ from datetime import datetime
 
 from core.ttl_cache import make_ttl_cache
 
-logger = logging.getLogger('api.services.underlying_quality')
+logger = logging.getLogger("api.services.underlying_quality")
 
 CACHE_TTL = 3600  # 1 hour
 
 _cache = make_ttl_cache(maxsize=512, ttl=CACHE_TTL)
 
 _EMPTY = {
-    'grade': 'unknown',
-    'score': 0,
-    'regime': 'unknown',
-    'trend_strength': 'unknown',
-    'adx': 0.0,
-    'rs_slope_63d': 0.0,
-    'atr_pct': 0.0,
-    'volume_ratio': 0.0,
-    'price_vs_ema200': 0.0,
-    'warnings': ['insufficient_data'],
-    'source': 'yfinance',
-    'updated_at': None,
+    "grade": "unknown",
+    "score": 0,
+    "regime": "unknown",
+    "trend_strength": "unknown",
+    "adx": 0.0,
+    "rs_slope_63d": 0.0,
+    "atr_pct": 0.0,
+    "volume_ratio": 0.0,
+    "price_vs_ema200": 0.0,
+    "warnings": ["insufficient_data"],
+    "source": "yfinance",
+    "updated_at": None,
 }
 
 
@@ -51,35 +51,40 @@ def get_underlying_quality(ticker: str) -> dict:
 
 def _compute(ticker: str) -> dict:
     try:
-        from api.services.utils import get_yfinance_history, validate_ticker
-        import pandas as pd
         import numpy as np
+        import pandas as pd
+
+        from api.services.utils import get_yfinance_history, validate_ticker
     except ImportError:
-        return {**_EMPTY, 'warnings': ['dependencies_missing']}
+        return {**_EMPTY, "warnings": ["dependencies_missing"]}
 
     if not validate_ticker(ticker):
-        return {**_EMPTY, 'warnings': ['invalid_ticker']}
+        return {**_EMPTY, "warnings": ["invalid_ticker"]}
 
     try:
-        hist = get_yfinance_history(ticker, period='1y')
+        hist = get_yfinance_history(ticker, period="1y")
         if hist is None or hist.empty or len(hist) < 50:
-            return {**_EMPTY, 'warnings': ['insufficient_price_data'], 'updated_at': datetime.now().isoformat()}
+            return {**_EMPTY, "warnings": ["insufficient_price_data"], "updated_at": datetime.now().isoformat()}
 
-        close = hist['Close']
-        high = hist['High']
-        low = hist['Low']
-        volume = hist['Volume']
+        close = hist["Close"]
+        high = hist["High"]
+        low = hist["Low"]
+        volume = hist["Volume"]
         current_price = float(close.iloc[-1])
 
         # --- EMA200 regime ---
-        ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1]) if len(close) >= 200 else float(close.ewm(span=min(len(close), 200), adjust=False).mean().iloc[-1])
+        ema200 = (
+            float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+            if len(close) >= 200
+            else float(close.ewm(span=min(len(close), 200), adjust=False).mean().iloc[-1])
+        )
         price_vs_ema200 = ((current_price - ema200) / ema200 * 100) if ema200 > 0 else 0.0
         if current_price > ema200 * 1.02:
-            regime = 'bullish'
+            regime = "bullish"
         elif current_price < ema200 * 0.98:
-            regime = 'bearish'
+            regime = "bearish"
         else:
-            regime = 'neutral'
+            regime = "neutral"
 
         # --- ADX (14-period) ---
         adx = _compute_adx(high, low, close, period=14)
@@ -87,9 +92,9 @@ def _compute(ticker: str) -> dict:
         # --- Relative strength slope vs SPY (63-day) ---
         rs_slope = 0.0
         try:
-            spy_hist = get_yfinance_history('SPY', period='1y')
+            spy_hist = get_yfinance_history("SPY", period="1y")
             if spy_hist is not None and not spy_hist.empty and len(spy_hist) >= 63:
-                spy_close = spy_hist['Close']
+                spy_close = spy_hist["Close"]
                 # Align on common dates
                 common_idx = close.index.intersection(spy_close.index)
                 if len(common_idx) >= 63:
@@ -106,11 +111,14 @@ def _compute(ticker: str) -> dict:
         # --- ATR percent ---
         atr_pct = 0.0
         if len(close) >= 14:
-            tr = pd.concat([
-                high - low,
-                (high - close.shift(1)).abs(),
-                (low - close.shift(1)).abs(),
-            ], axis=1).max(axis=1)
+            tr = pd.concat(
+                [
+                    high - low,
+                    (high - close.shift(1)).abs(),
+                    (low - close.shift(1)).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
             atr14 = float(tr.rolling(14).mean().iloc[-1])
             atr_pct = (atr14 / current_price * 100) if current_price > 0 else 0.0
 
@@ -125,77 +133,77 @@ def _compute(ticker: str) -> dict:
         warnings = []
         score = 50  # neutral starting point
 
-        if regime == 'bullish':
+        if regime == "bullish":
             score += 20
-        elif regime == 'bearish':
+        elif regime == "bearish":
             score -= 20
-            warnings.append('below_200_sma')
+            warnings.append("below_200_sma")
 
         if adx > 25:
             score += 10
         elif adx < 15:
             score -= 5
-            warnings.append('weak_trend')
+            warnings.append("weak_trend")
 
         if rs_slope > 0.05:
             score += 15
         elif rs_slope < -0.05:
             score -= 15
-            warnings.append('underperforming_spy')
+            warnings.append("underperforming_spy")
 
         if atr_pct > 5.0:
             score -= 10
-            warnings.append('high_volatility')
+            warnings.append("high_volatility")
         elif atr_pct > 3.5:
-            warnings.append('elevated_volatility')
+            warnings.append("elevated_volatility")
 
         if vol_ratio < 0.5:
-            warnings.append('low_volume')
+            warnings.append("low_volume")
 
         score = max(0, min(100, score))
 
         if score >= 70:
-            grade = 'strong'
+            grade = "strong"
         elif score >= 50:
-            grade = 'mixed'
+            grade = "mixed"
         else:
-            grade = 'weak'
-            warnings.append('weak_underlying')
+            grade = "weak"
+            warnings.append("weak_underlying")
 
         if not warnings:
-            warnings.append('none')
+            warnings.append("none")
 
         return {
-            'grade': grade,
-            'score': round(score, 1),
-            'regime': regime,
-            'trend_strength': 'trending' if adx > 25 else 'ranging',
-            'adx': round(adx, 2),
-            'rs_slope_63d': round(rs_slope, 4),
-            'atr_pct': round(atr_pct, 2),
-            'volume_ratio': round(vol_ratio, 2),
-            'price_vs_ema200': round(price_vs_ema200, 2),
-            'warnings': warnings,
-            'source': 'yfinance',
-            'updated_at': datetime.now().isoformat(),
+            "grade": grade,
+            "score": round(score, 1),
+            "regime": regime,
+            "trend_strength": "trending" if adx > 25 else "ranging",
+            "adx": round(adx, 2),
+            "rs_slope_63d": round(rs_slope, 4),
+            "atr_pct": round(atr_pct, 2),
+            "volume_ratio": round(vol_ratio, 2),
+            "price_vs_ema200": round(price_vs_ema200, 2),
+            "warnings": warnings,
+            "source": "yfinance",
+            "updated_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
         logger.warning(f"Underlying quality failed for {ticker}: {e}")
-        return {**_EMPTY, 'warnings': ['fetch_error'], 'updated_at': datetime.now().isoformat()}
+        return {**_EMPTY, "warnings": ["fetch_error"], "updated_at": datetime.now().isoformat()}
 
 
 def _compute_adx(high, low, close, period=14) -> float:
     """Minimal ADX computation."""
     try:
-        import pandas as pd
         import numpy as np
+        import pandas as pd
 
         if len(close) < period + 10:
             return 25.0
 
         h = high.values
-        l = low.values
+        lo = low.values
         c = close.values
 
         tr_list = np.zeros(len(h))
@@ -203,9 +211,9 @@ def _compute_adx(high, low, close, period=14) -> float:
         minus_dm = np.zeros(len(h))
 
         for i in range(1, len(h)):
-            tr_list[i] = max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1]))
+            tr_list[i] = max(h[i] - lo[i], abs(h[i] - c[i - 1]), abs(lo[i] - c[i - 1]))
             up = h[i] - h[i - 1]
-            down = l[i - 1] - l[i]
+            down = lo[i - 1] - lo[i]
             plus_dm[i] = up if (up > down and up > 0) else 0
             minus_dm[i] = down if (down > up and down > 0) else 0
 

@@ -3,26 +3,27 @@ MoomooConnection - connection lifecycle, order management, and portfolio retriev
 Extracted from core/connection.py for maintainability.
 """
 
-import time
 import os
-import traceback
 import threading
+import time
+import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
 from core.utils import is_market_open
+
 try:
     from moomoo import (
+        RET_ERROR,
+        RET_OK,
         OpenQuoteContext,
         OpenSecTradeContext,
-        RET_OK,
-        RET_ERROR,
+        OptionDataFilter,
+        OptionType,
         SecurityFirm,
         TrdEnv,
-
-        OptionType,
-    UserSecurityGroupType,
-    OptionDataFilter,
-)
+        UserSecurityGroupType,
+    )
 except ImportError:
     # Allow graceful fallback during test collection / environments without full moomoo SDK
     OpenQuoteContext = None
@@ -36,34 +37,34 @@ except ImportError:
     UserSecurityGroupType = None
     OptionDataFilter = None
 
-from core.logging_config import get_logger
-from core.rate_limiter import RateLimiter
 from core.connection_constants import (
-    _safe_close_context,
     _clean_account_id,
     _env_name,
-    _normalize_trd_env,
-    _normalize_security_firm,
-    _infer_security_type_from_code,
-    _parse_option_code_metadata,
-    _safe_float,
     _first_non_zero,
+    _infer_security_type_from_code,
     _normalize_iv,
+    _normalize_security_firm,
+    _normalize_trd_env,
+    _parse_option_code_metadata,
+    _safe_close_context,
+    _safe_float,
 )
 from core.context_factory import create_contexts
+from core.logging_config import get_logger
+from core.rate_limiter import RateLimiter
 from core.ticker_utils import TickerCache, format_symbol
 
-logger = get_logger('autotrader.connection', 'moomoo')
+logger = get_logger("autotrader.connection", "moomoo")
 
 
 def _safe_str(value) -> str:
     """Convert a value to a UTF-8-safe string for logging, replacing non-ASCII chars that crash cp1252 consoles."""
     raw = str(value)
     try:
-        raw.encode('cp1252')
+        raw.encode("cp1252")
         return raw
     except UnicodeEncodeError:
-        return raw.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+        return raw.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
 
 
 def _safe_cash_value(value) -> float | None:
@@ -79,32 +80,32 @@ def _safe_cash_value(value) -> float | None:
 def _select_withdrawable_cash_field(acc_row) -> tuple[float, str]:
     """Choose withdrawable/cash-like USD fields, not margin buying power."""
     cash_fields = (
-        'us_avl_withdrawal_cash',
-        'available_funds',
-        'avl_withdrawal_cash',
-        'us_cash',
-        'cash',
+        "us_avl_withdrawal_cash",
+        "available_funds",
+        "avl_withdrawal_cash",
+        "us_cash",
+        "cash",
     )
     for field in cash_fields:
         value = _safe_cash_value(acc_row.get(field))
         if value is not None and value > 0:
             return value, field
-    return 0.0, 'none'
+    return 0.0, "none"
 
 
 def _select_buying_power_field(acc_row) -> tuple[float, str]:
     """Choose the Moomoo field that represents option cash power/capacity."""
     power_fields = (
-        'usd_net_cash_power',
-        'max_power_short_sell',
-        'power',
-        'buying_power',
+        "usd_net_cash_power",
+        "max_power_short_sell",
+        "power",
+        "buying_power",
     )
     for field in power_fields:
         value = _safe_cash_value(acc_row.get(field))
         if value is not None and value > 0:
             return value, field
-    return 0.0, 'none'
+    return 0.0, "none"
 
 
 def _select_account_cash_field(acc_row) -> tuple[float, str]:
@@ -113,24 +114,24 @@ def _select_account_cash_field(acc_row) -> tuple[float, str]:
 
 def _cash_diagnostics_from_acc_row(acc_row) -> dict:
     fields = [
-        'us_avl_withdrawal_cash',
-        'us_cash',
-        'usd_net_cash_power',
-        'max_power_short_sell',
-        'power',
-        'buying_power',
-        'cash',
-        'available_funds',
-        'avl_withdrawal_cash',
+        "us_avl_withdrawal_cash",
+        "us_cash",
+        "usd_net_cash_power",
+        "max_power_short_sell",
+        "power",
+        "buying_power",
+        "cash",
+        "available_funds",
+        "avl_withdrawal_cash",
     ]
     cash, source = _select_account_cash_field(acc_row)
     buying_power, buying_power_source = _select_buying_power_field(acc_row)
     return {
-        'selected_cash': cash,
-        'selected_cash_source': source,
-        'selected_buying_power': buying_power,
-        'selected_buying_power_source': buying_power_source,
-        'fields': {field: acc_row.get(field) for field in fields},
+        "selected_cash": cash,
+        "selected_cash_source": source,
+        "selected_buying_power": buying_power,
+        "selected_buying_power_source": buying_power_source,
+        "fields": {field: acc_row.get(field) for field in fields},
     }
 
 
@@ -148,27 +149,37 @@ class MoomooConnection:
     _option_chain_gate = threading.BoundedSemaphore(1)
     _option_chain_rate_limiter = None
     _option_chain_rate_lock = threading.Lock()
-    _market_timezone = ZoneInfo(os.environ.get('MARKET_TIMEZONE', 'America/New_York'))
+    _market_timezone = ZoneInfo(os.environ.get("MARKET_TIMEZONE", "America/New_York"))
 
-    def __new__(cls, host='127.0.0.1', port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None):
+    def __new__(
+        cls, host="127.0.0.1", port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None
+    ):
         cleaned_account_id = _clean_account_id(account_id)
 
         if TrdEnv is not None:
             default_portfolio_env = TrdEnv.SIMULATE if readonly else TrdEnv.REAL
             normalized_portfolio_env = _normalize_trd_env(portfolio_env, default_portfolio_env)
         else:
-            normalized_portfolio_env = str(portfolio_env).strip().upper() if portfolio_env else ('SIMULATE' if readonly else 'REAL')
+            normalized_portfolio_env = (
+                str(portfolio_env).strip().upper() if portfolio_env else ("SIMULATE" if readonly else "REAL")
+            )
 
         if SecurityFirm is not None:
             normalized_security_firm = _normalize_security_firm(
-                security_firm or os.environ.get('MOOMOO_SECURITY_FIRM'),
+                security_firm or os.environ.get("MOOMOO_SECURITY_FIRM"),
                 SecurityFirm.FUTUSECURITIES,
             )
         else:
-            normalized_security_firm = str(security_firm or os.environ.get('MOOMOO_SECURITY_FIRM') or '').strip().upper()
+            normalized_security_firm = (
+                str(security_firm or os.environ.get("MOOMOO_SECURITY_FIRM") or "").strip().upper()
+            )
 
-        normalized_portfolio_env_key = getattr(normalized_portfolio_env, 'name', str(normalized_portfolio_env).strip().upper())
-        normalized_security_firm_key = getattr(normalized_security_firm, 'name', str(normalized_security_firm).strip().upper())
+        normalized_portfolio_env_key = getattr(
+            normalized_portfolio_env, "name", str(normalized_portfolio_env).strip().upper()
+        )
+        normalized_security_firm_key = getattr(
+            normalized_security_firm, "name", str(normalized_security_firm).strip().upper()
+        )
         key = f"{host}:{port}:{readonly}:{cleaned_account_id}:{normalized_portfolio_env_key}:{normalized_security_firm_key}"
 
         with cls._instance_lock:
@@ -182,7 +193,16 @@ class MoomooConnection:
 
             return cls._instances[key]
 
-    def __init__(self, host='127.0.0.1', port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None, broker_cache_after_hours=True):
+    def __init__(
+        self,
+        host="127.0.0.1",
+        port=11111,
+        readonly=True,
+        account_id=None,
+        portfolio_env=None,
+        security_firm=None,
+        broker_cache_after_hours=True,
+    ):
         self._broker_cache_after_hours = broker_cache_after_hours
         if self._initialized:
             return
@@ -191,13 +211,9 @@ class MoomooConnection:
         self.port = port
         self.readonly = readonly
         self.account_id = _clean_account_id(account_id)
-        self.portfolio_env = _normalize_trd_env(
-            portfolio_env,
-            TrdEnv.SIMULATE if readonly else TrdEnv.REAL
-        )
+        self.portfolio_env = _normalize_trd_env(portfolio_env, TrdEnv.SIMULATE if readonly else TrdEnv.REAL)
         self.security_firm = _normalize_security_firm(
-            security_firm or os.environ.get('MOOMOO_SECURITY_FIRM'),
-            SecurityFirm.FUTUSECURITIES
+            security_firm or os.environ.get("MOOMOO_SECURITY_FIRM"), SecurityFirm.FUTUSECURITIES
         )
         self.quote_ctx = None
         self.trd_ctx = None
@@ -209,10 +225,7 @@ class MoomooConnection:
         self._initialized = True
 
         self._rate_limiter = RateLimiter(
-            max_requests_per_window=45,
-            rate_limit_window=60,
-            burst_threshold=20,
-            burst_window=10
+            max_requests_per_window=45, rate_limit_window=60, burst_threshold=20, burst_window=10
         )
         with MoomooConnection._option_chain_rate_lock:
             if MoomooConnection._option_chain_rate_limiter is None:
@@ -287,10 +300,7 @@ class MoomooConnection:
     @classmethod
     def get_connection_pool_stats(cls):
         with cls._instance_lock:
-            return {
-                'cached_instances': len(cls._instances),
-                'instance_keys': list(cls._instances.keys())
-            }
+            return {"cached_instances": len(cls._instances), "instance_keys": list(cls._instances.keys())}
 
     def _account_id_arg(self, account_id):
         if not account_id:
@@ -319,17 +329,19 @@ class MoomooConnection:
             return self._account_cache
         try:
             ret, data = self.trd_ctx.get_acc_list()
-            if ret != RET_OK or data is None or getattr(data, 'empty', True):
+            if ret != RET_OK or data is None or getattr(data, "empty", True):
                 self._account_cache = []
                 return self._account_cache
 
             accounts = []
-            for record in data.to_dict('records'):
-                accounts.append({
-                    'acc_id': str(record.get('acc_id', '')).strip(),
-                    'trd_env': record.get('trd_env', TrdEnv.SIMULATE),
-                    'security_firm': record.get('security_firm', '')
-                })
+            for record in data.to_dict("records"):
+                accounts.append(
+                    {
+                        "acc_id": str(record.get("acc_id", "")).strip(),
+                        "trd_env": record.get("trd_env", TrdEnv.SIMULATE),
+                        "security_firm": record.get("security_firm", ""),
+                    }
+                )
 
             self._account_cache = accounts
             return accounts
@@ -342,13 +354,13 @@ class MoomooConnection:
         if not account_id:
             return None
         for account in self._get_available_accounts():
-            if account.get('acc_id') == str(account_id):
+            if account.get("acc_id") == str(account_id):
                 return account
         return None
 
     def _find_account_by_env(self, trd_env):
         for account in self._get_available_accounts():
-            if account.get('trd_env') == trd_env:
+            if account.get("trd_env") == trd_env:
                 return account
         return None
 
@@ -357,23 +369,24 @@ class MoomooConnection:
         if self.account_id:
             matched_account = self._find_account_by_id(self.account_id)
             if matched_account:
-                return matched_account.get('trd_env', TrdEnv.REAL), matched_account.get('acc_id')
+                return matched_account.get("trd_env", TrdEnv.REAL), matched_account.get("acc_id")
             return desired_env, self.account_id
         fallback_account = self._find_account_by_env(desired_env)
-        return desired_env, fallback_account.get('acc_id') if fallback_account else ''
+        return desired_env, fallback_account.get("acc_id") if fallback_account else ""
 
-    def _format_trade_error(self, action, data, trd_env, account_id=''):
+    def _format_trade_error(self, action, data, trd_env, account_id=""):
         details = str(data)
         env_label = _env_name(trd_env)
-        account_label = f" account {account_id}" if account_id else ' account'
+        account_label = f" account {account_id}" if account_id else " account"
         available_accounts = self._get_available_accounts()
-        available_accounts_text = ', '.join(
+        available_accounts_text = ", ".join(
             f"{account.get('acc_id')} ({_env_name(account.get('trd_env'))})"
-            for account in available_accounts if account.get('acc_id')
+            for account in available_accounts
+            if account.get("acc_id")
         )
 
-        if 'No available real accounts' in details or 'Nonexisting acc_id' in details:
-            suffix = ''
+        if "No available real accounts" in details or "Nonexisting acc_id" in details:
+            suffix = ""
             if available_accounts_text:
                 suffix = f" Available accounts exposed by OpenD right now: {available_accounts_text}."
             return (
@@ -464,28 +477,28 @@ class MoomooConnection:
         price_size, failed_size = self._ticker_cache.get_cache_stats()
 
         return {
-            'connected': self._connected,
-            'is_healthy': self.is_connected(),
-            'host': self.host,
-            'port': self.port,
-            'last_activity': self._last_activity.isoformat() if self._last_activity else None,
-            'idle_seconds': idle_time,
-            'uptime_seconds': uptime_seconds,
-            'has_quote_ctx': self.quote_ctx is not None,
-            'has_trd_ctx': self.trd_ctx is not None,
-            'readonly': self.readonly,
-            'portfolio_env': _env_name(self.portfolio_env),
-            'security_firm': str(self.security_firm),
-            'account_id': self.account_id if self.account_id else 'auto',
-            'stock_price_cache_size': price_size,
-            'failed_tickers_count': failed_size,
-            'rate_limit_stats': self._rate_limiter.get_stats(),
-            'rate_limit_config': {
-                'max_requests_per_window': self._rate_limiter.max_requests_per_window,
-                'rate_limit_window': self._rate_limiter.rate_limit_window,
-                'burst_threshold': self._rate_limiter.burst_threshold,
-                'burst_window': self._rate_limiter.burst_window,
-            }
+            "connected": self._connected,
+            "is_healthy": self.is_connected(),
+            "host": self.host,
+            "port": self.port,
+            "last_activity": self._last_activity.isoformat() if self._last_activity else None,
+            "idle_seconds": idle_time,
+            "uptime_seconds": uptime_seconds,
+            "has_quote_ctx": self.quote_ctx is not None,
+            "has_trd_ctx": self.trd_ctx is not None,
+            "readonly": self.readonly,
+            "portfolio_env": _env_name(self.portfolio_env),
+            "security_firm": str(self.security_firm),
+            "account_id": self.account_id if self.account_id else "auto",
+            "stock_price_cache_size": price_size,
+            "failed_tickers_count": failed_size,
+            "rate_limit_stats": self._rate_limiter.get_stats(),
+            "rate_limit_config": {
+                "max_requests_per_window": self._rate_limiter.max_requests_per_window,
+                "rate_limit_window": self._rate_limiter.rate_limit_window,
+                "burst_threshold": self._rate_limiter.burst_threshold,
+                "burst_window": self._rate_limiter.burst_window,
+            },
         }
 
     def _format_symbol(self, symbol):
@@ -512,9 +525,9 @@ class MoomooConnection:
             if request_key in self._pending_requests:
                 return self._pending_requests[request_key], False
             entry = {
-                'event': threading.Event(),
-                'result': None,
-                'completed_at': None,
+                "event": threading.Event(),
+                "result": None,
+                "completed_at": None,
             }
             self._pending_requests[request_key] = entry
             return entry, True
@@ -524,7 +537,7 @@ class MoomooConnection:
             entry = self._pending_requests.get(request_key)
             if not entry:
                 return
-            if not entry.get('event') or not entry['event'].is_set():
+            if not entry.get("event") or not entry["event"].is_set():
                 return
             self._pending_requests.pop(request_key, None)
 
@@ -532,9 +545,9 @@ class MoomooConnection:
         with self._pending_requests_lock:
             entry = self._pending_requests.get(request_key)
             if entry is not None:
-                entry['result'] = result
-                entry['completed_at'] = time.time()
-                entry['event'].set()
+                entry["result"] = result
+                entry["completed_at"] = time.time()
+                entry["event"].set()
                 timer = threading.Timer(
                     self._pending_result_ttl_seconds,
                     self._cleanup_pending_request,
@@ -548,11 +561,11 @@ class MoomooConnection:
         entry, is_new = self._get_or_create_pending_request(request_key)
         if not is_new:
             logger.debug(f"Waiting for pending request: {request_key}")
-            entry['event'].wait(timeout=timeout)
+            entry["event"].wait(timeout=timeout)
             with self._pending_requests_lock:
                 current = self._pending_requests.get(request_key)
                 if current is not None:
-                    return current.get('result')
+                    return current.get("result")
             logger.warning(f"Timeout waiting for pending request: {request_key}")
             return None
         return None
@@ -617,7 +630,7 @@ class MoomooConnection:
                 self._complete_pending_request(request_key, None)
                 return None
 
-            price = float(data.iloc[0].get('last_price', 0))
+            price = float(data.iloc[0].get("last_price", 0))
             self._cache_stock_price(symbol, price)
             self._complete_pending_request(request_key, price)
             return price
@@ -681,7 +694,19 @@ class MoomooConnection:
             logger.error(f"Error getting broker queue for {symbol}: {str(e)}")
             return RET_ERROR, None, None
 
-    def get_history_kline(self, symbol, start=None, end=None, ktype=None, autype=None, fields=None, max_count=120, page_req_key=None, extended_time=False, session=None):
+    def get_history_kline(
+        self,
+        symbol,
+        start=None,
+        end=None,
+        ktype=None,
+        autype=None,
+        fields=None,
+        max_count=120,
+        page_req_key=None,
+        extended_time=False,
+        session=None,
+    ):
         symbol = self._format_symbol(symbol)
         try:
             self._rate_limiter.check_rate_limit()
@@ -735,7 +760,7 @@ class MoomooConnection:
             logger.error(f"Error getting owner plate for {symbol}: {str(e)}")
             return RET_ERROR, None
 
-    def get_option_chain(self, symbol, expiration=None, right='C', target_strike=None, data_filter=None):
+    def get_option_chain(self, symbol, expiration=None, right="C", target_strike=None, data_filter=None):
         symbol = self._format_symbol(symbol)
         cache_key = f"{symbol}_{expiration}_{right}"
         request_key = f"option_chain:{cache_key}"
@@ -759,7 +784,7 @@ class MoomooConnection:
                     self._complete_pending_request(request_key, None)
                     return None
 
-            opt_type = OptionType.CALL if right == 'C' else OptionType.PUT
+            opt_type = OptionType.CALL if right == "C" else OptionType.PUT
             start_date = None
             end_date = None
             if expiration:
@@ -768,11 +793,11 @@ class MoomooConnection:
                     end_date = start_date
 
             result = {
-                'symbol': symbol.split('.')[-1],
-                'expiration': expiration.replace('-', '') if expiration else '',
-                'stock_price': None,
-                'right': right,
-                'options': []
+                "symbol": symbol.split(".")[-1],
+                "expiration": expiration.replace("-", "") if expiration else "",
+                "stock_price": None,
+                "right": right,
+                "options": [],
             }
 
             if data_filter is not None and OptionDataFilter is None:
@@ -782,7 +807,7 @@ class MoomooConnection:
             try:
                 chain_kwargs = dict(code=symbol, start=start_date, end=end_date, option_type=opt_type)
                 if data_filter is not None and OptionDataFilter is not None:
-                    chain_kwargs['data_filter'] = data_filter
+                    chain_kwargs["data_filter"] = data_filter
                 ret, data = self.quote_ctx.get_option_chain(**chain_kwargs)
 
                 if ret != RET_OK:
@@ -797,10 +822,10 @@ class MoomooConnection:
                     return result
 
                 if target_strike:
-                    data['strike_diff'] = (data['strike_price'] - float(target_strike)).abs()
-                    data = data.sort_values('strike_diff').head(20)
+                    data["strike_diff"] = (data["strike_price"] - float(target_strike)).abs()
+                    data = data.sort_values("strike_diff").head(20)
 
-                option_codes = data['code'].tolist()
+                option_codes = data["code"].tolist()
                 if not option_codes:
                     if data_filter is None:
                         self._cache_option_chain(symbol, expiration, right, result)
@@ -810,31 +835,31 @@ class MoomooConnection:
                 ret, snap_data = self.quote_ctx.get_market_snapshot(option_codes)
                 if ret == RET_OK:
                     for _, row in snap_data.iterrows():
-                        opt_expiry = row.get('option_expiry_date', '') or row.get('strike_time', '')
+                        opt_expiry = row.get("option_expiry_date", "") or row.get("strike_time", "")
                         if opt_expiry:
-                            opt_expiry = opt_expiry.replace('-', '')
+                            opt_expiry = opt_expiry.replace("-", "")
 
                         option_data = {
-                            'strike': float(row.get('option_strike_price', 0)),
-                            'expiration': opt_expiry,
-                            'option_type': 'CALL' if row.get('option_type') == 'CALL' else 'PUT',
-                            'bid': float(row.get('bid_price', 0)),
-                            'ask': float(row.get('ask_price', 0)),
-                            'last': float(row.get('last_price', 0)),
-                            'volume': int(row.get('volume', 0)),
-                            'open_interest': int(row.get('option_open_interest', row.get('open_interest', 0)) or 0),
-                            'implied_volatility': _normalize_iv(row.get('option_implied_volatility', 0)),
-                            'delta': float(row.get('option_delta', 0)),
-                            'gamma': float(row.get('option_gamma', 0)),
-                            'theta': float(row.get('option_theta', 0)),
-                            'vega': float(row.get('option_vega', 0))
+                            "strike": float(row.get("option_strike_price", 0)),
+                            "expiration": opt_expiry,
+                            "option_type": "CALL" if row.get("option_type") == "CALL" else "PUT",
+                            "bid": float(row.get("bid_price", 0)),
+                            "ask": float(row.get("ask_price", 0)),
+                            "last": float(row.get("last_price", 0)),
+                            "volume": int(row.get("volume", 0)),
+                            "open_interest": int(row.get("option_open_interest", row.get("open_interest", 0)) or 0),
+                            "implied_volatility": _normalize_iv(row.get("option_implied_volatility", 0)),
+                            "delta": float(row.get("option_delta", 0)),
+                            "gamma": float(row.get("option_gamma", 0)),
+                            "theta": float(row.get("option_theta", 0)),
+                            "vega": float(row.get("option_vega", 0)),
                         }
-                        result['options'].append(option_data)
+                        result["options"].append(option_data)
             finally:
                 MoomooConnection._option_chain_gate.release()
 
-            if not result['expiration'] and result['options']:
-                result['expiration'] = result['options'][0]['expiration']
+            if not result["expiration"] and result["options"]:
+                result["expiration"] = result["options"][0]["expiration"]
 
             if data_filter is None:
                 self._cache_option_chain(symbol, expiration, right, result)
@@ -853,12 +878,9 @@ class MoomooConnection:
 
         try:
             trd_env, account_id = self._resolve_portfolio_account()
-            ret, acc_data = self.trd_ctx.accinfo_query(
-                trd_env=trd_env,
-                acc_id=self._account_id_arg(account_id)
-            )
+            ret, acc_data = self.trd_ctx.accinfo_query(trd_env=trd_env, acc_id=self._account_id_arg(account_id))
             if ret != RET_OK:
-                self.last_error = self._format_trade_error('get account info', acc_data, trd_env, account_id)
+                self.last_error = self._format_trade_error("get account info", acc_data, trd_env, account_id)
                 logger.error(self.last_error)
                 return None
 
@@ -872,86 +894,86 @@ class MoomooConnection:
                 self._cash_diagnostics_logged = True
             available_cash, available_cash_source = _select_account_cash_field(acc)
             buying_power, buying_power_source = _select_buying_power_field(acc)
-            account_value = _first_non_zero(
-                acc.get('usd_assets'),
-                acc.get('us_cash'),
-                acc.get('total_assets', 0)
-            )
+            account_value = _first_non_zero(acc.get("usd_assets"), acc.get("us_cash"), acc.get("total_assets", 0))
             excess_liquidity = _first_non_zero(
-                acc.get('usd_net_cash_power'),
-                acc.get('us_avl_withdrawal_cash'),
-                acc.get('available_funds'),
-                acc.get('avl_withdrawal_cash', 0)
+                acc.get("usd_net_cash_power"),
+                acc.get("us_avl_withdrawal_cash"),
+                acc.get("available_funds"),
+                acc.get("avl_withdrawal_cash", 0),
             )
             initial_margin = _first_non_zero(
-                acc.get('initial_margin'),
-                acc.get('margin_call_margin'),
-                acc.get('maintenance_margin'),
-                acc.get('frozen_cash', 0)
+                acc.get("initial_margin"),
+                acc.get("margin_call_margin"),
+                acc.get("maintenance_margin"),
+                acc.get("frozen_cash", 0),
             )
 
             account_info = {
-                'account_id': str(acc.get('acc_id', account_id or '')),
-                'trading_env': _env_name(trd_env),
-                'available_cash': available_cash,
-                'available_cash_source': available_cash_source,
-                'buying_power': buying_power,
-                'buying_power_source': buying_power_source,
-                'account_value': account_value,
-                'excess_liquidity': excess_liquidity,
-                'initial_margin': initial_margin,
-                'currency': 'USD',
-                'leverage_percentage': 0,
-                'positions': {},
-                'is_frozen': False
+                "account_id": str(acc.get("acc_id", account_id or "")),
+                "trading_env": _env_name(trd_env),
+                "available_cash": available_cash,
+                "available_cash_source": available_cash_source,
+                "buying_power": buying_power,
+                "buying_power_source": buying_power_source,
+                "account_value": account_value,
+                "excess_liquidity": excess_liquidity,
+                "initial_margin": initial_margin,
+                "currency": "USD",
+                "leverage_percentage": 0,
+                "positions": {},
+                "is_frozen": False,
             }
 
-            ret, pos_data = self.trd_ctx.position_list_query(
-                trd_env=trd_env,
-                acc_id=self._account_id_arg(account_id)
-            )
+            ret, pos_data = self.trd_ctx.position_list_query(trd_env=trd_env, acc_id=self._account_id_arg(account_id))
             if ret == RET_OK and not pos_data.empty:
-                position_types = pos_data['code'].apply(_infer_security_type_from_code)
-                option_positions = pos_data[position_types == 'OPT']
+                position_types = pos_data["code"].apply(_infer_security_type_from_code)
+                option_positions = pos_data[position_types == "OPT"]
                 if not option_positions.empty:
-                    opt_ret, opt_snaps = self.quote_ctx.get_market_snapshot(option_positions['code'].tolist())
+                    opt_ret, opt_snaps = self.quote_ctx.get_market_snapshot(option_positions["code"].tolist())
                     if opt_ret == RET_OK:
-                        opt_snaps_dict = opt_snaps.set_index('code').to_dict('index')
+                        opt_snaps_dict = opt_snaps.set_index("code").to_dict("index")
                     else:
                         opt_snaps_dict = {}
                 else:
                     opt_snaps_dict = {}
 
                 for _, pos in pos_data.iterrows():
-                    symbol = pos.get('code', '')
+                    symbol = pos.get("code", "")
                     sec_type = _infer_security_type_from_code(symbol)
-                    option_metadata = _parse_option_code_metadata(symbol) if sec_type == 'OPT' else None
+                    option_metadata = _parse_option_code_metadata(symbol) if sec_type == "OPT" else None
 
                     pos_key = symbol
                     pos_details = {
-                        'shares': _safe_float(pos.get('qty', 0)),
-                        'avg_cost': _safe_float(pos.get('average_cost', pos.get('cost_price', 0))),
-                        'market_price': _safe_float(pos.get('nominal_price', pos.get('last_price', 0))),
-                        'market_value': _safe_float(pos.get('market_val', 0)),
-                        'unrealized_pnl': _safe_float(pos.get('unrealized_pl', pos.get('pl_val', 0))),
-                        'security_type': sec_type
+                        "shares": _safe_float(pos.get("qty", 0)),
+                        "avg_cost": _safe_float(pos.get("average_cost", pos.get("cost_price", 0))),
+                        "market_price": _safe_float(pos.get("nominal_price", pos.get("last_price", 0))),
+                        "market_value": _safe_float(pos.get("market_val", 0)),
+                        "unrealized_pnl": _safe_float(pos.get("unrealized_pl", pos.get("pl_val", 0))),
+                        "security_type": sec_type,
                     }
 
-                    if sec_type == 'OPT' and symbol in opt_snaps_dict:
+                    if sec_type == "OPT" and symbol in opt_snaps_dict:
                         snap = opt_snaps_dict[symbol]
-                        pos_details.update({
-                            'expiration': snap.get('option_expiry_date', '').replace('-', '') or (option_metadata or {}).get('expiration', ''),
-                            'strike': _safe_float(snap.get('option_strike_price', (option_metadata or {}).get('strike', 0))),
-                            'option_type': 'CALL' if snap.get('option_type') == 'CALL' else 'PUT'
-                        })
-                    elif sec_type == 'OPT' and option_metadata:
-                        pos_details.update({
-                            'expiration': option_metadata.get('expiration', ''),
-                            'strike': _safe_float(option_metadata.get('strike', 0)),
-                            'option_type': option_metadata.get('option_type', '')
-                        })
+                        pos_details.update(
+                            {
+                                "expiration": snap.get("option_expiry_date", "").replace("-", "")
+                                or (option_metadata or {}).get("expiration", ""),
+                                "strike": _safe_float(
+                                    snap.get("option_strike_price", (option_metadata or {}).get("strike", 0))
+                                ),
+                                "option_type": "CALL" if snap.get("option_type") == "CALL" else "PUT",
+                            }
+                        )
+                    elif sec_type == "OPT" and option_metadata:
+                        pos_details.update(
+                            {
+                                "expiration": option_metadata.get("expiration", ""),
+                                "strike": _safe_float(option_metadata.get("strike", 0)),
+                                "option_type": option_metadata.get("option_type", ""),
+                            }
+                        )
 
-                    account_info['positions'][pos_key] = pos_details
+                    account_info["positions"][pos_key] = pos_details
 
             return account_info
         except Exception as e:
@@ -999,63 +1021,66 @@ class MoomooConnection:
     def _get_sdk_version():
         try:
             import moomoo as _m
-            return getattr(_m, '__version__', 'unknown')
+
+            return getattr(_m, "__version__", "unknown")
         except Exception:
-            return 'N/A'
+            return "N/A"
 
     def get_opend_diagnostics(self):
         sdk_version = self._get_sdk_version()
         if not self._ensure_quote_context():
             return {
-                'connected': False,
-                'sdk_available': OpenQuoteContext is not None,
-                'sdk_version': sdk_version,
-                'security_firm': str(self.security_firm) if self.security_firm else 'N/A',
-                'portfolio_env': _env_name(self.portfolio_env),
-                'readonly': self.readonly,
+                "connected": False,
+                "sdk_available": OpenQuoteContext is not None,
+                "sdk_version": sdk_version,
+                "security_firm": str(self.security_firm) if self.security_firm else "N/A",
+                "portfolio_env": _env_name(self.portfolio_env),
+                "readonly": self.readonly,
             }
         try:
             ret, sub_data = self.query_subscription()
             sub_info = None
             if ret == RET_OK and sub_data is not None:
                 sub_info = {
-                    'total_used': int(sub_data.get('total_used', 0)),
-                    'remain': int(sub_data.get('remain', 0)),
-                    'own_used': int(sub_data.get('own_used', 0)),
+                    "total_used": int(sub_data.get("total_used", 0)),
+                    "remain": int(sub_data.get("remain", 0)),
+                    "own_used": int(sub_data.get("own_used", 0)),
                 }
             return {
-                'connected': True,
-                'sdk_available': True,
-                'sdk_version': sdk_version,
-                'security_firm': str(self.security_firm) if self.security_firm else 'N/A',
-                'portfolio_env': _env_name(self.portfolio_env),
-                'readonly': self.readonly,
-                'subscription': sub_info,
-                'option_data_filter_available': OptionDataFilter is not None,
-                'host': self.host,
-                'port': self.port,
+                "connected": True,
+                "sdk_available": True,
+                "sdk_version": sdk_version,
+                "security_firm": str(self.security_firm) if self.security_firm else "N/A",
+                "portfolio_env": _env_name(self.portfolio_env),
+                "readonly": self.readonly,
+                "subscription": sub_info,
+                "option_data_filter_available": OptionDataFilter is not None,
+                "host": self.host,
+                "port": self.port,
             }
         except Exception as e:
             logger.error(f"Error getting OpenD diagnostics: {e}")
             logger.debug(traceback.format_exc())
             return {
-                'connected': True,
-                'sdk_available': OpenQuoteContext is not None,
-                'sdk_version': sdk_version,
-                'error': str(e),
+                "connected": True,
+                "sdk_available": OpenQuoteContext is not None,
+                "sdk_version": sdk_version,
+                "error": str(e),
             }
 
     def create_option_contract(self, symbol, expiry, strike, option_type):
         symbol = self._format_symbol(symbol)
-        opt_type = OptionType.CALL if option_type.upper() in ['C', 'CALL'] else OptionType.PUT
+        opt_type = OptionType.CALL if option_type.upper() in ["C", "CALL"] else OptionType.PUT
 
         moomoo_expiry = f"{expiry[0:4]}-{expiry[4:6]}-{expiry[6:8]}" if len(expiry) == 8 else expiry
 
-        ret, data = self.quote_ctx.get_option_chain(code=symbol, start=moomoo_expiry, end=moomoo_expiry, option_type=opt_type)
+        ret, data = self.quote_ctx.get_option_chain(
+            code=symbol, start=moomoo_expiry, end=moomoo_expiry, option_type=opt_type
+        )
         if ret == RET_OK:
-            match = data[data['strike_price'] == float(strike)]
+            match = data[data["strike_price"] == float(strike)]
             if not match.empty:
-                return match.iloc[0]['code']
+                return match.iloc[0]["code"]
 
         return None
 
@@ -1143,7 +1168,9 @@ class MoomooConnection:
                 return RET_ERROR, None
             api = getattr(self.quote_ctx, "get_financials_earnings_price_history", None)
             if not callable(api):
-                logger.warning("get_financials_earnings_price_history not available in this SDK version (requires upgrade)")
+                logger.warning(
+                    "get_financials_earnings_price_history not available in this SDK version (requires upgrade)"
+                )
                 return RET_ERROR, None
             return api(code)
         except AttributeError:
@@ -1153,5 +1180,3 @@ class MoomooConnection:
             logger.error(f"Error getting earnings price history: {e}")
             logger.debug(traceback.format_exc())
             return RET_ERROR, None
-
-

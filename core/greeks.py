@@ -7,7 +7,7 @@ Falls back to yfinance for implied volatility when other sources return 0.
 
 import logging
 import math
-from datetime import datetime, date
+from datetime import date, datetime
 from typing import Optional
 
 from scipy.stats import norm
@@ -43,21 +43,21 @@ def compute_bs_greeks(
     """
     option_type = option_type.upper()
     sigma = _normalize_iv(iv)
-    S, K, T, r = stock_price, strike, max(time_to_expiry_years, 1/365), risk_free_rate
+    S, K, T, r = stock_price, strike, max(time_to_expiry_years, 1 / 365), risk_free_rate
 
     if sigma <= 0 or S <= 0 or K <= 0:
         return 0.0, 0.0, 0.0, 0.0
 
     sqrt_T = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
     d2 = d1 - sigma * sqrt_T
 
     # Common components
-    nd1 = norm.pdf(d1)          # Standard normal PDF at d1
-    Nd1 = norm.cdf(d1)          # Standard normal CDF at d1
+    nd1 = norm.pdf(d1)  # Standard normal PDF at d1
+    Nd1 = norm.cdf(d1)  # Standard normal CDF at d1
 
     # Delta
-    if option_type == 'CALL':
+    if option_type == "CALL":
         delta = Nd1
     else:
         delta = Nd1 - 1.0
@@ -69,7 +69,7 @@ def compute_bs_greeks(
     vega = S * nd1 * sqrt_T / 100.0
 
     # Theta (per calendar day, i.e. divide by 365)
-    if option_type == 'CALL':
+    if option_type == "CALL":
         theta_per_year = -(S * nd1 * sigma) / (2.0 * sqrt_T) - r * K * math.exp(-r * T) * norm.cdf(d2)
     else:
         theta_per_year = -(S * nd1 * sigma) / (2.0 * sqrt_T) + r * K * math.exp(-r * T) * norm.cdf(-d2)
@@ -89,11 +89,11 @@ def enrich_option_with_greeks(
     Mutates the option dict in-place AND returns it for convenience.
     """
     # Get current values (normalize IV as safety net)
-    iv = _normalize_iv(option.get('implied_volatility', 0))
-    delta = float(option.get('delta', 0) or 0)
-    gamma = float(option.get('gamma', 0) or 0)
-    theta = float(option.get('theta', 0) or 0)
-    vega = float(option.get('vega', 0) or 0)
+    iv = _normalize_iv(option.get("implied_volatility", 0))
+    delta = float(option.get("delta", 0) or 0)
+    float(option.get("gamma", 0) or 0)
+    theta = float(option.get("theta", 0) or 0)
+    float(option.get("vega", 0) or 0)
 
     # If we already have non-zero delta, assume other Greeks are also valid
     if abs(delta) > 0.001 and abs(theta) > 0.0001:
@@ -103,16 +103,16 @@ def enrich_option_with_greeks(
     if iv <= 0:
         return option
 
-    strike = float(option.get('strike', 0) or 0)
-    expiration = str(option.get('expiration', '') or '')
-    option_type = str(option.get('option_type', '') or '').upper()
+    strike = float(option.get("strike", 0) or 0)
+    expiration = str(option.get("expiration", "") or "")
+    option_type = str(option.get("option_type", "") or "").upper()
 
     if not all([strike > 0, expiration, stock_price > 0]):
         return option
 
     # Calculate time to expiry in years
     try:
-        expiry_date = datetime.strptime(expiration, '%Y%m%d').date()
+        expiry_date = datetime.strptime(expiration, "%Y%m%d").date()
         today = date.today()
         dte = max((expiry_date - today).days, 1)
         T = dte / 365.0
@@ -130,19 +130,26 @@ def enrich_option_with_greeks(
 
         # Only overwrite if the computed value is meaningful
         if abs(new_delta) > 0.001:
-            option['delta'] = round(new_delta, 5)
+            option["delta"] = round(new_delta, 5)
         if abs(new_gamma) > 0.0001:
-            option['gamma'] = round(new_gamma, 5)
+            option["gamma"] = round(new_gamma, 5)
         if abs(new_theta) > 0.0001:
-            option['theta'] = round(new_theta, 5)
+            option["theta"] = round(new_theta, 5)
         if abs(new_vega) > 0.0001:
-            option['vega'] = round(new_vega, 5)
-        option['greeks_source'] = 'Black-Scholes computed'
+            option["vega"] = round(new_vega, 5)
+        option["greeks_source"] = "Black-Scholes computed"
         logger.info(
             "Computed BS Greeks for strike=%.2f exp=%s type=%s S=%.2f IV=%.2f "
             "delta=%.4f gamma=%.4f theta=%.4f vega=%.4f",
-            strike, expiration, option_type, stock_price, iv,
-            new_delta, new_gamma, new_theta, new_vega,
+            strike,
+            expiration,
+            option_type,
+            stock_price,
+            iv,
+            new_delta,
+            new_gamma,
+            new_theta,
+            new_vega,
         )
     except Exception as e:
         logger.debug(f"BS Greeks computation failed: {e}")
@@ -188,7 +195,7 @@ def fetch_yfinance_iv_for_chain(
             yfinance_cache[cache_key] = None
             return None
 
-        df = chain["calls"] if option_type == 'C' else chain["puts"]
+        df = chain["calls"] if option_type == "C" else chain["puts"]
 
         if df is None or df.empty:
             yfinance_cache[cache_key] = None
@@ -196,8 +203,8 @@ def fetch_yfinance_iv_for_chain(
 
         result = {}
         for _, row in df.iterrows():
-            strike = float(row['strike'])
-            iv = float(row.get('impliedVolatility', 0))
+            strike = float(row["strike"])
+            iv = float(row.get("impliedVolatility", 0))
             if not math.isnan(iv) and iv > 0:
                 result[strike] = iv
 
@@ -218,12 +225,12 @@ def prepare_option_for_scoring(option, ticker, stock_price, yfinance_iv_cache=No
 
     Modifies option in place. Returns (normalized_iv, delta_after_enrichment).
     """
-    iv = _normalize_iv(option.get('implied_volatility', 0))
-    delta = float(option.get('delta', 0) or 0)
+    iv = _normalize_iv(option.get("implied_volatility", 0))
+    delta = float(option.get("delta", 0) or 0)
 
     if iv <= 0 and yfinance_iv_cache is not None:
-        exp = str(option.get('expiration', ''))
-        opt_type = 'C' if str(option.get('option_type', '')).upper() == 'CALL' else 'P'
+        exp = str(option.get("expiration", ""))
+        opt_type = "C" if str(option.get("option_type", "")).upper() == "CALL" else "P"
         iv_map = fetch_yfinance_iv_for_chain(
             ticker,
             exp,
@@ -232,18 +239,18 @@ def prepare_option_for_scoring(option, ticker, stock_price, yfinance_iv_cache=No
             chain_fetcher=chain_fetcher,
         )
         if iv_map:
-            strike = float(option.get('strike', 0))
+            strike = float(option.get("strike", 0))
             iv = iv_map.get(strike, 0)
             if iv > 0:
-                option['implied_volatility'] = iv
-                option['iv_source'] = 'yfinance'
+                option["implied_volatility"] = iv
+                option["iv_source"] = "yfinance"
 
     if iv > 0 and abs(delta) < 0.001:
         enrich_option_with_greeks(option, stock_price)
-        delta = float(option.get('delta', 0) or 0)
-    elif abs(delta) > 0.001 and not option.get('greeks_source'):
-        option['greeks_source'] = 'broker'
-    elif not option.get('greeks_source'):
-        option['greeks_source'] = 'missing'
+        delta = float(option.get("delta", 0) or 0)
+    elif abs(delta) > 0.001 and not option.get("greeks_source"):
+        option["greeks_source"] = "broker"
+    elif not option.get("greeks_source"):
+        option["greeks_source"] = "missing"
 
     return iv, delta

@@ -7,16 +7,13 @@ are always computed for every recommendation.
 """
 
 
-
 # ---------------------------------------------------------------------------
 # Growth-related helpers
 # ---------------------------------------------------------------------------
 
+
 def estimate_target_gap(
-    account_value: float,
-    target_multiple: float,
-    current_premium_income: float,
-    projected_months: int = 12
+    account_value: float, target_multiple: float, current_premium_income: float, projected_months: int = 12
 ) -> float:
     """
     Estimate gap between projected income and the target account value.

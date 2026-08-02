@@ -8,24 +8,25 @@ Checks for:
   - Delta displayed consistently as signed Greek and absolute probability
 """
 
-import unittest
 import os
-
+import unittest
 
 # Replacement character and common mojibake patterns
 MOJIBAKE_PATTERNS = [
-    'Ã',  # Latin-1 misdecoded UTF-8
-    'ð',  # Another common mojibake indicator
-    '\ufffd',  # Unicode replacement character
-    'â€',  # Common UTF-8 → Latin-1 mojibake
+    "Ã",  # Latin-1 misdecoded UTF-8
+    "ð",  # Another common mojibake indicator
+    "\ufffd",  # Unicode replacement character
+    "â€",  # Common UTF-8 → Latin-1 mojibake
 ]
 
 
-def _get_source_files(base_dir, extensions=('.py', '.js', '.html', '.css', '.md')):
+def _get_source_files(base_dir, extensions=(".py", ".js", ".html", ".css", ".md")):
     """Yield paths to all source files under base_dir."""
     for root, dirs, files in os.walk(base_dir):
         # Skip hidden and virtual environment dirs
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('venv', '.venv', 'node_modules', '__pycache__')]
+        dirs[:] = [
+            d for d in dirs if not d.startswith(".") and d not in ("venv", ".venv", "node_modules", "__pycache__")
+        ]
         for f in files:
             if any(f.endswith(ext) for ext in extensions):
                 yield os.path.join(root, f)
@@ -36,17 +37,17 @@ class TestEncodingSanity(unittest.TestCase):
 
     def test_no_mojibake_in_source_files(self):
         """No mojibake or replacement characters in user-facing source files."""
-        base_dir = os.path.join(os.path.dirname(__file__), '..')
+        base_dir = os.path.join(os.path.dirname(__file__), "..")
         ignored = {
-            os.path.normpath(os.path.join(base_dir, 'SIGNAL_GENERATOR_10X_TODO.md')),
-            os.path.normpath(os.path.join(base_dir, 'tests', 'test_encoding.py')),
+            os.path.normpath(os.path.join(base_dir, "SIGNAL_GENERATOR_10X_TODO.md")),
+            os.path.normpath(os.path.join(base_dir, "tests", "test_encoding.py")),
         }
         failures = []
         for filepath in _get_source_files(base_dir):
             if os.path.normpath(filepath) in ignored:
                 continue
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
+                with open(filepath, "r", encoding="utf-8") as f:
                     content = f.read()
                 for pattern in MOJIBAKE_PATTERNS:
                     if pattern in content:
@@ -61,11 +62,11 @@ class TestEncodingSanity(unittest.TestCase):
 
     def test_source_files_are_utf8(self):
         """Source files should be valid UTF-8."""
-        base_dir = os.path.join(os.path.dirname(__file__), '..')
+        base_dir = os.path.join(os.path.dirname(__file__), "..")
         failures = []
         for filepath in _get_source_files(base_dir):
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
+                with open(filepath, "r", encoding="utf-8") as f:
                     f.read()
             except UnicodeDecodeError as e:
                 relpath = os.path.relpath(filepath, base_dir)
@@ -109,21 +110,21 @@ class TestFormatterModule(unittest.TestCase):
 
     def test_formatters_module_exists(self):
         """Check that frontend has a formatters.js module."""
-        base_dir = os.path.join(os.path.dirname(__file__), '..')
-        formatters_path = os.path.join(base_dir, 'frontend', 'static', 'js', 'utils', 'formatters.js')
+        base_dir = os.path.join(os.path.dirname(__file__), "..")
+        formatters_path = os.path.join(base_dir, "frontend", "static", "js", "utils", "formatters.js")
         self.assertTrue(
             os.path.exists(formatters_path),
-            "frontend/static/js/utils/formatters.js should exist for centralized formatting"
+            "frontend/static/js/utils/formatters.js should exist for centralized formatting",
         )
 
     def test_core_display_units_exists(self):
         """Check that core/display_units.py exists (TODO 1.4)."""
-        base_dir = os.path.join(os.path.dirname(__file__), '..')
-        display_units_path = os.path.join(base_dir, 'core', 'display_units.py')
+        base_dir = os.path.join(os.path.dirname(__file__), "..")
+        display_units_path = os.path.join(base_dir, "core", "display_units.py")
         # This is a "should exist" check - don't fail if not yet created
         if not os.path.exists(display_units_path):
             self.skipTest("core/display_units.py not yet created (TODO 1.4)")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

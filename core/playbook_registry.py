@@ -12,9 +12,7 @@ Also supports a 'monitoring' status for hypotheses being tracked.
 
 import json
 import logging
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from typing import Optional
+from dataclasses import asdict, dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +86,7 @@ class HypothesisRegistry:
     def _connect(self):
         if self._conn is None:
             from db.sqlite_pool import pooled_connection
+
             self._conn_ctx = pooled_connection(self.db.db_path)
             self._conn = self._conn_ctx.__enter__()
         return self._conn
@@ -112,8 +111,14 @@ class HypothesisRegistry:
                             (hypothesis_id, title, description, category, status, tags_json, notes, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, '', datetime('now'), datetime('now'))
                         """,
-                        (h["hypothesis_id"], h["title"], h["description"],
-                         h["category"], h["status"], json.dumps(h["tags"])),
+                        (
+                            h["hypothesis_id"],
+                            h["title"],
+                            h["description"],
+                            h["category"],
+                            h["status"],
+                            json.dumps(h["tags"]),
+                        ),
                     )
                 conn.commit()
             except Exception as exc:
@@ -129,9 +134,7 @@ class HypothesisRegistry:
                     (status,),
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    "SELECT * FROM playbook_hypotheses ORDER BY updated_at DESC"
-                ).fetchall()
+                rows = conn.execute("SELECT * FROM playbook_hypotheses ORDER BY updated_at DESC").fetchall()
             return [_row_to_hypothesis(r) for r in rows]
         except Exception as exc:
             logger.error("Failed to list hypotheses: %s", exc)

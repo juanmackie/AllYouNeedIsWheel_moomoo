@@ -8,8 +8,8 @@ whenever the dependency is available.
 
 from __future__ import annotations
 
-from collections import OrderedDict
 import time
+from collections import OrderedDict
 from typing import Generic, Iterator, MutableMapping, Optional, TypeVar
 
 K = TypeVar("K")

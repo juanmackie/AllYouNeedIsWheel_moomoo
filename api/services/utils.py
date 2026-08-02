@@ -13,10 +13,10 @@ from threading import Lock
 from core.rate_limiter import RateLimiter
 from core.ttl_cache import make_ttl_cache
 
-logger = logging.getLogger('api.services.utils')
+logger = logging.getLogger("api.services.utils")
 
 # Known market/exchange prefixes to strip from ticker symbols
-KNOWN_PREFIXES = {'US', 'HK', 'SZ', 'SH', 'SS', 'SG', 'JP', 'UK', 'DE', 'FR', 'IT', 'CA', 'AU', 'NZ'}
+KNOWN_PREFIXES = {"US", "HK", "SZ", "SH", "SS", "SG", "JP", "UK", "DE", "FR", "IT", "CA", "AU", "NZ"}
 
 
 def clean_yfinance_ticker(ticker: str) -> str:
@@ -36,27 +36,27 @@ def clean_yfinance_ticker(ticker: str) -> str:
         Cleaned ticker safe for yfinance download.
     """
     if not ticker or not isinstance(ticker, str):
-        return ticker or ''
+        return ticker or ""
 
     original = ticker
 
     # --- Step 1: Strip exchange prefix via colon (e.g. "NASDAQ:AAPL") ---
-    if ':' in ticker:
-        ticker = ticker.split(':', 1)[-1]
+    if ":" in ticker:
+        ticker = ticker.split(":", 1)[-1]
 
     # --- Step 2: Strip moomoo-style market prefix (e.g. "US.UBER", "HK.0700") ---
-    if '.' in ticker:
-        parts = ticker.split('.', 1)
+    if "." in ticker:
+        parts = ticker.split(".", 1)
         if len(parts) == 2 and parts[0] in KNOWN_PREFIXES:
             ticker = parts[1]
 
     # --- Step 3: Replace dots with hyphens for yfinance compatibility (e.g. "BRK.B" → "BRK-B") ---
-    ticker = ticker.replace('.', '-')
+    ticker = ticker.replace(".", "-")
 
     # --- Step 4: Strip remaining invalid characters ---
     # Slashes ("/") cause path traversal in yfinance HTTP requests (e.g. "ORCL/PD" → 500)
     # Dollars ("$") are reserved URL characters
-    ticker = ticker.replace('/', '-').replace('$', '-')
+    ticker = ticker.replace("/", "-").replace("$", "-")
 
     if ticker != original:
         logger.debug(f"Cleaned ticker: '{original}' → '{ticker}'")
@@ -93,7 +93,7 @@ def validate_ticker(ticker: str) -> bool:
     # Slashes ("/") break yfinance URL construction (e.g. "ORCL/PD" → path traversal → 500 error)
     # Dollars ("$") are yfinance special characters
     # Spaces break HTTP requests
-    if '/' in ticker or '$' in ticker or ' ' in ticker:
+    if "/" in ticker or "$" in ticker or " " in ticker:
         return False
 
     return True

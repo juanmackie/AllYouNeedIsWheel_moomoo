@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta
 import time
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pandas as pd
@@ -7,7 +7,7 @@ import pytest
 
 from core.catalyst_flow_decision import classify_catalyst_flow
 
-_overlay_map_patch = patch('api.services.catalyst_flow_service.fetch_signal_overlay_map', return_value={})
+_overlay_map_patch = patch("api.services.catalyst_flow_service.fetch_signal_overlay_map", return_value={})
 _overlay_map_patch.start()
 
 
@@ -175,6 +175,7 @@ def test_service_uses_requested_chain_side_when_snapshot_side_is_ambiguous():
 # Social context integration
 # ---------------------------------------------------------------------------
 
+
 def _make_catalyst_service(*, apewisdom_enabled=True, max_boost_tickers=2):
     from api.services.catalyst_flow_service import CatalystFlowService
 
@@ -187,9 +188,9 @@ def _make_catalyst_service(*, apewisdom_enabled=True, max_boost_tickers=2):
                 "min_volume": 100,
                 "min_premium_notional": 100_000,
                 "min_fresh_volume_ratio": 2,
-            "max_expirations": 3,
-            "max_dte": 90,
-            "max_scan_tickers": 12,
+                "max_expirations": 3,
+                "max_dte": 90,
+                "max_scan_tickers": 12,
                 "apewisdom": {
                     "enabled": apewisdom_enabled,
                     "min_mentions": 1,
@@ -202,28 +203,32 @@ def _make_catalyst_service(*, apewisdom_enabled=True, max_boost_tickers=2):
 
 
 def _fake_signal(ticker: str, score: float) -> list[dict]:
-    return [{
-        "ticker": ticker,
-        "side": "CALL",
-        "score": score,
-        "cluster_expirations": ["20260619"],
-        "is_hedged": False,
-        "rationale": [],
-        "blockers": [],
-    }]
+    return [
+        {
+            "ticker": ticker,
+            "side": "CALL",
+            "score": score,
+            "cluster_expirations": ["20260619"],
+            "is_hedged": False,
+            "rationale": [],
+            "blockers": [],
+        }
+    ]
 
 
 def _aw_payload(*tickers: str) -> dict:
     results = []
     for idx, ticker in enumerate(tickers, 1):
-        results.append({
-            "ticker": ticker,
-            "mentions": str(100 - idx * 10),
-            "mentions_24h_ago": "10",
-            "rank": str(idx),
-            "rank_24h_ago": str(idx + 10),
-            "upvotes": "25",
-        })
+        results.append(
+            {
+                "ticker": ticker,
+                "mentions": str(100 - idx * 10),
+                "mentions_24h_ago": "10",
+                "rank": str(idx),
+                "rank_24h_ago": str(idx + 10),
+                "upvotes": "25",
+            }
+        )
     return {"results": results}
 
 
@@ -234,7 +239,12 @@ def test_get_signals_reuses_apewisdom_cache_across_calls():
     def fake_scan(conn, ticker, config):
         return _fake_signal(ticker, 30 if ticker == "AAPL" else 28)
 
-    with patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks", return_value=_aw_payload("AAPL", "TSLA")) as fetch_mock, patch.object(svc, "_scan_ticker", side_effect=fake_scan):
+    with (
+        patch(
+            "api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks", return_value=_aw_payload("AAPL", "TSLA")
+        ) as fetch_mock,
+        patch.object(svc, "_scan_ticker", side_effect=fake_scan),
+    ):
         first = svc.get_signals(tickers=["AAPL"], limit=2)
         second = svc.get_signals(tickers=["AAPL"], limit=2)
 
@@ -249,9 +259,7 @@ def test_refresh_keeps_fresh_catalyst_cache_entry():
 
     svc = _make_catalyst_service(apewisdom_enabled=False)
     svc.connection = type("Conn", (), {"is_connected": lambda self: True})()
-    CatalystFlowService._shared_cache = {
-        "AAPL": {"ts": time.time() - 100, "signals": _fake_signal("AAPL", 40)}
-    }
+    CatalystFlowService._shared_cache = {"AAPL": {"ts": time.time() - 100, "signals": _fake_signal("AAPL", 40)}}
 
     with patch.object(svc, "_scan_ticker") as scan_mock:
         result = svc.get_signals(tickers=["AAPL"], limit=1, refresh=True)
@@ -266,9 +274,7 @@ def test_refresh_rescans_stale_catalyst_cache_entry():
 
     svc = _make_catalyst_service(apewisdom_enabled=False)
     svc.connection = type("Conn", (), {"is_connected": lambda self: True})()
-    CatalystFlowService._shared_cache = {
-        "AAPL": {"ts": time.time() - 2500, "signals": _fake_signal("AAPL", 40)}
-    }
+    CatalystFlowService._shared_cache = {"AAPL": {"ts": time.time() - 2500, "signals": _fake_signal("AAPL", 40)}}
 
     with patch.object(svc, "_scan_ticker", return_value=_fake_signal("AAPL", 60)) as scan_mock:
         result = svc.get_signals(tickers=["AAPL"], limit=1, refresh=True)
@@ -282,7 +288,10 @@ def test_watchlist_ticker_receives_social_context():
     svc = _make_catalyst_service()
     svc.connection = type("Conn", (), {"is_connected": lambda self: True})()
 
-    with patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks", return_value=_aw_payload("AAPL")), patch.object(svc, "_scan_ticker", return_value=_fake_signal("AAPL", 40)):
+    with (
+        patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks", return_value=_aw_payload("AAPL")),
+        patch.object(svc, "_scan_ticker", return_value=_fake_signal("AAPL", 40)),
+    ):
         result = svc.get_signals(tickers=["AAPL"], limit=1)
 
     assert result["signals"][0]["social"]["source"] == "apewisdom"
@@ -297,7 +306,10 @@ def test_social_boost_resorts_signals_after_augmentation():
     def fake_scan(conn, ticker, config):
         return _fake_signal(ticker, 30 if ticker == "AAPL" else 31)
 
-    with patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks", return_value=_aw_payload("AAPL")), patch.object(svc, "_scan_ticker", side_effect=fake_scan):
+    with (
+        patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks", return_value=_aw_payload("AAPL")),
+        patch.object(svc, "_scan_ticker", side_effect=fake_scan),
+    ):
         result = svc.get_signals(tickers=["AAPL", "MSFT"], limit=2)
 
     # Social context is attached but no longer boosts score, so original order preserved
@@ -310,7 +322,10 @@ def test_get_signals_falls_back_to_watchlist_when_apewisdom_disabled():
     svc = _make_catalyst_service(apewisdom_enabled=False)
     svc.connection = type("Conn", (), {"is_connected": lambda self: True})()
 
-    with patch.object(svc, "_scan_ticker", return_value=_fake_signal("AAPL", 35)), patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks") as fetch_mock:
+    with (
+        patch.object(svc, "_scan_ticker", return_value=_fake_signal("AAPL", 35)),
+        patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks") as fetch_mock,
+    ):
         result = svc.get_signals(tickers=["AAPL"], limit=1)
 
     assert result["signals"][0]["ticker"] == "AAPL"
@@ -322,22 +337,25 @@ def test_get_signals_falls_back_to_watchlist_when_apewisdom_disabled():
 # Action bucket classification
 # ---------------------------------------------------------------------------
 
+
 def _make_signal_with_sides(*, ticker, sides_and_scores):
     """Build a list of signal dicts with specified sides and scores."""
     signals = []
     for side, score in sides_and_scores:
-        signals.append({
-            "ticker": ticker,
-            "side": side,
-            "score": score,
-            "cluster_expirations": ["20260619"],
-            "is_hedged": False,
-            "rationale": ["$1.5M premium notional"],
-            "blockers": [],
-            "action_bucket": "CALL_RESEARCH" if side == "CALL" else "PUT_RESEARCH",
-            "action_label": "Call Research" if side == "CALL" else "Put Research",
-            "action_reason": "Fresh flow detected",
-        })
+        signals.append(
+            {
+                "ticker": ticker,
+                "side": side,
+                "score": score,
+                "cluster_expirations": ["20260619"],
+                "is_hedged": False,
+                "rationale": ["$1.5M premium notional"],
+                "blockers": [],
+                "action_bucket": "CALL_RESEARCH" if side == "CALL" else "PUT_RESEARCH",
+                "action_label": "Call Research" if side == "CALL" else "Put Research",
+                "action_reason": "Fresh flow detected",
+            }
+        )
     return signals
 
 
@@ -400,9 +418,10 @@ def test_social_context_does_not_upgrade_actionability():
     low_signal["actionable"] = False
     low_signal["research_only"] = True
 
-    with patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks",
-               return_value=_aw_payload("GME")), \
-         patch.object(svc, "_scan_ticker", return_value=[low_signal]):
+    with (
+        patch("api.services.apewisdom_service.ApeWisdomService.fetch_all_stocks", return_value=_aw_payload("GME")),
+        patch.object(svc, "_scan_ticker", return_value=[low_signal]),
+    ):
         result = svc.get_signals(tickers=["GME"], limit=1)
 
     sig = result["signals"][0]
@@ -478,6 +497,7 @@ def test_put_research_bucket_assigned_for_clean_put_flow():
 # Canonical ticker grouping
 # ---------------------------------------------------------------------------
 
+
 def test_conflict_detection_groups_by_canonical_ticker():
     svc = _make_catalyst_service()
     svc.connection = type("Conn", (), {"is_connected": lambda self: True})()
@@ -502,6 +522,7 @@ def test_conflict_detection_groups_by_canonical_ticker():
 # ---------------------------------------------------------------------------
 # Dominance logic
 # ---------------------------------------------------------------------------
+
 
 def test_dominant_side_keeps_research_bucket():
     """When one side's top score is >= 1.5x the other, dominant side keeps its bucket."""
@@ -545,6 +566,7 @@ def test_balanced_flow_becomes_conflict():
 # ---------------------------------------------------------------------------
 # Warning suppression
 # ---------------------------------------------------------------------------
+
 
 def test_get_ticker_warnings_suppresses_conflict_signals():
     from api.services.catalyst_flow_service import CatalystFlowService
@@ -615,6 +637,7 @@ def test_get_ticker_warnings_allows_clean_research_signals():
 # ---------------------------------------------------------------------------
 # Load-bearing fields
 # ---------------------------------------------------------------------------
+
 
 def test_signal_includes_volume_oi_bid_ask_spread():
     from core.catalyst_flow_decision import classify_catalyst_flow
