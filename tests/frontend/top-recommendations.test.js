@@ -156,7 +156,7 @@ describe('top-recommendations empty state', () => {
 
     await new Promise(r => setTimeout(r, 50));
 
-    expect(fetchTopRecommendations).toHaveBeenCalledWith(3, false, true, false, null);
+    expect(fetchTopRecommendations).toHaveBeenCalledWith(3, false);
     const emptyCall = StateModel.showEmpty.mock.calls.find(c => c[0] === 'top-recommendations-state');
     expect(emptyCall).toBeDefined();
     const message = emptyCall[1];
@@ -165,127 +165,6 @@ describe('top-recommendations empty state', () => {
     expect(message).not.toContain('market open');
     expect(message).not.toContain('trading day');
     expect(message).not.toContain('Check back after');
-  });
-
-  it('loads research calls/puts on demand when the research button is clicked', async () => {
-    const { initializeTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/top-recommendations.js'
-    );
-
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
-    );
-
-    fetchTopRecommendations.mockResolvedValue({
-      success: true,
-      signals: [],
-      count: 0,
-      generated_at: '2026-05-24T12:00:00',
-    });
-
-    await initializeTopRecommendations();
-    await vi.dynamicImportSettled?.();
-    await new Promise(r => setTimeout(r, 50));
-
-    document.getElementById('research-long-options').click();
-    await vi.dynamicImportSettled?.();
-    await new Promise(r => setTimeout(r, 50));
-
-    expect(fetchTopRecommendations).toHaveBeenCalledWith(3, true, true, false, null);
-  });
-
-  it('loads best plays without cash limits when the toggle is enabled', async () => {
-    const { initializeTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/top-recommendations.js'
-    );
-
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
-    );
-
-    fetchTopRecommendations.mockResolvedValue({
-      success: true,
-      signals: [],
-      count: 0,
-      generated_at: '2026-05-24T12:00:00',
-    });
-
-    await initializeTopRecommendations();
-    await vi.dynamicImportSettled?.();
-    await new Promise(r => setTimeout(r, 50));
-
-    const toggle = document.getElementById('ignore-cash-limits-toggle');
-    expect(toggle.checked).toBe(false);
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event('change'));
-
-    await vi.dynamicImportSettled?.();
-    await new Promise(r => setTimeout(r, 50));
-
-    expect(fetchTopRecommendations).toHaveBeenLastCalledWith(3, true, true, true, null);
-    expect(document.getElementById('best-plays-help').classList.contains('d-none')).toBe(false);
-    expect(document.getElementById('top-recs-desc').textContent).toContain('2-25% OTM');
-  });
-
-  it('queues best plays reload when toggled during an in-flight scan', async () => {
-    const { initializeTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/top-recommendations.js'
-    );
-
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
-    );
-
-    let resolveInitial;
-    fetchTopRecommendations
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        resolveInitial = resolve;
-      }))
-      .mockResolvedValueOnce({
-        success: true,
-        signals: [],
-        count: 0,
-        generated_at: '2026-05-24T12:00:01',
-        ignore_cash_limits: true,
-      });
-
-    initializeTopRecommendations();
-    await vi.waitFor(() => {
-      expect(fetchTopRecommendations).toHaveBeenCalledTimes(1);
-    });
-
-    const toggle = document.getElementById('ignore-cash-limits-toggle');
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event('change'));
-
-    expect(fetchTopRecommendations).toHaveBeenCalledTimes(1);
-    expect(document.getElementById('best-plays-help').textContent).toContain('queued');
-
-    resolveInitial({
-      success: true,
-      signals: [],
-      count: 0,
-      generated_at: '2026-05-24T12:00:00',
-      ignore_cash_limits: false,
-    });
-
-    await vi.waitFor(() => {
-      expect(fetchTopRecommendations).toHaveBeenCalledTimes(2);
-    });
-
-    expect(fetchTopRecommendations).toHaveBeenLastCalledWith(3, true, true, true, null);
-    await vi.waitFor(() => {
-      expect(document.getElementById('best-plays-help').textContent).toContain('active');
-    });
-  });
-
-  it('adds tooltip affordance to the best plays toggle', () => {
-    const toggleLabel = document.querySelector('.best-plays-toggle');
-    const toggle = document.getElementById('ignore-cash-limits-toggle');
-
-    expect(toggleLabel.dataset.bsToggle).toBe('tooltip');
-    expect(toggleLabel.getAttribute('title')).toContain('without CSP cash');
-    expect(toggle.getAttribute('aria-describedby')).toBe('best-plays-help');
   });
 
   it('shows dominant blocker and cash diagnostics when no signals surface', async () => {

@@ -16,80 +16,24 @@
         <div class="app-section__actions">
             <small id="top-recs-last-updated" class="text-muted d-none"></small>
             <span id="market-state-badge" class="badge d-none me-1"></span>
-            <label
-                class="best-plays-toggle"
-                data-bs-toggle="tooltip"
-                data-bs-placement="top"
-                title="Reloads rankings without CSP cash or broker buying-power filters. Over-budget CSPs are marked Research only; no trades are placed."
-            >
-                <input id="ignore-cash-limits-toggle" type="checkbox" aria-describedby="best-plays-help">
-                <span>Best plays</span>
-                <i class="bi bi-info-circle best-plays-toggle__info" aria-hidden="true"></i>
-            </label>
-            <button id="research-long-options" class="btn btn-outline-secondary btn-sm" type="button">
-                <i class="bi bi-rocket-takeoff"></i> Research Calls/Puts
-            </button>
             <button id="refresh-top-recommendations" class="btn btn-outline-primary btn-sm" type="button">
                 <i class="bi bi-arrow-clockwise"></i> Refresh
             </button>
         </div>
     </div>
-    <div id="best-plays-help" class="best-plays-help d-none">
-        Best plays active: cash and broker buying-power filters are ignored for ranking; over-budget CSPs are research-only.
-    </div>
-    <div class="screener-settings mt-2 mb-2">
-        <details class="small">
-            <summary class="text-secondary fw-semibold" style="cursor:pointer">
-                <i class="bi bi-sliders"></i> Screener settings
-            </summary>
-            <div class="d-flex flex-wrap gap-3 mt-2 align-items-end" id="screener-controls">
-                <div class="d-flex flex-column">
-                    <label class="text-muted mb-1" for="screener-otm-min">OTM min %</label>
-                    <input id="screener-otm-min" type="number" class="form-control form-control-sm" style="width:70px" min="0" max="50" step="1" placeholder="5" title="Minimum OTM percentage for CSP screening">
-                </div>
-                <div class="d-flex flex-column">
-                    <label class="text-muted mb-1" for="screener-otm-max">OTM max %</label>
-                    <input id="screener-otm-max" type="number" class="form-control form-control-sm" style="width:70px" min="0" max="50" step="1" placeholder="15" title="Maximum OTM percentage for CSP screening">
-                </div>
-                <div class="d-flex flex-column">
-                    <label class="text-muted mb-1" for="screener-dte-min">DTE min</label>
-                    <input id="screener-dte-min" type="number" class="form-control form-control-sm" style="width:70px" min="0" max="120" step="1" placeholder="30" title="Minimum days to expiration">
-                </div>
-                <div class="d-flex flex-column">
-                    <label class="text-muted mb-1" for="screener-dte-max">DTE max</label>
-                    <input id="screener-dte-max" type="number" class="form-control form-control-sm" style="width:70px" min="0" max="120" step="1" placeholder="45" title="Maximum days to expiration">
-                </div>
-                <div class="d-flex flex-column">
-                    <label class="text-muted mb-1" for="screener-delta-target">Delta target</label>
-                    <input id="screener-delta-target" type="number" class="form-control form-control-sm" style="width:70px" min="0" max="1" step="0.05" placeholder="0.30" title="Target delta for CSP screening">
-                </div>
-                <div class="d-flex flex-column">
-                    <label class="text-muted mb-1" for="screener-min-volatility">Min volatility %</label>
-                    <input id="screener-min-volatility" type="number" class="form-control form-control-sm" style="width:70px" min="0" max="100" step="1" placeholder="4.5" title="Minimum implied volatility percentile (IV-rank)">
-                </div>
-                <div class="d-flex flex-column">
-                    <label class="text-muted mb-1" for="screener-min-buying-power">Min BP $</label>
-                    <input id="screener-min-buying-power" type="number" class="form-control form-control-sm" style="width:80px" min="0" max="100000" step="500" placeholder="5000" title="Minimum CSP buying power">
-                </div>
-                <div class="d-flex flex-column">
-                    <button id="apply-screener-settings" class="btn btn-outline-secondary btn-sm" type="button" title="Refresh signals with these screener settings">
-                        <i class="bi bi-arrow-clockwise"></i> Apply
-                    </button>
-                </div>
-                <div class="d-flex flex-column">
-                    <button id="reset-screener-settings" class="btn btn-outline-secondary btn-sm" type="button" title="Reset to defaults">
-                        <i class="bi bi-arrow-counterclockwise"></i> Reset
-                    </button>
-                </div>
-            </div>
-        </details>
+    <div class="preset-selector mt-2 mb-2">
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+            <span class="text-secondary fw-semibold small">Risk preset:</span>
+            <div class="btn-group btn-group-sm" id="preset-buttons" role="group" aria-label="Wheel risk preset"></div>
+        </div>
+        <div id="preset-effective" class="small text-muted mt-1"></div>
     </div>
     <div id="growth-mode-banner" class="d-none mb-2">
         <div class="alert alert-info d-flex align-items-center gap-2 py-2 px-3 mb-0" role="alert">
-            <i class="bi bi-rocket-takeoff fs-5"></i>
+            <i class="bi bi-shield-check fs-5"></i>
             <div>
-                <strong>Growth Mode active</strong> &mdash; candidates ranked for <span id="growth-mode-objective">time to 2x</span>.
-                Max drawdown budget: <span id="growth-mode-drawdown">40%</span>.
+                <strong id="growth-mode-objective">Balanced preset</strong>
+                <span id="growth-mode-drawdown"></span>
                 <div id="growth-mode-csp-profile" class="small text-muted mt-1">
                     <span id="growth-csp-profile-label">CSP profile:</span>
                     <span id="growth-csp-profile-text"></span>

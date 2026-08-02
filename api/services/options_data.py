@@ -82,7 +82,6 @@ class OptionsDataService:
         self.iv_earnings_service = iv_earnings_service
         self._screening_profile_provider = screening_profile_provider
         self._portfolio_context_provider = portfolio_context_provider
-        self._growth_profile = None  # Set by recommendation engine when growth mode is active
 
     def _get_config(self):
         if hasattr(self._config_provider, "config"):
@@ -94,20 +93,6 @@ class OptionsDataService:
 
     def _get_portfolio_context(self):
         return self._portfolio_context_provider.get_portfolio_context()
-
-    def _get_growth_profile(self):
-        """Return growth profile — always-on."""
-        config = self._get_config()
-        growth_mode = config.get("growth_mode", {}) if config else {}
-        if growth_mode:
-            return {
-                "objective": growth_mode.get("objective", "time_to_2x"),
-                "target_account_multiple": float(growth_mode.get("target_account_multiple", 2.0)),
-                "max_drawdown_pct": float(growth_mode.get("max_drawdown_pct", 0.40)),
-                "execution_scope": growth_mode.get("execution_scope", "short_premium_wheel"),
-                "long_options_mode": growth_mode.get("long_options_mode", "research_only"),
-            }
-        return self._growth_profile
 
     def _strip_ticker_prefix(self, ticker):
         return clean_yfinance_ticker(ticker)
@@ -168,7 +153,7 @@ class OptionsDataService:
             earnings_adjustment=earnings_adjustment,
             earnings_info=earnings_info,
             macro_regime=macro_regime,
-            growth_profile=self._get_growth_profile(),
+            growth_profile=None,
         )
 
         if decision is None:

@@ -26,29 +26,9 @@ DEFAULT_CONNECTION_CONFIG = {
     "broker_cache_after_hours": True,  # use cached broker data outside US market hours
     "screening_criteria": {"min_volatility_pct": 3.0, "min_volume": 1000000, "max_stocks": 50},
     "watchlist": _parse_watchlist_env(os.environ.get("WATCHLIST")),
-    "growth_mode": {
-        "enabled": True,
-        "objective": "time_to_2x",
-        "target_account_multiple": 2.0,
-        "max_drawdown_pct": 0.40,
-        "execution_scope": "short_premium_wheel",
-        "long_options_mode": "research_only",
-        "screener_profile": {
-            "csp_target_delta": 0.30,
-            "csp_delta_tolerance": 0.12,
-            "csp_min_dte": 30,
-            "csp_max_dte": 45,
-            "csp_preferred_dte": 37,
-            "csp_default_otm_pct": 10,
-            "call_default_otm_pct": 10,
-            "csp_min_otm_pct": 5,
-            "csp_max_otm_pct": 15,
-            "min_csp_buying_power": 5000,
-            "min_volatility_pct": 4.5,
-            "max_watchlist_tickers": 25,
-            "require_cash_fit": True,
-        },
-    },
+    # Versioned wheel risk preset (conservative | balanced | aggressive).
+    # The UI persists the selection in the settings table; this is only the default.
+    "wheel_preset": "balanced",
 }
 
 

@@ -87,19 +87,25 @@ def create_application():
 
     @app.context_processor
     def inject_screening_config():
+        # Read-only effective values of the active preset (Balanced by default).
+        from core.presets import DEFAULT_PRESET_KEY, get_preset
+
         conn_config = current_app.config.get("connection_config", {})
-        growth_mode = conn_config.get("growth_mode", {})
-        screener_profile = growth_mode.get("screener_profile", {})
+        preset = get_preset(conn_config.get("wheel_preset", DEFAULT_PRESET_KEY))
+        sp = preset.to_screener_profile()
         return {
             "screening_config": {
-                "growth_mode_enabled": bool(growth_mode.get("enabled", True)),
-                "csp_default_otm_pct": screener_profile.get("csp_default_otm_pct", 10),
-                "call_default_otm_pct": screener_profile.get("call_default_otm_pct", 10),
-                "csp_min_dte": screener_profile.get("csp_min_dte", 30),
-                "csp_max_dte": screener_profile.get("csp_max_dte", 45),
-                "csp_preferred_dte": screener_profile.get("csp_preferred_dte", 37),
-                "csp_min_otm_pct": screener_profile.get("csp_min_otm_pct", 5),
-                "csp_max_otm_pct": screener_profile.get("csp_max_otm_pct", 15),
+                "preset_key": preset.key,
+                "preset_label": preset.label,
+                "preset_version": preset.version,
+                "csp_default_otm_pct": sp.get("csp_default_otm_pct", 10),
+                "call_default_otm_pct": sp.get("call_default_otm_pct", 10),
+                "csp_min_dte": sp.get("csp_min_dte", 30),
+                "csp_max_dte": sp.get("csp_max_dte", 45),
+                "csp_preferred_dte": sp.get("csp_preferred_dte", 37),
+                "csp_min_otm_pct": sp.get("csp_min_otm_pct", 5),
+                "csp_max_otm_pct": sp.get("csp_max_otm_pct", 15),
+                "read_only": True,
             }
         }
 

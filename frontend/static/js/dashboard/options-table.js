@@ -35,7 +35,7 @@ async function fetchScreeningConfig() {
             const data = await resp.json();
             if (data.success) {
                 state.screeningConfig = {
-                    growthModeEnabled: data.growth_mode_enabled ?? true,
+                    presetKey: data.preset_key ?? 'balanced',
                     cspDefaultOtmPct: data.csp_default_otm_pct,
                     callDefaultOtmPct: data.call_default_otm_pct,
                     cspMinDte: data.csp_min_dte,
@@ -53,7 +53,7 @@ async function fetchScreeningConfig() {
         console.error('Error fetching screening config:', e);
     }
     state.screeningConfig = {
-        growthModeEnabled: false,
+        presetKey: 'balanced',
         cspDefaultOtmPct: 10,
         callDefaultOtmPct: 10,
         cspMinDte: 30,

@@ -70,6 +70,26 @@ class OptionsDatabase:
                 logger.warning("DB transaction rolled back", exc_info=True)
                 raise
 
+    # --- Settings (key/value) ---
+
+    def get_setting(self, key: str, default=None):
+        """Return a persisted setting value, or default when absent."""
+        with pooled_connection(self.db_path) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key: str, value: str):
+        """Persist a setting value (upsert)."""
+        with pooled_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+                """,
+                (key, value),
+            )
+            conn.commit()
+
     # --- IV History ---
 
     def save_iv_data(self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None):

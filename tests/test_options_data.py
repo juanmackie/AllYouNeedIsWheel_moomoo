@@ -122,9 +122,9 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
             },
         )
 
+        # Growth-mode objectives are gone; scoring receives no growth profile.
         growth_profile = mock_score.call_args.kwargs.get("growth_profile")
-        self.assertIsNotNone(growth_profile)
-        self.assertEqual(growth_profile["objective"], "time_to_2x")
+        self.assertIsNone(growth_profile)
 
     def test_put_expirations_use_growth_dte_window_when_toggle_enabled(self):
         from moomoo import RET_OK

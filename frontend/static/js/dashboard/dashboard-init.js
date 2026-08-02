@@ -55,7 +55,6 @@ export async function initializeDashboard() {
 
         initializeSignalPanels();
 
-        initSizingModeSelector();
 
         const cashReserveToggle = document.getElementById('cash-reserve-toggle');
         if (cashReserveToggle && !cashReserveToggle.dataset.bound) {
@@ -63,7 +62,6 @@ export async function initializeDashboard() {
             cashReserveToggle.addEventListener('change', (e) => toggleCashReserve(e.target.checked));
         }
 
-        initializeLLMAdvisor();
 
         const refreshAllBtn = document.getElementById('refresh-all-btn');
         if (refreshAllBtn && !refreshAllBtn.dataset.bound) {
@@ -134,24 +132,6 @@ function showWaveLoading(waveId, message) {
 function hideWaveLoading(waveId) {
     const el = document.getElementById(`${waveId}-loading`);
     if (el) el.classList.add('d-none');
-}
-
-export function initSizingModeSelector() {
-    const radios = document.querySelectorAll('input[name="sizing-mode"]');
-    if (!radios.length) return;
-    const saved = localStorage.getItem('sizingMode');
-    if (saved === 'aggressive') {
-        const aggressive = document.getElementById('sizing-aggressive');
-        if (aggressive) aggressive.checked = true;
-    } else {
-        const conservative = document.getElementById('sizing-conservative');
-        if (conservative) conservative.checked = true;
-    }
-    radios.forEach(radio => {
-        radio.addEventListener('change', () => {
-            if (radio.checked) { localStorage.setItem('sizingMode', radio.value); updateIdleCashPanel(); }
-        });
-    });
 }
 
 export async function loadPositionsCommandPanel() {

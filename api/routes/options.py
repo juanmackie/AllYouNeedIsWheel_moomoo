@@ -47,9 +47,7 @@ def get_options_service():
     return _options_service_instance
 
 
-def _generate_in_background(
-    cache_key, limit, portfolio_hash, include_long_options=False, ignore_cash_limits=False, screener_overrides=None
-):
+def _generate_in_background(cache_key, limit, portfolio_hash):
     """
     Generate top recommendations in a background thread.
     Manages the in-flight registry so duplicate cold generations don't stack.
@@ -64,12 +62,7 @@ def _generate_in_background(
     def generation_task():
         try:
             logger.info(f"Background generation started for {cache_key}")
-            result = get_options_service().get_top_recommendations(
-                limit=limit,
-                include_long_options=include_long_options,
-                ignore_cash_limits=ignore_cash_limits,
-                screener_overrides=screener_overrides or {},
-            )
+            result = get_options_service().get_top_recommendations(limit=limit)
 
             if "error" not in result:
                 result = _normalize_top_recommendations_payload(result)
@@ -477,35 +470,8 @@ def get_top_recommendations():
         # Check for manual refresh parameter
         manual_refresh = request.args.get("refresh", "false").lower() == "true"
 
-        # Create cache key based on limit and portfolio state
-        include_long_options = request.args.get("include_long_options", "true").lower() == "true"
-        ignore_cash_limits = request.args.get("ignore_cash_limits", "false").lower() == "true"
-
-        # Screener profile overrides (user-tunable from UI)
-        screener_overrides = {}
-        for param, key in [
-            ("csp_min_otm_pct", "csp_min_otm_pct"),
-            ("csp_max_otm_pct", "csp_max_otm_pct"),
-            ("csp_min_dte", "csp_min_dte"),
-            ("csp_max_dte", "csp_max_dte"),
-            ("csp_target_delta", "csp_target_delta"),
-            ("min_csp_buying_power", "min_csp_buying_power"),
-            ("min_volatility_pct", "min_volatility_pct"),
-        ]:
-            raw = request.args.get(param)
-            if raw is not None:
-                try:
-                    screener_overrides[key] = float(raw)
-                except (ValueError, TypeError):
-                    pass
-        screener_suffix = (
-            ":".join(f"{k}={v}" for k, v in sorted(screener_overrides.items())) if screener_overrides else "none"
-        )
-
-        cache_key = (
-            f"top_recommendations:limit={limit}:include_long_options={include_long_options}:"
-            f"ignore_cash_limits={ignore_cash_limits}:screener={screener_suffix}:hash={current_portfolio_hash}"
-        )
+        # Cache key: limit + portfolio state (preset is part of config)
+        cache_key = f"top_recommendations:limit={limit}:hash={current_portfolio_hash}"
 
         # Check cache unless manual refresh requested
         if not manual_refresh:
@@ -519,14 +485,7 @@ def get_top_recommendations():
                 )
 
                 if cache_metadata["cache_status"] == "STALE":
-                    _trigger_background_refresh(
-                        cache_key,
-                        limit,
-                        current_portfolio_hash,
-                        include_long_options=include_long_options,
-                        ignore_cash_limits=ignore_cash_limits,
-                        screener_overrides=screener_overrides,
-                    )
+                    _trigger_background_refresh(cache_key, limit, current_portfolio_hash)
 
                 return _build_top_recommendations_cache_response(
                     cached_result,
@@ -536,14 +495,7 @@ def get_top_recommendations():
 
         # Cache miss or manual refresh ? generate in background instead of blocking
         logger.info(f"Generating fresh top recommendations in background (manual_refresh={manual_refresh})")
-        generation_started = _generate_in_background(
-            cache_key,
-            limit,
-            current_portfolio_hash,
-            include_long_options=include_long_options,
-            ignore_cash_limits=ignore_cash_limits,
-            screener_overrides=screener_overrides,
-        )
+        generation_started = _generate_in_background(cache_key, limit, current_portfolio_hash)
         generation_age = _get_generation_age(cache_key)
         # Try to serve stale cache while generation runs
         try:

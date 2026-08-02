@@ -15,7 +15,6 @@ let listenersBound = false;
 let isInitialized = false;
 let activeSignalType = 'all';
 let _isLoading = false; // in-flight guard — prevents overlapping requests
-let lastIncludeLongOptions = true;
 let pendingRecommendationRequest = null;
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const GENERATING_RETRY_DELAYS_MS = [8000, 15000, 30000, 60000, 120000];
@@ -23,12 +22,11 @@ let loadingBannerId = null;
 let generatingRetryTimer = null;
 let generatingRetryCount = 0;
 let _isBackendGenerating = false;
-let lastIgnoreCashLimits = false;
 let _toggleRefreshInProgress = false;
 
 // DOM Elements (initialized lazily)
 let container, contentEl, cardsContainer, lastUpdatedEl;
-let blockedListEl, blockedCountEl, bpIndicator, ignoreCashLimitsToggle, bestPlaysHelpEl;
+let blockedListEl, blockedCountEl, bpIndicator;
 let tabContainer, signalCountDisplay;
 
 /**
@@ -42,52 +40,8 @@ function initElements() {
     blockedListEl = document.getElementById('blocked-candidates-list');
     blockedCountEl = document.getElementById('blocked-candidates-count');
     bpIndicator = document.getElementById('buying-power-indicator');
-    ignoreCashLimitsToggle = document.getElementById('ignore-cash-limits-toggle');
-    bestPlaysHelpEl = document.getElementById('best-plays-help');
     tabContainer = document.getElementById('signal-tabs');
     signalCountDisplay = document.getElementById('signal-count-display');
-}
-
-function getIgnoreCashLimitsEnabled() {
-    return Boolean(ignoreCashLimitsToggle?.checked);
-}
-
-const SCREENER_INPUT_IDS = ['screener-otm-min', 'screener-otm-max', 'screener-dte-min', 'screener-dte-max',
-    'screener-delta-target', 'screener-min-volatility', 'screener-min-buying-power'];
-function getScreenerOverrides() {
-    const overrides = {};
-    const otmMin = document.getElementById('screener-otm-min');
-    const otmMax = document.getElementById('screener-otm-max');
-    const dteMin = document.getElementById('screener-dte-min');
-    const dteMax = document.getElementById('screener-dte-max');
-    const deltaTarget = document.getElementById('screener-delta-target');
-    const minVol = document.getElementById('screener-min-volatility');
-    const minBP = document.getElementById('screener-min-buying-power');
-    if (otmMin && otmMin.value !== '' && otmMin.value !== otmMin.defaultValue) overrides.csp_min_otm_pct = parseFloat(otmMin.value);
-    if (otmMax && otmMax.value !== '' && otmMax.value !== otmMax.defaultValue) overrides.csp_max_otm_pct = parseFloat(otmMax.value);
-    if (dteMin && dteMin.value !== '' && dteMin.value !== dteMin.defaultValue) overrides.csp_min_dte = parseFloat(dteMin.value);
-    if (dteMax && dteMax.value !== '' && dteMax.value !== dteMax.defaultValue) overrides.csp_max_dte = parseFloat(dteMax.value);
-    if (deltaTarget && deltaTarget.value !== '' && deltaTarget.value !== deltaTarget.defaultValue) overrides.csp_target_delta = parseFloat(deltaTarget.value);
-    if (minVol && minVol.value !== '' && minVol.value !== minVol.defaultValue) overrides.min_volatility_pct = parseFloat(minVol.value);
-    if (minBP && minBP.value !== '' && minBP.value !== minBP.defaultValue) overrides.min_csp_buying_power = parseFloat(minBP.value);
-    return Object.keys(overrides).length > 0 ? overrides : null;
-}
-
-function updateBestPlaysHelp(enabled, queued = false) {
-    const isEnabled = Boolean(enabled);
-    if (bestPlaysHelpEl) {
-        bestPlaysHelpEl.classList.toggle('d-none', !isEnabled);
-        bestPlaysHelpEl.textContent = queued
-            ? 'Best plays queued: the list will reload with wider OTM/DTE range and no cash filters after the current scan finishes.'
-            : 'Best plays active: OTM widened to 2-25%, DTE to 7-60, and cash/buying-power filters ignored. Over-budget CSPs are research-only.';
-    }
-
-    const descEl = document.getElementById('top-recs-desc');
-    if (descEl) {
-        descEl.textContent = isEnabled
-            ? 'Best plays: wider screener (2-25% OTM, 7-60 DTE), no cash fit filters. Review research-only CSPs before acting.'
-            : 'Signals ranked by estimated impact on reaching your 2x account target.';
-    }
 }
 
 /**
@@ -447,14 +401,14 @@ function createRecommendationCard(rec) {
         clone.querySelector('.csp-cash-pct').textContent = cashPct > 0 ? `${cashPct.toFixed(1)}%` : 'N/A';
         clone.querySelector('.csp-breakeven-buffer').textContent = breakevenBuffer != null ? `${breakevenBuffer.toFixed(1)}%` : 'N/A';
         clone.querySelector('.csp-expected-move').textContent = expectedMove != null ? `${expectedMove.toFixed(1)}%` : 'N/A';
-        // Show active screener profile on CSP card (P2.3)
+        // Show active preset profile on CSP card (read-only)
         const screenerSummary = clone.querySelector('.csp-screener-summary');
         if (screenerSummary) {
-            const cspProfile = signalsData?.growth_mode?.csp_profile_summary;
+            const cspProfile = signalsData?.preset?.csp_profile_summary;
             if (cspProfile) {
                 screenerSummary.textContent = cspProfile;
             } else {
-                const sp = signalsData?.growth_mode?.screener_profile;
+                const sp = signalsData?.preset?.screener_profile;
                 if (sp && Object.keys(sp).length > 0) {
                     const parts = [];
                     if (sp.csp_min_otm_pct != null && sp.csp_max_otm_pct != null) parts.push(`OTM ${sp.csp_min_otm_pct}-${sp.csp_max_otm_pct}%`);
@@ -627,7 +581,7 @@ function scheduleGeneratingRetry() {
     generatingRetryCount += 1;
     generatingRetryTimer = setTimeout(() => {
         generatingRetryTimer = null;
-        loadTopRecommendations(false, lastIncludeLongOptions, lastIgnoreCashLimits);
+        loadTopRecommendations(false);
     }, delay);
     return { scheduled: true, delay, attempt };
 }
@@ -791,40 +745,36 @@ function updateTimestamp(timestamp, cacheInfo = null) {
  * @param {Array} recs - Array of recommendation objects for this lane
  */
 /**
- * Apply growth mode banner and labels
+ * Apply the active preset banner and labels (read-only effective values)
  * @param {Object} result - Full API response
  */
-function applyGrowthMode(result) {
-    const growthMode = result?.growth_mode;
-    // Growth mode is always-on — always show the growth banner
+function applyPreset(result) {
+    const preset = result?.preset;
     document.getElementById('growth-mode-banner')?.classList.remove('d-none');
-    document.getElementById('growth-mode-objective').textContent = growthMode?.objective?.replace(/_/g, ' ') || 'time to 2x';
-    document.getElementById('growth-mode-drawdown').textContent = `${((growthMode?.max_drawdown_pct ?? 0.40) * 100).toFixed(0)}%`;
-    document.getElementById('top-recs-title').textContent = 'Growth signals';
-    document.getElementById('top-recs-eyebrow').textContent = 'Growth mode';
-    updateBestPlaysHelp(Boolean(result?.ignore_cash_limits ?? lastIgnoreCashLimits));
+    document.getElementById('growth-mode-objective').textContent = preset?.label ? `${preset.label} preset` : 'Balanced preset';
+    document.getElementById('growth-mode-drawdown').textContent = preset?.version ? `v${preset.version}` : '';
+    document.getElementById('top-recs-title').textContent = 'Wheel signals';
+    document.getElementById('top-recs-eyebrow').textContent = preset?.label?.toUpperCase() || 'BALANCED';
 
-    // Show CSP screener profile
+    // Show CSP screener profile (read-only)
     const cspProfileText = document.getElementById('growth-csp-profile-text');
     if (cspProfileText) {
-        if (growthMode?.csp_profile_summary) {
-            cspProfileText.textContent = growthMode.csp_profile_summary;
-            document.getElementById('growth-csp-profile-label').classList.remove('d-none');
-        } else if (growthMode?.screener_profile && Object.keys(growthMode.screener_profile).length > 0) {
-            const sp = growthMode.screener_profile;
-            const parts = [];
-            parts.push(`Δ ${sp.csp_target_delta ?? '?'} ±${sp.csp_delta_tolerance ?? '?'}`);
-            const dtePref = sp.csp_preferred_dte ?? '?';
-            const dteMin = sp.csp_min_dte ?? '?';
-            const dteMax = sp.csp_max_dte ?? '?';
-            parts.push(`DTE ${dteMin}-${dteMax} (pref ${dtePref})`);
-            parts.push(`OTM ${sp.csp_default_otm_pct ?? '?'}%`);
-            parts.push(`IV ≥${sp.min_iv_rank ?? '?'}%`);
-            if (sp.require_cash_fit) parts.push('cash-fit req.');
-            cspProfileText.textContent = parts.join(' | ');
+        if (preset?.csp_profile_summary) {
+            cspProfileText.textContent = preset.csp_profile_summary;
             document.getElementById('growth-csp-profile-label').classList.remove('d-none');
         } else {
-            cspProfileText.textContent = '';
+            const sp = preset?.screener_profile;
+            if (sp && Object.keys(sp).length > 0) {
+                const parts = [];
+                parts.push(`Δ ${sp.csp_target_delta ?? '?'} ±${sp.csp_delta_tolerance ?? '?'}`);
+                parts.push(`DTE ${sp.csp_min_dte ?? '?'}-${sp.csp_max_dte ?? '?'} (pref ${sp.csp_preferred_dte ?? '?'})`);
+                parts.push(`OTM ${sp.csp_min_otm_pct ?? '?'}-${sp.csp_max_otm_pct ?? '?'}%`);
+                if (sp.require_cash_fit) parts.push('cash-fit req.');
+                cspProfileText.textContent = parts.join(' | ');
+                document.getElementById('growth-csp-profile-label').classList.remove('d-none');
+            } else {
+                cspProfileText.textContent = '';
+            }
         }
     }
 }
@@ -1057,7 +1007,7 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
     showMarketStateBadge(result?._freshness);
     
     // Apply growth mode banner
-    applyGrowthMode(result);
+    applyPreset(result);
     
     // Update buying power indicator
     updateBuyingPowerIndicator(result);
@@ -1085,28 +1035,15 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
 /**
  * Load top recommendations from API
  */
-export async function loadTopRecommendations(
-    manualRefresh = false,
-    includeLongOptions = true,
-    ignoreCashLimits = getIgnoreCashLimitsEnabled(),
-    screenerOverrides = getScreenerOverrides()
-) {
+export async function loadTopRecommendations(manualRefresh = false) {
     if (_isLoading) {
-        pendingRecommendationRequest = {
-            manualRefresh,
-            includeLongOptions,
-            ignoreCashLimits: Boolean(ignoreCashLimits),
-            screenerOverrides,
-        };
-        updateBestPlaysHelp(ignoreCashLimits, true);
+        pendingRecommendationRequest = { manualRefresh };
         console.debug('Top recommendations: already loading, queued latest request');
         return;
     }
     if (manualRefresh) {
         resetGeneratingRetryState();
     }
-    lastIncludeLongOptions = includeLongOptions;
-    lastIgnoreCashLimits = Boolean(ignoreCashLimits);
     _isLoading = true;
     
     if (!container) initElements();
@@ -1116,7 +1053,7 @@ export async function loadTopRecommendations(
     }
     
     try {
-        const result = await fetchTopRecommendations(3, manualRefresh, includeLongOptions, lastIgnoreCashLimits, screenerOverrides);
+        const result = await fetchTopRecommendations(3, manualRefresh);
         
         if (result.error) {
             if (result.timedOut) {
@@ -1132,7 +1069,7 @@ export async function loadTopRecommendations(
             return;
         }
         
-        applyGrowthMode(result);
+        applyPreset(result);
 
         // Backend is still generating — don't replace what's on screen
         if (result.generating) {
@@ -1194,12 +1131,7 @@ export async function loadTopRecommendations(
             const nextRequest = pendingRecommendationRequest;
             pendingRecommendationRequest = null;
             setTimeout(() => {
-                loadTopRecommendations(
-                    nextRequest.manualRefresh,
-                    nextRequest.includeLongOptions,
-                    nextRequest.ignoreCashLimits,
-                    nextRequest.screenerOverrides
-                );
+                loadTopRecommendations(nextRequest.manualRefresh);
             }, 0);
         }
     }
@@ -1217,7 +1149,7 @@ function startAutoRefresh() {
     // Set up new interval
     autoRefreshInterval = setInterval(() => {
         if (isVisible) {
-            loadTopRecommendations(false, lastIncludeLongOptions, lastIgnoreCashLimits);
+            loadTopRecommendations(false);
         }
     }, REFRESH_INTERVAL_MS);
 }
@@ -1240,7 +1172,66 @@ function handleVisibilityChange() {
     
     if (isVisible) {
         // Refresh when tab becomes visible again (in case data is stale)
-        loadTopRecommendations(false, lastIncludeLongOptions, lastIgnoreCashLimits);
+        loadTopRecommendations(false);
+    }
+}
+
+/**
+ * Preset selector: three versioned presets; effective values are read-only.
+ */
+let _presetState = null;
+
+export async function initPresetSelector() {
+    const buttonsEl = document.getElementById('preset-buttons');
+    if (!buttonsEl || buttonsEl.dataset.bound) return;
+    buttonsEl.dataset.bound = 'true';
+    try {
+        const resp = await fetch('/api/settings');
+        if (!resp.ok) return;
+        _presetState = await resp.json();
+        renderPresetSelector();
+    } catch (err) {
+        console.error('Preset selector failed to load:', err);
+    }
+}
+
+function renderPresetSelector() {
+    const buttonsEl = document.getElementById('preset-buttons');
+    const effectiveEl = document.getElementById('preset-effective');
+    if (!buttonsEl || !_presetState) return;
+    buttonsEl.innerHTML = '';
+    const labels = { conservative: 'Conservative', balanced: 'Balanced', aggressive: 'Aggressive' };
+    for (const [key, preset] of Object.entries(_presetState.presets || {})) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-sm ' + (key === _presetState.active ? 'btn-primary' : 'btn-outline-secondary');
+        btn.textContent = labels[key] || preset.label || key;
+        btn.dataset.preset = key;
+        btn.addEventListener('click', () => selectPreset(key));
+        buttonsEl.appendChild(btn);
+    }
+    if (effectiveEl) {
+        const eff = _presetState.effective || {};
+        effectiveEl.textContent =
+            `Effective: DTE ${eff.csp_min_dte}-${eff.csp_max_dte} (pref ${eff.csp_preferred_dte}), ` +
+            `delta ${eff.csp_target_delta}±${eff.csp_delta_tolerance}, OTM ${eff.csp_min_otm_pct}-${eff.csp_max_otm_pct}%, ` +
+            `min BP $${Math.round(eff.min_csp_buying_power || 0)}, max ${eff.max_buying_power_pct_per_csp || 0}% BP per CSP — read-only`;
+    }
+}
+
+async function selectPreset(key) {
+    try {
+        const resp = await fetch('/api/settings/preset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ preset: key }),
+        });
+        if (!resp.ok) return;
+        _presetState = await resp.json();
+        renderPresetSelector();
+        loadTopRecommendations(true);
+    } catch (err) {
+        console.error('Preset selection failed:', err);
     }
 }
 
@@ -1255,7 +1246,7 @@ function setupEventListeners() {
     const refreshBtn = document.getElementById('refresh-top-recommendations');
     if (refreshBtn) {
         refreshBtn.addEventListener('click', () => {
-            loadTopRecommendations(true, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
+            loadTopRecommendations(true);
         });
     }
     
@@ -1263,49 +1254,13 @@ function setupEventListeners() {
     const retryBtn = document.getElementById('retry-top-recommendations');
     if (retryBtn) {
         retryBtn.addEventListener('click', () => {
-            loadTopRecommendations(false, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
+            loadTopRecommendations(false);
         });
     }
 
-    // Research-only long options button
-    const researchBtn = document.getElementById('research-long-options');
-    if (researchBtn) {
-        researchBtn.addEventListener('click', () => {
-            loadTopRecommendations(true, true, getIgnoreCashLimitsEnabled());
-        });
-    }
+    // Preset selector
+    initPresetSelector();
 
-    if (ignoreCashLimitsToggle) {
-        ignoreCashLimitsToggle.checked = false;
-        updateBestPlaysHelp(false);
-        ignoreCashLimitsToggle.addEventListener('change', () => {
-            const enabled = getIgnoreCashLimitsEnabled();
-            updateBestPlaysHelp(enabled);
-            _toggleRefreshInProgress = true;
-            loadTopRecommendations(true, lastIncludeLongOptions, enabled);
-        });
-    }
-
-    // Screener settings Apply button
-    const applyScreenerBtn = document.getElementById('apply-screener-settings');
-    if (applyScreenerBtn) {
-        applyScreenerBtn.addEventListener('click', () => {
-            loadTopRecommendations(true, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
-        });
-    }
-
-    // Screener settings Reset button
-    const resetScreenerBtn = document.getElementById('reset-screener-settings');
-    if (resetScreenerBtn) {
-        resetScreenerBtn.addEventListener('click', () => {
-            for (const id of SCREENER_INPUT_IDS) {
-                const el = document.getElementById(id);
-                if (el) el.value = '';
-            }
-            loadTopRecommendations(true, lastIncludeLongOptions, getIgnoreCashLimitsEnabled());
-        });
-    }
-    
     // Signal-type tabs
     initSignalTabs();
     
@@ -1340,9 +1295,7 @@ export function cleanupTopRecommendations() {
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     signalsData = null;
     activeSignalType = 'all';
-    lastIncludeLongOptions = true;
     pendingRecommendationRequest = null;
-    lastIgnoreCashLimits = false;
     isVisible = true;
     listenersBound = false;
     isInitialized = false;
@@ -1351,8 +1304,6 @@ export function cleanupTopRecommendations() {
     generatingRetryCount = 0;
     _isBackendGenerating = false;
     _toggleRefreshInProgress = false;
-    if (ignoreCashLimitsToggle) ignoreCashLimitsToggle.checked = false;
-    updateBestPlaysHelp(false);
 }
 
 export function isBackendGenerating() { return _isBackendGenerating; }

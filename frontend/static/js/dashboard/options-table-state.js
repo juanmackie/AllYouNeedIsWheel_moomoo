@@ -127,10 +127,6 @@ function loadOtmSettings() {
         const savedSettings = localStorage.getItem('otmSettings');
         if (savedSettings) {
             const settings = JSON.parse(savedSettings);
-            const growthEnabled = state.screeningConfig?.growthModeEnabled;
-            const migrated = localStorage.getItem('_otmMigratedToGrowth');
-            const needsMigration = growthEnabled && migrated !== 'true';
-
             Object.keys(settings).forEach(ticker => {
                 if (!state.tickersData[ticker]) {
                     state.tickersData[ticker] = {};

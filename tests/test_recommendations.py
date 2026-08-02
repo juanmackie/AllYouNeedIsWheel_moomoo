@@ -128,36 +128,6 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["count"], 0)
 
-    def test_ignore_cash_limits_does_not_cash_cap_watchlist_universe(self):
-        self.mock_portfolio_context_provider.get_portfolio_context.return_value = {
-            "positions": {},
-            "cash_balance": 0,
-            "available_cash": 0,
-            "cash_available_for_csp": 0,
-            "cash_reserved_for_csp": 0,
-            "broker_buying_power": 0,
-            "short_calls": {},
-            "short_puts": {},
-        }
-        engine = self._import_engine()
-
-        result = engine.get_top_recommendations(limit=5, ignore_cash_limits=True)
-
-        self.assertTrue(result["success"])
-        self.assertTrue(result["ignore_cash_limits"])
-        # When ignore_cash_limits=True, the engine widens OTM/DTE for unconstrained mode
-        self.mock_watchlist_manager.get_effective_watchlist.assert_called_with(
-            growth_mode_config={
-                "screener_profile": {
-                    "csp_min_otm_pct": 2,
-                    "csp_max_otm_pct": 25,
-                    "csp_min_dte": 7,
-                    "csp_max_dte": 60,
-                }
-            },
-            portfolio_context=None,
-        )
-
     def test_get_top_recommendations_caps_scan_tickers_at_12(self):
         """P0.3: watchlist >12 tickers should be capped to MAX_COLD_SCAN_TICKERS."""
         tickers = [f"TICK{i}" for i in range(20)]
@@ -172,74 +142,6 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertLessEqual(mock_fetch.call_count, 12)
         called_tickers = [call[0][0] for call in mock_fetch.call_args_list]
         self.assertEqual(called_tickers, tickers[:12])
-
-    def test_get_top_recommendations_includes_research_only_long_lanes(self):
-        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
-        engine = self._import_engine()
-        long_call = {
-            "ticker": "AAPL",
-            "stock_price": 150.0,
-            "option_type": "CALL",
-            "strike": 162.0,
-            "expiration": "20240315",
-            "dte": 21,
-            "mid_price": 2.05,
-            "premium_per_contract": 205.0,
-            "bid": 2.0,
-            "ask": 2.1,
-            "annualized_return": 23.0,
-            "iv_adjusted_return": 50.0,
-            "otm_pct": 8.0,
-            "delta": 0.25,
-            "implied_volatility": 0.35,
-            "open_interest": 500,
-            "volume": 100,
-            "score": 82.0,
-            "profile_type": "long_call",
-            "research_only": True,
-            "warnings": ["Research-only long call signal - verify before trading"],
-            "wheel_decision": {"contract_score": 82.0, "confidence_score": 100},
-        }
-        long_put = {
-            "ticker": "AAPL",
-            "stock_price": 150.0,
-            "option_type": "PUT",
-            "strike": 138.0,
-            "expiration": "20240315",
-            "dte": 21,
-            "mid_price": 1.8,
-            "premium_per_contract": 180.0,
-            "bid": 1.75,
-            "ask": 1.85,
-            "annualized_return": 22.0,
-            "iv_adjusted_return": 45.0,
-            "otm_pct": 8.0,
-            "delta": -0.25,
-            "implied_volatility": 0.36,
-            "open_interest": 400,
-            "volume": 90,
-            "score": 80.0,
-            "profile_type": "long_put",
-            "research_only": True,
-            "warnings": ["Research-only long put signal - verify before trading"],
-            "wheel_decision": {"contract_score": 80.0, "confidence_score": 100},
-        }
-
-        with (
-            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]),
-            patch.object(
-                engine, "_fetch_watchlist_long_options", return_value={"calls": [long_call], "puts": [long_put]}
-            ),
-            patch("api.services.recommendations.is_market_open", return_value=True),
-        ):
-            result = engine.get_top_recommendations(limit=5, include_long_options=True)
-
-        self.assertEqual(result["long_calls"]["count"], 1)
-        self.assertEqual(result["long_puts"]["count"], 1)
-        self.assertTrue(result["long_calls"]["signals"][0]["research_only"])
-        self.assertTrue(result["long_puts"]["signals"][0]["research_only"])
-        self.assertEqual(result["long_calls"]["signals"][0]["signal_type"], "call")
-        self.assertEqual(result["long_puts"]["signals"][0]["signal_type"], "put")
 
     def test_get_top_recommendations_ranks_by_premium_velocity(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA", "BBB"]
@@ -296,7 +198,6 @@ class TestRecommendationEngine(unittest.TestCase):
 
         with (
             patch.object(engine, "_fetch_watchlist_ticker_csp", side_effect=[[faster_daily], [slower_daily]]),
-            patch.object(engine, "_fetch_watchlist_long_options", return_value={"calls": [], "puts": []}),
             patch("api.services.recommendations.is_market_open", return_value=True),
         ):
             result = engine.get_top_recommendations(limit=5)
@@ -308,20 +209,6 @@ class TestRecommendationEngine(unittest.TestCase):
             result["signals"][0]["premium_per_contract"] / result["signals"][0]["dte"],
             result["signals"][1]["premium_per_contract"] / result["signals"][1]["dte"],
         )
-
-    def test_get_top_recommendations_skips_long_options_by_default(self):
-        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
-        engine = self._import_engine()
-
-        with (
-            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]),
-            patch.object(engine, "_fetch_watchlist_long_options") as mock_long,
-        ):
-            result = engine.get_top_recommendations(limit=5)
-
-        self.assertEqual(result["long_calls"]["count"], 0)
-        self.assertEqual(result["long_puts"]["count"], 0)
-        mock_long.assert_not_called()
 
     def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
@@ -352,7 +239,6 @@ class TestRecommendationEngine(unittest.TestCase):
 
         with (
             patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[csp]),
-            patch.object(engine, "_fetch_watchlist_long_options", return_value={"calls": [], "puts": []}),
         ):
             result = engine.get_top_recommendations(limit=5)
 
@@ -1101,36 +987,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["count"], 0)
 
-    def test_ignore_cash_limits_does_not_cash_cap_watchlist_universe(self):
-        self.mock_portfolio_context_provider.get_portfolio_context.return_value = {
-            "positions": {},
-            "cash_balance": 0,
-            "available_cash": 0,
-            "cash_available_for_csp": 0,
-            "cash_reserved_for_csp": 0,
-            "broker_buying_power": 0,
-            "short_calls": {},
-            "short_puts": {},
-        }
-        engine = self._import_engine()
-
-        result = engine.get_top_recommendations(limit=5, ignore_cash_limits=True)
-
-        self.assertTrue(result["success"])
-        self.assertTrue(result["ignore_cash_limits"])
-        # When ignore_cash_limits=True, the engine widens OTM/DTE for unconstrained mode
-        self.mock_watchlist_manager.get_effective_watchlist.assert_called_with(
-            growth_mode_config={
-                "screener_profile": {
-                    "csp_min_otm_pct": 2,
-                    "csp_max_otm_pct": 25,
-                    "csp_min_dte": 7,
-                    "csp_max_dte": 60,
-                }
-            },
-            portfolio_context=None,
-        )
-
     def test_get_top_recommendations_caps_scan_tickers_at_12(self):
         """P0.3: watchlist >12 tickers should be capped to MAX_COLD_SCAN_TICKERS."""
         tickers = [f"TICK{i}" for i in range(20)]
@@ -1145,74 +1001,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertLessEqual(mock_fetch.call_count, 12)
         called_tickers = [call[0][0] for call in mock_fetch.call_args_list]
         self.assertEqual(called_tickers, tickers[:12])
-
-    def test_get_top_recommendations_includes_research_only_long_lanes(self):
-        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
-        engine = self._import_engine()
-        long_call = {
-            "ticker": "AAPL",
-            "stock_price": 150.0,
-            "option_type": "CALL",
-            "strike": 162.0,
-            "expiration": "20240315",
-            "dte": 21,
-            "mid_price": 2.05,
-            "premium_per_contract": 205.0,
-            "bid": 2.0,
-            "ask": 2.1,
-            "annualized_return": 23.0,
-            "iv_adjusted_return": 50.0,
-            "otm_pct": 8.0,
-            "delta": 0.25,
-            "implied_volatility": 0.35,
-            "open_interest": 500,
-            "volume": 100,
-            "score": 82.0,
-            "profile_type": "long_call",
-            "research_only": True,
-            "warnings": ["Research-only long call signal - verify before trading"],
-            "wheel_decision": {"contract_score": 82.0, "confidence_score": 100},
-        }
-        long_put = {
-            "ticker": "AAPL",
-            "stock_price": 150.0,
-            "option_type": "PUT",
-            "strike": 138.0,
-            "expiration": "20240315",
-            "dte": 21,
-            "mid_price": 1.8,
-            "premium_per_contract": 180.0,
-            "bid": 1.75,
-            "ask": 1.85,
-            "annualized_return": 22.0,
-            "iv_adjusted_return": 45.0,
-            "otm_pct": 8.0,
-            "delta": -0.25,
-            "implied_volatility": 0.36,
-            "open_interest": 400,
-            "volume": 90,
-            "score": 80.0,
-            "profile_type": "long_put",
-            "research_only": True,
-            "warnings": ["Research-only long put signal - verify before trading"],
-            "wheel_decision": {"contract_score": 80.0, "confidence_score": 100},
-        }
-
-        with (
-            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]),
-            patch.object(
-                engine, "_fetch_watchlist_long_options", return_value={"calls": [long_call], "puts": [long_put]}
-            ),
-            patch("api.services.recommendations.is_market_open", return_value=True),
-        ):
-            result = engine.get_top_recommendations(limit=5, include_long_options=True)
-
-        self.assertEqual(result["long_calls"]["count"], 1)
-        self.assertEqual(result["long_puts"]["count"], 1)
-        self.assertTrue(result["long_calls"]["signals"][0]["research_only"])
-        self.assertTrue(result["long_puts"]["signals"][0]["research_only"])
-        self.assertEqual(result["long_calls"]["signals"][0]["signal_type"], "call")
-        self.assertEqual(result["long_puts"]["signals"][0]["signal_type"], "put")
 
     def test_get_top_recommendations_ranks_by_premium_velocity(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA", "BBB"]
@@ -1269,7 +1057,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
 
         with (
             patch.object(engine, "_fetch_watchlist_ticker_csp", side_effect=[[faster_daily], [slower_daily]]),
-            patch.object(engine, "_fetch_watchlist_long_options", return_value={"calls": [], "puts": []}),
             patch("api.services.recommendations.is_market_open", return_value=True),
         ):
             result = engine.get_top_recommendations(limit=5)
@@ -1281,20 +1068,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             result["signals"][0]["premium_per_contract"] / result["signals"][0]["dte"],
             result["signals"][1]["premium_per_contract"] / result["signals"][1]["dte"],
         )
-
-    def test_get_top_recommendations_skips_long_options_by_default(self):
-        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
-        engine = self._import_engine()
-
-        with (
-            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]),
-            patch.object(engine, "_fetch_watchlist_long_options") as mock_long,
-        ):
-            result = engine.get_top_recommendations(limit=5)
-
-        self.assertEqual(result["long_calls"]["count"], 0)
-        self.assertEqual(result["long_puts"]["count"], 0)
-        mock_long.assert_not_called()
 
     def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
@@ -1325,7 +1098,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
 
         with (
             patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[csp]),
-            patch.object(engine, "_fetch_watchlist_long_options", return_value={"calls": [], "puts": []}),
         ):
             result = engine.get_top_recommendations(limit=5)
 
@@ -2693,7 +2465,36 @@ class TestRecommendationNonDuplication(unittest.TestCase):
 
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_score.return_value = mock_decision
-            result = engine.get_top_recommendations(limit=5)
+            with patch.object(engine, "_fetch_watchlist_ticker_csp") as mock_fetch:
+                mock_fetch.return_value = [
+                    {
+                        "ticker": "AAPL",
+                        "stock_price": 150.0,
+                        "option_type": "PUT",
+                        "max_contracts": 1,
+                        "existing_position": 0,
+                        "from_watchlist": True,
+                        "strike": 140.0,
+                        "expiration": "20240315",
+                        "dte": 21,
+                        "mid_price": 2.75,
+                        "premium_per_contract": 275.0,
+                        "bid": 2.50,
+                        "ask": 3.00,
+                        "annualized_return": 18.0,
+                        "iv_adjusted_return": 50.0,
+                        "otm_pct": 6.67,
+                        "delta": -0.20,
+                        "implied_volatility": 0.35,
+                        "open_interest": 500,
+                        "volume": 200,
+                        "score": 75.0,
+                        "profile_type": "monthly",
+                        "warnings": [],
+                        "wheel_decision": {"contract_score": 75.0, "confidence_score": 100},
+                    }
+                ]
+                result = engine.get_top_recommendations(limit=5)
 
         self.assertGreater(len(result.get("signals", [])), 0)
         self.assertNotIn("best_plays", result)
@@ -2783,7 +2584,7 @@ class TestRecommendationNonDuplication(unittest.TestCase):
                         "wheel_decision": {"score": 80.0, "quote_quality": "tradable", "blocked_reason_codes": []},
                     }
                 ]
-                result = engine.get_top_recommendations(limit=5, include_long_options=True)
+                result = engine.get_top_recommendations(limit=5)
 
         # signals should have items and stay deduplicated by underlying
         self.assertGreater(len(result.get("signals", [])), 0)
@@ -2792,10 +2593,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
             cu = canonical_underlying(rec["ticker"])
             self.assertNotIn(cu, seen, f"Duplicate underlying {cu} found")
             seen.add(cu)
-
-
-class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
-    """Test that blocked signals surface with readable diagnostics."""
 
     def setUp(self):
         self.mock_connection_provider = MagicMock()
@@ -2880,7 +2677,7 @@ class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
             mock_fetch.return_value = [
                 engine._make_skip_diagnostic("BLOCKED", "no_bid", "No executable bid - ask-only quote")
             ]
-            result = engine.get_top_recommendations(limit=5, include_long_options=True)
+            result = engine.get_top_recommendations(limit=5)
 
         self.assertIn("blocked_signals", result)
         if result.get("blocked_signals"):
@@ -3014,44 +2811,6 @@ class TestRecommendationBlockedCandidatesDiagnostics(unittest.TestCase):
         self.mock_conn.get_option_expiration_dates.assert_not_called()
         self.mock_conn.get_option_chain.assert_not_called()
 
-    def test_ignore_cash_limits_bypasses_cash_prefilter(self):
-        """Best plays mode should fetch expirations even when no strike fits cash."""
-        from api.services.recommendations import RecommendationEngine
-
-        engine = RecommendationEngine(
-            self.mock_connection_provider,
-            self.mock_config_provider,
-            self.mock_db,
-            self.mock_iv_earnings,
-            self.mock_portfolio_context_provider,
-            self.mock_portfolio_service_provider,
-            self.mock_watchlist_manager,
-            self.mock_options_data,
-            self.mock_cash_calculator,
-        )
-
-        portfolio = dict(
-            self.mock_portfolio_context, cash_available_for_csp=200.0, available_cash=200.0, broker_buying_power=200.0
-        )
-        self.mock_conn.get_cached_stock_price.return_value = None
-        self.mock_conn.get_stock_price.return_value = 5.0
-        self.mock_conn.get_option_expiration_dates.return_value = (
-            1,
-            pd.DataFrame({"expiration_date": []}),
-        )
-
-        with (
-            patch.dict("sys.modules", {"moomoo": MagicMock(RET_OK=0)}),
-            patch("api.services.recommendations.is_market_open", return_value=True),
-        ):
-            engine._fetch_watchlist_csp_moomoo("CHEAP", portfolio, ignore_cash_limits=True)
-
-        self.mock_conn.get_option_expiration_dates.assert_called_once_with("CHEAP")
-
-
-class TestCSPCashFit(unittest.TestCase):
-    """Test CSP cash-fit: a ticker where 15% OTM fits but 10% does not."""
-
     def setUp(self):
         self.mock_connection_provider = MagicMock()
         self.mock_config_provider = MagicMock()
@@ -3067,6 +2826,21 @@ class TestCSPCashFit(unittest.TestCase):
         self.mock_conn = MagicMock()
         self.mock_conn.get_stock_price.return_value = 100.0
         self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
+
+        self.mock_portfolio_context = {
+            "positions": {},
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "broker_buying_power": 50000.0,
+            "broker_buying_power_source": "available_cash",
+            "cash_available_for_csp": 50000.0,
+            "cash_reserved_for_csp": 0.0,
+            "excess_liquidity": 50000.0,
+            "short_calls": {},
+            "short_puts": {},
+        }
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = self.mock_portfolio_context
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["ASKONLY"]
 
         self.mock_watchlist_manager.get_screening_profile.return_value = {
             "min_mid_price": 0.05,
@@ -3104,7 +2878,7 @@ class TestCSPCashFit(unittest.TestCase):
             self.mock_options_data,
             self.mock_cash_calculator,
         )
-        engine._growth_screener_config = {
+        engine._preset_profile = {
             "screener_profile": {
                 "csp_default_otm_pct": 10,
                 "csp_min_otm_pct": 5,
@@ -3196,7 +2970,7 @@ class TestCSPCashFit(unittest.TestCase):
             "PUT",
             dte=37,
             vix_regime=portfolio["vix_regime"],
-            growth_mode_config=engine._growth_screener_config,
+            growth_mode_config=engine._preset_profile,
         )
 
     def test_watchlist_csp_scoring_blocks_missing_iv(self):

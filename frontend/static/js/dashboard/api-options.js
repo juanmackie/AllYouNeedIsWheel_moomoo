@@ -81,17 +81,10 @@ export async function fetchOptionExpirations(ticker, optionType = null, options 
     }
 }
 
-export async function fetchTopRecommendations(limit = 3, manualRefresh = false, includeLongOptions = false, ignoreCashLimits = false, screenerOverrides = null) {
+export async function fetchTopRecommendations(limit = 3, manualRefresh = false) {
     try {
         let url = `/api/options/top-recommendations?limit=${limit}`;
         if (manualRefresh) url += '&refresh=true';
-        if (includeLongOptions) url += '&include_long_options=true';
-        if (ignoreCashLimits) url += '&ignore_cash_limits=true';
-        if (screenerOverrides) {
-            for (const [key, val] of Object.entries(screenerOverrides)) {
-                if (val != null && val !== '') url += `&${key}=${encodeURIComponent(val)}`;
-            }
-        }
         const response = await fetchWithTimeout(url, {}, 30000);
         if (!response.ok) {
             const payload = await readJsonSafely(response);

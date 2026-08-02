@@ -148,6 +148,11 @@ def create_app(config=None):
 
     app.register_blueprint(earnings.bp)
 
+    # Settings (persisted wheel preset)
+    from api.routes import settings
+
+    app.register_blueprint(settings.bp)
+
     # Extracted route modules (F008)
     from api.routes import alerts, roll_pressure
 
