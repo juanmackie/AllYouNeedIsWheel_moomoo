@@ -49,9 +49,7 @@ def _empty_df(columns=("code",)):
 
 
 def _build_fake_contexts():
-    acc_df = pd.DataFrame(
-        [{"acc_id": "ACC1", "trd_env": TrdEnv.SIMULATE, "security_firm": "FUTUSECURITIES"}]
-    )
+    acc_df = pd.DataFrame([{"acc_id": "ACC1", "trd_env": TrdEnv.SIMULATE, "security_firm": "FUTUSECURITIES"}])
     price_df = pd.DataFrame([{"code": "US.AAPL", "last_price": 150.0}])
     acc_info_df = pd.DataFrame(
         [
@@ -73,7 +71,10 @@ def _build_fake_contexts():
 
     quote_methods = {
         "get_global_state": lambda: (RET_OK, "OK"),
-        "get_market_snapshot": lambda symbols: (RET_OK, price_df if symbols and "OPT" not in str(symbols) else _empty_df()),
+        "get_market_snapshot": lambda symbols: (
+            RET_OK,
+            price_df if symbols and "OPT" not in str(symbols) else _empty_df(),
+        ),
         "get_option_expiration_date": lambda code: (RET_OK, pd.DataFrame([{"expiration_date": "2026-09-18"}])),
         "get_option_chain": lambda **kw: (RET_OK, _empty_df()),
         "get_user_security_group": lambda **kw: (RET_OK, group_df),
@@ -136,9 +137,7 @@ class TestQueryOnlySurface(unittest.TestCase):
         conn.get_user_security_group()
 
         forbidden_touched = [
-            name
-            for name in FORBIDDEN_SDK_MEMBERS
-            if name in self.quote_fake.accessed or name in self.trd_fake.accessed
+            name for name in FORBIDDEN_SDK_MEMBERS if name in self.quote_fake.accessed or name in self.trd_fake.accessed
         ]
         self.assertEqual(forbidden_touched, [], f"forbidden SDK members accessed: {forbidden_touched}")
         self.assertIn("get_market_snapshot", self.quote_fake.accessed)

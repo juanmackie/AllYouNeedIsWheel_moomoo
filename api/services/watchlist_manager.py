@@ -90,35 +90,19 @@ class WatchlistManager:
             return self.config.get("watchlist", [])
 
     def _get_tvscreener_service(self):
-        """
-        Lazy initialization of tvscreener service.
-        Returns the service if available, None otherwise.
-        Uses a sentinel (False) to avoid repeated failed initialization attempts.
-        """
-        if not hasattr(self, "_tvscreener_service"):
-            try:
-                from api import get_service
-
-                self._tvscreener_service = get_service("tvscreener")
-                logger.info("tvscreener service initialized")
-            except Exception as e:
-                logger.warning(f"tvscreener service not available: {e}")
-                self._tvscreener_service = False
-        return self._tvscreener_service if self._tvscreener_service else None
+        """Dynamic screening is out of scope; always returns None."""
+        return None
 
     def get_effective_watchlist(self, growth_mode_config=None, portfolio_context=None):
         """
-        Get effective watchlist based on configuration.
-        Supports static, moomoo, dynamic, and hybrid modes.
+        Get the effective watchlist.
 
-        When growth_mode is enabled, uses growth-tuned screener parameters
-        (higher min_volatility_pct, smaller max_stocks) to reduce wasted scanning.
-        When portfolio_context is provided, computes max_price from CSP cash
-        to cap CSP underlyings.
+        Supports static, moomoo, and hybrid (moomoo + static union) modes.
+        Dynamic broad-market screening is out of scope.
 
         Args:
-            growth_mode_config: Optional growth mode config dict. When provided
-                                and enabled, overrides screening_criteria values.
+            growth_mode_config: Optional growth mode config dict (retained for
+                                call-site compatibility; replaced by presets).
             portfolio_context: Optional portfolio context dict. When provided,
                                computes max_price from CSP cash.
 
@@ -126,8 +110,6 @@ class WatchlistManager:
             List of ticker symbols
         """
         static_watchlist = self.config.get("watchlist", [])
-
-        # Check watchlist mode
         watchlist_mode = self.config.get("watchlist_mode", "static")
 
         if watchlist_mode == "static":
@@ -136,57 +118,15 @@ class WatchlistManager:
         if watchlist_mode == "moomoo":
             return self._fetch_moomoo_watchlist()
 
-        # Try dynamic screening
-        try:
-            tvscreener = self._get_tvscreener_service()
-            if tvscreener:
-                criteria = self.config.get("screening_criteria", {})
-                min_volatility_pct = _screening_min_volatility_pct(criteria, 3.0)
-                min_volume = criteria.get("min_volume", 1000000)
-                max_stocks = criteria.get("max_stocks", 50)
+        if watchlist_mode == "hybrid":
+            moomoo_tickers = self._fetch_moomoo_watchlist() or []
+            combined = list(dict.fromkeys(list(moomoo_tickers) + list(static_watchlist)))
+            logger.info(
+                f"Hybrid watchlist: {len(moomoo_tickers)} moomoo + {len(static_watchlist)} static = {len(combined)} total"
+            )
+            return combined
 
-                # Apply growth mode overlay on screening criteria
-                if growth_mode_config:
-                    screener_profile = growth_mode_config.get("screener_profile", {})
-                    min_volatility_pct = _screening_min_volatility_pct(screener_profile, min_volatility_pct)
-                    max_stocks = screener_profile.get("max_watchlist_tickers", max_stocks)
-
-                # Compute max_price from portfolio context
-                max_price = None
-                if portfolio_context:
-                    csp_cash = float(portfolio_context.get("cash_available_for_csp", 0) or 0)
-                    if csp_cash > 0:
-                        # Max price = CSP cash / 100 / (1 - max_otm_pct/100)
-                        # With 15% max OTM: strike = price * 0.85, cash = strike * 100
-                        # So max_price = cash / 100 / 0.85
-                        max_otm_pct = 15.0
-                        if growth_mode_config:
-                            sp = growth_mode_config.get("screener_profile", {})
-                            max_otm_pct = float(sp.get("csp_max_otm_pct", 15) or 15)
-                        max_price = csp_cash / 100 / (1 - max_otm_pct / 100)
-
-                dynamic = tvscreener.get_wheel_candidates(
-                    min_volatility_pct=min_volatility_pct,
-                    min_volume=min_volume,
-                    limit=max_stocks,
-                    max_price=max_price,
-                )
-
-                if dynamic:
-                    if watchlist_mode == "hybrid":
-                        # Combine dynamic and static watchlists
-                        combined = list(dict.fromkeys(dynamic + static_watchlist))
-                        logger.info(
-                            f"Hybrid watchlist: {len(dynamic)} dynamic + {len(static_watchlist)} static = {len(combined)} total"
-                        )
-                        return combined
-                    else:  # 'dynamic'
-                        logger.info(f"Dynamic watchlist: {len(dynamic)} stocks")
-                        return dynamic
-        except Exception as e:
-            logger.warning(f"Dynamic screening failed: {e}, using static watchlist")
-
-        # Fallback to static watchlist
+        # Unknown mode: fall back to static
         return static_watchlist
 
     def get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None, growth_mode_config=None):

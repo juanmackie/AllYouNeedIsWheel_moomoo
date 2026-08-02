@@ -6,7 +6,6 @@ from flask import Blueprint, current_app, jsonify, request
 
 from api.routes.source_policy import attach_source_policy, build_account_source_policy
 from api.routes.utils import error_response
-from api.services.macro_regime_service import get_macro_service
 from core.connection import probe_opend_status
 from core.logging_config import get_logger
 
@@ -65,9 +64,7 @@ def _ensure_opend_available():
 
 @bp.route("/", methods=["GET"])
 def get_portfolio():
-    """
-    Get the current portfolio information with macro regime context.
-    """
+    """Get the current portfolio information (broker truth only)."""
     try:
         unavailable_response = _ensure_opend_available()
         if unavailable_response:
@@ -76,29 +73,6 @@ def get_portfolio():
         results = get_portfolio_service().get_portfolio_summary()
         if results is None:
             return _service_unavailable_response(get_portfolio_service().last_error, "Failed to load portfolio summary")
-
-        # Add macro regime context to portfolio response
-        try:
-            macro_service = get_macro_service()
-            macro_regime = macro_service.get_macro_regime()
-            results["macro_context"] = {
-                "rate_regime": macro_regime.get("rate_regime", "unknown"),
-                "credit_stress": macro_regime.get("credit_stress", "unknown"),
-                "growth_regime": macro_regime.get("growth_regime", "unknown"),
-                "inflation_trend": macro_regime.get("inflation_trend", "unknown"),
-                "yield_curve_slope": macro_regime.get("yield_curve_slope", 0),
-                "macro_multiplier": macro_regime.get("macro_multiplier", 1.0),
-                "summary": macro_regime.get("summary", ""),
-                "advice": macro_regime.get("advice", ""),
-                "enabled": macro_regime.get("enabled", False),
-            }
-        except Exception as macro_err:
-            results["macro_context"] = {
-                "enabled": False,
-                "summary": "Macro detection unavailable",
-                "advice": "Check FRED API configuration",
-                "error": str(macro_err),
-            }
 
         return jsonify(attach_source_policy(results, build_account_source_policy("portfolio")))
     except Exception as e:

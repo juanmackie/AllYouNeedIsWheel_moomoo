@@ -18,31 +18,12 @@ vi.mock('../../frontend/static/js/dashboard/dashboard-cash.js', () => ({
   updateIdleCashPanel: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../frontend/static/js/dashboard/dashboard-regime.js', () => ({
-  updateWeeklyEarningsSummary: vi.fn().mockResolvedValue(undefined),
-  loadVixRegime: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../frontend/static/js/dashboard/macro.js', () => ({
-  loadMacroRegime: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('../../frontend/static/js/dashboard/weekly-income.js', () => ({
   renderWeeklyIncome: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../frontend/static/js/dashboard/earnings-vol-signals.js', () => ({
-  initializeEarningsVolSignals: vi.fn().mockResolvedValue(undefined),
-  loadEarningsVolSignals: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('../../frontend/static/js/dashboard/options-table.js', () => ({
   loadTickers: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../frontend/static/js/dashboard/catalyst-watch.js', () => ({
-  initializeCatalystWatch: vi.fn().mockResolvedValue(undefined),
-  loadCatalystSignals: vi.fn().mockResolvedValue(undefined),
 }));
 
 function setupDOM() {
@@ -85,10 +66,7 @@ describe('dashboard signal-panel initialization', () => {
     const { loadPortfolioData } = await import('../../frontend/static/js/dashboard/account.js');
     const { initializeTopRecommendations } = await import('../../frontend/static/js/dashboard/top-recommendations.js');
     const { renderWeeklyIncome } = await import('../../frontend/static/js/dashboard/weekly-income.js');
-    const { initializeEarningsVolSignals, loadEarningsVolSignals } = await import('../../frontend/static/js/dashboard/earnings-vol-signals.js');
     const { loadTickers } = await import('../../frontend/static/js/dashboard/options-table.js');
-    const { initializeCatalystWatch, loadCatalystSignals } = await import('../../frontend/static/js/dashboard/catalyst-watch.js');
-    const { updateWeeklyEarningsSummary } = await import('../../frontend/static/js/dashboard/dashboard-regime.js');
     const { updateIdleCashPanel } = await import('../../frontend/static/js/dashboard/dashboard-cash.js');
 
     await initializeDashboard();
@@ -97,13 +75,8 @@ describe('dashboard signal-panel initialization', () => {
     expect(loadPortfolioData).toHaveBeenCalledTimes(1);
     expect(initializeTopRecommendations).toHaveBeenCalledTimes(1);
     expect(renderWeeklyIncome).toHaveBeenCalledTimes(1);
-    expect(initializeEarningsVolSignals).toHaveBeenCalledTimes(1);
-    expect(loadEarningsVolSignals).not.toHaveBeenCalled();
     expect(loadTickers).not.toHaveBeenCalled();
-    expect(updateWeeklyEarningsSummary).toHaveBeenCalledTimes(1);
     expect(updateIdleCashPanel).toHaveBeenCalledTimes(1);
-    expect(initializeCatalystWatch).toHaveBeenCalledTimes(1);
-    expect(loadCatalystSignals).not.toHaveBeenCalled();
 
     document.getElementById('refresh-filled-orders').click();
     await vi.dynamicImportSettled?.();

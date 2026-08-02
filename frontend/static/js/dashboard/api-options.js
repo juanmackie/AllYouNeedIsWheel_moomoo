@@ -111,34 +111,3 @@ export async function fetchTopRecommendations(limit = 3, manualRefresh = false, 
     }
 }
 
-export async function fetchCatalystSignals(manualRefresh = false, thresholds = null, timeoutMs = 45000) {
-    let url = `/api/options/catalyst-watch?limit=6`;
-    if (manualRefresh) url += '&refresh=true';
-    if (thresholds?.minPremiumNotional != null) {
-        url += `&min_premium_notional=${thresholds.minPremiumNotional}`;
-    }
-    if (thresholds?.minVolume != null) {
-        url += `&min_volume=${thresholds.minVolume}`;
-    }
-    if (thresholds?.minFreshVolumeRatio != null) {
-        url += `&min_fresh_volume_ratio=${thresholds.minFreshVolumeRatio}`;
-    }
-    if (thresholds?.maxScanTickers != null) {
-        url += `&max_scan_tickers=${thresholds.maxScanTickers}`;
-    }
-    if (thresholds?.maxExpirations != null) {
-        url += `&max_expirations=${thresholds.maxExpirations}`;
-    }
-    const response = await fetchWithTimeout(url, {
-        headers: {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0',
-        },
-    }, timeoutMs);
-    const payload = await readJsonSafely(response);
-    if (!response.ok || !payload?.success) {
-        throw new Error(payload?.error || `HTTP error ${response.status}`);
-    }
-    return payload;
-}

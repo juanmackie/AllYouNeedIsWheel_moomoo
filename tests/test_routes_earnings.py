@@ -11,11 +11,9 @@ class TestEarningsRoutes(unittest.TestCase):
         self.app = create_app({"TESTING": True})
         self.client = self.app.test_client()
 
-    @patch("api.routes.earnings.get_scheduler_info")
     @patch("api.routes.earnings.IVEarningsService")
     @patch("api.routes.earnings.OptionsDatabase")
-    def test_get_earnings_status(self, mock_db, mock_service_cls, mock_scheduler):
-        mock_scheduler.return_value = {"running": True, "workers": 1}
+    def test_get_earnings_status(self, mock_db, mock_service_cls):
         mock_service = MagicMock()
         mock_service.get_cache_stats.return_value = {"hits": 3, "misses": 1}
         mock_service_cls.return_value = mock_service
@@ -24,8 +22,8 @@ class TestEarningsRoutes(unittest.TestCase):
         data = response.get_json()
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(data["status"], "running")
-        self.assertEqual(data["scheduler"]["workers"], 1)
+        self.assertEqual(data["status"], "manual")
+        self.assertFalse(data["scheduler"]["running"])
         self.assertEqual(data["cache_stats"]["hits"], 3)
         mock_db.assert_called_once()
 

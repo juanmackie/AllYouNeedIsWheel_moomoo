@@ -12,7 +12,6 @@ from api.routes.utils import error_response, success_response
 from api.services.iv_earnings_service import IVEarningsService
 from api.services.portfolio_service import PortfolioService
 from api.services.watchlist_manager import WatchlistManager
-from core.scheduler import get_scheduler_info
 from core.ticker_utils import earnings_underlying_ticker
 from db.database import OptionsDatabase
 
@@ -120,41 +119,15 @@ def get_lock_status():
         return error_response(str(e))
 
 
-@bp.route("/vol-signals")
-def get_earnings_vol_signals():
-    """
-    Get read-only earnings volatility signals for the configured watchlist.
-
-    These signals are educational/research labels only. They do not stage or
-    execute trades.
-    """
-    limit = request.args.get("limit", 8, type=int)
-    refresh = request.args.get("refresh", "false").lower() == "true"
-    tickers_param = request.args.get("tickers", "")
-
-    try:
-        tickers = None
-        if tickers_param:
-            tickers = [ticker.strip().upper() for ticker in tickers_param.split(",") if ticker.strip()]
-
-        service = get_service("earnings_vol")
-        return success_response(service.get_signals(tickers=tickers, limit=limit, refresh=refresh))
-
-    except Exception as e:
-        logger.error(f"Error getting earnings vol signals: {e}")
-        return error_response(str(e))
-
-
 @bp.route("/status")
 def get_earnings_status():
     """Get earnings updater status and cache statistics."""
     service = _get_earnings_service()
-    scheduler_info = get_scheduler_info()
 
     return jsonify(
         {
-            "status": "running" if scheduler_info.get("running") else "stopped",
-            "scheduler": scheduler_info,
+            "status": "manual",
+            "scheduler": {"running": False, "note": "automatic scheduler removed"},
             "cache_stats": service.get_cache_stats(),
         }
     )

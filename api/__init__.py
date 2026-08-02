@@ -138,25 +138,21 @@ def create_app(config=None):
     _register_services()
 
     # Register blueprints
-    from api.routes import llm, macro, options, portfolio
+    from api.routes import options, portfolio
 
     app.register_blueprint(portfolio.bp)
     app.register_blueprint(options.bp)
-    app.register_blueprint(macro.bp)
-    app.register_blueprint(llm.bp)
 
-    # Register new feature blueprints
-    from api.routes import earnings, risk
+    # Earnings calendar/IV (wheel earnings gate)
+    from api.routes import earnings
 
     app.register_blueprint(earnings.bp)
-    app.register_blueprint(risk.bp)
 
     # Extracted route modules (F008)
-    from api.routes import alerts, roll_pressure, signals
+    from api.routes import alerts, roll_pressure
 
     app.register_blueprint(roll_pressure.bp)
     app.register_blueprint(alerts.bp)
-    app.register_blueprint(signals.bp)
 
     # Wheel Scan Ledger
     from api.routes import ledger
@@ -202,20 +198,6 @@ def create_app(config=None):
     def health_check():
         logger.debug("Health check endpoint called")
 
-        # Check tvscreener availability
-        tvscreener_status = "unknown"
-        try:
-            from api import get_service
-
-            tvscreener = get_service("tvscreener")
-            if tvscreener and tvscreener._ensure_initialized():
-                tvscreener_status = "available"
-            else:
-                tvscreener_status = "unavailable"
-        except Exception as exc:
-            logger.warning("Health check tvscreener probe failed: %s", exc, exc_info=True)
-            tvscreener_status = "error"
-
         database_status = "unknown"
         try:
             database = current_app.config.get("database")
@@ -240,7 +222,6 @@ def create_app(config=None):
 
         return {
             "status": "healthy",
-            "tvscreener": tvscreener_status,
             "database": database_status,
             "opend": opend_status.get("status", "unknown"),
             "timestamp": datetime.now().isoformat(),
@@ -267,14 +248,10 @@ def _register_services():
     # Import services here to avoid circular imports at module level
     from api.services.options_service import OptionsService
     from api.services.portfolio_service import PortfolioService
-    from api.services.signal_overlay_service import get_signal_overlay_service
-    from api.services.tvscreener_service import create_tvscreener_service
 
     # Register service factories (not instances yet)
     register_service("options", OptionsService)
     register_service("portfolio", PortfolioService)
-    register_service("signal_overlay", get_signal_overlay_service)
-    register_service("tvscreener", create_tvscreener_service)
 
     def _create_iv_earnings_service():
         from api.services.config import get_config
@@ -285,15 +262,3 @@ def _register_services():
         return IVEarningsService(db)
 
     register_service("ivearnings", _create_iv_earnings_service)
-
-    def _create_earnings_vol_signal_service():
-        from flask import current_app
-
-        from api.services.earnings_vol_service import EarningsVolSignalService
-
-        return EarningsVolSignalService(
-            config=current_app.config.get("connection_config", {}),
-            iv_earnings_service=get_service("ivearnings"),
-        )
-
-    register_service("earnings_vol", _create_earnings_vol_signal_service)

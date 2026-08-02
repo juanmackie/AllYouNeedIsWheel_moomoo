@@ -20,8 +20,6 @@ DEFAULT_CONNECTION_CONFIG = {
     "db_path": "options.db",
     "auto_launch_opend": False,
     "opend_path": "",
-    "openbb_enabled": False,
-    "fred_enabled": True,
     "cash_reserve_enabled": True,
     "watchlist_mode": "static",  # 'static', 'dynamic', 'hybrid', 'moomoo'
     "moomoo_watchlist_group": "My Watchlist",
@@ -49,24 +47,6 @@ DEFAULT_CONNECTION_CONFIG = {
             "min_volatility_pct": 4.5,
             "max_watchlist_tickers": 25,
             "require_cash_fit": True,
-        },
-    },
-    # ── Catalyst flow feature flags ────────────────────────────────────
-    "catalyst_flow": {
-        "enabled": True,
-        "research_only": True,
-        "min_premium_notional": 1_000_000,
-        "min_fresh_volume_ratio": 5,
-        "min_volume": 500,
-        "max_expirations": 3,
-        "max_dte": 60,
-        "max_scan_tickers": 12,
-        "apewisdom": {
-            "enabled": True,
-            "filter": "all-stocks",
-            "max_boost_tickers": 8,
-            "min_mentions": 5,
-            "exclude_tickers": ["SPY", "QQQ", "VOO", "VTI", "VT", "TQQQ", "SQQQ"],
         },
     },
 }
@@ -100,14 +80,6 @@ def apply_env_overrides(config):
         # The app is structurally query-only; readonly is always True.
         # Accept and ignore the variable rather than breaking existing configs.
         logger.info("MOOMOO_READONLY accepted for compatibility; the app is query-only.")
-
-    openbb_enabled = os.environ.get("OPENBB_ENABLED")
-    if openbb_enabled is not None and openbb_enabled != "":
-        config["openbb_enabled"] = openbb_enabled.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-    fred_enabled = os.environ.get("FRED_ENABLED")
-    if fred_enabled is not None and fred_enabled != "":
-        config["fred_enabled"] = fred_enabled.strip().lower() in {"1", "true", "yes", "y", "on"}
 
     cash_reserve_enabled = os.environ.get("CASH_RESERVE_ENABLED")
     if cash_reserve_enabled is not None and cash_reserve_enabled != "":

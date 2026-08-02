@@ -63,85 +63,12 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
             "watchlist_mode": "static",
         }.get(key, default)
         mock_get_config.return_value = mock_config
-        mock_get_service.return_value = None  # No tvscreener service
+        mock_get_service.return_value = None
 
         service = OptionsService()
         result = service.get_effective_watchlist()
 
         self.assertEqual(result, ["AAPL", "TSLA", "NVDA"])
-
-    @patch("api.get_service")
-    @patch("api.services.config.get_config")
-    def test_dynamic_mode_returns_dynamic(self, mock_get_config, mock_get_service):
-        """Dynamic mode should return tvscreener results."""
-        mock_config = MagicMock()
-        mock_config.get.side_effect = lambda key, default=None: {
-            "watchlist": ["AAPL"],
-            "watchlist_mode": "dynamic",
-            "screening_criteria": {
-                "min_volatility_pct": 3.0,
-                "min_volume": 1000000,
-                "max_stocks": 50,
-            },
-        }.get(key, default)
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.return_value = ["GME", "AMC", "BB"]
-        mock_get_service.return_value = mock_tvscreener
-        mock_get_config.return_value = mock_config
-
-        service = OptionsService()
-        result = service.get_effective_watchlist()
-
-        self.assertEqual(result, ["GME", "AMC", "BB"])
-
-    @patch("api.get_service")
-    @patch("api.services.config.get_config")
-    def test_hybrid_mode_combines(self, mock_get_config, mock_get_service):
-        """Hybrid mode should combine static and dynamic."""
-        mock_config = MagicMock()
-        mock_config.get.side_effect = lambda key, default=None: {
-            "watchlist": ["AAPL", "TSLA"],
-            "watchlist_mode": "hybrid",
-            "screening_criteria": {
-                "min_volatility_pct": 3.0,
-                "min_volume": 1000000,
-                "max_stocks": 50,
-            },
-        }.get(key, default)
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.return_value = ["GME", "AMC"]
-        mock_get_service.return_value = mock_tvscreener
-        mock_get_config.return_value = mock_config
-
-        service = OptionsService()
-        result = service.get_effective_watchlist()
-
-        # Should have AAPL, TSLA, GME, AMC (no duplicates)
-        self.assertEqual(len(result), 4)
-        self.assertIn("AAPL", result)
-        self.assertIn("TSLA", result)
-        self.assertIn("GME", result)
-        self.assertIn("AMC", result)
-
-    @patch("api.get_service")
-    @patch("api.services.config.get_config")
-    def test_dynamic_failure_falls_back(self, mock_get_config, mock_get_service):
-        """Dynamic mode should fall back to static on failure."""
-        mock_config = MagicMock()
-        mock_config.get.side_effect = lambda key, default=None: {
-            "watchlist": ["AAPL", "TSLA"],
-            "watchlist_mode": "dynamic",
-        }.get(key, default)
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.side_effect = Exception("API down")
-        mock_get_service.return_value = mock_tvscreener
-        mock_get_config.return_value = mock_config
-
-        service = OptionsService()
-        result = service.get_effective_watchlist()
-
-        # Should fall back to static
-        self.assertEqual(result, ["AAPL", "TSLA"])
 
 
 class TestOptionsServiceConnectionConfig(unittest.TestCase):

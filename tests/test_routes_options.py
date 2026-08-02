@@ -898,30 +898,6 @@ class TestCashStatus(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestVixRegime(unittest.TestCase):
-    """GET /api/options/vix-regime"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_service = _patch_service()
-        self.mock_service._get_vix_regime.return_value = {"vix": 15.0, "regime": "low"}
-
-    @patch("api.routes.options.get_options_service")
-    def test_returns_vix_regime(self, mock_get_svc):
-        """Should return VIX regime data."""
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/vix-regime")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(data["success"])
-        self.assertEqual(data["vix_regime"]["vix"], 15.0)
-        self.assertEqual(data["vix_regime"]["regime"], "low")
-
-
 # ---------------------------------------------------------------------------
 # Analytics: lifecycle
 # ---------------------------------------------------------------------------

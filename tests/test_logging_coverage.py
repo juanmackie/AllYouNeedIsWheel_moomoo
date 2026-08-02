@@ -235,7 +235,6 @@ class TestApiLogging(unittest.TestCase):
         database.db_path = ":memory:"
 
         with (
-            patch("api.get_service", side_effect=RuntimeError("tvscreener down")),
             patch("api.sqlite3.connect", return_value=mock_conn),
             patch("api.probe_opend_status", side_effect=RuntimeError("opend down")),
         ):
@@ -249,10 +248,8 @@ class TestApiLogging(unittest.TestCase):
                     data = resp.get_json()
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(data["tvscreener"], "error")
         self.assertEqual(data["database"], "error")
         self.assertEqual(data["opend"], "error")
-        self.assertTrue(any("Health check tvscreener probe failed" in msg for msg in log.output))
         self.assertTrue(any("Health check database probe failed" in msg for msg in log.output))
         self.assertTrue(any("Health check OpenD probe failed" in msg for msg in log.output))
 

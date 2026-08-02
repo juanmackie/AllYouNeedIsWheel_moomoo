@@ -13,12 +13,8 @@ class TestApiHealth(unittest.TestCase):
         database = MagicMock()
         database.db_path = db_path
 
-        mock_tvscreener = MagicMock()
-        mock_tvscreener._ensure_initialized.return_value = True
-
         with (
             patch("api._register_services"),
-            patch("api.get_service", return_value=mock_tvscreener),
             patch("api.probe_opend_status", return_value={"status": "connected"}),
         ):
             app = create_app(
@@ -35,9 +31,9 @@ class TestApiHealth(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(data["status"], "healthy")
-        self.assertEqual(data["tvscreener"], "available")
         self.assertEqual(data["database"], "available")
         self.assertEqual(data["opend"], "connected")
+        self.assertNotIn("tvscreener", data)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@
  */
 import { fetchTopRecommendations } from './api.js';
 import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
-import { getMacroData } from './macro.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
 import StateModel from '../utils/state-model.js';
 
@@ -357,19 +356,6 @@ function createRecommendationCard(rec) {
         researchOnlyBadge.classList.remove('d-none');
     }
 
-    // Underlying quality badge
-    const qualityBadge = clone.querySelector('.underlying-quality-badge');
-    if (rec.underlying_quality && rec.underlying_quality !== 'unknown') {
-        const qualityClasses = { strong: 'bg-success', mixed: 'bg-info', weak: 'bg-danger' };
-        const qualityLabels = { strong: 'Strong underlying', mixed: 'Mixed underlying', weak: 'Weak underlying' };
-        qualityBadge.textContent = qualityLabels[rec.underlying_quality] || rec.underlying_quality;
-        qualityBadge.classList.add(qualityClasses[rec.underlying_quality] || 'bg-secondary');
-        qualityBadge.classList.remove('d-none');
-        if (rec.underlying_warnings && rec.underlying_warnings.length > 0 && rec.underlying_warnings[0] !== 'none') {
-            qualityBadge.title = rec.underlying_warnings.join(', ');
-        }
-    }
-
     // Data source + freshness
     const sourceEl = clone.querySelector('.signal-data-source');
     const sourceInfo = getDataSourceInfo(rec);
@@ -428,9 +414,9 @@ function createRecommendationCard(rec) {
         ivRankEl.textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
     }
 
-    // Macro impact line
+    // Macro impact line (macro enrichment is out of scope; always neutral)
     const macroImpactEl = clone.querySelector('.macro-impact');
-    const macroData = getMacroData();
+    const macroData = null;
     if (macroImpactEl && rec.macro_multiplier != null && macroData) {
         const multiplier = rec.macro_multiplier;
         const impactPct = ((multiplier - 1.0) * 100).toFixed(0);

@@ -54,6 +54,23 @@ from core.scoring_factors import (
 logger = logging.getLogger(__name__)
 
 
+def disabled_macro_context() -> dict:
+    """Macro/FRED enrichment is out of scope; return an explicit disabled
+    context so call sites never depend on a live macro service."""
+    return {
+        "rate_regime": "unknown",
+        "credit_stress": "unknown",
+        "growth_regime": "unknown",
+        "inflation_trend": "unknown",
+        "yield_curve_slope": 0,
+        "macro_multiplier": 1.0,
+        "summary": "",
+        "advice": "",
+        "enabled": False,
+        "macro_regime": "unknown",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------

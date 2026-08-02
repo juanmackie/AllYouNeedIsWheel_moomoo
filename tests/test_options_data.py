@@ -41,11 +41,9 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
             portfolio_context_provider=MagicMock(),
         )
 
-    @patch("api.services.options_data.get_macro_service")
     @patch("api.services.options_data.score_contract")
-    def test_build_candidate_filters_hard_blocked_contracts(self, mock_score, mock_macro):
+    def test_build_candidate_filters_hard_blocked_contracts(self, mock_score):
         service = self._make_service()
-        mock_macro.return_value.get_macro_regime.return_value = {}
 
         decision = MagicMock()
         decision.ticker = "AAPL"
@@ -78,11 +76,9 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch("api.services.options_data.get_macro_service")
     @patch("api.services.options_data.score_contract")
-    def test_build_candidate_preserves_yfinance_provenance(self, mock_score, mock_macro):
+    def test_build_candidate_preserves_yfinance_provenance(self, mock_score):
         service = self._make_service()
-        mock_macro.return_value.get_macro_regime.return_value = {}
 
         decision = MagicMock()
         decision.ticker = "AAPL"
@@ -218,11 +214,9 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         )
         self.assertLess(result["puts"][0]["annualized_return"], result["puts"][1]["annualized_return"])
 
-    @patch("api.services.options_data.get_macro_service")
     @patch("api.services.options_data.score_contract")
-    def test_build_candidate_blocks_low_confidence_yfinance_fallback(self, mock_score, mock_macro):
+    def test_build_candidate_blocks_low_confidence_yfinance_fallback(self, mock_score):
         service = self._make_service()
-        mock_macro.return_value.get_macro_regime.return_value = {}
 
         decision = MagicMock()
         decision.ticker = "AAPL"
@@ -301,9 +295,8 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch("api.services.options_data.get_macro_service")
     @patch("api.services.options_data.score_contract")
-    def test_direct_candidate_scoring_uses_growth_profile_from_toggle(self, mock_score, mock_macro):
+    def test_direct_candidate_scoring_uses_growth_profile_from_toggle(self, mock_score):
         service = self._make_service(
             {
                 "cash_reserve_enabled": True,
@@ -317,7 +310,6 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
                 },
             }
         )
-        mock_macro.return_value.get_macro_regime.return_value = {}
 
         decision = MagicMock()
         decision.ticker = "INTC"

@@ -9,7 +9,6 @@ from datetime import datetime
 
 import pandas as pd
 
-from api.services.macro_regime_service import get_macro_service
 from api.services.utils import (
     clean_yfinance_ticker,
     get_yfinance_history,
@@ -19,7 +18,7 @@ from api.services.utils import (
 from core.growth_mode import should_block_for_data_quality
 from core.scoring_factors import premium_velocity_per_day
 from core.utils import get_closest_friday, is_market_open
-from core.wheel_decision import score_contract
+from core.wheel_decision import disabled_macro_context, score_contract
 
 logger = logging.getLogger("api.services.options_data")
 
@@ -256,8 +255,7 @@ class OptionsDataService:
         Delegates to the unified WheelDecision engine, then converts
         the result back to the legacy dict format for API compatibility.
         """
-        # Gather IV / earnings / macro context
-        portfolio_context.get("vix_regime")
+        # Gather IV / earnings context (macro enrichment is out of scope)
         option["expiration"] = _normalize_expiration(option.get("expiration", ""))
 
         if option.get("implied_volatility", 0) > 0:
@@ -279,7 +277,7 @@ class OptionsDataService:
         )
         earnings_adjustment, earnings_warning = self.iv_earnings_service.get_earnings_score_impact(ticker)
         earnings_info = self.iv_earnings_service.get_earnings_info(ticker)
-        macro_regime = get_macro_service().get_macro_regime()
+        macro_regime = disabled_macro_context()
 
         # -- Enrich option with yfinance IV and computed BS Greeks --------------
         from core.greeks import prepare_option_for_scoring

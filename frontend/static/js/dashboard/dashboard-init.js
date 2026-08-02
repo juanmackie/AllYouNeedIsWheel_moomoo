@@ -4,14 +4,10 @@
  */
 import { loadPortfolioData } from './account.js';
 import { initializeTopRecommendations, isBackendGenerating } from './top-recommendations.js';
-import { initializeLLMAdvisor } from './llm-advisor.js';
 import { formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
-import { updateWeeklyEarningsSummary } from './dashboard-regime.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
-import { loadMacroRegime } from './macro.js';
-import { loadVixRegime } from './dashboard-regime.js';
 
 let signalPanelsInitialized = false;
 
@@ -52,9 +48,6 @@ export async function initializeDashboard() {
         showWaveLoading('wave3', 'Loading market data...');
         try {
             await Promise.all([
-                loadMacroRegime(),
-                loadVixRegime(),
-                updateWeeklyEarningsSummary(),
                 updateIdleCashPanel()
             ]);
         } catch (error) { console.error('Wave 3 error:', error); }
@@ -104,12 +97,6 @@ async function initializeSignalPanels() {
         console.error('Failed to load weekly income:', err);
     });
 
-    import('./earnings-vol-signals.js').then(mod => {
-        mod.initializeEarningsVolSignals();
-    }).catch(err => {
-        console.error('Failed to load earnings-vol-signals:', err);
-    });
-
     import('./options-table.js').then(mod => {
         const loadBtn = document.getElementById('load-options-scanner');
         if (loadBtn && !loadBtn.dataset.bound) {
@@ -136,14 +123,6 @@ async function initializeSignalPanels() {
         }
     }).catch(err => {
         console.error('Options table error:', err);
-    });
-
-    import('./catalyst-watch.js').then(mod => {
-        mod.initializeCatalystWatch().catch(err => {
-            console.error('Catalyst watch error:', err);
-        });
-    }).catch(err => {
-        console.error('Catalyst watch error:', err);
     });
 }
 

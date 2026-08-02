@@ -8,7 +8,6 @@ import logging
 from api.services.options_data import OptionsDataService
 from api.services.portfolio_context import PortfolioContext
 from api.services.recommendations import RecommendationEngine
-from api.services.vix_regime_service import VixRegimeService
 from api.services.watchlist_manager import WatchlistManager
 
 logger = logging.getLogger("api.services.options")
@@ -36,12 +35,10 @@ class OptionsService:
         # Initialize composed services with explicit dependencies
         # Order matters: leaf dependencies first, then consumers
         self.watchlist_manager = WatchlistManager(config_provider=self)
-        self.vix_regime_service = VixRegimeService(
-            config_provider=self,
-        )
+        # VIX/macro enrichment removed: wheel decisions use broker truth only.
         self.portfolio_context_helper = PortfolioContext(
             portfolio_service_provider=self,
-            vix_regime_provider=self.vix_regime_service,
+            vix_regime_provider=None,
             config_provider=self,
         )
         self.options_data = OptionsDataService(
@@ -186,9 +183,6 @@ class OptionsService:
     def _get_fallback_stock_price(self, portfolio_context, ticker):
         """Get fallback stock price (delegates to portfolio_context_helper)"""
         return self.portfolio_context_helper._get_fallback_stock_price(portfolio_context, ticker)
-
-    def _get_vix_regime(self):
-        return self.vix_regime_service.get_vix_regime()
 
     def _sanitize_result(self, result):
         """Sanitize result to remove NaN values"""

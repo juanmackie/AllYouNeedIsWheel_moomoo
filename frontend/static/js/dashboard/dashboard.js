@@ -8,8 +8,6 @@
 import { loadPortfolioData } from './account.js';
 import { loadTickers } from './options-table.js';
 import { initializeTopRecommendations } from './top-recommendations.js';
-import { loadMacroRegime } from './macro.js';
-import { initializeLLMAdvisor } from './llm-advisor.js';
 import { showAlert } from '../utils/alerts.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { formatCurrency } from '../utils/formatters.js';
@@ -17,7 +15,6 @@ import { initializeDashboard } from './dashboard-init.js';
 
 export { initializeDashboard };
 export { updateCashReserveStatus, updateIdleCashPanel } from './dashboard-cash.js';
-export { loadLockedTickers, loadVixRegime, updateWeeklyEarningsSummary } from './dashboard-regime.js';
 
 export let weeklyIncomeData = null;
 

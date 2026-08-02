@@ -395,9 +395,9 @@ class RecommendationEngine:
         if stock_price is None or stock_price <= 0:
             return {"calls": [], "puts": []}
 
-        from api.services.macro_regime_service import get_macro_service
+        from core.wheel_decision import disabled_macro_context
 
-        macro_regime = get_macro_service().get_macro_regime()
+        macro_regime = disabled_macro_context()
         growth_cfg = getattr(self, "_growth_screener_config", None)
         results = {"calls": [], "puts": []}
 
@@ -627,9 +627,9 @@ class RecommendationEngine:
             valid_expirations.sort(key=lambda x: abs(pref_dte - x[1]))
             expirations_to_check = valid_expirations[:2]
 
-            from api.services.macro_regime_service import get_macro_service
+            from core.wheel_decision import disabled_macro_context
 
-            macro_regime = get_macro_service().get_macro_regime()
+            macro_regime = disabled_macro_context()
 
             candidates = []
             seen = set()
@@ -864,9 +864,9 @@ class RecommendationEngine:
             candidates = []
             blocked_count = 0
 
-            from api.services.macro_regime_service import get_macro_service
+            from core.wheel_decision import disabled_macro_context
 
-            macro_regime = get_macro_service().get_macro_regime()
+            macro_regime = disabled_macro_context()
 
             for target_exp in expirations_to_check:
                 try:
@@ -1627,9 +1627,8 @@ class RecommendationEngine:
                 )
 
             enrichment_hint = {
-                "mode": "on_demand",
-                "overlay_endpoint": "/api/signals/overlay",
-                "removed_from_hot_path": ["catalyst_warnings", "underlying_quality", "signal_overlay"],
+                "mode": "none",
+                "removed_from_hot_path": ["catalyst_warnings", "underlying_quality", "signal_overlay", "macro"],
             }
 
             # Record scan ledger entry (non-blocking)

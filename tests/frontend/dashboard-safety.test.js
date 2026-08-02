@@ -64,28 +64,6 @@ describe('dashboard rendering safety', () => {
     expect(list.innerHTML).not.toContain('<img src=x onerror=alert(1)>');
   });
 
-  it('escapes API-fed locked ticker content in the regime panel', async () => {
-    setupRegimeDOM();
-    fetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        success: true,
-        locked: [{
-          ticker: '<svg onload=alert(1)>',
-          earnings_date: '<script>evil()</script>',
-          days_to_earnings: 5,
-        }],
-      }),
-    });
-
-    const { loadLockedTickers } = await import('../../frontend/static/js/dashboard/dashboard-regime.js');
-    await loadLockedTickers();
-
-    const list = document.getElementById('locked-tickers-list');
-    expect(list.innerHTML).toContain('&lt;svg onload=alert(1)&gt;');
-    expect(list.innerHTML).not.toContain('<svg onload=alert(1)>');
-  });
-
   it('escapes state-model messages before injecting HTML', async () => {
     setupStateDOM();
 

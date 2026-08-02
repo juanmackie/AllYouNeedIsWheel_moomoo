@@ -50,11 +50,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ["AAPL"])
 
-    @patch.object(WatchlistManager, "_get_tvscreener_service")
-    def test_dynamic_mode(self, mock_get_tvscreener):
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.return_value = ["GME", "AMC"]
-        mock_get_tvscreener.return_value = mock_tvscreener
+    def test_dynamic_mode_is_unsupported_and_falls_back_to_static(self):
+        """Broad dynamic screening is out of scope; dynamic mode returns static."""
         self.mock_context.config = {
             "watchlist": ["AAPL"],
             "watchlist_mode": "dynamic",
@@ -68,24 +65,15 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         result = manager.get_effective_watchlist()
 
-        self.assertEqual(result, ["GME", "AMC"])
-        mock_tvscreener.get_wheel_candidates.assert_called_once_with(
-            min_volatility_pct=3.0, min_volume=1000000, limit=50, max_price=None
-        )
+        self.assertEqual(result, ["AAPL"])
 
-    @patch.object(WatchlistManager, "_get_tvscreener_service")
-    def test_hybrid_mode(self, mock_get_tvscreener):
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.return_value = ["AMC", "BB"]
-        mock_get_tvscreener.return_value = mock_tvscreener
+    @patch.object(WatchlistManager, "_fetch_moomoo_watchlist")
+    def test_hybrid_mode_unions_moomoo_and_static(self, mock_fetch_moomoo):
+        """Hybrid mode is the union of the Moomoo group and the static list."""
+        mock_fetch_moomoo.return_value = ["AMC", "BB"]
         self.mock_context.config = {
             "watchlist": ["AAPL", "TSLA"],
             "watchlist_mode": "hybrid",
-            "screening_criteria": {
-                "min_volatility_pct": 2.0,
-                "min_volume": 500000,
-                "max_stocks": 30,
-            },
         }
         manager = WatchlistManager(self.mock_context)
 
@@ -97,11 +85,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
         self.assertIn("AMC", result)
         self.assertIn("BB", result)
 
-    @patch.object(WatchlistManager, "_get_tvscreener_service")
-    def test_dynamic_failure_falls_back_to_static(self, mock_get_tvscreener):
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.side_effect = Exception("Rate limited")
-        mock_get_tvscreener.return_value = mock_tvscreener
+    def test_dynamic_failure_falls_back_to_static(self):
+        """Any dynamic-mode failure falls back to the static watchlist."""
         self.mock_context.config = {
             "watchlist": ["AAPL"],
             "watchlist_mode": "dynamic",
@@ -112,12 +97,10 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ["AAPL"])
 
-    @patch.object(WatchlistManager, "_get_tvscreener_service")
-    def test_dynamic_no_service_falls_back(self, mock_get_tvscreener):
-        mock_get_tvscreener.return_value = None
+    def test_unknown_mode_falls_back_to_static(self):
         self.mock_context.config = {
             "watchlist": ["AAPL"],
-            "watchlist_mode": "dynamic",
+            "watchlist_mode": "quantum",
         }
         manager = WatchlistManager(self.mock_context)
 
@@ -217,57 +200,6 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
         result = manager.get_effective_watchlist()
 
         self.assertEqual(result, ["AMD"])
-
-    @patch.object(WatchlistManager, "_get_tvscreener_service")
-    def test_dynamic_mode_passes_max_price_from_portfolio_context(self, mock_get_tvscreener):
-        """Dynamic watchlist passes max_price to tvscreener when portfolio_context is provided."""
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.return_value = ["CHEAP1", "CHEAP2"]
-        mock_get_tvscreener.return_value = mock_tvscreener
-        self.mock_context.config = {
-            "watchlist": ["AAPL"],
-            "watchlist_mode": "dynamic",
-            "screening_criteria": {
-                "min_volatility_pct": 3.0,
-                "min_volume": 1000000,
-                "max_stocks": 50,
-            },
-        }
-        portfolio = {"cash_available_for_csp": 11358.0}
-        manager = WatchlistManager(self.mock_context)
-
-        result = manager.get_effective_watchlist(portfolio_context=portfolio)
-
-        self.assertEqual(result, ["CHEAP1", "CHEAP2"])
-        # max_price = 11358 / 100 / 0.85 ≈ 133.62
-        expected_max_price = 11358 / 100 / (1 - 15 / 100)
-        mock_tvscreener.get_wheel_candidates.assert_called_once_with(
-            min_volatility_pct=3.0, min_volume=1000000, limit=50, max_price=expected_max_price
-        )
-
-    @patch.object(WatchlistManager, "_get_tvscreener_service")
-    def test_dynamic_mode_no_max_price_without_portfolio_context(self, mock_get_tvscreener):
-        """Dynamic watchlist passes max_price=None when no portfolio_context."""
-        mock_tvscreener = MagicMock()
-        mock_tvscreener.get_wheel_candidates.return_value = ["GME", "AMC"]
-        mock_get_tvscreener.return_value = mock_tvscreener
-        self.mock_context.config = {
-            "watchlist": ["AAPL"],
-            "watchlist_mode": "dynamic",
-            "screening_criteria": {
-                "min_volatility_pct": 3.0,
-                "min_volume": 1000000,
-                "max_stocks": 50,
-            },
-        }
-        manager = WatchlistManager(self.mock_context)
-
-        result = manager.get_effective_watchlist()
-
-        self.assertEqual(result, ["GME", "AMC"])
-        mock_tvscreener.get_wheel_candidates.assert_called_once_with(
-            min_volatility_pct=3.0, min_volume=1000000, limit=50, max_price=None
-        )
 
 
 class TestWatchlistManagerScreeningProfile(unittest.TestCase):

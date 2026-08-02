@@ -353,16 +353,11 @@ class TestRecommendationEngine(unittest.TestCase):
         with (
             patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[csp]),
             patch.object(engine, "_fetch_watchlist_long_options", return_value={"calls": [], "puts": []}),
-            patch("api.services.catalyst_flow_service.CatalystFlowService") as mock_catalyst_svc,
-            patch("api.services.underlying_quality.get_underlying_quality") as mock_quality,
         ):
             result = engine.get_top_recommendations(limit=5)
 
         self.assertEqual(result["watchlist_csps"]["count"], 1)
-        self.assertEqual(result["enrichment"]["mode"], "on_demand")
-        self.assertEqual(result["enrichment"]["overlay_endpoint"], "/api/signals/overlay")
-        mock_catalyst_svc.assert_not_called()
-        mock_quality.assert_not_called()
+        self.assertEqual(result["enrichment"]["mode"], "none")
 
     def test_get_top_recommendations_processes_positions(self):
         engine = self._import_engine()
@@ -872,9 +867,7 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             patch.object(engine, "_get_connection", return_value=FakeConnection()),
             patch.object(engine, "_score_csp_contract", return_value=fake_decision),
             patch("api.services.recommendations.is_market_open", return_value=True),
-            patch("api.services.macro_regime_service.get_macro_service") as mock_macro_service,
         ):
-            mock_macro_service.return_value.get_macro_regime.return_value = {"regime": "normal"}
             result = engine._fetch_watchlist_csp_moomoo("AAPL", self.mock_portfolio_context)
 
         self.assertIsInstance(result, list)

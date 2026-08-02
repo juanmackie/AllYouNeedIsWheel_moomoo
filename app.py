@@ -17,7 +17,6 @@ from api import create_app
 from config import apply_env_overrides
 from core.background_manager import BackgroundTaskManager
 from core.logging_config import get_logger
-from core.ticker_utils import earnings_underlying_ticker
 from db.database import OptionsDatabase
 
 # Configure logging
@@ -39,51 +38,6 @@ def _resolve_local_path(path_value, base_dir):
     if os.path.isabs(path_value):
         return path_value
     return os.path.join(base_dir, path_value)
-
-
-def _build_scheduler_earnings_ticker_provider(app):
-    def _provider():
-        from api import get_service
-        from api.services.watchlist_manager import WatchlistManager
-
-        tickers = set()
-
-        portfolio_service = get_service("portfolio")
-        positions = portfolio_service.get_positions() or []
-        for position in positions:
-            normalized = earnings_underlying_ticker(str(position.get("symbol", "") or "").strip())
-            if normalized:
-                tickers.add(normalized)
-
-        connection_config = app.config.get("connection_config", {})
-        watchlist_manager = WatchlistManager(connection_config)
-        growth_mode = connection_config.get("growth_mode", {})
-        for ticker in watchlist_manager.get_effective_watchlist(growth_mode_config=growth_mode) or []:
-            normalized = earnings_underlying_ticker(str(ticker).strip())
-            if normalized:
-                tickers.add(normalized)
-
-        return sorted(tickers)
-
-    return _provider
-
-
-def _build_scheduler_warm_cache_provider():
-    def _provider():
-        from api import get_service
-
-        return get_service("options")
-
-    return _provider
-
-
-def _build_scheduler_earnings_service_provider():
-    def _provider(db):
-        from api.services.iv_earnings_service import IVEarningsService
-
-        return IVEarningsService(db)
-
-    return _provider
 
 
 # Create Flask application with necessary configs
@@ -214,7 +168,7 @@ def ensure_app():
 
 
 def start_runtime(app):
-    """Start runtime services (safety gate, health monitor, scheduler).
+    """Start runtime services (health monitor).
 
     Called only from explicit entry points (run_api.py, python app.py).
     Importing this module or ensure_app() must NOT start threads or
@@ -226,25 +180,6 @@ def start_runtime(app):
         atexit.register(task_manager.stop_health_monitor)
     except Exception as e:
         logger.error(f"Failed to start health monitor: {e}")
-
-    # Start background scheduler (earnings updater)
-    try:
-        from core.scheduler import start_scheduler, stop_scheduler
-
-        started = start_scheduler(
-            db=app.config.get("database"),
-            app=app,
-            earnings_ticker_provider=_build_scheduler_earnings_ticker_provider(app),
-            earnings_service_provider=_build_scheduler_earnings_service_provider(),
-            warm_cache_service_provider=_build_scheduler_warm_cache_provider(),
-        )
-        if started:
-            logger.info("Background scheduler started (this process owns the lock)")
-        else:
-            logger.info("Background scheduler skipped (another process owns the lock)")
-        atexit.register(stop_scheduler)
-    except Exception as e:
-        logger.error(f"Failed to start background scheduler: {e}")
 
 
 if __name__ == "__main__":

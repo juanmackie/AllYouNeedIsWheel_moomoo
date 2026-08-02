@@ -10,6 +10,7 @@ from datetime import datetime
 from core.logging_config import get_logger
 from core.position_utils import parse_moomoo_symbol, parse_position_qty
 from core.ticker_utils import earnings_underlying_ticker
+from core.wheel_decision import disabled_macro_context
 
 logger = get_logger("api.services.portfolio_scoring", "api")
 
@@ -51,7 +52,6 @@ def build_portfolio_context(option_positions, portfolio_service):
 
 
 def score_position(pos, conn, portfolio_context, iv_earnings_service):
-    from api.services.macro_regime_service import get_macro_service
     from core.wheel_decision import score_existing_position
 
     ticker = parse_moomoo_symbol(pos.get("symbol", ""))
@@ -99,7 +99,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
         iv_earnings_service.record_iv_data(ticker, iv, current_price, option_type, expiration, dte)
     iv_env_adj, iv_rank, iv_status = iv_earnings_service.get_iv_environment_score(ticker, iv if iv > 0 else 0.20)
     earnings_adj, _ = iv_earnings_service.get_earnings_score_impact(ticker)
-    macro = get_macro_service().get_macro_regime()
+    macro = disabled_macro_context()
 
     decision = score_existing_position(
         ticker=ticker,

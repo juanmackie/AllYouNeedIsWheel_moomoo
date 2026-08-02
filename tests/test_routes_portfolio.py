@@ -48,13 +48,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         mock_ps = self._mock_connection_available()
         mock_get_ps.return_value = mock_ps
 
-        with patch("api.routes.portfolio.get_macro_service") as mock_macro:
-            mock_macro.return_value.get_macro_regime.return_value = {
-                "rate_regime": "normal",
-                "macro_multiplier": 1.0,
-                "enabled": False,
-            }
-            response = self.client.get("/api/portfolio/")
+        response = self.client.get("/api/portfolio/")
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
         self.assertIn("cash_balance", data)
