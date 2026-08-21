@@ -27,7 +27,7 @@
 - Use `conftest.py` fixtures where shared app/database setup already exists.
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
-- `test_recommendations.py` includes `test_get_top_recommendations_caps_scan_tickers_at_12` verifying the cold-scan ticker cap (`MAX_COLD_SCAN_TICKERS = 12`).
+- `test_recommendations.py` verifies complete watchlist-union scanning and deterministic quality/event-tier then executable-bid velocity ordering; infeasible unions publish `planning` rather than truncating.
 
 ## Verification
 

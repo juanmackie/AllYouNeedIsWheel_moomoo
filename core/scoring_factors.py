@@ -6,8 +6,13 @@ All functions are stateless helpers with no service dependencies.
 """
 
 import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+# US equity options trade on exchanges quoting in America/New_York time.
+NY_TZ = ZoneInfo("America/New_York")
 
 # ── Named constants for score thresholds ─────────────────────────────────
 # Extract these from magic numbers throughout wheel_decision.py.
@@ -128,6 +133,98 @@ def _calculate_mid_price(bid: float, ask: float, last: float = 0.0) -> float:
     if last > 0:
         return last
     return 0.0
+
+
+def parse_broker_timestamp(ts: object) -> "datetime | None":
+    """Parse a Moomoo broker ``update_time`` into a tz-aware datetime (NY).
+
+    Moomoo timestamps are quoted in the US exchange local time (Eastern).
+    Naive strings are localized to ``America/New_York``; already-aware values
+    are converted. Returns ``None`` when the value is missing or unparseable
+    so callers can fail closed.
+    """
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        dt = ts
+    else:
+        text = str(ts).strip()
+        if not text:
+            return None
+        candidate_formats = (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y/%m/%d %H:%M:%S",
+        )
+        dt = None
+        for fmt in candidate_formats:
+            try:
+                dt = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+        if dt is None:
+            # Last resort: let Python try ISO parsing.
+            try:
+                dt = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=NY_TZ)
+    return dt.astimezone(NY_TZ)
+
+
+def is_crossed_market(bid: float, ask: float) -> bool:
+    """Return True when the ask is below the bid (invalid broker quote)."""
+    try:
+        return float(ask or 0) < float(bid or 0)
+    except (TypeError, ValueError):
+        return False
+
+
+def quote_is_stale(
+    update_time: object,
+    as_of_utc: "datetime | None" = None,
+    max_age_sec: "int | None" = None,
+) -> bool:
+    """Return True when the broker quote timestamp is missing/invalid/stale.
+
+    ``as_of_utc`` should be the current UTC time; defaults to now. A quote with
+    no parseable broker time, or older than ``max_age_sec``, is stale.
+    """
+    if max_age_sec is None:
+        max_age_sec = STALE_QUOTE_THRESHOLD
+    parsed = parse_broker_timestamp(update_time)
+    if parsed is None:
+        return True
+    if as_of_utc is None:
+        as_of_utc = datetime.now(timezone.utc)
+    # Normalize the reference instant to NY for an apples-to-apples comparison.
+    as_of_ny = as_of_utc.astimezone(NY_TZ)
+    return (as_of_ny - parsed).total_seconds() > max_age_sec
+
+
+def classify_event_tier(earnings_info: dict | None, dte: float, security_type: str = "stock") -> str:
+    """Classify event evidence without creating an actionable external signal."""
+    kind = str(security_type or "stock").strip().lower()
+    if kind in {"etf", "index"}:
+        return "event_not_applicable"
+    if not isinstance(earnings_info, dict):
+        return "event_unknown"
+    if earnings_info.get("data_stale") or earnings_info.get("fetch_status") not in {"success"}:
+        return "event_unknown"
+    try:
+        days = int(earnings_info.get("days_to_earnings"))
+        days_to_expiry = int(dte)
+    except (TypeError, ValueError):
+        return "event_unknown"
+    if days > days_to_expiry:
+        return "event_safe"
+    if 0 <= days <= days_to_expiry:
+        return "earnings_before_expiry"
+    return "event_unknown"
 
 
 def premium_velocity_per_day(premium_per_contract: float, dte: float) -> float:
@@ -304,7 +401,9 @@ def _compute_recommended_contracts(decision, portfolio_context: dict) -> int:
     """
     account_value = max(float(portfolio_context.get("account_value", 0) or 0), ACCOUNT_VALUE_MIN)
     max(len(portfolio_context.get("positions", {})), 1)
-    max_contracts = max(decision.max_contracts, 1)
+    max_contracts = max(int(decision.max_contracts or 0), 0)
+    if max_contracts <= 0:
+        return 0
 
     if decision.option_type == "CALL":
         return max_contracts
@@ -312,7 +411,7 @@ def _compute_recommended_contracts(decision, portfolio_context: dict) -> int:
     cash_required = max(decision.cash_required, 1)
     position_target = account_value * 0.10
     by_value = max(int(position_target / cash_required), 1)
-    by_available = max(decision.max_contracts, 1)
+    by_available = max_contracts
 
     recommended = min(by_value, by_available)
     return max(recommended, 1)

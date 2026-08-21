@@ -7,6 +7,7 @@ POST /api/run/refresh      -> start one background refresh (serialized)
 
 from flask import Blueprint, jsonify
 
+from core.run_model import recompute_effective_snapshot
 from core.wheel_runner import start_background_refresh
 
 bp = Blueprint("run", __name__, url_prefix="/api/run")
@@ -30,7 +31,7 @@ def get_run_state():
     db = _get_db()
     attempt = db.get_latest_attempt() if db is not None else None
     snapshot = db.get_latest_snapshot() if db is not None else None
-    return jsonify({"attempt": attempt, "snapshot": snapshot})
+    return jsonify({"attempt": attempt, "snapshot": recompute_effective_snapshot(snapshot)})
 
 
 @bp.route("/refresh", methods=["POST"])

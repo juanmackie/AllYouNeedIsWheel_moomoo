@@ -25,6 +25,5 @@ export {
 } from './api-portfolio.js';
 
 export {
-    fetchOptionData, fetchStockPrices, fetchOptionExpirations,
-    fetchTopRecommendations
+    fetchOptionData, fetchStockPrices, fetchOptionExpirations
 } from './api-options.js';

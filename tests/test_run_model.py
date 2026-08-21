@@ -8,7 +8,13 @@ failed-refresh preservation, and snapshot persistence.
 import unittest
 from unittest.mock import MagicMock
 
-from core.run_model import RefreshAttempt, RunMetadata, WheelRunSnapshot, utc_now_iso
+from core.run_model import (
+    RefreshAttempt,
+    RunMetadata,
+    WheelRunSnapshot,
+    recompute_effective_snapshot,
+    utc_now_iso,
+)
 from core.wheel_runner import WheelRunner, opaque_account_id, resolve_account
 
 
@@ -95,6 +101,18 @@ class TestSnapshotTradeability(unittest.TestCase):
 
     def test_errors_not_tradeable(self):
         self.assertFalse(_make_snapshot(errors=("boom",)).tradeable)
+
+    def test_read_time_staleness_does_not_mutate_snapshot_payload(self):
+        from datetime import datetime, timedelta, timezone
+
+        fetched = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat()
+        snapshot = _make_snapshot().to_dict()
+        snapshot["run"]["quote_fetched_at"] = {"AAPL": fetched}
+        effective = recompute_effective_snapshot(snapshot, datetime.now(timezone.utc))
+        self.assertFalse(effective["tradeable"])
+        self.assertEqual(effective["effective_status"], "stale")
+        self.assertEqual(snapshot["run"]["status"], "ready")
+        self.assertEqual(snapshot["tradeable"], True)
 
     def test_stale_quotes_not_tradeable(self):
         from datetime import datetime, timezone

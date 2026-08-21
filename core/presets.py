@@ -70,7 +70,7 @@ class WheelPreset:
 WHEEL_PRESETS: dict[str, WheelPreset] = {
     "conservative": WheelPreset(
         key="conservative",
-        version=1,
+        version=2,
         label="Conservative",
         description="Stricter liquidity, smaller allocations, farther OTM strikes.",
         csp_target_delta=0.25,
@@ -90,7 +90,7 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
     ),
     "balanced": WheelPreset(
         key="balanced",
-        version=1,
+        version=2,
         label="Balanced",
         description="Moderate DTE/delta/liquidity and position-size limits (default).",
         csp_target_delta=0.30,
@@ -110,7 +110,7 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
     ),
     "aggressive": WheelPreset(
         key="aggressive",
-        version=1,
+        version=2,
         label="Aggressive",
         description="Shorter DTE, broader deltas, and larger allocations.",
         csp_target_delta=0.35,

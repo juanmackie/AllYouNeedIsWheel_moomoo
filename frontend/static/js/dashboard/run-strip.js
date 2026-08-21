@@ -47,7 +47,7 @@ export async function loadRunStrip() {
             if (coverageEl) coverageEl.textContent = `stage: ${attempt.stage}`;
         } else if (snapshot?.run) {
             const run = snapshot.run;
-            const status = run.status || 'stale';
+            const status = snapshot.effective_status || (snapshot.tradeable ? run.status : 'stale');
             setBadge('run-env', run.env || '--', run.env === 'REAL' ? 'bg-danger' : 'bg-secondary');
             setBadge('run-market', `MARKET ${(run.market_state || 'unknown').toUpperCase()}`, 'bg-secondary');
             setBadge('run-status', status.toUpperCase(), STATUS_CLASSES[status] || 'bg-secondary');

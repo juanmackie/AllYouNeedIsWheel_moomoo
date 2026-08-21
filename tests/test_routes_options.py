@@ -489,248 +489,6 @@ class TestExpirations(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Top recommendations
-# ---------------------------------------------------------------------------
-
-
-class TestTopRecommendations(unittest.TestCase):
-    """GET /api/options/top-recommendations — most complex endpoint"""
-
-    def setUp(self):
-        _reset_service_global()
-        self.mock_service = _patch_service()
-        self.mock_service.get_top_recommendations.return_value = {"signals": [{"ticker": "AAPL", "score": 85}]}
-        self.mock_service._get_portfolio_context.return_value = {"cash_balance": 10000, "positions": {}}
-
-    @patch("api.routes.options._generate_in_background")
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_returns_recommendations_cache_miss(self, mock_cache, mock_probe, mock_get_svc, mock_gen):
-        """Should return generating signal on cache miss with no stale fallback."""
-        mock_probe.return_value = {"status": "connected"}
-        mock_cache.get.return_value = (None, {"cache_status": "MISS"})
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/top-recommendations")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 202)
-        self.assertTrue(data.get("generating"))
-        self.assertEqual(data.get("message"), "Signals are being computed. Check back shortly.")
-        self.mock_service._get_portfolio_context.assert_called_once_with(refresh=False)
-        mock_gen.assert_called_once()
-
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_returns_cached_recommendations(self, mock_cache, mock_probe, mock_get_svc):
-        """Should return cached recommendations on cache hit."""
-        mock_probe.return_value = {"status": "connected"}
-        cached_data = {
-            "signals": [{"ticker": "AAPL", "score": 85}],
-        }
-        mock_cache.get.return_value = (
-            cached_data,
-            {
-                "cache_status": "HIT",
-                "cache_age_seconds": 10,
-                "portfolio_changed": False,
-                "is_valid": True,
-                "background_refresh_failed": False,
-                "cached_at": "2026-01-01",
-            },
-        )
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/top-recommendations")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(data["_cache"]["cache_status"], "HIT")
-        self.mock_service._get_portfolio_context.assert_called_once_with(refresh=False)
-        # Should NOT call get_top_recommendations (cache hit)
-        self.mock_service.get_top_recommendations.assert_not_called()
-
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_stale_cache_triggers_background_refresh(self, mock_cache, mock_probe, mock_get_svc):
-        """Should serve stale cache and trigger background refresh."""
-        mock_probe.return_value = {"status": "connected"}
-        cached_data = {
-            "signals": [{"ticker": "AAPL", "score": 85}],
-        }
-        mock_cache.get.return_value = (
-            cached_data,
-            {
-                "cache_status": "STALE",
-                "cache_age_seconds": 400,
-                "portfolio_changed": False,
-                "is_valid": True,
-                "background_refresh_failed": False,
-                "cached_at": "2026-01-01",
-            },
-        )
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/top-recommendations")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(data["_cache"]["cache_status"], "STALE")
-        # Background refresh runs in a daemon thread; the main response
-        # comes from cache. Store the call count for reference.
-        self.assertEqual(data["signals"][0]["ticker"], "AAPL")
-
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_manual_refresh_bypasses_cache(self, mock_cache, mock_probe, mock_get_svc):
-        """Should bypass cache when refresh=true and return generating signal."""
-        mock_probe.return_value = {"status": "connected"}
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/top-recommendations", query_string={"refresh": "true"})
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 202)
-        self.assertTrue(data.get("generating"))
-        self.assertEqual(data.get("message"), "Signals are being computed. Check back shortly.")
-
-    @patch("api.routes.options._generate_in_background")
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_fallback_to_stale_on_failure(self, mock_cache, mock_probe, mock_get_svc, mock_gen):
-        """Should return stale cache as fallback when fresh fetch fails.
-
-        Flow: cache miss → fresh generation starts in background →
-              stale fallback returned immediately.
-        """
-        mock_probe.return_value = {"status": "connected"}
-        self.mock_service.get_top_recommendations.return_value = {"error": "API timeout"}
-        stale_data = {
-            "signals": [{"ticker": "AAPL", "score": 80}],
-        }
-        # First call (from the main cache check) returns MISS
-        # Second call (from the stale fallback handler) returns stale data
-        mock_cache.get.side_effect = [
-            (
-                None,
-                {
-                    "cache_status": "MISS",
-                    "cache_age_seconds": 0,
-                    "portfolio_changed": False,
-                    "is_valid": True,
-                    "background_refresh_failed": False,
-                    "cached_at": "",
-                },
-            ),
-            (
-                stale_data,
-                {
-                    "cache_status": "STALE",
-                    "cache_age_seconds": 500,
-                    "portfolio_changed": False,
-                    "is_valid": True,
-                    "background_refresh_failed": False,
-                    "cached_at": "2026-01-01",
-                },
-            ),
-        ]
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/top-recommendations")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(data["_cache"]["cache_status"], "STALE_FALLBACK")
-        # The stale data should be served despite API failure
-        self.assertEqual(data["signals"][0]["ticker"], "AAPL")
-
-    @patch("api.routes.options._generate_in_background")
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_enforces_limit_range(self, mock_cache, mock_probe, mock_get_svc, mock_gen):
-        """Should clamp limit between 1 and 10."""
-        mock_probe.return_value = {"status": "connected"}
-        mock_cache.get.return_value = (None, {"cache_status": "MISS"})
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            client.get("/api/options/top-recommendations", query_string={"limit": "100"})
-
-        # Should clamp to 10 when passed to background generation
-        mock_gen.assert_called_once()
-        args, kwargs = mock_gen.call_args
-        _, limit, _ = args
-        self.assertEqual(limit, 10)
-
-    @patch("api.routes.options._generate_in_background")
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_generating_on_cache_miss(self, mock_cache, mock_probe, mock_get_svc, mock_gen):
-        """Should return 202 generating when cache is cold (no stale fallback)."""
-        mock_probe.return_value = {"status": "connected"}
-        mock_cache.get.return_value = (
-            None,
-            {
-                "cache_status": "MISS",
-                "cache_age_seconds": 0,
-                "portfolio_changed": False,
-                "is_valid": True,
-                "background_refresh_failed": False,
-                "cached_at": "",
-            },
-        )
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/top-recommendations")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 202)
-        self.assertTrue(data.get("generating"))
-        self.assertEqual(data.get("message"), "Signals are being computed. Check back shortly.")
-        # Background generation should have been started
-        mock_gen.assert_called_once()
-
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.routes.options.recommendation_cache")
-    def test_opend_unavailable_503(self, mock_cache, mock_probe, mock_get_svc):
-        """Should return 503 when OpenD is unavailable."""
-        mock_probe.return_value = {"status": "unavailable", "message": "OpenD down."}
-        mock_get_svc.return_value = self.mock_service
-
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/top-recommendations")
-
-        self.assertEqual(resp.status_code, 503)
-        data = resp.get_json()
-        self.assertFalse(data["success"])
-        self.assertIn("error_code", data)
-        self.assertEqual(data["error_code"], "opend_unavailable")
-        self.assertIn("opend_status", data)
-
-
-# ---------------------------------------------------------------------------
 # Cash status
 # ---------------------------------------------------------------------------
 
@@ -755,6 +513,15 @@ class TestCashStatus(unittest.TestCase):
         mock_portfolio.get_portfolio_summary.return_value = {"cash_balance": 50000}
         mock_portfolio.get_positions.return_value = []
         mock_portfolio_cls.return_value = mock_portfolio
+        self.mock_service._get_portfolio_context.return_value = {
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "cash_reserved_for_csp": 0.0,
+            "cash_available_for_csp": 50000.0,
+            "broker_buying_power": 0.0,
+            "broker_buying_power_source": "none",
+            "excess_liquidity": 0.0,
+        }
 
         app = _make_app()
         with app.test_client() as client:
@@ -787,6 +554,15 @@ class TestCashStatus(unittest.TestCase):
             }
         ]
         mock_portfolio_cls.return_value = mock_portfolio
+        self.mock_service._get_portfolio_context.return_value = {
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "cash_reserved_for_csp": 30000.0,
+            "cash_available_for_csp": 20000.0,
+            "broker_buying_power": 0.0,
+            "broker_buying_power_source": "none",
+            "excess_liquidity": 0.0,
+        }
 
         app = _make_app()
         with app.test_client() as client:
@@ -796,7 +572,9 @@ class TestCashStatus(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         # cash_reserved = 2 contracts * 150 strike * 100 = 30000
         self.assertEqual(data["cash_reserved"], 30000.0)
-        self.assertEqual(data["cash_available"], 20000.0)
+        # cash_available is true available cash; cash_available_for_csp is deployable (minus reserved).
+        self.assertEqual(data["cash_available"], 50000.0)
+        self.assertEqual(data["cash_available_for_csp"], 20000.0)
         self.assertEqual(len(data["open_puts"]), 1)
 
     @patch("api.routes.options.get_options_service")
@@ -1047,6 +825,15 @@ class TestCashStatusCSPFields(unittest.TestCase):
             }
         ]
         mock_portfolio_cls.return_value = mock_portfolio
+        self.mock_service._get_portfolio_context.return_value = {
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "cash_reserved_for_csp": 15000.0,
+            "cash_available_for_csp": 40000.0,
+            "broker_buying_power": 55000.0,
+            "broker_buying_power_source": "excess_liquidity",
+            "excess_liquidity": 55000.0,
+        }
 
         app = _make_app()
         with app.test_client() as client:
@@ -1081,6 +868,15 @@ class TestCashStatusCSPFields(unittest.TestCase):
         }
         mock_portfolio.get_positions.return_value = []
         mock_portfolio_cls.return_value = mock_portfolio
+        self.mock_service._get_portfolio_context.return_value = {
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "cash_reserved_for_csp": 0.0,
+            "cash_available_for_csp": 50000.0,
+            "broker_buying_power": 50000.0,
+            "broker_buying_power_source": "available_cash",
+            "excess_liquidity": 50000.0,
+        }
 
         app = _make_app()
         with app.test_client() as client:

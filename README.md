@@ -32,9 +32,15 @@ manual copy-to-ticket suggestions for your broker UI.
   canonicalized and source-labelled. If the union cannot fit the OpenD quota
   and freshness window, the run is **planning** and directs you to reduce a
   source list — it never silently truncates and claims a global top three.
-- Unknown optional risk metadata (e.g. earnings timing) is kept `unknown` and
-  ranks the candidate below known-risk candidates; raw premium velocity
-  ranks within each tier.
+- Each hard-gate-passing candidate is classified as `qualified` or `marginal`,
+  then receives an event tier (`event_safe`, `event_not_applicable`,
+  `earnings_before_expiry`, or `event_unknown`). Ordering is quality tier,
+  event tier, executable bid premium velocity (`bid × 100 ÷ DTE`), then stable
+  ticker/expiry/strike keys. Composite score cannot override that order.
+- Moomoo `update_time` is preserved verbatim and interpreted in
+  `America/New_York`; UTC fetch time is carried separately. Missing/invalid/
+  stale broker time blocks actionable candidates while the market is open.
+  Midpoint is shown only as a non-guaranteed limit target.
 - Market-closed results are planning previews: visible, read-only, not
   copyable.
 
@@ -56,18 +62,20 @@ moomoo servers <-> OpenD (127.0.0.1:11111)
 Key pieces:
 
 - `core/run_model.py` — immutable `WheelRunSnapshot` (run id, timestamps,
-  env, opaque account identity, preset, market state, per-symbol quote
+  env, opaque account identity, preset, market state, per-symbol broker fetch
   freshness, complete-union coverage, picks, rejections) and separate
-  `RefreshAttempt` state. A failed attempt never relabels or erases the last
-  successful snapshot.
+  `RefreshAttempt` state. `/api/run` recomputes effective stale/tradeable state
+  at read time without rewriting history; a failed attempt never relabels or
+  erases the last successful snapshot.
 - `core/wheel_runner.py` — one bounded background refresh worker; explicit
   account identity resolution (REAL requires a configured `account_id`;
   never "the first account").
 - `core/presets.py` — versioned Conservative/Balanced/Aggressive presets.
 - `core/broker_protocol.py` — the query-only surface; forbidden SDK members
   are enforced by tests and an AST/repository scan.
-- `api/services/recommendations.py` — CSP/CC lanes, cash-fit and share
-  reservation gates, premium-velocity ranking within risk tiers.
+- `api/services/recommendations.py` — complete watchlist CSP/CC lanes,
+  true-cash/share reservation gates, explicit quality/event tiers, and
+  deterministic executable-bid premium-velocity ranking.
 - `api/routes/` — `run`, `settings`, `watchlist`, `options`, `portfolio`,
   `roll_pressure`, `alerts`, `earnings`, `ledger`, `source_policy`.
 

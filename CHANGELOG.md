@@ -1,3 +1,24 @@
+## 2026-08-21 — Night-staged copy tickets
+
+- Broadened copy eligibility to any qualified or marginal Moomoo-sourced signal with
+  positive capacity (dropped the event_safe/ETF-only restriction). Event risk is now a
+  ticket warning, not a copy blocker.
+- The dashboard copies a manual ticket for any `copy_eligible` candidate regardless of
+  market state: live runs get an explicit limit draft; US-closed/stale runs get a ticket
+  *staged for US open* with the premium labelled as the last broker quote and a
+  "verify live quote at open" note. Hard trust gates (crossed market, stale quote while
+  open, yfinance fallback, zero capacity, research-only) still block copy.
+
+## 2026-08-21 — Watchlist shortlist contract
+
+- Canonicalized shortlist ranking to quality tier, event tier, and executable-bid
+  premium velocity with stable tie-breakers; midpoint is a non-guaranteed limit target.
+- Preserved Moomoo quote update time and UTC fetch evidence; crossed/stale quotes
+  fail closed while open; CSP capacity uses true cash after reserved collateral.
+- Consolidated dashboard cards onto immutable `/api/run` snapshots with read-time
+  stale/tradeable evaluation and candidate/run copy gates.
+- Removed the parallel `/api/options/top-recommendations` cache workflow.
+
 ## 2026-08-02 — Consolidation (wheel app)
 
 - One-screen dashboard with operational strip, watchlist union, presets,

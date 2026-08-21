@@ -128,8 +128,8 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["count"], 0)
 
-    def test_get_top_recommendations_caps_scan_tickers_at_12(self):
-        """P0.3: watchlist >12 tickers should be capped to MAX_COLD_SCAN_TICKERS."""
+    def test_get_top_recommendations_scans_complete_watchlist_union(self):
+        """A feasible scan evaluates every watchlist symbol; it never truncates."""
         tickers = [f"TICK{i}" for i in range(20)]
         self.mock_watchlist_manager.get_effective_watchlist.return_value = tickers
         self.mock_watchlist_manager.get_effective_watchlist_with_origins.return_value = [
@@ -151,9 +151,9 @@ class TestRecommendationEngine(unittest.TestCase):
             with patch("api.services.recommendations.is_market_open", return_value=True):
                 engine.get_top_recommendations(limit=5)
 
-        self.assertLessEqual(mock_fetch.call_count, 12)
+        self.assertEqual(mock_fetch.call_count, 20)
         called_tickers = [call[0][0] for call in mock_fetch.call_args_list]
-        self.assertEqual(called_tickers, tickers[:12])
+        self.assertEqual(called_tickers, tickers)
 
     def test_get_top_recommendations_ranks_by_premium_velocity(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA", "BBB"]
@@ -167,8 +167,8 @@ class TestRecommendationEngine(unittest.TestCase):
             "expiration": "20240315",
             "dte": 10,
             "mid_price": 1.00,
-            "premium_per_contract": 100.0,
-            "bid": 0.95,
+            "premium_per_contract": 110.0,
+            "bid": 1.10,
             "ask": 1.05,
             "annualized_return": 18.25,
             "iv_adjusted_return": 30.0,
@@ -216,10 +216,11 @@ class TestRecommendationEngine(unittest.TestCase):
 
         self.assertGreater(len(result["signals"]), 1)
         self.assertEqual(result["signals"][0]["ticker"], "AAA")
-        self.assertLess(result["signals"][0]["annualized_return"], result["signals"][1]["annualized_return"])
+        ranked = {signal["ticker"]: signal for signal in result["signals"]}
+        self.assertLess(ranked["AAA"]["annualized_return"], ranked["BBB"]["annualized_return"])
         self.assertGreater(
-            result["signals"][0]["premium_per_contract"] / result["signals"][0]["dte"],
-            result["signals"][1]["premium_per_contract"] / result["signals"][1]["dte"],
+            ranked["AAA"]["premium_per_contract"] / ranked["AAA"]["dte"],
+            ranked["BBB"]["premium_per_contract"] / ranked["BBB"]["dte"],
         )
 
     def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
@@ -999,8 +1000,8 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["count"], 0)
 
-    def test_get_top_recommendations_caps_scan_tickers_at_12(self):
-        """P0.3: watchlist >12 tickers should be capped to MAX_COLD_SCAN_TICKERS."""
+    def test_get_top_recommendations_scans_complete_watchlist_union(self):
+        """A feasible scan evaluates every watchlist symbol; it never truncates."""
         tickers = [f"TICK{i}" for i in range(20)]
         self.mock_watchlist_manager.get_effective_watchlist.return_value = tickers
         self.mock_watchlist_manager.get_effective_watchlist_with_origins.return_value = [
@@ -1022,9 +1023,9 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             with patch("api.services.recommendations.is_market_open", return_value=True):
                 engine.get_top_recommendations(limit=5)
 
-        self.assertLessEqual(mock_fetch.call_count, 12)
+        self.assertEqual(mock_fetch.call_count, 20)
         called_tickers = [call[0][0] for call in mock_fetch.call_args_list]
-        self.assertEqual(called_tickers, tickers[:12])
+        self.assertEqual(called_tickers, tickers)
 
     def test_get_top_recommendations_ranks_by_premium_velocity(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA", "BBB"]
@@ -1038,8 +1039,8 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "expiration": "20240315",
             "dte": 10,
             "mid_price": 1.00,
-            "premium_per_contract": 100.0,
-            "bid": 0.95,
+            "premium_per_contract": 110.0,
+            "bid": 1.10,
             "ask": 1.05,
             "annualized_return": 18.25,
             "iv_adjusted_return": 30.0,
@@ -1087,10 +1088,11 @@ class TestRecommendationEngineSignals(unittest.TestCase):
 
         self.assertGreater(len(result["signals"]), 1)
         self.assertEqual(result["signals"][0]["ticker"], "AAA")
-        self.assertLess(result["signals"][0]["annualized_return"], result["signals"][1]["annualized_return"])
+        ranked = {signal["ticker"]: signal for signal in result["signals"]}
+        self.assertLess(ranked["AAA"]["annualized_return"], ranked["BBB"]["annualized_return"])
         self.assertGreater(
-            result["signals"][0]["premium_per_contract"] / result["signals"][0]["dte"],
-            result["signals"][1]["premium_per_contract"] / result["signals"][1]["dte"],
+            ranked["AAA"]["premium_per_contract"] / ranked["AAA"]["dte"],
+            ranked["BBB"]["premium_per_contract"] / ranked["BBB"]["dte"],
         )
 
     def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
@@ -3088,8 +3090,8 @@ class TestRiskTierRanking(unittest.TestCase):
             "expiration": "20240315",
             "dte": 10,
             "mid_price": 1.00,
-            "premium_per_contract": 100.0,
-            "bid": 0.95,
+            "premium_per_contract": 110.0,
+            "bid": 1.10,
             "ask": 1.05,
             "annualized_return": 18.0,
             "iv_adjusted_return": 50.0,
@@ -3105,7 +3107,7 @@ class TestRiskTierRanking(unittest.TestCase):
             # earnings metadata missing -> unknown
         }
         known_risk = dict(unknown_risk)
-        known_risk["premium_per_contract"] = 50.0  # velocity 5 < 10
+        known_risk["premium_per_contract"] = 50.0  # bid velocity 5 < 11
         known_risk["earnings_date"] = "2026-07-15"
         known_risk["days_to_earnings"] = 12
 
@@ -3118,7 +3120,7 @@ class TestRiskTierRanking(unittest.TestCase):
         self.assertEqual(signals[0]["premium_per_contract"], 50.0)
         self.assertEqual(signals[0]["days_to_earnings"], 12)
         if len(signals) > 1:
-            self.assertEqual(signals[1]["premium_per_contract"], 100.0)
+            self.assertEqual(signals[1]["premium_per_contract"], 110.0)
 
 
 if __name__ == "__main__":

@@ -265,7 +265,29 @@ class WheelRunner:
             status = "ready"
 
         symbols = list((result.get("watchlist_origins") or {}).keys())
-        quote_fetched_at = {sym: generated_at for sym in symbols}
+        quote_fetched_at_by_symbol = {
+            str(symbol): str(timestamp or "") for symbol, timestamp in (result.get("quote_fetched_at") or {}).items()
+        }
+        candidate_groups = [
+            result.get("signals") or [],
+            (result.get("watchlist_csps") or {}).get("signals", []) or [],
+            (result.get("covered_calls") or {}).get("signals", []) or [],
+        ]
+        for candidate_group in candidate_groups:
+            for candidate in candidate_group:
+                if not isinstance(candidate, dict):
+                    continue
+                symbol = str(candidate.get("ticker", "") or "")
+                fetched_at = str(
+                    candidate.get("quote_fetched_at_utc")
+                    or (candidate.get("wheel_decision") or {}).get("quote_fetched_at_utc", "")
+                    or ""
+                )
+                if symbol and fetched_at:
+                    quote_fetched_at_by_symbol[symbol] = fetched_at
+        # Missing evidence remains explicitly missing; never substitute run
+        # generation time for a broker fetch timestamp.
+        quote_fetched_at = {sym: quote_fetched_at_by_symbol.get(sym, "") for sym in symbols}
 
         preset = result.get("preset") or {}
         run = RunMetadata(

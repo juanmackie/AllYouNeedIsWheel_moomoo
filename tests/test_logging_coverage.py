@@ -10,6 +10,7 @@ without requiring pytest or its caplog fixture.
 
 import os
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 
@@ -81,7 +82,7 @@ class TestWheelDecisionLogging(unittest.TestCase):
         }
         option = {
             "strike": 95.0,
-            "expiration": "20260718",
+            "expiration": (datetime.now() + timedelta(days=37)).strftime("%Y%m%d"),
             "option_type": "PUT",
             "bid": 1.50,
             "ask": 1.60,

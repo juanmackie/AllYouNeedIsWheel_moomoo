@@ -157,17 +157,6 @@ class OptionsService:
         """Get stock price (delegates to options_data)"""
         return self.options_data.get_stock_price(ticker)
 
-    def get_top_recommendations(
-        self, limit=3, include_long_options=False, ignore_cash_limits=False, screener_overrides=None
-    ):
-        """Get top signals (delegates to recommendation_engine)."""
-        return self.recommendation_engine.get_top_recommendations(
-            limit,
-            include_long_options=include_long_options,
-            ignore_cash_limits=ignore_cash_limits,
-            screener_overrides=screener_overrides or {},
-        )
-
     def _get_portfolio_context(self, refresh=True):
         """Get portfolio context (delegates to portfolio_context_helper)."""
         return self.portfolio_context_helper.get_portfolio_context(refresh=refresh)

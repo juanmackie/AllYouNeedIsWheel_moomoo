@@ -20,7 +20,7 @@
 - Do not introduce production mocks or simulated account data.
 - When a signal can remain visible only as research-only data, keep that label and caveat explicit rather than silently dropping it.
 - Scanner services should return blocker/diagnostic counts when useful so the UI can explain empty panels.
-- `OptionsService.get_top_recommendations()` accepts `screener_overrides` dict and forwards it to `RecommendationEngine.get_top_recommendations()`. Supported override keys: `csp_min_otm_pct`, `csp_max_otm_pct`, `csp_min_dte`, `csp_max_dte`, `csp_target_delta`, `min_volatility_pct`, `min_csp_buying_power`. Overrides are merged on top of defaults and Best Plays unconstrained overrides.
+- `RecommendationEngine` is the backend shortlist authority: watchlist coverage is complete-or-planning, quality/event tiers precede executable-bid premium velocity, and candidates carry Moomoo quote evidence plus safe recommended quantity. `/api/run` publishes the immutable result.
 
 ## Work Guidance
 

@@ -2,10 +2,7 @@
 Options API routes
 """
 
-import datetime
 import logging
-import threading
-import time
 import traceback
 
 from flask import Blueprint, current_app, jsonify, request
@@ -22,7 +19,6 @@ from api.routes.utils import (
     opend_unavailable_response,
     success_response,
 )
-from core.cache_manager import RecommendationCache, recommendation_cache
 from core.connection import probe_opend_status
 
 # Set up logger
@@ -32,9 +28,6 @@ bp = Blueprint("options", __name__, url_prefix="/api/options")
 
 # Lazy service access - service created on first use
 _options_service_instance = None
-_generation_in_flight = {}  # cache_key -> started_at timestamp
-_generation_in_flight_lock = threading.Lock()
-GENERATION_IN_FLIGHT_TIMEOUT_SECONDS = 300
 
 
 def get_options_service():
@@ -45,158 +38,6 @@ def get_options_service():
 
         _options_service_instance = api.get_service("options")
     return _options_service_instance
-
-
-def _generate_in_background(cache_key, limit, portfolio_hash):
-    """
-    Generate top recommendations in a background thread.
-    Manages the in-flight registry so duplicate cold generations don't stack.
-    Clears the in-flight flag on completion.
-    """
-    with _generation_in_flight_lock:
-        if _generation_in_flight.get(cache_key):
-            logger.info(f"Generation already in flight for {cache_key}, skipping")
-            return False
-        _generation_in_flight[cache_key] = time.time()
-
-    def generation_task():
-        try:
-            logger.info(f"Background generation started for {cache_key}")
-            result = get_options_service().get_top_recommendations(limit=limit)
-
-            if "error" not in result:
-                result = _normalize_top_recommendations_payload(result)
-                recommendation_cache.set(cache_key, result, portfolio_hash)
-                logger.info(f"Background generation completed for {cache_key}")
-            else:
-                recommendation_cache.mark_background_refresh_failed(cache_key)
-                logger.error(f"Background generation failed for {cache_key}: {result['error']}")
-        except Exception as e:
-            recommendation_cache.mark_background_refresh_failed(cache_key)
-            logger.error(f"Background generation exception for {cache_key}: {e}")
-        finally:
-            with _generation_in_flight_lock:
-                _generation_in_flight.pop(cache_key, None)
-            logger.info(f"In-flight flag cleared for {cache_key}")
-
-    thread = threading.Thread(target=generation_task, daemon=True)
-    thread.start()
-    logger.info(f"Background generation thread started for {cache_key}")
-    return True
-
-
-def _get_generation_age(cache_key):
-    with _generation_in_flight_lock:
-        started_at = _generation_in_flight.get(cache_key)
-    if not started_at:
-        return None
-    return time.time() - started_at
-
-
-# Alias for backward compatibility
-_trigger_background_refresh = _generate_in_background
-
-
-def _normalize_top_recommendations_payload(payload):
-    """Normalize legacy cached recommendation payloads to the signals contract."""
-    if not isinstance(payload, dict):
-        return payload
-
-    normalized = dict(payload)
-    if "signals" not in normalized:
-        legacy_signals = list(normalized.get("recommendations") or normalized.get("best_plays") or [])
-        if not legacy_signals and isinstance(normalized.get("lanes"), dict):
-            lanes = normalized.get("lanes", {})
-            for lane_key in ("covered_calls", "watchlist_csp", "long_calls", "long_puts"):
-                lane = lanes.get(lane_key, {}) or {}
-                legacy_signals.extend(lane.get("signals") or lane.get("recommendations") or [])
-        if not legacy_signals:
-            for lane_key in ("covered_calls", "watchlist_csps", "long_calls", "long_puts"):
-                lane = normalized.get(lane_key, {}) or {}
-                if isinstance(lane, dict):
-                    legacy_signals.extend(lane.get("signals") or lane.get("recommendations") or [])
-        normalized["signals"] = legacy_signals
-
-    if "blocked_signals" not in normalized and normalized.get("blocked_candidates") is not None:
-        normalized["blocked_signals"] = normalized.get("blocked_candidates", [])
-
-    normalized.pop("recommendations", None)
-    normalized.pop("best_plays", None)
-    normalized.pop("lanes", None)
-    normalized.pop("blocked_candidates", None)
-    normalized["count"] = len(normalized.get("signals", []))
-    return normalized
-
-
-def _attach_top_recommendations_policy(payload):
-    return attach_source_policy(
-        payload,
-        build_research_source_policy(
-            "top_recommendations",
-            payload,
-            fallback_sources_allowed=[],
-        ),
-    )
-
-
-def _build_top_recommendations_cache_response(payload, cache_metadata, cache_status):
-    response_payload = _normalize_top_recommendations_payload(payload)
-    response_payload["_cache"] = cache_metadata
-    response_payload = _attach_top_recommendations_policy(response_payload)
-    response = jsonify(response_payload)
-    response.headers["X-Cache-Status"] = cache_status
-    response.headers["X-Cache-Age"] = str(cache_metadata.get("cache_age_seconds", 0))
-    return response, 200
-
-
-def _build_top_recommendations_generating_response():
-    return jsonify(
-        _attach_top_recommendations_policy(
-            {
-                "generating": True,
-                "count": 0,
-                "signals": [],
-                "message": "Signals are being computed. Check back shortly.",
-            }
-        )
-    ), 202
-
-
-def _build_top_recommendations_timeout_response():
-    return jsonify(
-        _attach_top_recommendations_policy(
-            {
-                "success": True,
-                "generating": False,
-                "generation_timed_out": True,
-                "count": 0,
-                "signals": [],
-                "blocked_signals": [],
-                "blocked_reason_counts": {},
-                "generated_at": datetime.datetime.now().isoformat(),
-                "message": "Signal generation is taking too long. Broker option-chain calls may be stalled.",
-            }
-        )
-    ), 200
-
-
-def _build_top_recommendations_stale_response(stale_result, stale_metadata, extra_cache_fields=None):
-    stale_payload = _normalize_top_recommendations_payload(stale_result)
-    cache_payload = {
-        "cache_status": "STALE_FALLBACK",
-        "cache_age_seconds": stale_metadata.get("cache_age_seconds", 0),
-        "portfolio_changed": stale_metadata.get("portfolio_changed", False),
-        "is_valid": True,
-        "background_refresh_failed": False,
-        "cached_at": stale_metadata.get("cached_at", ""),
-    }
-    if extra_cache_fields:
-        cache_payload.update(extra_cache_fields)
-    stale_payload["_cache"] = cache_payload
-    stale_payload = _attach_top_recommendations_policy(stale_payload)
-    response = jsonify(stale_payload)
-    response.headers["X-Cache-Status"] = "STALE_FALLBACK"
-    return response, 200
 
 
 def _ensure_opend_available():
@@ -420,124 +261,6 @@ def get_option_expirations():
         return error_response(str(e))
 
 
-@bp.route("/top-recommendations", methods=["GET"])
-def get_top_recommendations():
-    """
-    Get top N option signals across all portfolio positions.
-
-    Returns the highest-scoring option opportunities (both calls and puts)
-    filtered by capital availability and ranked by composite score.
-
-    Query parameters:
-        limit (int): Number of signals to return (default: 3, max: 10)
-
-    Returns:
-        JSON response with ranked signals
-    """
-    logger.info("GET /top-recommendations request received")
-
-    try:
-        unavailable_response = _ensure_opend_available()
-        if unavailable_response:
-            return unavailable_response
-        allowed, retry_after = enforce_route_rate_limit(
-            "top-recommendations", request.remote_addr or "local", max_requests=30, window_seconds=60
-        )
-        if not allowed:
-            return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
-
-        # Get limit parameter (default 3)
-        limit = request.args.get("limit", 3)
-        try:
-            limit = int(limit)
-            if limit < 1:
-                limit = 3
-            elif limit > 10:
-                limit = 10
-        except (ValueError, TypeError):
-            limit = 3
-
-        # Use a cached portfolio snapshot for the cache key so we do not block
-        # the request on a slow broker refresh.
-        try:
-            portfolio_context = get_options_service()._get_portfolio_context(refresh=False)
-            current_portfolio_hash = RecommendationCache.calculate_portfolio_hash(portfolio_context)
-        except Exception as e:
-            logger.warning(f"Failed to get portfolio context for cache: {e}")
-            portfolio_context = {}
-            current_portfolio_hash = "no_portfolio"
-
-        # Check for manual refresh parameter
-        manual_refresh = request.args.get("refresh", "false").lower() == "true"
-
-        # Cache key: limit + portfolio state (preset is part of config)
-        cache_key = f"top_recommendations:limit={limit}:hash={current_portfolio_hash}"
-
-        # Check cache unless manual refresh requested
-        if not manual_refresh:
-            cached_result, cache_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
-
-            if cached_result is not None:
-                logger.info(
-                    f"Cache {cache_metadata['cache_status']} for top-recommendations "
-                    f"(age={cache_metadata['cache_age_seconds']}s, "
-                    f"portfolio_changed={cache_metadata['portfolio_changed']})"
-                )
-
-                if cache_metadata["cache_status"] == "STALE":
-                    _trigger_background_refresh(cache_key, limit, current_portfolio_hash)
-
-                return _build_top_recommendations_cache_response(
-                    cached_result,
-                    cache_metadata,
-                    cache_metadata["cache_status"],
-                )
-
-        # Cache miss or manual refresh ? generate in background instead of blocking
-        logger.info(f"Generating fresh top recommendations in background (manual_refresh={manual_refresh})")
-        generation_started = _generate_in_background(cache_key, limit, current_portfolio_hash)
-        generation_age = _get_generation_age(cache_key)
-        # Try to serve stale cache while generation runs
-        try:
-            stale_result, stale_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
-            if stale_result is not None and stale_metadata.get("cache_status") in ("STALE", "HIT"):
-                logger.info("Returning stale cached signals while generating fresh data")
-                return _build_top_recommendations_stale_response(stale_result, stale_metadata)
-        except Exception:
-            logger.warning("Stale cache fallback for top_recommendations failed", exc_info=True)
-        # No stale data at all ? return generating signal immediately
-        if not generation_started and generation_age and generation_age > GENERATION_IN_FLIGHT_TIMEOUT_SECONDS:
-            logger.warning(
-                "Top recommendations generation has been in flight for %.1fs; returning timeout diagnostic",
-                generation_age,
-            )
-            return _build_top_recommendations_timeout_response()
-
-        logger.info("No cache available ? returning generating signal to frontend")
-        return _build_top_recommendations_generating_response()
-
-    except Exception as e:
-        logger.error(f"Error getting top recommendations: {str(e)}")
-        logger.error(traceback.format_exc())
-        # Last resort: try to return any stale cache
-        try:
-            stale_result, stale_metadata = recommendation_cache.get(cache_key, current_portfolio_hash)
-            if stale_result is not None:
-                logger.warning("Returning stale cached signals as last-resort fallback")
-                response, status_code = _build_top_recommendations_stale_response(
-                    stale_result,
-                    stale_metadata,
-                    {
-                        "background_refresh_failed": True,
-                        "error": str(e),
-                    },
-                )
-                return response, status_code
-        except Exception:
-            logger.warning("Research stale cache fallback for top_recommendations failed", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-
 @bp.route("/screening-config", methods=["GET"])
 def get_screening_config():
     """
@@ -602,59 +325,54 @@ def get_cash_status():
         if opend_error:
             return opend_error
 
-        from api.services.portfolio_service import PortfolioService
+        # Delegate CSP affordability to PortfolioContext, which computes true
+        # available cash minus reserved short-put collateral (margin buying
+        # power is display-only and is never used for CSP capacity).
+        service = get_options_service()
+        context = service._get_portfolio_context(refresh=True)
 
-        portfolio_service = PortfolioService()
+        cash_balance = float(context.get("cash_balance", 0) or 0)
+        available_cash = float(context.get("available_cash", 0) or 0)
+        cash_reserved = float(context.get("cash_reserved_for_csp", 0) or 0)
+        cash_available_for_csp = float(context.get("cash_available_for_csp", 0) or 0)
+        broker_buying_power = float(context.get("broker_buying_power", 0) or 0)
+        broker_buying_power_source = context.get("broker_buying_power_source", "none")
+        excess_liquidity = float(context.get("excess_liquidity", 0) or 0)
+        reserve_enabled = service.config.get("cash_reserve_enabled", True)
 
-        summary = portfolio_service.get_portfolio_summary() or {}
-        option_positions = portfolio_service.get_positions("OPT") or []
-
-        cash_balance = float(summary.get("cash_balance", summary.get("available_cash", 0)) or 0)
-        true_cash = float(
-            summary.get("available_cash", summary.get("cash_balance", summary.get("cash_available", 0))) or 0
-        )
-        if summary.get("buying_power") is not None:
-            broker_buying_power_source = "buying_power"
-        elif summary.get("excess_liquidity") is not None:
-            broker_buying_power_source = "excess_liquidity"
-        else:
-            broker_buying_power_source = "available_cash"
-        broker_buying_power = float(summary.get("buying_power", summary.get("excess_liquidity", true_cash)) or 0)
-        excess_liquidity = float(summary.get("excess_liquidity", 0) or 0)
-        available_cash = true_cash
-        cash_reserved = 0.0
+        # Per-open-put collateral detail (diagnostics only).
         open_puts = []
+        try:
+            from api.services.portfolio_service import PortfolioService
 
-        for position in option_positions:
-            pos_qty = int(position.get("position", 0) or 0)
-            option_type = str(position.get("option_type", "") or "").upper()
-            if pos_qty < 0 and option_type == "PUT":
-                ticker = str(position.get("symbol", "") or "").replace("US.", "")
-                strike = float(position.get("strike", 0) or 0)
-                contracts = abs(pos_qty)
-                expiration = position.get("expiration", "")
-                cash_required = strike * 100 * contracts
-                cash_reserved += cash_required
-                open_puts.append(
-                    {
-                        "ticker": ticker,
-                        "strike": strike,
-                        "contracts": contracts,
-                        "expiration": expiration,
-                        "cash_required": round(cash_required, 2),
-                    }
-                )
-
-        cash_available = max(0, available_cash - cash_reserved)
-        cash_available_for_csp = max(0, broker_buying_power - cash_reserved)
-        reserve_enabled = get_options_service().config.get("cash_reserve_enabled", True)
+            option_positions = PortfolioService().get_positions("OPT") or []
+            for position in option_positions:
+                pos_qty = int(position.get("position", 0) or 0)
+                option_type = str(position.get("option_type", "") or "").upper()
+                if pos_qty < 0 and option_type == "PUT":
+                    ticker = str(position.get("symbol", "") or "").replace("US.", "")
+                    strike = float(position.get("strike", 0) or 0)
+                    contracts = abs(pos_qty)
+                    expiration = position.get("expiration", "")
+                    cash_required = strike * 100 * contracts
+                    open_puts.append(
+                        {
+                            "ticker": ticker,
+                            "strike": strike,
+                            "contracts": contracts,
+                            "expiration": expiration,
+                            "cash_required": round(cash_required, 2),
+                        }
+                    )
+        except Exception as exc:
+            logger.debug(f"Open-put collateral detail unavailable: {exc}")
 
         return success_response(
             attach_source_policy(
                 {
                     "cash_balance": round(cash_balance, 2),
                     "cash_reserved": round(cash_reserved, 2),
-                    "cash_available": round(cash_available, 2),
+                    "cash_available": round(available_cash, 2),
                     "cash_available_for_csp": round(cash_available_for_csp, 2),
                     "cash_reserved_for_csp": round(cash_reserved, 2),
                     "broker_buying_power": round(broker_buying_power, 2),

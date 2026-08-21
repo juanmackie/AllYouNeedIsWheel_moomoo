@@ -10,7 +10,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from core.utils import is_market_open
@@ -156,7 +156,14 @@ class MoomooConnection:
     _market_timezone = ZoneInfo(os.environ.get("MARKET_TIMEZONE", "America/New_York"))
 
     def __new__(
-        cls, host="127.0.0.1", port=11111, readonly=True, account_id=None, portfolio_env=None, security_firm=None
+        cls,
+        host="127.0.0.1",
+        port=11111,
+        readonly=True,
+        account_id=None,
+        portfolio_env=None,
+        security_firm=None,
+        broker_cache_after_hours=True,
     ):
         cleaned_account_id = _clean_account_id(account_id)
 
@@ -842,6 +849,7 @@ class MoomooConnection:
                     return result
 
                 ret, snap_data = self.quote_ctx.get_market_snapshot(option_codes)
+                quote_fetched_at_utc = datetime.now(timezone.utc).isoformat()
                 if ret == RET_OK:
                     for _, row in snap_data.iterrows():
                         opt_expiry = row.get("option_expiry_date", "") or row.get("strike_time", "")
@@ -862,6 +870,10 @@ class MoomooConnection:
                             "gamma": float(row.get("option_gamma", 0)),
                             "theta": float(row.get("option_theta", 0)),
                             "vega": float(row.get("option_vega", 0)),
+                            # Broker quote timestamp — preserved verbatim so the
+                            # decision layer can fail closed on stale quotes.
+                            "update_time": str(row.get("update_time", "") or ""),
+                            "quote_fetched_at_utc": quote_fetched_at_utc,
                         }
                         result["options"].append(option_data)
             finally:
@@ -1015,6 +1027,46 @@ class MoomooConnection:
             logger.error(f"Error getting securities for group '{group_name}': {e}")
             logger.debug(traceback.format_exc())
             return RET_ERROR, None
+
+    @staticmethod
+    def _normalize_security_type_row(row):
+        """Normalize only broker-provided underlying classification."""
+        for field in ("stock_type", "security_type", "sec_type", "stock_class"):
+            value = str(row.get(field, "") or "").strip().lower()
+            if value in ("etf", "ie", "exchange_traded_fund"):
+                return "etf"
+            if value in ("index", "idx", "ind"):
+                return "index"
+        name = str(row.get("name", "") or "").lower()
+        if "etf" in name or name.endswith(" etf"):
+            return "etf"
+        return "stock"
+
+    def get_security_types(self, symbols):
+        """Return broker-verified underlying types for symbols in one snapshot."""
+        requested = [self._format_symbol(symbol) for symbol in (symbols or []) if symbol]
+        if not requested:
+            return {}
+        try:
+            if not self._ensure_quote_context():
+                return {symbol.split(".")[-1]: "stock" for symbol in requested}
+            ret, data = self.quote_ctx.get_market_snapshot(requested)
+            if ret != RET_OK or data is None or getattr(data, "empty", True):
+                return {symbol.split(".")[-1]: "stock" for symbol in requested}
+            result = {symbol.split(".")[-1]: "stock" for symbol in requested}
+            for _, row in data.iterrows():
+                code = str(row.get("code", "") or row.get("symbol", "") or "")
+                if code:
+                    result[code.split(".")[-1]] = self._normalize_security_type_row(row)
+            return result
+        except Exception as exc:
+            logger.debug("get_security_types failed: %s", exc)
+            return {symbol.split(".")[-1]: "stock" for symbol in requested}
+
+    def get_security_type(self, symbol):
+        """Return one broker-verified underlying type."""
+        normalized = self._format_symbol(symbol).split(".")[-1]
+        return self.get_security_types([symbol]).get(normalized, "stock")
 
     def query_subscription(self, is_all_conn=True):
         try:

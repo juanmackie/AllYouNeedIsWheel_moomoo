@@ -10,7 +10,9 @@ Loads fixtures from tests/fixtures/ and asserts:
 
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
+import core.wheel_decision as _wheel_decision
 from core.wheel_decision import WheelDecision, score_contract
 from tests.fixtures import (
     get_cc_below_cost_basis,
@@ -24,6 +26,13 @@ from tests.fixtures import (
     get_wide_spread_scenario,
     get_yfinance_fallback_scenario,
 )
+
+_market_closed_patch = patch.object(_wheel_decision, "is_market_open", return_value=False)
+_market_closed_patch.start()
+
+
+def tearDownModule():
+    _market_closed_patch.stop()
 
 
 class TestScoreRegression(unittest.TestCase):

@@ -339,11 +339,30 @@ class WatchlistManager:
 
             base_profile["vix_regime"] = regime_name
 
-        # -- Growth Mode screener overlay ------------------------------------
-        if growth_mode_config and option_type == "PUT":
-            sp = growth_mode_config.get("screener_profile", {})
-            if sp:
-                overrides = {
+        # -- Selected-preset merge -------------------------------------------
+        # The recommendation engine passes the active preset's flat screener
+        # profile (from WheelPreset.to_screener_profile()). Merge its explicit
+        # thresholds over the base profile so score_contract() honours the
+        # selected preset instead of silently falling back to legacy defaults.
+        # Retired growth/VIX overlay behavior was removed: the preset is the
+        # single source of these thresholds.
+        if growth_mode_config:
+            sp = growth_mode_config or {}
+            if not isinstance(sp, dict):
+                sp = {}
+            # Generic liquidity / premium floors apply to both CALL and PUT.
+            generic = {
+                "min_mid_price": sp.get("min_mid_price"),
+                "min_premium_per_contract": sp.get("min_premium_per_contract"),
+                "max_spread_pct": sp.get("max_spread_pct"),
+                "min_open_interest": sp.get("min_open_interest"),
+                "min_volume": sp.get("min_volume"),
+            }
+            for key, value in generic.items():
+                if value is not None:
+                    base_profile[key] = value
+            if option_type == "PUT":
+                put_overrides = {
                     "target_delta": sp.get("csp_target_delta"),
                     "delta_tolerance": sp.get("csp_delta_tolerance"),
                     "min_dte": sp.get("csp_min_dte"),
@@ -353,15 +372,17 @@ class WatchlistManager:
                     "min_otm_pct": sp.get("csp_min_otm_pct"),
                     "max_otm_pct": sp.get("csp_max_otm_pct"),
                 }
-                for key, value in overrides.items():
+                for key, value in put_overrides.items():
                     if value is not None:
                         base_profile[key] = value
-
-                # Tag the profile so consumers know it came from growth mode
-                base_profile["growth_screener"] = True
-
-                # When require_cash_fit is set, flag it in the profile
-                if sp.get("require_cash_fit", True):
-                    base_profile["require_cash_fit"] = True
+            if option_type == "CALL":
+                call_overrides = {
+                    "default_otm_pct": sp.get("call_default_otm_pct"),
+                }
+                for key, value in call_overrides.items():
+                    if value is not None:
+                        base_profile[key] = value
+            if sp.get("require_cash_fit", True):
+                base_profile["require_cash_fit"] = True
 
         return base_profile

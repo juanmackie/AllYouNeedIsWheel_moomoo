@@ -127,6 +127,9 @@ def _format_decision_to_candidate(
         "dte": decision.dte,
         "mid_price": round(decision.mid_price, 4),
         "premium_per_contract": round(decision.premium_per_contract, 2),
+        "bid_premium_per_contract": round(decision.bid_premium_per_contract, 2),
+        "limit_target_per_contract": round(decision.limit_target_per_contract, 2),
+        "premium_velocity_per_day": round(decision.premium_velocity_per_day, 4),
         "bid": decision.bid,
         "ask": decision.ask,
         "annualized_return": decision.annualized_return,
@@ -150,6 +153,13 @@ def _format_decision_to_candidate(
         "score_details": decision.score_details,
         "rationale": decision.rationale,
         "warnings": warnings,
+        "quality_tier": decision.quality_tier,
+        "event_tier": decision.event_tier,
+        "security_type": decision.security_type,
+        "review_only": decision.review_only,
+        "copy_eligible": decision.copy_eligible,
+        "quote_update_time": decision.quote_update_time,
+        "quote_fetched_at_utc": decision.quote_fetched_at_utc,
         "cash_reserve_enabled": cash_reserve_enabled,
         "breakeven": decision.breakeven,
         "breakeven_buffer_pct": decision.breakeven_buffer_pct,
@@ -200,6 +210,7 @@ class RecommendationEngine:
 
         self._preset = get_preset((self.config or {}).get("wheel_preset"))
         self._preset_profile = self._preset.to_screener_profile()
+        self._scan_security_types = {}
 
     def _get_connection(self):
         return self._connection_provider._ensure_connection()
@@ -526,6 +537,11 @@ class RecommendationEngine:
                             "gamma": float(opt.get("gamma", 0) or 0),
                             "theta": float(opt.get("theta", 0) or 0),
                             "vega": float(opt.get("vega", 0) or 0),
+                            "update_time": str(opt.get("update_time", "") or ""),
+                            "quote_fetched_at_utc": str(opt.get("quote_fetched_at_utc", "") or ""),
+                            "security_type": self._scan_security_types.get(
+                                str(ticker).upper().split(".")[-1], str(opt.get("security_type", "") or "stock")
+                            ),
                         }
 
                         decision = self._score_csp_contract(
@@ -613,6 +629,9 @@ class RecommendationEngine:
             "dte": option.get("dte"),
             "mid_price": option.get("mid_price"),
             "premium_per_contract": option.get("premium_per_contract"),
+            "bid_premium_per_contract": option.get("bid_premium_per_contract", wd.get("bid_premium_per_contract")),
+            "limit_target_per_contract": option.get("limit_target_per_contract", wd.get("limit_target_per_contract")),
+            "premium_velocity_per_day": option.get("premium_velocity_per_day", wd.get("premium_velocity_per_day")),
             "score": option.get("score"),
             "annualized_return": option.get("annualized_return"),
             "iv_adjusted_return": option.get("iv_adjusted_return"),
@@ -625,6 +644,7 @@ class RecommendationEngine:
             "warnings": option.get("warnings", []),
             "rationale": option.get("rationale", []),
             "max_contracts": option.get("max_contracts"),
+            "recommended_contracts": option.get("recommended_contracts", wd.get("recommended_contracts", 0)),
             "existing_position": option.get("existing_position", 0),
             "profile_type": option.get("profile_type"),
             "stock_price": option.get("stock_price"),
@@ -665,6 +685,13 @@ class RecommendationEngine:
             "iv_source": _option_source_value(option, wd, "iv_source", wd.get("iv_source", "broker")),
             "from_yfinance": _option_uses_yfinance(option, wd),
             "quote_quality": wd.get("quote_quality", ""),
+            "quality_tier": option.get("quality_tier", wd.get("quality_tier", "")),
+            "event_tier": option.get("event_tier", wd.get("event_tier", "")),
+            "security_type": option.get("security_type", wd.get("security_type", "stock")),
+            "review_only": option.get("review_only", wd.get("review_only", True)),
+            "copy_eligible": option.get("copy_eligible", wd.get("copy_eligible", False)),
+            "quote_update_time": option.get("quote_update_time", wd.get("quote_update_time", "")),
+            "quote_fetched_at_utc": option.get("quote_fetched_at_utc", wd.get("quote_fetched_at_utc", "")),
             "blocked_reason_codes": wd.get("blocked_reason_codes", []) or wd.get("hard_blockers", []),
             "research_only": research_only,
         }
@@ -760,6 +787,19 @@ class RecommendationEngine:
                 watchlist_with_origins = [{"ticker": str(t), "origins": ["config"]} for t in plain]
             effective_watchlist = [item["ticker"] for item in watchlist_with_origins]
             watchlist_origins = {item["ticker"]: item["origins"] for item in watchlist_with_origins}
+            security_types = {}
+            get_security_types = getattr(conn, "get_security_types", None)
+            if callable(get_security_types) and effective_watchlist:
+                try:
+                    raw_security_types = get_security_types(effective_watchlist)
+                    if isinstance(raw_security_types, dict):
+                        security_types = {
+                            str(symbol).upper().split(".")[-1]: str(value).lower()
+                            for symbol, value in raw_security_types.items()
+                        }
+                except Exception:
+                    logger.debug("Broker security-type batch lookup unavailable", exc_info=True)
+            self._scan_security_types = security_types
             logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers (canonical union)")
 
             if not positions and not effective_watchlist:
@@ -801,6 +841,7 @@ class RecommendationEngine:
             watchlist_errors = 0
             skipped_csp_diagnostics = []
             ticker_diagnostics = {}
+            scan_quote_fetched_at = {}
 
             # ════════════════════════════════════════════════════════════
             # LANE 1: Watchlist CSPs — short-circuit when no cash to deploy
@@ -857,17 +898,10 @@ class RecommendationEngine:
                     ),
                 }
 
-            # Cap tickers per cold scan to bound scan time within the client retry
-            # budget. Each ticker may need 2 option-chain calls (3s spacing each)
-            # plus price/expiration calls, so ~10-15 tickers fits in ~120s worst case.
-            MAX_COLD_SCAN_TICKERS = preflight["recommended_max_size"]
-            scan_watchlist = effective_watchlist[:MAX_COLD_SCAN_TICKERS]
-            if len(effective_watchlist) > MAX_COLD_SCAN_TICKERS:
-                logger.info(
-                    "Capping cold scan to %d of %d tickers to fit retry budget",
-                    MAX_COLD_SCAN_TICKERS,
-                    len(effective_watchlist),
-                )
+            # Scan the COMPLETE canonical union. The preflight above already
+            # guaranteed feasibility (or we returned `planning`). We never
+            # silently truncate and still claim a global top three.
+            scan_watchlist = effective_watchlist
 
             if cash_available_for_csp <= 0:
                 logger.info(
@@ -902,6 +936,16 @@ class RecommendationEngine:
                                 continue
                             cached_item["held_position"] = is_held
                             cached_item["existing_position"] = short_puts.get(ticker, 0)
+                            cached_item["security_type"] = security_types.get(
+                                str(ticker).upper().split(".")[-1], "stock"
+                            )
+                            cached_fetched_at = str(
+                                cached_item.get("quote_fetched_at_utc")
+                                or (cached_item.get("wheel_decision") or {}).get("quote_fetched_at_utc", "")
+                                or ""
+                            )
+                            if cached_fetched_at:
+                                scan_quote_fetched_at[str(ticker)] = cached_fetched_at
                             watchlist_csp_candidates.append(cached_item)
                         continue
 
@@ -918,6 +962,14 @@ class RecommendationEngine:
                             continue
                         result["held_position"] = is_held
                         result["existing_position"] = short_puts.get(ticker, 0)
+                        result["security_type"] = security_types.get(str(ticker).upper().split(".")[-1], "stock")
+                        result_fetched_at = str(
+                            result.get("quote_fetched_at_utc")
+                            or (result.get("wheel_decision") or {}).get("quote_fetched_at_utc", "")
+                            or ""
+                        )
+                        if result_fetched_at:
+                            scan_quote_fetched_at[str(ticker)] = result_fetched_at
                         watchlist_csp_candidates.append(result)
                         watchlist_processed += 1
 
@@ -1090,22 +1142,59 @@ class RecommendationEngine:
                     ticker_diagnostics[t]["top_score"] = max(ticker_diagnostics[t]["top_score"], score)
                 ticker_diagnostics[t]["candidate_count"] += 1
 
-            # ── Unified ranking: one engine for CSPs and covered calls ──
-            # Sort by premium velocity (premium_per_contract / dte) — the primary ranking axis.
-            # Multi-factor scoring still qualifies candidates (via hard_blockers, warnings, risk budget),
-            # but the final rank is determined by raw premium earned per day.
-            def _get_rank_score(x):
-                return premium_velocity_per_day(x.get("premium_per_contract", 0), x.get("dte", 0))
+            # ── Unified deterministic ranking: tier, then executable bid velocity ──
+            quality_order = {"qualified": 0, "marginal": 1}
+            event_order = {
+                "event_safe": 0,
+                "event_not_applicable": 0,
+                "earnings_before_expiry": 1,
+                "event_unknown": 2,
+            }
 
-            def _risk_tier(x):
-                """0 = known earnings/risk metadata; 1 = unknown (ranked below)."""
-                if x.get("earnings_date") or x.get("days_to_earnings") is not None:
-                    return 0
-                return 1
+            def _candidate_field(candidate, field, default=None):
+                decision = candidate.get("wheel_decision") or {}
+                value = candidate.get(field)
+                return decision.get(field, default) if value is None else value
 
-            # Rank within risk tiers by raw premium velocity. Candidates with
-            # unknown optional risk metadata sit below known-risk candidates.
-            all_candidates.sort(key=lambda x: (_risk_tier(x), -_get_rank_score(x)))
+            def _rank_velocity(candidate):
+                explicit = _candidate_field(candidate, "premium_velocity_per_day")
+                if explicit is not None:
+                    try:
+                        return float(explicit or 0)
+                    except (TypeError, ValueError):
+                        pass
+                bid_premium = _candidate_field(candidate, "bid_premium_per_contract")
+                if bid_premium is None:
+                    bid = candidate.get("bid", 0) or 0
+                    bid_premium = float(bid) * 100
+                return premium_velocity_per_day(bid_premium, candidate.get("dte", 0))
+
+            def _rank_key(candidate):
+                quality = str(_candidate_field(candidate, "quality_tier") or "qualified").lower()
+                event = str(_candidate_field(candidate, "event_tier") or "").lower()
+                if not event:
+                    # Compatibility for old mocked payloads only; real decisions
+                    # always serialize an explicit event tier.
+                    event = (
+                        "event_safe"
+                        if (candidate.get("earnings_date") or candidate.get("days_to_earnings") is not None)
+                        else "event_unknown"
+                    )
+                return (
+                    quality_order.get(quality, 1),
+                    event_order.get(event, event_order["event_unknown"]),
+                    -_rank_velocity(candidate),
+                    str(candidate.get("ticker", "")).upper(),
+                    str(candidate.get("expiration", "")),
+                    float(candidate.get("strike", 0) or 0),
+                )
+
+            def _rank_candidates(candidates):
+                return sorted(candidates, key=_rank_key)
+
+            # Composite score is intentionally absent from this key. It may
+            # qualify/explain a candidate, never break a velocity tie.
+            all_candidates = _rank_candidates(all_candidates)
 
             # ── Build lane results with diversity safeguard ──────────
             def _select_top(candidates, max_per=1):
@@ -1119,8 +1208,8 @@ class RecommendationEngine:
                         selected.append(opt)
                 return selected
 
-            top_covered_calls = _select_top(eligible_covered_call_candidates, max_per=1)
-            top_watchlist_csp = _select_top(eligible_watchlist_csp_candidates, max_per=2)
+            top_covered_calls = _select_top(_rank_candidates(eligible_covered_call_candidates), max_per=1)
+            top_watchlist_csp = _select_top(_rank_candidates(eligible_watchlist_csp_candidates), max_per=2)
 
             # Single ranked signal pipeline combining CSPs and covered calls.
             signals = _select_top(all_candidates, max_per=2)[:limit]
@@ -1173,6 +1262,10 @@ class RecommendationEngine:
                         "option_type": s.get("option_type"),
                         "strike": s.get("strike"),
                         "score": s.get("score"),
+                        "bid_premium_per_contract": s.get("bid_premium_per_contract"),
+                        "premium_velocity_per_day": s.get("premium_velocity_per_day"),
+                        "quality_tier": s.get("quality_tier"),
+                        "event_tier": s.get("event_tier"),
                         "annualized_return": s.get("annualized_return"),
                     }
                     for s in formatted_signals[:5]
@@ -1229,6 +1322,7 @@ class RecommendationEngine:
                     "complete": len(scan_watchlist) >= len(effective_watchlist),
                 },
                 "watchlist_origins": watchlist_origins,
+                "quote_fetched_at": {ticker: scan_quote_fetched_at.get(ticker, "") for ticker in effective_watchlist},
                 "preset": {
                     "key": self._preset.key,
                     "version": self._preset.version,
@@ -1251,7 +1345,7 @@ class RecommendationEngine:
                     "position_tickers": list(positions.keys()) if positions else [],
                     "watchlist_tickers": effective_watchlist,
                     "scan_tickers_count": len(scan_watchlist),
-                    "scan_tickers_cap": MAX_COLD_SCAN_TICKERS,
+                    "scan_tickers_cap": len(effective_watchlist),
                     "skipped_csp": skipped_csp_diagnostics,
                     "skipped_csp_count": len(skipped_csp_diagnostics),
                 },

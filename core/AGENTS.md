@@ -10,14 +10,14 @@
 
 - Own business-critical trading logic that should not depend on Flask.
 - Own reusable decision functions for Wheel strategy signals, scoring factors, Greeks, and evidence-gated advice.
-- Own premium velocity calculation — the primary ranking axis for all surfaced signals.
+- Own executable-bid premium velocity calculation and quote-evidence gates; quality/event tiers precede stable bid-velocity ranking for surfaced signals.
 - Own OpenD connection lifecycle helpers and shared runtime utilities.
 
 ## Local Contracts
 
 - Keep `core` independent from `api.routes` and Flask request context.
 - Preserve live-trading safety assumptions and source-of-truth boundaries.
-- Scoring changes must preserve or deliberately update the methodology documented in `SCORING.md`.
+- Scoring changes must preserve or deliberately update the methodology documented in `SCORING.md`; midpoint is display-only and never a ranking basis.
 - Connection logic must avoid leaking handles and should be safe under repeated route/service calls.
 - Scheduler/background code must be idempotent enough for Flask debug reloads and test imports.
 

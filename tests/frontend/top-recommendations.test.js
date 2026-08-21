@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../../frontend/static/js/dashboard/api.js', () => ({
-  fetchTopRecommendations: vi.fn(),
+vi.mock('../../frontend/static/js/dashboard/api-run.js', () => ({
+  fetchRunState: vi.fn(),
+  refreshRun: vi.fn(),
 }));
 
 vi.mock('../../frontend/static/js/utils/state-model.js', () => ({
@@ -141,11 +142,11 @@ describe('top-recommendations empty state', () => {
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
 
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       success: true,
       signals: [],
       count: 0,
@@ -157,7 +158,7 @@ describe('top-recommendations empty state', () => {
 
     await new Promise(r => setTimeout(r, 50));
 
-    expect(fetchTopRecommendations).toHaveBeenCalledWith(3, false);
+    expect(fetchRunState).toHaveBeenCalledWith();
     const emptyCall = StateModel.showEmpty.mock.calls.find(c => c[0] === 'top-recommendations-state');
     expect(emptyCall).toBeDefined();
     const message = emptyCall[1];
@@ -173,11 +174,11 @@ describe('top-recommendations empty state', () => {
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
 
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       success: true,
       signals: [],
       count: 0,
@@ -226,11 +227,11 @@ describe('top-recommendations OpenD-unavailable state', () => {
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
 
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       signals: [],
       count: 0,
       error: 'OpenD unavailable',
@@ -251,11 +252,11 @@ describe('top-recommendations OpenD-unavailable state', () => {
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
 
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       signals: [],
       count: 0,
       error: 'Login required',
@@ -300,11 +301,11 @@ describe('top-recommendations generating state', () => {
     );
     cleanup = cleanupTopRecommendations;
 
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       success: true,
       generating: true,
       count: 0,
@@ -355,11 +356,11 @@ describe('top-recommendations unknown IV status', () => {
     );
     cleanup = cleanupTopRecommendations;
 
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       success: true,
       count: 1,
       signals: [
@@ -430,12 +431,12 @@ describe('top-recommendations source badges', () => {
     cleanup = cleanupTopRecommendations;
     cleanupTopRecommendations();
 
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
     const now = new Date().toISOString();
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       success: true,
       count: 1,
       generated_at: now,
@@ -532,14 +533,16 @@ describe('top-recommendations source badges', () => {
     const { initializeTopRecommendations } = await import(
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
-    const { fetchTopRecommendations } = await import(
-      '../../frontend/static/js/dashboard/api.js'
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
     );
 
-    fetchTopRecommendations.mockResolvedValue({
+    fetchRunState.mockResolvedValue({
       success: true,
+      tradeable: true,
       signals: [{
         rank: 1, ticker: 'AAPL', option_type: 'PUT', strike: 140, expiration: '20240315', dte: 21,
+        copy_eligible: true, recommended_contracts: 1,
         bid: 2.50, ask: 3.00, mid_price: 2.75, premium_per_contract: 275.0,
         max_contracts: 1, cash_required: 14000.0, chain_source: 'broker',
         signal_type: 'csp', profile_type: 'monthly',
@@ -575,3 +578,49 @@ describe('top-recommendations source badges', () => {
     await vi.waitFor(() => expect(btn.classList.contains('btn-danger')).toBe(true));
     vi.unstubAllGlobals();
   });
+
+  it('copies a staged ticket when the run is not tradeable (US market closed)', async () => {
+    setupDOM();
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
+    );
+
+    fetchRunState.mockResolvedValue({
+      success: true,
+      tradeable: false,
+      signals: [{
+        rank: 1, ticker: 'TSLA', option_type: 'PUT', strike: 200, expiration: '20240315', dte: 21,
+        copy_eligible: true, recommended_contracts: 2,
+        bid: 3.00, ask: 3.50, mid_price: 3.25, premium_per_contract: 325.0,
+        max_contracts: 2, cash_required: 20000.0, chain_source: 'broker',
+        signal_type: 'csp', profile_type: 'monthly', event_tier: 'event_unknown',
+        wheel_decision: { confidence_score: 100 },
+      }],
+      count: 1,
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const btn = document.querySelector('.copy-ticket-btn');
+    expect(btn).toBeTruthy();
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toContain('Stage ticket');
+    btn.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+    const text = writeText.mock.calls[0][0];
+    expect(text).toContain('STAGED FOR US MARKET OPEN');
+    expect(text).toContain('EVENT RISK');
+    expect(text).toContain('TSLA');
+    vi.unstubAllGlobals();
+  });
+

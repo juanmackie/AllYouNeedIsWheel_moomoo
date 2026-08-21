@@ -4,7 +4,9 @@ Tests for core/wheel_decision.py - Unified Wheel Decision Engine
 
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
+import core.wheel_decision as _wd_module
 from core.wheel_decision import (
     WheelDecision,
     _calculate_mid_price,
@@ -19,6 +21,17 @@ from core.wheel_decision import (
     score_contract,
     score_existing_position,
 )
+
+# Deterministic across market hours: the freshness fail-closed gate only
+# triggers when the market is open. Unit tests assert scoring outcomes
+# independent of quote freshness, so default the market to closed;
+# freshness-specific tests patch is_market_open explicitly to True.
+_is_market_open_patch = patch.object(_wd_module, "is_market_open", return_value=False)
+_is_market_open_patch.start()
+
+
+def tearDownModule():
+    _is_market_open_patch.stop()
 
 
 class TestWheelDecisionDataclass(unittest.TestCase):
@@ -1324,6 +1337,202 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         self.assertAlmostEqual(result_decimal.implied_volatility, result_pct.implied_volatility, delta=0.02)
         # Expected move buffer should be similar
         self.assertAlmostEqual(result_decimal.expected_move_buffer, result_pct.expected_move_buffer, delta=2.0)
+
+
+class TestQuoteFreshness(unittest.TestCase):
+    """Truthful broker-quote evidence: crossed markets and stale/missing
+    broker timestamps fail closed."""
+
+    def setUp(self):
+        from zoneinfo import ZoneInfo
+
+        self.ny = ZoneInfo("America/New_York")
+        future = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        self.fresh_ts = datetime.now(self.ny).strftime("%Y-%m-%d %H:%M:%S")
+        self.stale_ts = (datetime.now(self.ny) - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+        self.profile = {
+            "min_mid_price": 0.05,
+            "max_spread_pct": 60,
+            "min_premium_per_contract": 10,
+            "min_open_interest": 10,
+            "min_volume": 1,
+            "target_iv_adjusted": 50,
+            "target_theta_delta_ratio": 0.005,
+            "preferred_dte": 21,
+            "target_delta": 0.20,
+            "delta_tolerance": 0.15,
+            "ideal_open_interest": 500,
+            "ideal_volume": 100,
+            "ideal_spread_pct": 12,
+            "liquidity_weight_multiplier": 1.0,
+            "profile_type": "monthly",
+        }
+        self.portfolio = {
+            "positions": {},
+            "cash_balance": 10000.0,
+            "account_value": 50000.0,
+            "short_puts": {},
+        }
+        self.base = {
+            "strike": 95.0,
+            "expiration": future,
+            "option_type": "PUT",
+            "bid": 2.0,
+            "ask": 2.50,
+            "last": 2.25,
+            "delta": -0.20,
+            "gamma": 0.05,
+            "theta": -0.05,
+            "vega": 0.15,
+            "implied_volatility": 0.30,
+            "open_interest": 500,
+            "volume": 100,
+        }
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_fresh_quote_passes_when_market_open(self, _mock_open):
+        opt = dict(
+            self.base,
+            update_time=self.fresh_ts,
+            quote_fetched_at_utc=datetime.now().astimezone().isoformat(),
+        )
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertFalse(res.hard_blockers)
+        self.assertNotIn("stale_quote", res.blocked_reason_codes)
+        self.assertEqual(res.quote_update_time, self.fresh_ts)
+        self.assertTrue(res.quote_fetched_at_utc)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_missing_update_time_blocked_when_market_open(self, _mock_open):
+        opt = dict(self.base)
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertTrue(res.hard_blockers)
+        self.assertIn("stale_quote", res.blocked_reason_codes)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_invalid_update_time_blocked_when_market_open(self, _mock_open):
+        opt = dict(self.base, update_time="not-a-timestamp")
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertTrue(res.hard_blockers)
+        self.assertIn("stale_quote", res.blocked_reason_codes)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_stale_update_time_blocked_when_market_open(self, _mock_open):
+        opt = dict(self.base, update_time=self.stale_ts)
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertTrue(res.hard_blockers)
+        self.assertIn("stale_quote", res.blocked_reason_codes)
+
+    def test_freshness_skipped_when_market_closed(self):
+        # Module default: market closed, so missing timestamp is tolerated.
+        opt = dict(self.base)
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertFalse(res.hard_blockers)
+        self.assertNotIn("stale_quote", res.blocked_reason_codes)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_crossed_market_blocked(self, _mock_open):
+        opt = dict(self.base, bid=3.0, ask=2.50, update_time=self.fresh_ts)
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertTrue(res.hard_blockers)
+        self.assertIn("crossed_market", res.blocked_reason_codes)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_locked_market_is_valid(self, _mock_open):
+        opt = dict(self.base, bid=2.0, ask=2.0, update_time=self.fresh_ts)
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertFalse(res.hard_blockers)
+        self.assertEqual(res.spread_pct, 0.0)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_event_tier_requires_fresh_metadata(self, _mock_open):
+        stock = dict(self.base, update_time=self.fresh_ts, security_type="stock")
+        safe = score_contract(
+            "AAPL",
+            stock,
+            100.0,
+            self.profile,
+            self.portfolio,
+            earnings_info={"fetch_status": "success", "data_stale": False, "days_to_earnings": 30},
+        )
+        self.assertEqual(safe.event_tier, "event_safe")
+
+        etf = dict(self.base, update_time=self.fresh_ts, security_type="etf")
+        not_applicable = score_contract("SPY", etf, 100.0, self.profile, self.portfolio)
+        self.assertEqual(not_applicable.event_tier, "event_not_applicable")
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_bid_premium_velocity_and_tiers(self, _mock_open):
+        opt = dict(
+            self.base,
+            ask=2.10,
+            update_time=self.fresh_ts,
+            quote_fetched_at_utc=datetime.now().astimezone().isoformat(),
+        )
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertFalse(res.hard_blockers)
+        self.assertEqual(res.bid_premium_per_contract, 200.0)
+        self.assertEqual(res.limit_target_per_contract, 205.0)
+        # premium velocity = 200 / 21 dte
+        self.assertAlmostEqual(res.premium_velocity_per_day, 200.0 / 21, places=4)
+        self.assertEqual(res.quality_tier, "qualified")
+
+
+class TestCopyEligibility(TestQuoteFreshness):
+    """Copy eligibility is broader than live-tradeable: any qualified or marginal
+    broker-sourced signal with positive capacity can be copied. Event risk is surfaced
+    as a warning, not a blocker, because the user stages tickets manually at US open."""
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_qualified_with_unknown_earnings_is_copy_eligible(self, _mock_open):
+        opt = dict(self.base, ask=2.10, update_time=self.fresh_ts)
+        res = score_contract(
+            "AAPL",
+            opt,
+            100.0,
+            self.profile,
+            self.portfolio,
+            earnings_info={"fetch_status": "failed"},
+        )
+        self.assertEqual(res.quality_tier, "qualified")
+        self.assertEqual(res.event_tier, "event_unknown")
+        self.assertTrue(res.copy_eligible)
+        self.assertFalse(res.review_only)
+        self.assertTrue(any("EVENT RISK" in r for r in res.rationale))
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_marginal_quality_is_copy_eligible(self, _mock_open):
+        opt = dict(self.base, bid=2.0, ask=3.6, open_interest=20, volume=5, update_time=self.fresh_ts)
+        res = score_contract(
+            "AAPL",
+            opt,
+            100.0,
+            self.profile,
+            self.portfolio,
+            earnings_info={"fetch_status": "success", "data_stale": False, "days_to_earnings": 30},
+        )
+        self.assertEqual(res.quality_tier, "marginal")
+        self.assertTrue(res.copy_eligible)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_yfinance_fallback_not_copy_eligible(self, _mock_open):
+        opt = dict(self.base, update_time=self.fresh_ts, from_yfinance=True)
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertFalse(res.copy_eligible)
+        self.assertTrue(res.review_only)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_zero_capacity_not_copy_eligible(self, _mock_open):
+        opt = dict(self.base, update_time=self.fresh_ts)
+        res = score_contract(
+            "AAPL",
+            opt,
+            100.0,
+            self.profile,
+            {"positions": {}, "cash_balance": 0.0, "account_value": 0.0, "short_puts": {}},
+        )
+        self.assertEqual(res.recommended_contracts, 0)
+        self.assertFalse(res.copy_eligible)
 
 
 if __name__ == "__main__":

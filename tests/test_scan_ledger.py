@@ -91,7 +91,7 @@ class TestScanLedgerEntry(unittest.TestCase):
     def test_default_creation(self):
         entry = ScanLedgerEntry()
         self.assertEqual(entry.scan_type, "recommendations")
-        self.assertEqual(entry.scoring_version, "1.0")
+        self.assertEqual(entry.scoring_version, "2.0-bid-tier")
         self.assertEqual(entry.data_sources, [])
         self.assertEqual(entry.warnings, [])
         self.assertEqual(entry.top_signals, [])

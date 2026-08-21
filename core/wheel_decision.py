@@ -49,7 +49,12 @@ from core.scoring_factors import (
     _compute_size_fit,
     _score_positive_metric,
     _score_proximity,
+    classify_event_tier,
+    is_crossed_market,
+    premium_velocity_per_day,
+    quote_is_stale,
 )
+from core.utils import is_market_open
 
 logger = logging.getLogger(__name__)
 
@@ -172,8 +177,27 @@ class WheelDecision:
     profile_type: str = "monthly"
 
     # -- Quote quality ------------------------------------------------------
-    quote_quality: str = ""  # tradable | no_bid | no_ask | zero_mark | wide_spread | low_liquidity
+    quote_quality: str = (
+        ""  # tradable | no_bid | no_ask | zero_mark | wide_spread | low_liquidity | crossed_market | stale_quote
+    )
     blocked_reason_codes: list[str] = field(default_factory=list)
+
+    # -- Tier contract (single comprehensive plan) ------------------------
+    # quality_tier: qualified | marginal  (spread/OI/volume vs ideal profile)
+    # event_tier:  event_safe | event_unknown | earnings_before_expiry | event_not_applicable
+    quality_tier: str = ""
+    event_tier: str = ""
+    review_only: bool = False
+    copy_eligible: bool = False
+    # Canonical premium basis: executable bid credit, not midpoint.
+    bid_premium_per_contract: float = 0.0
+    limit_target_per_contract: float = 0.0  # midpoint, labelled "limit target — not guaranteed"
+    premium_velocity_per_day: float = 0.0  # bid_premium_per_contract / DTE
+    # Broker quote timestamp (verbatim) and UTC fetch time, kept separate so
+    # freshness reflects the broker quote, not local processing time.
+    quote_update_time: str = ""
+    quote_fetched_at_utc: str = ""
+    security_type: str = "stock"
 
     # -- Decision flags -----------------------------------------------------
     hard_blockers: list[str] = field(default_factory=list)
@@ -394,6 +418,29 @@ def score_contract(
     if ask <= 0:
         return _create_failed_decision(ticker, option_type, strike, expiration, "No ask price available", ["no_ask"])
 
+    if is_crossed_market(bid, ask):
+        return _create_failed_decision(
+            ticker,
+            option_type,
+            strike,
+            expiration,
+            "Crossed market (ask below bid) - invalid broker quote",
+            ["crossed_market"],
+        )
+
+    # Broker quote freshness: fail closed when the market is open and the
+    # broker update time is missing, invalid, or older than the stale window.
+    quote_update_time = str(option.get("update_time", "") or "")
+    if is_market_open() and quote_is_stale(quote_update_time):
+        return _create_failed_decision(
+            ticker,
+            option_type,
+            strike,
+            expiration,
+            "Stale or missing broker quote timestamp while market open",
+            ["stale_quote"],
+        )
+
     mid_price = _calculate_mid_price(bid, ask, last)
     if mid_price <= 0:
         return _create_failed_decision(
@@ -414,7 +461,29 @@ def score_contract(
     implied_volatility = _normalize_iv(option.get("implied_volatility", 0))
     open_interest = int(option.get("open_interest", 0) or 0)
     volume = int(option.get("volume", 0) or 0)
-    premium_per_contract = mid_price * 100
+    # Canonical premium basis is the executable bid credit, not the midpoint.
+    bid_premium_per_contract = bid * 100
+    premium_per_contract = bid_premium_per_contract
+    limit_target_per_contract = mid_price * 100  # midpoint, labelled "limit target — not guaranteed"
+    premium_velocity = premium_velocity_per_day(bid_premium_per_contract, dte)
+
+    # Quality tier: qualified only when spread/OI/volume meet the ideal profile.
+    ideal_spread = profile.get("ideal_spread_pct", 12)
+    ideal_oi = profile.get("ideal_open_interest", 500)
+    ideal_vol = profile.get("ideal_volume", 100)
+    quality_tier = (
+        "qualified"
+        if (spread_pct <= ideal_spread and open_interest >= ideal_oi and volume >= ideal_vol)
+        else "marginal"
+    )
+    # This must be supplied by the broker adapter; scoring time is not quote
+    # fetch time. Direct/unit callers without adapter evidence remain visibly
+    # unproven and cannot claim a fresh fetch timestamp.
+    quote_fetched_at_utc = str(option.get("quote_fetched_at_utc", "") or "")
+    security_type = str(option.get("security_type", "stock") or "stock").strip().lower()
+    if security_type not in {"stock", "etf", "index"}:
+        security_type = "stock"
+    event_tier = classify_event_tier(earnings_info, dte, security_type)
 
     if premium_per_contract < profile.get("min_premium_per_contract", 10):
         return _create_failed_decision(
@@ -496,6 +565,14 @@ def score_contract(
         last=last,
         mid_price=round(mid_price, 4),
         premium_per_contract=round(premium_per_contract, 2),
+        bid_premium_per_contract=round(bid_premium_per_contract, 2),
+        limit_target_per_contract=round(limit_target_per_contract, 2),
+        premium_velocity_per_day=round(premium_velocity, 4),
+        quality_tier=quality_tier,
+        quote_update_time=quote_update_time,
+        quote_fetched_at_utc=quote_fetched_at_utc,
+        security_type=security_type,
+        event_tier=event_tier,
         delta=round(delta, 5),
         gamma=round(float(option.get("gamma", 0) or 0), 5),
         theta=round(float(option.get("theta", 0) or 0), 5),
@@ -524,7 +601,7 @@ def score_contract(
         greeks_source=(option.get("greeks_source") or ("broker" if abs(delta) > 0.001 else "Black-Scholes computed")),
         iv_source=iv_source,
         macro_source=macro_regime.get("source", "FRED/cache/disabled"),
-        quote_timestamp=datetime.now().isoformat(),
+        quote_timestamp=quote_fetched_at_utc or None,
         generated_at=datetime.now().isoformat(),
     )
 
@@ -588,10 +665,10 @@ def score_contract(
         max_contracts = max(int(shares_owned // 100), 0)
         if max_contracts < 1 and not is_long_research:
             return _create_failed_decision(ticker, "CALL", strike, expiration, "No covered shares available")
-        decision.max_contracts = max_contracts if max_contracts > 0 else 1
+        decision.max_contracts = max_contracts
 
         otm_pct = ((strike - stock_price) / stock_price) * 100
-        if_called_return = (((strike - stock_price) + mid_price) / stock_price) * 100 if stock_price > 0 else 0
+        if_called_return = (((strike - stock_price) + bid) / stock_price) * 100 if stock_price > 0 else 0
         cost_basis_score = (
             1.0 if avg_cost <= 0 or strike >= avg_cost else _clamp(1 - ((avg_cost - strike) / avg_cost) * 4)
         )
@@ -757,7 +834,7 @@ def score_contract(
                 f"Research-only: requires ${cash_required:.0f} cash, CSP cash available ${cash_available_for_csp:.0f}"
             )
 
-        breakeven = strike - mid_price
+        breakeven = strike - bid
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
         capital_fit = 0.0 if cash_available_for_csp <= 0 else _clamp(cash_available_for_csp / cash_required)
 
@@ -878,6 +955,30 @@ def score_contract(
 
     else:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Unknown option type")
+
+    # Candidate-level copy eligibility: any qualified or marginal liquidity signal with a
+    # live broker quote and positive capacity can be copied. Event risk is NOT a blocker -
+    # the user trades manually and verifies - but it is surfaced as a warning in the ticket
+    # (see rationale below). Runtime market/freshness gates decide whether the copied ticket
+    # is "execute now" (live) or a "staged for US open" draft (market closed / stale quote).
+    decision.copy_eligible = bool(
+        decision.quality_tier in {"qualified", "marginal"}
+        and decision.chain_source.lower() in {"broker", "persisted-broker"}
+        and not from_yfinance
+        and decision.recommended_contracts > 0
+        and not research_only_mode
+    )
+    decision.review_only = not decision.copy_eligible
+    decision.rationale.insert(
+        0,
+        f"Bid credit ${decision.bid_premium_per_contract:.2f}/contract; velocity ${decision.premium_velocity_per_day:.2f}/day; "
+        f"limit target ${decision.limit_target_per_contract:.2f} (not guaranteed); "
+        f"quality={decision.quality_tier}; event={decision.event_tier}",
+    )
+    if decision.event_tier == "event_unknown":
+        decision.rationale.append("EVENT RISK: earnings status unknown — verify earnings date before placing.")
+    elif decision.event_tier == "earnings_before_expiry":
+        decision.rationale.append("EVENT RISK: earnings before expiry — high risk, confirm before placing.")
 
     # -- Growth-aware scoring (always-on) ----------------------------------
     _apply_growth_scoring(
@@ -1135,11 +1236,11 @@ def _apply_growth_scoring(
 
     rationale_parts = []
     if decision.contract_score >= 70:
-        rationale_parts.append("Strong growth candidate")
+        rationale_parts.append("Strong secondary qualification")
     elif decision.contract_score >= 50:
-        rationale_parts.append("Moderate growth contribution")
+        rationale_parts.append("Moderate secondary qualification")
     else:
-        rationale_parts.append("Limited growth impact")
+        rationale_parts.append("Limited secondary qualification")
 
     if decision.risk_budget_used_pct > 0:
         rationale_parts.append(f"Uses {decision.risk_budget_used_pct:.0f}% of drawdown budget")

@@ -23,7 +23,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-SCORING_VERSION = "1.0"
+SCORING_VERSION = "2.0-bid-tier"
 
 
 @dataclass

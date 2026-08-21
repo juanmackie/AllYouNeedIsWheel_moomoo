@@ -17,7 +17,7 @@
 - Keep route error handling explicit and user-readable.
 - Keep source-policy metadata visible for endpoints that combine Moomoo, watchlist, social, or third-party data.
 - Do not add routes that imply autonomous order execution.
-- `GET /api/options/top-recommendations` supports screener-override query params: `csp_min_otm_pct`, `csp_max_otm_pct`, `csp_min_dte`, `csp_max_dte`, `csp_target_delta`, `min_volatility_pct`, `min_csp_buying_power`. These are passed through as `screener_overrides` to the generation service and included in the cache key.
+- `/api/run` and `/api/run/refresh` are the sole dashboard shortlist workflow. `GET /api/run` returns the immutable last snapshot plus a read-time effective `tradeable`/`stale` view; refresh is serialized and never overwrites the last good snapshot.
 
 ## Work Guidance
 

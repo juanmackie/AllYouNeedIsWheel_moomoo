@@ -16,11 +16,56 @@ Only ``ready`` permits copy-to-ticket actions.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
 ACTIONABLE_STATES = ("ready",)
+
+
+def _fresh_quote_map(quote_fetched_at: dict, max_age_sec: int, now: datetime) -> tuple[bool, list[str]]:
+    stale_symbols = []
+    if not quote_fetched_at:
+        return False, stale_symbols
+    for symbol, fetched_at in quote_fetched_at.items():
+        try:
+            parsed = datetime.fromisoformat(str(fetched_at))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            age = (now - parsed.astimezone(timezone.utc)).total_seconds()
+        except (TypeError, ValueError):
+            stale_symbols.append(str(symbol))
+            continue
+        if age > max_age_sec or age < 0:
+            stale_symbols.append(str(symbol))
+    return not stale_symbols, stale_symbols
+
+
+def recompute_effective_snapshot(snapshot: dict | None, now: datetime | None = None) -> dict | None:
+    """Return a read-only effective view without changing persisted history."""
+    if not isinstance(snapshot, dict):
+        return snapshot
+    view = copy.deepcopy(snapshot)
+    run = view.get("run") or {}
+    now = now or datetime.now(timezone.utc)
+    fresh, stale_symbols = _fresh_quote_map(
+        run.get("quote_fetched_at") or {},
+        int(run.get("max_tradeable_age_sec", 120) or 120),
+        now,
+    )
+    coverage_complete = bool(
+        run.get("coverage_complete", False)
+        or (
+            int(run.get("coverage_total", 0) or 0) > 0
+            and int(run.get("coverage_scanned", 0) or 0) >= int(run.get("coverage_total", 0) or 0)
+        )
+    )
+    base_tradeable = run.get("status") in ACTIONABLE_STATES and not run.get("errors") and coverage_complete and fresh
+    view["tradeable"] = base_tradeable
+    view["effective_status"] = "stale" if run.get("status") == "ready" and not base_tradeable else run.get("status")
+    view["effective_stale_symbols"] = stale_symbols
+    return view
 
 
 def utc_now_iso() -> str:
@@ -45,7 +90,7 @@ class RunMetadata:
     max_tradeable_age_sec: int = 120
     coverage_scanned: int = 0
     coverage_total: int = 0
-    schema_version: int = 1
+    schema_version: int = 2
 
     @property
     def coverage_complete(self) -> bool:
@@ -74,17 +119,12 @@ class WheelRunSnapshot:
         return self._quotes_fresh()
 
     def _quotes_fresh(self) -> bool:
-        if not self.run.quote_fetched_at:
-            return False
-        now = datetime.now(timezone.utc)
-        for fetched_at in self.run.quote_fetched_at.values():
-            try:
-                age = (now - datetime.fromisoformat(fetched_at)).total_seconds()
-            except (TypeError, ValueError):
-                return False
-            if age > self.run.max_tradeable_age_sec:
-                return False
-        return True
+        fresh, _ = _fresh_quote_map(
+            self.run.quote_fetched_at,
+            self.run.max_tradeable_age_sec,
+            datetime.now(timezone.utc),
+        )
+        return fresh
 
     def to_dict(self) -> dict:
         return {

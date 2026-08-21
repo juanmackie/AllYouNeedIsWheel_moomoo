@@ -3,7 +3,7 @@
         <div>
             <span class="app-section__eyebrow" id="top-recs-eyebrow">Opportunity desk</span>
             <h2 id="top-recs-title">Top Signals</h2>
-            <p id="top-recs-desc">Highest-conviction wheel signals ranked by growth impact, premium efficiency, and cash fit.</p>
+            <p id="top-recs-desc">Top watchlist wheel signals ranked by quality tier, event evidence, and executable-bid premium velocity.</p>
             <div id="buying-power-indicator" class="small text-muted d-none">
                 CSP cash: <span id="bp-amount"></span>
                 <span class="text-secondary">|</span>
@@ -74,7 +74,7 @@
     </div>
 
     <div class="app-section__footer">
-        Signals ranked by premium efficiency, liquidity, and 2x portfolio impact. CSP signals require cash not tied up by open short puts unless Best plays is enabled.
+        Signals ranked by quality and event tier, then executable-bid premium velocity. Midpoint values are limit targets—not guaranteed fills; copy remains disabled for review-only signals.
     </div>
 </section>
 
@@ -110,7 +110,7 @@
                     </div>
                     <div class="row g-1">
                         <div class="col-6 text-center">
-                            <small class="text-muted d-block">Premium</small>
+                            <small class="text-muted d-block">Executable bid credit</small>
                             <span class="premium-amount fw-bold fs-6"></span>
                             <small class="text-muted d-block">per cont.</small>
                         </div>
@@ -131,6 +131,22 @@
                 <!-- CAPITAL / RISK -->
                 <div class="recommendation-card__group">
                     <div class="recommendation-details">
+                        <div class="recommendation-detail-row d-flex justify-content-between">
+                            <span>Executable bid</span>
+                            <span class="bid-premium fw-semibold"></span>
+                        </div>
+                        <div class="recommendation-detail-row d-flex justify-content-between">
+                            <span>Limit target <small>(not guaranteed)</small></span>
+                            <span class="limit-target fw-semibold"></span>
+                        </div>
+                        <div class="recommendation-detail-row d-flex justify-content-between">
+                            <span>Spread / OI / volume</span>
+                            <span class="liquidity-evidence fw-semibold"></span>
+                        </div>
+                        <div class="recommendation-detail-row d-flex justify-content-between">
+                            <span>Quantity</span>
+                            <span class="quantity-evidence fw-semibold"></span>
+                        </div>
                         <div class="recommendation-detail-row d-flex justify-content-between">
                             <span>OTM</span>
                             <span class="otm-pct fw-semibold"></span>

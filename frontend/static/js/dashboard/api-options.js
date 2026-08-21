@@ -81,26 +81,3 @@ export async function fetchOptionExpirations(ticker, optionType = null, options 
     }
 }
 
-export async function fetchTopRecommendations(limit = 3, manualRefresh = false) {
-    try {
-        let url = `/api/options/top-recommendations?limit=${limit}`;
-        if (manualRefresh) url += '&refresh=true';
-        const response = await fetchWithTimeout(url, {}, 30000);
-        if (!response.ok) {
-            const payload = await readJsonSafely(response);
-            if (isOpenDUnavailable(payload)) { setConnectionStatusFromPayload(payload); return { signals: [], count: 0, error: payload?.error || 'OpenD unavailable', error_code: payload?.error_code }; }
-            throw new Error(payload?.error || `HTTP error ${response.status}`);
-        }
-        clearUnavailableStatus();
-        const result = await response.json();
-        const cacheStatus = response.headers.get('X-Cache-Status') || 'MISS';
-        const cacheAge = parseInt(response.headers.get('X-Cache-Age') || '0', 10);
-        return { ...result, _cacheInfo: { status: cacheStatus, age: cacheAge } };
-    } catch (error) {
-        const isTimeout = error?.message?.includes('Request timed out');
-        (isTimeout ? console.warn : console.error)('Error fetching top recommendations:', error);
-        if (!isRealAccountUnavailableError(error) && !isTimeout) showAlert(`Error fetching top recommendations: ${error.message}`, 'danger');
-        return { signals: [], count: 0, error: error.message, timedOut: isTimeout };
-    }
-}
-

@@ -17,7 +17,7 @@
 
 - Keep templates presentation-focused; route/service layers should provide data contracts.
 - Preserve accessibility basics: labels, button text, modal semantics, and readable empty/error states.
-- Do not remove warning/source/freshness fields from signal displays unless the backend contract is intentionally changed.
+- Signal cards must keep broker source/freshness, quality/event tiers, spread/liquidity, bid velocity, recommended quantity, and review-only/copy caveats visible; midpoint is a non-guaranteed limit target.
 - Keep any plain-English interpretation/caveat slots for research-only signal cards stable when templates expose them.
 - Keep script/style dependencies consistent with `base.html`.
 

@@ -2,7 +2,7 @@
  * Top Recommendations Module
  * Displays the highest-scoring option opportunities with auto-refresh
  */
-import { fetchTopRecommendations } from './api.js';
+import { fetchRunState, refreshRun } from './api-run.js';
 import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
 import StateModel from '../utils/state-model.js';
@@ -228,18 +228,20 @@ function formatExpiration(expiration) {
  * Build an explicit copy-to-ticket payload for a signal. No order is placed;
  * this is manual ticket text for the broker UI.
  */
-function buildTicketText(rec) {
+function buildTicketText(rec, { staged = false } = {}) {
     const wd = rec.wheel_decision || {};
     const action = getSignalType(rec) === 'covered_call' ? 'SELL TO OPEN COVERED CALL' : 'SELL TO OPEN CSP';
     const optionType = rec.option_type || wd.option_type || '';
     const ticker = rec.ticker || '?';
     const expiry = (rec.expiration || '').replace(/-/g, '');
     const strike = rec.strike != null ? Number(rec.strike).toFixed(2) : '?';
-    const qty = Math.max(1, Number(rec.max_contracts || rec.recommended_contracts || 1) || 1);
-    const limit = rec.bid != null && rec.ask != null
-        ? ((Number(rec.bid) + Number(rec.ask)) / 2).toFixed(2)
+    const qty = Number(rec.recommended_contracts || 0);
+    const limit = rec.limit_target_per_contract != null
+        ? (Number(rec.limit_target_per_contract) / 100).toFixed(2)
         : (rec.mid_price != null ? Number(rec.mid_price).toFixed(2) : '?');
-    const premium = rec.premium_per_contract != null ? Number(rec.premium_per_contract).toFixed(2) : '?';
+    const premium = rec.bid_premium_per_contract != null
+        ? Number(rec.bid_premium_per_contract).toFixed(2)
+        : (rec.premium_per_contract != null ? Number(rec.premium_per_contract).toFixed(2) : '?');
     const dte = rec.dte != null ? rec.dte : '?';
     const cashRequired = rec.cash_required != null
         ? 'Cash required: $' + Number(rec.cash_required).toFixed(2)
@@ -250,15 +252,25 @@ function buildTicketText(rec) {
     const lines = [
         action + ' — ' + ticker,
         optionType + ' ' + ticker + ' ' + expiry + ' ' + strike + ' x' + qty,
-        'Limit $' + limit + ' (mid) — premium $' + premium + '/contract, DTE ' + dte,
+        'Limit $' + limit + ' (midpoint, not guaranteed) — executable bid $' + premium + '/contract, DTE ' + dte,
         cashRequired,
         'Source: ' + chainSource + ' (Moomoo) — quote ' + freshness,
     ];
+    if (staged) {
+        lines.push('STAGED FOR US MARKET OPEN — premium is the last broker quote, NOT live; verify the live quote before placing.');
+    }
+    const eventTier = rec.event_tier || wd.event_tier || '';
+    if (eventTier === 'event_unknown') {
+        lines.push('EVENT RISK: earnings status unknown — verify the earnings date before placing.');
+    } else if (eventTier === 'earnings_before_expiry') {
+        lines.push('EVENT RISK: earnings before expiry — high risk, confirm before placing.');
+    }
     return lines.filter(Boolean).join('\n');
 }
 
 async function copyTicket(rec, btn) {
-    const text = buildTicketText(rec);
+    const staged = !Boolean(signalsData?.tradeable);
+    const text = buildTicketText(rec, { staged });
     const original = btn.innerHTML;
     try {
         await navigator.clipboard.writeText(text);
@@ -322,19 +334,39 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     // Premium velocity — headlining metric
     const velocityEl = clone.querySelector('.premium-velocity');
     const dte = rec.dte;
-    const premiumPerContract = rec.premium_per_contract;
-    let velocityDisplay = 'N/A';
-    let velocityPositive = false;
-    if (premiumPerContract != null && premiumPerContract > 0 && dte != null && dte > 0) {
-        const dailyVelocity = premiumPerContract / dte;
-        velocityDisplay = '$' + dailyVelocity.toFixed(2) + ' / day';
-        velocityPositive = true;
-    }
+    const dailyVelocity = rec.premium_velocity_per_day != null
+        ? Number(rec.premium_velocity_per_day)
+        : null;
+    let velocityDisplay = dailyVelocity != null && dailyVelocity > 0
+        ? '$' + dailyVelocity.toFixed(2) + ' / day'
+        : 'N/A';
+    let velocityPositive = dailyVelocity != null && dailyVelocity > 0;
     velocityEl.textContent = velocityDisplay;
     velocityEl.classList.add(velocityPositive ? 'text-success' : 'text-muted');
 
-    // Premium
-    clone.querySelector('.premium-amount').textContent = rec.premium_per_contract != null ? formatCurrency(rec.premium_per_contract) : 'N/A';
+    // Premium evidence: bid is executable; midpoint is a separate target.
+    clone.querySelector('.premium-amount').textContent = rec.bid_premium_per_contract != null
+        ? formatCurrency(Number(rec.bid_premium_per_contract))
+        : (rec.premium_per_contract != null ? formatCurrency(rec.premium_per_contract) : 'N/A');
+    const limitTargetEl = clone.querySelector('.limit-target');
+    if (limitTargetEl) {
+        limitTargetEl.textContent = rec.limit_target_per_contract != null
+            ? formatCurrency(Number(rec.limit_target_per_contract) / 100)
+            : 'N/A';
+    }
+    const liquidityEl = clone.querySelector('.liquidity-evidence');
+    if (liquidityEl) {
+        const spread = rec.wheel_decision?.spread_pct ?? rec.spread_pct;
+        const oi = rec.open_interest;
+        const volume = rec.volume;
+        liquidityEl.textContent = `${spread != null ? `${Number(spread).toFixed(1)}%` : 'N/A'} / ${oi ?? 'N/A'} / ${volume ?? 'N/A'}`;
+    }
+    const quantityEl = clone.querySelector('.quantity-evidence');
+    if (quantityEl) {
+        const recommended = Number(rec.recommended_contracts || 0);
+        const maximum = Number(rec.max_contracts || 0);
+        quantityEl.textContent = `${recommended} recommended / ${maximum} max`;
+    }
     
     // Annualized return
     const annualizedEl = clone.querySelector('.annualized-return');
@@ -345,6 +377,16 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     const scoreBadge = clone.querySelector('.score-badge');
     scoreBadge.textContent = rec.score != null ? `Score: ${rec.score.toFixed(1)}` : 'Score: N/A';
     addClassTokens(scoreBadge, getScoreColorClass(rec.score));
+
+    // Explicit quality/event tiers are the actionability explanation.
+    const tierBadge = clone.querySelector('.underlying-quality-badge');
+    const qualityTier = rec.quality_tier || rec.wheel_decision?.quality_tier || 'marginal';
+    const eventTier = rec.event_tier || rec.wheel_decision?.event_tier || 'event_unknown';
+    if (tierBadge) {
+        tierBadge.textContent = `${qualityTier} · ${eventTier.replaceAll('_', ' ')}`;
+        addClassTokens(tierBadge, qualityTier === 'qualified' ? 'bg-success' : 'bg-warning text-dark');
+        tierBadge.classList.remove('d-none');
+    }
 
     // Confidence badge
     const confidenceBadge = clone.querySelector('.confidence-badge');
@@ -414,16 +456,14 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         riskBadge.classList.remove('d-none');
     }
 
-    // Why this winner: premium/DTE velocity vs the next ranked candidate.
+    // Why this winner: backend-provided bid velocity; browser does not rank.
     const whyEl = clone.querySelector('.why-winner');
     if (whyEl) {
-        const velocity = rec.premium_per_contract != null && rec.dte
-            ? (rec.premium_per_contract / rec.dte).toFixed(2)
-            : null;
+        const velocity = dailyVelocity != null ? dailyVelocity.toFixed(2) : null;
         const next = rankedNeighbor;
         if (velocity != null) {
-            if (next && next.premium_per_contract != null && next.dte) {
-                const nextVelocity = (next.premium_per_contract / next.dte).toFixed(2);
+            if (next && next.premium_velocity_per_day != null) {
+                const nextVelocity = Number(next.premium_velocity_per_day).toFixed(2);
                 whyEl.textContent = `Why this pick: $${velocity}/day premium velocity` +
                     (parseFloat(velocity) > parseFloat(nextVelocity)
                         ? ` beats next candidate ($${nextVelocity}/day)`
@@ -439,7 +479,29 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     // Copy-to-ticket (explicit; clipboard success/failure feedback)
     const copyBtn = clone.querySelector('.copy-ticket-btn');
     if (copyBtn) {
-        copyBtn.addEventListener('click', () => copyTicket(rec, copyBtn));
+        const runTradeable = Boolean(signalsData?.tradeable);
+        const candidateEligible = Boolean(rec.copy_eligible);
+        const quantityReady = Number(rec.recommended_contracts || 0) > 0;
+        // Copy is allowed for any copy-eligible candidate regardless of market state.
+        // When the run is not live-tradeable (US market closed / stale quote) the ticket is
+        // staged for placement at US open, with the premium labelled as the last broker quote.
+        const canCopy = candidateEligible && quantityReady;
+        copyBtn.disabled = !canCopy;
+        if (canCopy) {
+            if (runTradeable) {
+                copyBtn.title = 'Copy a manual ticket draft (live broker quote)';
+                copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy ticket';
+            } else {
+                copyBtn.title = 'Copy a staged limit ticket — US market closed; verify live quote at open';
+                copyBtn.innerHTML = '<i class="bi bi-clock"></i> Stage ticket';
+            }
+        } else {
+            copyBtn.title = 'Review only: candidate is not copy eligible';
+            copyBtn.innerHTML = '<i class="bi bi-eye"></i> Review only';
+        }
+        copyBtn.addEventListener('click', () => {
+            if (canCopy) copyTicket(rec, copyBtn);
+        });
     }
 
     // Details
@@ -607,7 +669,7 @@ function showGenerating() {
             stateEl.innerHTML = '';
             const notice = document.createElement('div');
             notice.className = 'text-warning small text-center py-2';
-            notice.innerHTML = `<i class="bi bi-hourglass-split"></i> Recomputing best plays... This may take a moment.`;
+            notice.innerHTML = `<i class="bi bi-hourglass-split"></i> Recomputing watchlist signals... This may take a moment.`;
             stateEl.appendChild(notice);
         }
         // Schedule retry polling even for toggle-triggered regenerations
@@ -1141,19 +1203,33 @@ export async function loadTopRecommendations(manualRefresh = false) {
     }
     
     try {
-        const result = await fetchTopRecommendations(3, manualRefresh);
-        
-        if (result.error) {
-            if (result.timedOut) {
-                console.warn('Top recommendations timed out — showing generating state');
-                showGenerating();
-            } else if (result.error_code && ['opend_unavailable', 'opend_login_required', 'real_account_unavailable'].includes(result.error_code)) {
-                console.warn('Top recommendations: OpenD unavailable:', result.error);
-                showError('OpenD unavailable — login required to view wheel signals.');
-            } else {
-                console.error('Error loading top recommendations:', result.error);
-                showError();
+        if (manualRefresh) {
+            await refreshRun();
+        }
+        const envelope = await fetchRunState();
+        const snapshot = envelope.snapshot;
+        const attempt = envelope.attempt || {};
+        const result = (envelope.error || envelope.generating || envelope.signals)
+            ? envelope
+            : snapshot
+            ? {
+                ...snapshot,
+                generated_at: snapshot.run?.generated_at,
+                preset: snapshot.preset || {},
+                market_state: snapshot.run?.market_state,
+                status: snapshot.effective_status || snapshot.run?.status,
+                tradeable: Boolean(snapshot.tradeable),
+                attempt,
             }
+            : (['queued', 'refreshing'].includes(attempt.state)
+                ? { generating: true, signals: [], attempt }
+                : { error: attempt.latest_error || 'No completed wheel run is available.' });
+
+        if (result.error) {
+            if (result.generating) showGenerating();
+            else if (['opend_unavailable', 'opend_login_required', 'real_account_unavailable'].includes(result.error_code)) {
+                showError('OpenD unavailable — login required to view wheel signals.');
+            } else showError(result.error);
             return;
         }
         
@@ -1195,20 +1271,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
         
         signalsData = result;
         
-        const cacheInfo = result._cache || null;
-        
-        if (cacheInfo && cacheInfo.cache_status === 'STALE_FALLBACK') {
-            renderRecommendations(result, result.generated_at, cacheInfo);
-            if (lastUpdatedEl) {
-                const errorMsg = cacheInfo.error ? ` (refresh failed: ${cacheInfo.error})` : '';
-                lastUpdatedEl.textContent = `Showing cached data${errorMsg}`;
-                lastUpdatedEl.classList.add('text-warning');
-                lastUpdatedEl.classList.remove('d-none');
-            }
-            return;
-        }
-        
-        renderRecommendations(result, result.generated_at, cacheInfo);
+        renderRecommendations(result, result.generated_at, null);
         
     } catch (error) {
         console.error('Error loading top recommendations:', error);

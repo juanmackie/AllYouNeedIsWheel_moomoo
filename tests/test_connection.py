@@ -547,6 +547,7 @@ class TestMoomooConnectionCaching(unittest.TestCase):
         mock_chain_df = MagicMock()
         mock_chain_df.empty = True
         conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
         conn.quote_ctx.get_option_chain.return_value = (RET_OK, mock_chain_df)
 
         conn._cache_option_chain("AAPL", "20230616", "C", {"cached": True})
@@ -1253,6 +1254,71 @@ class TestMoomooConnectionAccountResolution(unittest.TestCase):
         self.assertIsNone(conn.quote_ctx)
         self.assertIsNone(conn.trd_ctx)
         self.assertFalse(conn._connected)
+
+
+class TestBrokerEvidence(unittest.TestCase):
+    def setUp(self):
+        MoomooConnection._instances.clear()
+
+    def tearDown(self):
+        MoomooConnection._instances.clear()
+
+    def test_security_types_are_batched_and_broker_derived(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {"code": "US.SPY", "stock_type": "ETF"},
+                    {"code": "US.AAPL", "stock_type": "STOCK"},
+                ]
+            ),
+        )
+
+        result = conn.get_security_types(["SPY", "AAPL"])
+
+        self.assertEqual(result, {"SPY": "etf", "AAPL": "stock"})
+        conn.quote_ctx.get_market_snapshot.assert_called_once()
+        self.assertEqual(conn.get_security_type("SPY"), "etf")
+
+    def test_option_chain_carries_broker_time_and_fetch_time(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx.get_option_chain.return_value = (
+            RET_OK,
+            pd.DataFrame([{"code": "US.AAPL240101P00100000"}]),
+        )
+        conn.quote_ctx.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "option_expiry_date": "2024-01-01",
+                        "option_type": "PUT",
+                        "option_strike_price": 100,
+                        "bid_price": 2,
+                        "ask_price": 2.1,
+                        "last_price": 2.05,
+                        "volume": 10,
+                        "option_open_interest": 20,
+                        "option_implied_volatility": 30,
+                        "option_delta": -0.2,
+                        "option_gamma": 0.01,
+                        "option_theta": -0.02,
+                        "option_vega": 0.1,
+                        "update_time": "2024-01-01 10:00:00",
+                    }
+                ]
+            ),
+        )
+
+        result = conn.get_option_chain("AAPL", "20240101", "P")
+        option = result["options"][0]
+        self.assertEqual(option["update_time"], "2024-01-01 10:00:00")
+        self.assertTrue(option["quote_fetched_at_utc"])
 
 
 if __name__ == "__main__":

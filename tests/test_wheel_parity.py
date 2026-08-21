@@ -17,12 +17,21 @@ retained app can be proven behaviorally equivalent on the wheel surface:
 
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
+import core.wheel_decision as _wheel_decision
 from core.presets import get_preset
 from core.run_model import RunMetadata, WheelRunSnapshot, utc_now_iso
 from core.ticker_utils import canonical_underlying
-from core.wheel_runner import WheelRunner, opaque_account_id
 from core.wheel_decision import WheelDecision, score_contract
+from core.wheel_runner import opaque_account_id
+
+_market_closed_patch = patch.object(_wheel_decision, "is_market_open", return_value=False)
+_market_closed_patch.start()
+
+
+def tearDownModule():
+    _market_closed_patch.stop()
 
 
 def _option(**overrides):
@@ -158,7 +167,8 @@ class TestQuoteFreshnessParity(unittest.TestCase):
 
     def test_stale_run_not_tradeable(self):
         old = datetime.now().timestamp() - 300
-        from datetime import datetime as _dt, timezone
+        from datetime import datetime as _dt
+        from datetime import timezone
 
         fetched = _dt.fromtimestamp(old, tz=timezone.utc).isoformat()
         run = RunMetadata(
@@ -247,7 +257,7 @@ class TestPresetParity(unittest.TestCase):
     def test_balanced_default_and_versions(self):
         preset = get_preset(None)
         self.assertEqual(preset.key, "balanced")
-        self.assertEqual(preset.version, 1)
+        self.assertEqual(preset.version, 2)
         self.assertTrue(preset.to_screener_profile()["require_cash_fit"])
 
 

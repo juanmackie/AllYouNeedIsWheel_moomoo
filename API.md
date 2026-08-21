@@ -12,8 +12,8 @@ order, unlock, or trading-password endpoint.
 - `GET /api/system/opend-status` — OpenD probe
 
 ### Wheel run
-- `GET /api/run` — latest refresh attempt + latest completed snapshot
-- `POST /api/run/refresh` — start one background refresh (202; 409 if running)
+- `GET /api/run` — latest refresh attempt plus immutable last-good snapshot; response recomputes effective `tradeable`, `effective_status`, and stale symbols at read time
+- `POST /api/run/refresh` — start one background refresh (202; 409 if running); failed attempts never overwrite the last-good snapshot
 
 ### Settings
 - `GET /api/settings` — presets, active key, effective read-only values
@@ -24,11 +24,9 @@ order, unlock, or trading-password endpoint.
 - `POST /api/watchlist` — add app-managed symbol `{symbol}`
 - `DELETE /api/watchlist/<symbol>` — remove app-managed symbol
 
-### Options / recommendations
-- `GET /api/options/top-recommendations?limit=3&refresh=true` — CSP + covered-call
-  signals with preset, coverage, origins, blocked diagnostics
+### Options / research
 - `GET /api/options/otm`, `/api/options/expirations`, `/api/options/stock-price`,
-  `/api/options/cash-status`, `/api/options/analytics/lifecycle` — broker-only research views
+  `/api/options/cash-status`, `/api/options/analytics/lifecycle` — broker-only research views. Shortlist cards are served only by `/api/run`; there is no parallel recommendation cache endpoint.
 
 ### Portfolio / positions
 - `GET /api/portfolio/` — portfolio summary (broker truth)
