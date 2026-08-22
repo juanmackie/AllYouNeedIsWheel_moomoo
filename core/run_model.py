@@ -51,7 +51,7 @@ def recompute_effective_snapshot(snapshot: dict | None, now: datetime | None = N
     now = now or datetime.now(timezone.utc)
     fresh, stale_symbols = _fresh_quote_map(
         run.get("quote_fetched_at") or {},
-        int(run.get("max_tradeable_age_sec", 120) or 120),
+        int(run.get("max_tradeable_age_sec", 300) or 300),
         now,
     )
     coverage_complete = bool(
@@ -87,7 +87,7 @@ class RunMetadata:
     partial_symbols: tuple[str, ...] = ()
     stale_symbols: tuple[str, ...] = ()
     quote_fetched_at: dict[str, str] = field(default_factory=dict)
-    max_tradeable_age_sec: int = 120
+    max_tradeable_age_sec: int = 300
     coverage_scanned: int = 0
     coverage_total: int = 0
     schema_version: int = 2

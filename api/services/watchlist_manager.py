@@ -161,7 +161,7 @@ class WatchlistManager:
         calls spaced >= 3s by the chain rate limiter. Total chain time is
         approximately 6s per symbol.
         """
-        freshness_window = int(self.config.get("max_tradeable_quote_age_sec", 120) or 120)
+        freshness_window = int(self.config.get("max_tradeable_quote_age_sec", 300) or 300)
         chain_spacing_sec = 3.0
         per_symbol_chain_sec = 2 * chain_spacing_sec
         estimated_scan_sec = watchlist_size * per_symbol_chain_sec

@@ -64,13 +64,13 @@ export async function loadRunStrip() {
                         : 'coverage n/a';
             }
             if (freshnessEl) {
-                const ages = Object.values(run.quote_fetched_at || {}).map((ts) => {
-                    const age = (Date.now() - new Date(ts).getTime()) / 1000;
-                    return Math.round(age);
-                });
+                const ages = Object.values(run.quote_fetched_at || {})
+                    .filter((ts) => ts)
+                    .map((ts) => Math.round((Date.now() - new Date(ts).getTime()) / 1000))
+                    .filter((a) => Number.isFinite(a));
                 freshnessEl.textContent = ages.length
                     ? `quote age ${Math.max(...ages)}s (max ${run.max_tradeable_age_sec}s)`
-                    : '';
+                    : (run.market_state === 'closed' ? 'quote stale (market closed)' : 'quote stale');
             }
         } else {
             setBadge('run-status', 'NO RUN', 'bg-secondary');

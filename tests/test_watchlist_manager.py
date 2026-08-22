@@ -22,6 +22,37 @@ class TestWatchlistManagerInit(unittest.TestCase):
         self.assertIs(manager._config_provider, mock_context)
 
 
+class TestPreflightScanFeasibility(unittest.TestCase):
+    """Freshness-window contract: a full canonical-union scan must be feasible
+    at the configured window. The default must accommodate the shipped
+    27-symbol union; a regression to the old 120s window silently published
+    planning/0 for every refresh."""
+
+    def setUp(self):
+        self.mock_context = MagicMock()
+        self.mock_context.config = {}
+        self.manager = WatchlistManager(self.mock_context)
+
+    def test_default_window_fits_27_symbol_union(self):
+        result = self.manager.preflight_scan_feasibility(27)
+        self.assertTrue(result["feasible"], result)
+        self.assertEqual(result["freshness_window_sec"], 300)
+        self.assertEqual(result["estimated_scan_sec"], 162.0)
+        self.assertTrue(result["chain_quota_ok"])
+
+    def test_explicit_config_override_is_respected(self):
+        self.mock_context.config = {"max_tradeable_quote_age_sec": 120}
+        result = self.manager.preflight_scan_feasibility(27)
+        self.assertFalse(result["feasible"])
+        self.assertEqual(result["freshness_window_sec"], 120)
+
+    def test_oversized_union_stays_infeasible(self):
+        """Complete-union-or-planning still gates genuinely oversized lists."""
+        result = self.manager.preflight_scan_feasibility(60)
+        self.assertFalse(result["feasible"])
+        self.assertEqual(result["estimated_scan_sec"], 360.0)
+
+
 class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
     """Test get_effective_watchlist behavior."""
 

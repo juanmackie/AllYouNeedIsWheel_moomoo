@@ -863,7 +863,7 @@ class RecommendationEngine:
                     "feasible": True,
                     "watchlist_size": len(effective_watchlist),
                     "estimated_scan_sec": 0.0,
-                    "freshness_window_sec": 120,
+                    "freshness_window_sec": 300,
                     "chain_calls": 0,
                     "chain_quota_ok": True,
                     "recommended_max_size": max(12, len(effective_watchlist)),

@@ -1,3 +1,11 @@
+## 2026-08-22 — Freshness window sized for full-union scans
+
+- Raised the quote freshness window (`max_tradeable_age_sec` / preflight budget) from
+  120s to 300s. A 27-symbol canonical union (est ~162s of chain calls) previously always
+  exceeded the 120s window, so every refresh published `planning` with zero signals —
+  including held-position covered calls. Scans are now feasible at full-union size;
+  complete-union-or-planning semantics are unchanged.
+
 ## 2026-08-21 — Night-staged copy tickets
 
 - Broadened copy eligibility to any qualified or marginal Moomoo-sourced signal with

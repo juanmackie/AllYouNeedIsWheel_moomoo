@@ -80,11 +80,11 @@ def resolve_account(conn, config: dict) -> str:
 class WheelRunner:
     """Runs the wheel engine and publishes immutable snapshots."""
 
-    def __init__(self, db, options_service, config: dict, max_tradeable_age_sec: int = 120):
+    def __init__(self, db, options_service, config: dict, max_tradeable_age_sec: int = 300):
         self._db = db
         self._options_service = options_service
         self._config = config
-        self._max_tradeable_age_sec = int(max_tradeable_age_sec or 120)
+        self._max_tradeable_age_sec = int(max_tradeable_age_sec or 300)
         self._latest_snapshot: WheelRunSnapshot | None = None
 
     # -- attempt helpers -------------------------------------------------
