@@ -1,0 +1,77 @@
+<section class="app-section dashboard-growth-section" id="growth-panel">
+    <div class="summary-panel">
+        <div class="summary-panel__header">
+            <div>
+                <span class="app-section__eyebrow">Growth</span>
+                <h2>Path to 10x</h2>
+            </div>
+            <div id="growth-track-badge" class="badge bg-secondary">LOADING…</div>
+        </div>
+
+        <div class="summary-metrics-grid" role="group" aria-label="Growth metrics">
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Current NAV</p>
+                <h3 class="summary-metric-value" id="growth-current-nav">$0.00</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Target (<span id="growth-target-label">10x</span>)</p>
+                <h3 class="summary-metric-value" id="growth-target-nav">$0.00</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Progress</p>
+                <h3 class="summary-metric-value" id="growth-progress">0%</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Annualized pace</p>
+                <h3 class="summary-metric-value" id="growth-annualized">—</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">ETA to 10x</p>
+                <h3 class="summary-metric-value" id="growth-eta">—</h3>
+            </div>
+        </div>
+
+        <div class="summary-leverage-panel">
+            <div class="progress" style="height: 4px;">
+                <div id="growth-progress-bar" class="progress-bar bg-success" role="progressbar"
+                     style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+        </div>
+
+        <div class="mt-3">
+            <p class="summary-metric-label mb-1">Equity curve (NAV per run)</p>
+            <div id="growth-equity-curve" class="growth-equity-curve text-muted small" aria-live="polite">
+                Loading history…
+            </div>
+        </div>
+
+        <div class="summary-metrics-grid mt-3" role="group" aria-label="Trade journal">
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Win rate</p>
+                <h3 class="summary-metric-value" id="journal-win-rate">—</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Exits</p>
+                <h3 class="summary-metric-value" id="journal-exits">0</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Rolls</p>
+                <h3 class="summary-metric-value" id="journal-rolls">0</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Entries</p>
+                <h3 class="summary-metric-value" id="journal-entries">0</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Snapshots</p>
+                <h3 class="summary-metric-value" id="journal-snapshots">0</h3>
+            </div>
+        </div>
+
+        <p class="text-muted small mt-2 mb-0">
+            Pace math uses persisted portfolio snapshots only (Moomoo/OpenD truth,
+            captured at each completed run). No fixed deadline — ETA is derived
+            from your realized pace.
+        </p>
+    </div>
+</section>

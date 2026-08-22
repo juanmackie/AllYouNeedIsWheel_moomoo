@@ -1,0 +1,46 @@
+<section class="app-section dashboard-positions-section" id="position-monitor">
+    <div class="summary-panel">
+        <div class="summary-panel__header">
+            <div>
+                <span class="app-section__eyebrow">Monitoring</span>
+                <h2>Open short options</h2>
+            </div>
+            <button id="refresh-position-monitor" class="btn btn-outline-secondary btn-sm" type="button">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
+
+        <div id="position-monitor-loading" class="text-muted small mb-2 d-none"></div>
+
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0" aria-label="Open short option positions">
+                <thead>
+                    <tr>
+                        <th scope="col">Ticker</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Strike</th>
+                        <th scope="col">Expiry</th>
+                        <th scope="col">DTE</th>
+                        <th scope="col">Qty</th>
+                        <th scope="col">Entry cr.</th>
+                        <th scope="col">Mark</th>
+                        <th scope="col">P&amp;L</th>
+                        <th scope="col">Delta</th>
+                        <th scope="col">Earnings</th>
+                        <th scope="col">Pressure</th>
+                        <th scope="col">Verdict</th>
+                    </tr>
+                </thead>
+                <tbody id="position-monitor-body">
+                    <tr><td colspan="13" class="text-center text-muted">Loading positions…</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <p class="text-muted small mt-2 mb-0">
+            Live Moomoo/OpenD data, read-only. P&amp;L compares your entry credit
+            (avg cost) with the current mark. Verdicts come from the exit playbook
+            and are suggestions only — execute externally in Moomoo.
+        </p>
+    </div>
+</section>

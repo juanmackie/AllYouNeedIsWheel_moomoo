@@ -4,13 +4,14 @@
 
 ## Purpose
 
-`db/` owns SQLite schema creation, migrations, connection pooling, and repositories for persisted earnings, IV history, trade events, option chains, and recommendation data.
+`db/` owns SQLite schema creation, migrations, connection pooling, and repositories for persisted earnings, IV history, trade events, option chains, portfolio snapshots, and recommendation data.
 
 ## Ownership
 
 - `schema.py` owns `SCHEMA_VERSION`, table creation, and migrations.
 - `database.py` owns the higher-level database facade.
 - Repository modules own focused persistence behavior for their table/domain.
+- `portfolio_snapshots_repository.py` owns one-snapshot-per-run equity history (`portfolio_snapshots`, schema v7); rows join to `run_metadata` via `run_id` and feed `/api/portfolio/history` plus position-diff trade-event inference.
 - `sqlite_pool.py` owns pooled connection behavior.
 
 ## Local Contracts

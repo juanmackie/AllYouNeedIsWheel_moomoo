@@ -67,8 +67,56 @@ quality tier
 → strike
 ```
 
-The existing underlying-diversity safeguard is applied after this ordering.
+The existing underlying-diversity safeguard is applied after this ordering,
+extended with a portfolio-aware concentration guard: an underlying you already
+have open short options on receives at most ONE new pick (not the standard
+cap), and each candidate carries `existing_exposure_contracts` for display.
 The browser displays the backend fields and performs no ranking or premium math.
+
+## Capital-aware sizing on every pick
+
+CSP capacity is computed from true available cash after reserved short-put
+collateral (`cash_available_for_csp`). Each pick displays: cash required,
+income at the recommended size (recommended contracts × executable bid),
+cash remaining after the trade, and — when portfolio history exists — what
+percentage of the daily pace to the preset's growth target this trade covers.
+
+## Exit playbook (open positions)
+
+`core/exit_playbook.py::evaluate_exit` assigns each open short option one
+deterministic verdict — HOLD, TAKE_PROFIT, ROLL, or CLOSE — with ranked
+reasons. First matching rule wins:
+
+1. CLOSE — earnings land before expiry while ITM or within 5% OTM.
+2. CLOSE — deeply ITM beyond the preset threshold (default 15%).
+3. CLOSE — |delta| breaches the exit level (default 0.65).
+4. TAKE_PROFIT — ≥ 50% of entry credit captured (entry credit from Moomoo
+   `avg_cost`; unknown credit disables the rule, never fakes it).
+5. ROLL — DTE entered the roll window (default ≤ 21) while safely OTM.
+6. HOLD — otherwise; proximity/decay notes ride along.
+
+Verdicts are computed in `score_existing_position`, serialized on the wheel
+decision, exposed via `/api/portfolio/roll-pressure`, and rendered on the
+position monitor with reasons as tooltips. Early-assignment/dividend risk for
+ITM short calls is intentionally not modeled: no free-tier dividend feed
+exists, and inventing one would violate the broker-truth contract.
+
+## Entry timing guidance
+
+Each scan payload carries server-computed intraday advice
+(`core/utils.entry_window_advice`): avoid the first 15 minutes (spread
+blowout) and final 30 minutes (MOC/pinning), midday is fair, mid-session is
+good, outside hours the app directs you to stage limit tickets. Earnings risk
+before entry is already enforced by event tiers.
+
+## Growth pace (path to target)
+
+One portfolio snapshot is persisted per completed run (NAV, cash, reserved
+collateral, full position book). `GET /api/portfolio/history` serves the
+series plus a `pace` payload from `core.growth_mode.growth_pace`: progress
+toward the active preset's `target_account_multiple`, annualized pace from
+realized NAV change, ETA to target, required premium/day, and an on-track
+verdict derived from realized pace — never a promised date.
 
 ## Actionability
 

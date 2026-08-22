@@ -11,6 +11,9 @@
 - `api/__init__.py` owns app factory setup, service registration, request logging, CORS (including `_supports_credentialed_cors` and `_is_trusted_cors_origin` helpers), secret-key resolution (`_resolve_secret_key`), health checks, and blueprint registration.
 - `api/routes/` owns request parsing, response shaping, HTTP status handling, and delegation to services.
 - `api/services/` owns broker-facing, market-data, portfolio, recommendation, LLM, and signal orchestration.
+- `api/routes/portfolio.py::get_portfolio_history` serves persisted per-run portfolio snapshots plus growth-pace math from `core.growth_mode.growth_pace` (target multiple from the active preset); it reads local SQLite only and does not gate on live OpenD.
+- `api/routes/roll_pressure.py` enriches each open position with the exit-playbook verdict (`exit_verdict`, `exit_reasons`) and Moomoo entry credit (`avg_cost`) for P&L display.
+- `api/services/recommendations.py` attaches `entry_context` (intraday entry-window advice) and applies the portfolio-aware concentration guard (`existing_exposure_contracts`).
 
 ## Local Contracts
 

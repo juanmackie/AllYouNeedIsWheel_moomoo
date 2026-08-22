@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from core.connection_constants import _normalize_iv
+from core.exit_playbook import ExitThresholds, captured_profit_pct_for_short, evaluate_exit
 from core.growth_mode import (
     classify_covered_call_intent,
     compute_confidence_score,
@@ -1106,6 +1107,20 @@ def score_existing_position(
     # Compute profit target progress
     decision.profit_target_progress = _compute_profit_target_progress(decision)
 
+    # Exit playbook verdict (deterministic rules, preset-driven thresholds).
+    entry_credit = float(position_data.get("avg_cost", 0) or 0)
+    decision.exit_verdict, decision.exit_reasons = _evaluate_position_exit(
+        decision,
+        entry_credit_per_contract=entry_credit,
+        earnings_info=earnings_info or {},
+        thresholds=ExitThresholds(
+            profit_take_pct=float(portfolio_context.get("exit_profit_take_pct", 50.0) or 50.0),
+            roll_dte=int(portfolio_context.get("exit_roll_dte", 21) or 21),
+            exit_delta=float(portfolio_context.get("exit_delta", 0.65) or 0.65),
+            deep_itm_pct=float(portfolio_context.get("exit_deep_itm_pct", 15.0) or 15.0),
+        ),
+    )
+
     # Size fit
     decision.size_fit = _compute_size_fit(decision, portfolio_context)
 
@@ -1135,6 +1150,46 @@ def score_existing_position(
         extrinsic,
     )
     return decision
+
+
+def _evaluate_position_exit(
+    decision: WheelDecision,
+    entry_credit_per_contract: float,
+    earnings_info: dict,
+    thresholds: ExitThresholds | None = None,
+):
+    """Bridge a scored open position into the exit playbook.
+
+    Returns (verdict, reasons). Days-to-earnings prefers the enriched earnings
+    info, then whatever the decision already carries. Entry credit unknown ->
+    profit-take rule cannot fire (explicitly modeled as None).
+    """
+    days_to_earnings = None
+    for source in (
+        earnings_info.get("days_to_earnings") if isinstance(earnings_info, dict) else None,
+        decision.days_to_earnings,
+    ):
+        if source is not None:
+            try:
+                days_to_earnings = int(source)
+                break
+            except (TypeError, ValueError):
+                continue
+
+    captured = captured_profit_pct_for_short(
+        entry_credit_per_contract=entry_credit_per_contract,
+        current_mark_per_contract=decision.mid_price,
+    )
+    verdict = evaluate_exit(
+        option_type=decision.option_type,
+        dte=int(decision.dte or 0),
+        delta=float(decision.delta or 0),
+        otm_pct=float(decision.otm_pct or 0),
+        captured_profit_pct=captured,
+        days_to_earnings=days_to_earnings,
+        thresholds=thresholds,
+    )
+    return verdict.verdict, verdict.reasons
 
 
 # ---------------------------------------------------------------------------
@@ -1226,7 +1281,9 @@ def _apply_growth_scoring(
             decision.warnings.append("Low premium relative to growth target")
 
     income_per_month = premium_per_contract * 4
-    target_multiple = float(growth_obj.get("target_account_multiple", 2.0))
+    # Aligned with the active preset's growth objective (defaults to the
+    # project-wide 10x goal when no preset profile is provided).
+    target_multiple = float(growth_obj.get("target_account_multiple", 10.0))
     decision.remaining_gap_to_target = estimate_target_gap(
         account_value=max(account_value, cash_balance, ACCOUNT_VALUE_MIN),
         target_multiple=target_multiple,

@@ -152,5 +152,66 @@ class TestAlertsRoutes(unittest.TestCase):
             self.assertEqual(response.status_code, 503)
 
 
+class TestPortfolioHistoryRoute(unittest.TestCase):
+    """GET /api/portfolio/history — local snapshot store, no OpenD gate."""
+
+    def setUp(self):
+        from api import create_app
+
+        self.app = create_app()
+        self.client = self.app.test_client()
+        self.app.config["TESTING"] = True
+
+    def test_history_database_unavailable(self):
+        self.app.config["database"] = None
+        response = self.client.get("/api/portfolio/history")
+        self.assertEqual(response.status_code, 503)
+
+    def test_history_success_and_source_policy(self):
+        mock_db = MagicMock()
+        mock_db.get_portfolio_history.return_value = [
+            {
+                "run_id": "r1",
+                "captured_at": "2026-08-20T15:00:00+00:00",
+                "env": "SIMULATE",
+                "account_id": "h1",
+                "net_liquidation": 1000.0,
+                "cash_available": 400.0,
+                "cash_reserved_for_csp": 600.0,
+                "cash_available_for_csp": 400.0,
+                "broker_buying_power": 1000.0,
+                "positions": [],
+            },
+            {
+                "run_id": "r2",
+                "captured_at": "2026-08-21T15:00:00+00:00",
+                "env": "SIMULATE",
+                "account_id": "h1",
+                "net_liquidation": 1100.0,
+                "cash_available": 440.0,
+                "cash_reserved_for_csp": 660.0,
+                "cash_available_for_csp": 440.0,
+                "broker_buying_power": 1100.0,
+                "positions": [],
+            },
+        ]
+        self.app.config["database"] = mock_db
+
+        response = self.client.get("/api/portfolio/history?limit=10")
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data["count"], 2)
+        self.assertEqual(len(data["series"]), 2)
+        self.assertEqual(data["series"][0]["net_liquidation"], 1000.0)  # oldest first
+        self.assertEqual(data["source_policy"]["mode"], "broker_only")
+        mock_db.get_portfolio_history.assert_called_once_with(limit=10)
+
+    def test_history_invalid_limit(self):
+        mock_db = MagicMock()
+        self.app.config["database"] = mock_db
+        response = self.client.get("/api/portfolio/history?limit=abc")
+        self.assertEqual(response.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

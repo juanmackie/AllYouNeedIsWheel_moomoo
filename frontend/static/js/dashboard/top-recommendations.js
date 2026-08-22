@@ -9,6 +9,11 @@ import StateModel from '../utils/state-model.js';
 
 // Module state
 let signalsData = null;
+
+// Daily premium needed to stay on the 10x pace (from portfolio history).
+// Fetched lazily once; null when history is insufficient.
+let requiredPremiumPerDay = null;
+let requiredPaceFetched = false;
 let autoRefreshInterval = null;
 let isVisible = true;
 let listenersBound = false;
@@ -547,6 +552,35 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
 
         clone.querySelector('.csp-cash-required').textContent = cashReq ? formatCurrency(cashReq) : 'N/A';
         clone.querySelector('.csp-cash-pct').textContent = cashPct > 0 ? `${cashPct.toFixed(1)}%` : 'N/A';
+
+        // Capital-aware sizing: income at the recommended size (executable bid)
+        // and cash left after collateral is committed. Pure arithmetic on
+        // Moomoo-sourced fields — no new data source.
+        const qtyRec = Number(rec.recommended_contracts || 0);
+        const bidPremiumPerContract = rec.bid_premium_per_contract ?? rec.wheel_decision?.bid_premium_per_contract;
+        const incomeAtSize = qtyRec > 0 && bidPremiumPerContract != null ? qtyRec * Number(bidPremiumPerContract) : null;
+        const cashAfter = cashReq != null && cspCash > 0 ? cspCash - qtyRec * Number(cashReq) : null;
+        const incomeEl = clone.querySelector('.csp-income-at-size');
+        if (incomeEl) incomeEl.textContent = incomeAtSize != null ? formatCurrency(incomeAtSize) : 'N/A';
+        const cashAfterEl = clone.querySelector('.csp-cash-after');
+        if (cashAfterEl) {
+            cashAfterEl.textContent = cashAfter != null ? formatCurrency(Math.max(cashAfter, 0)) : 'N/A';
+            cashAfterEl.classList.toggle('text-warning', cashAfter != null && cashAfter < 0);
+        }
+
+        // Contribution to the 10x goal: this trade's credit vs the required
+        // daily pace derived from persisted portfolio history.
+        const contributionEl = clone.querySelector('.csp-pace-contribution');
+        if (contributionEl) {
+            if (incomeAtSize != null && requiredPremiumPerDay != null && requiredPremiumPerDay > 0) {
+                const coverage = (incomeAtSize / requiredPremiumPerDay) * 100;
+                contributionEl.textContent = `Covers ${coverage.toFixed(1)}% of the daily pace to 10x`;
+                contributionEl.classList.remove('d-none');
+            } else {
+                contributionEl.textContent = '';
+                contributionEl.classList.add('d-none');
+            }
+        }
         clone.querySelector('.csp-breakeven-buffer').textContent = breakevenBuffer != null ? `${breakevenBuffer.toFixed(1)}%` : 'N/A';
         clone.querySelector('.csp-expected-move').textContent = expectedMove != null ? `${expectedMove.toFixed(1)}%` : 'N/A';
         // Show active preset profile on CSP card (read-only)
@@ -906,6 +940,23 @@ function applyPreset(result) {
     document.getElementById('top-recs-title').textContent = 'Wheel signals';
     document.getElementById('top-recs-eyebrow').textContent = preset?.label?.toUpperCase() || 'BALANCED';
 
+    // Entry timing guidance (intraday window advice, server-computed)
+    const entryContext = result?.entry_context;
+    const timingWrap = document.getElementById('entry-timing-advice');
+    const timingText = document.getElementById('entry-timing-text');
+    if (timingWrap && timingText && entryContext?.message) {
+        timingText.textContent = entryContext.message;
+        const qualityClass = {
+            good: 'text-success',
+            fair: 'text-muted',
+            caution: 'text-warning',
+            poor: 'text-danger',
+            closed: 'text-muted',
+        }[entryContext.quality] || 'text-muted';
+        timingText.className = qualityClass;
+        timingWrap.classList.remove('d-none');
+    }
+
     // Show CSP screener profile (read-only)
     const cspProfileText = document.getElementById('growth-csp-profile-text');
     if (cspProfileText) {
@@ -1073,6 +1124,28 @@ function getSignalType(rec) {
 }
 
 /**
+ * Lazily load the required daily premium pace from portfolio history.
+ * Resolves true only when a usable pace value was found (one-shot).
+ */
+async function fetchRequiredPace() {
+    requiredPaceFetched = true;
+    try {
+        const resp = await fetch('/api/portfolio/history?limit=365');
+        if (resp.ok) {
+            const data = await resp.json();
+            const pace = data?.pace?.required_premium_per_day;
+            if (typeof pace === 'number' && pace > 0) {
+                requiredPremiumPerDay = pace;
+                return true;
+            }
+        }
+    } catch (err) {
+        console.debug('Pace contribution unavailable:', err);
+    }
+    return false;
+}
+
+/**
  * Render signals filtered by active tab
  */
 function renderFilteredSignals() {
@@ -1088,6 +1161,12 @@ function renderFilteredSignals() {
         applyGrowthFieldsToCard(card, rec);
         cardsContainer.appendChild(card);
     });
+    // Pace data loads once; re-render a single time when it arrives.
+    if (!requiredPaceFetched) {
+        fetchRequiredPace().then((found) => {
+            if (found && cardsContainer && signalsData) renderFilteredSignals();
+        });
+    }
 
     // Update count display
     if (signalCountDisplay) {

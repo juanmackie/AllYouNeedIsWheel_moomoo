@@ -12,6 +12,9 @@
                 Broker buying power: <span id="bp-broker"></span>
                 <div id="bp-diagnostics" class="small text-warning mt-1 d-none"></div>
             </div>
+            <div id="entry-timing-advice" class="small mt-1 d-none">
+                <i class="bi bi-clock-history"></i> <span id="entry-timing-text"></span>
+            </div>
         </div>
         <div class="app-section__actions">
             <small id="top-recs-last-updated" class="text-muted d-none"></small>
@@ -171,6 +174,14 @@
                                 <span class="csp-cash-required fw-semibold"></span>
                             </div>
                             <div class="d-flex justify-content-between">
+                                <span>Income at size</span>
+                                <span class="csp-income-at-size fw-semibold"></span>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span>Cash after trade</span>
+                                <span class="csp-cash-after fw-semibold"></span>
+                            </div>
+                            <div class="d-flex justify-content-between">
                                 <span>% of CSP cash</span>
                                 <span class="csp-cash-pct fw-semibold"></span>
                             </div>
@@ -185,6 +196,7 @@
                             <div class="csp-screener-info small text-muted mt-1">
                                 <i class="bi bi-funnel"></i> <span class="csp-screener-summary"></span>
                             </div>
+                            <div class="csp-pace-contribution small text-info mt-1 d-none"></div>
                         </div>
 
                         <div class="cc-details d-none">

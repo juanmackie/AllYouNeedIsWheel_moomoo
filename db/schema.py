@@ -5,7 +5,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def create_tables(conn):
@@ -225,6 +225,29 @@ def create_tables(conn):
         ON option_chain_snapshots(as_of)
     """)
 
+    # ── Portfolio Snapshots (one row per completed run, for equity history) ──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id                  TEXT NOT NULL UNIQUE,
+            captured_at             TEXT NOT NULL,
+            env                     TEXT NOT NULL,
+            account_id              TEXT NOT NULL DEFAULT '',
+            net_liquidation         REAL NOT NULL DEFAULT 0,
+            cash_available          REAL NOT NULL DEFAULT 0,
+            cash_reserved_for_csp   REAL NOT NULL DEFAULT 0,
+            cash_available_for_csp  REAL NOT NULL DEFAULT 0,
+            broker_buying_power     REAL NOT NULL DEFAULT 0,
+            positions_json          TEXT NOT NULL DEFAULT '[]',
+            created_at              TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_captured_at
+        ON portfolio_snapshots(captured_at)
+    """)
+
 
 def migrate_database(db_path):
     try:
@@ -412,6 +435,30 @@ def migrate_database(db_path):
                 )
                 logger.info("Migration: Created option_chain_snapshots table for persistent chain cache")
                 cursor.execute("PRAGMA user_version = 6")
+                conn.commit()
+
+            if current_version < 7:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+                        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                        run_id                  TEXT NOT NULL UNIQUE,
+                        captured_at             TEXT NOT NULL,
+                        env                     TEXT NOT NULL,
+                        account_id              TEXT NOT NULL DEFAULT '',
+                        net_liquidation         REAL NOT NULL DEFAULT 0,
+                        cash_available          REAL NOT NULL DEFAULT 0,
+                        cash_reserved_for_csp   REAL NOT NULL DEFAULT 0,
+                        cash_available_for_csp  REAL NOT NULL DEFAULT 0,
+                        broker_buying_power     REAL NOT NULL DEFAULT 0,
+                        positions_json          TEXT NOT NULL DEFAULT '[]',
+                        created_at              TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_captured_at ON portfolio_snapshots(captured_at)"
+                )
+                logger.info("Migration: Created portfolio_snapshots table for equity history")
+                cursor.execute("PRAGMA user_version = 7")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

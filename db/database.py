@@ -10,6 +10,7 @@ from pathlib import Path
 from .earnings_repository import EarningsRepository
 from .iv_repository import IVRepository
 from .option_chain_repository import OptionChainRepository
+from .portfolio_snapshots_repository import PortfolioSnapshotsRepository
 from .schema import create_tables, migrate_database
 from .sqlite_pool import (
     get_connection_pool_stats,
@@ -42,6 +43,7 @@ class OptionsDatabase:
         self._earnings = EarningsRepository(self.db_path)
         self._trade_events = TradeEventsRepository(self.db_path)
         self._option_chains = OptionChainRepository(self.db_path)
+        self._portfolio_snapshots = PortfolioSnapshotsRepository(self.db_path)
 
         logger.info("OptionsDatabase initialized at %s", self.db_path)
         logger.debug(
@@ -290,6 +292,17 @@ class OptionsDatabase:
 
     def get_trade_analytics(self):
         return self._trade_events.get_trade_analytics()
+
+    # --- Portfolio Snapshots ---
+
+    def save_portfolio_snapshot(self, snapshot: dict) -> bool:
+        return self._portfolio_snapshots.save_portfolio_snapshot(snapshot)
+
+    def get_latest_portfolio_snapshot(self):
+        return self._portfolio_snapshots.get_latest_portfolio_snapshot()
+
+    def get_portfolio_history(self, limit: int = 180):
+        return self._portfolio_snapshots.get_portfolio_history(limit=limit)
 
     # --- Option Chain Snapshots ---
 

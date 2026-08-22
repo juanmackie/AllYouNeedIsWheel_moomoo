@@ -163,5 +163,66 @@ def get_weekly_income():
         return jsonify({"error": str(e), "positions": [], "total_income": 0, "positions_count": 0}), 500
 
 
+@bp.route("/history", methods=["GET"])
+def get_portfolio_history():
+    """
+    Get persisted portfolio snapshot history (one per completed run).
+
+    Serves equity-curve and growth-pace panels from the local snapshot store.
+    Data originates from OpenD (captured at run publish time); this endpoint is
+    read-only over SQLite and does not require a live OpenD connection.
+
+    Query Parameters:
+        limit: Max snapshots to return, oldest first. Default 180, max 1000.
+    """
+    try:
+        db = current_app.config.get("database")
+        if not db:
+            return error_response("Database not available", status_code=503)
+
+        raw_limit = request.args.get("limit")
+        try:
+            limit = int(raw_limit) if raw_limit is not None else 180
+        except (TypeError, ValueError):
+            return error_response("Invalid limit — must be an integer", status_code=400)
+
+        history = db.get_portfolio_history(limit=limit)
+        from core.growth_mode import growth_pace
+        from core.presets import WHEEL_PRESETS, get_preset
+
+        # Pace target follows the active wheel preset (read-only effective value).
+        target_multiple = 10.0
+        try:
+            persisted = db.get_setting("wheel_preset")
+            key = persisted if persisted in WHEEL_PRESETS else None
+            target_multiple = float(get_preset(key).target_account_multiple or 10.0)
+        except Exception:
+            pass
+
+        # Chart-ready series plus the full snapshot payloads.
+        series = [
+            {
+                "captured_at": snap["captured_at"],
+                "run_id": snap["run_id"],
+                "net_liquidation": snap["net_liquidation"],
+                "cash_available": snap["cash_available"],
+                "cash_available_for_csp": snap["cash_available_for_csp"],
+                "cash_reserved_for_csp": snap["cash_reserved_for_csp"],
+            }
+            for snap in history
+        ]
+        payload = {
+            "count": len(history),
+            "series": series,
+            "snapshots": history,
+            "pace": growth_pace(history, target_multiple=target_multiple),
+            "target_multiple": target_multiple,
+        }
+        return jsonify(attach_source_policy(payload, build_account_source_policy("portfolio_history"))), 200
+    except Exception as e:
+        logger.error("Error loading portfolio history: %s", e)
+        return error_response(str(e), status_code=500)
+
+
 # roll-pressure and alerts endpoints extracted to
 # api/routes/roll_pressure.py and api/routes/alerts.py (F008)

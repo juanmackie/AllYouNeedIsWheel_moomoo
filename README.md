@@ -13,13 +13,20 @@ manual copy-to-ticket suggestions for your broker UI.
 
 1. Start OpenD and log in, then launch the app.
 2. Open the dashboard: operational strip (env, read-only, market state, run
-   status, coverage, quote freshness) → portfolio summary → watchlist union →
-   top-three CSP picks → covered-call/roll actions → diagnostics.
+   status, coverage, quote freshness) → portfolio summary → growth panel
+   (path to 10x: equity curve, pace, ETA) → watchlist union → top-three CSP
+   picks with contract sizing and entry-timing advice → position monitor
+   (open short options with exit-playbook verdicts) → covered-call/roll
+   actions → diagnostics.
 3. Choose a risk preset (Conservative / Balanced / Aggressive; **Balanced by
-   default**; effective values are read-only).
+   default**; effective values are read-only). Each preset carries a growth
+   objective (`target_account_multiple`; Balanced targets **10x**) that drives
+   pace math.
 4. Refresh a run. A completed `WheelRunSnapshot` is persisted and atomically
-   published; only a **ready** run with complete watchlist coverage and fresh
-   Moomoo quotes permits copy actions.
+   published — alongside one portfolio snapshot per run for equity history,
+   and inferred trade events when positions changed between runs. Only a
+   **ready** run with complete watchlist coverage and fresh Moomoo quotes
+   permits copy actions.
 5. Copy an explicit ticket and execute in Moomoo.
 
 ## Data and actionability contract
@@ -70,7 +77,19 @@ Key pieces:
 - `core/wheel_runner.py` — one bounded background refresh worker; explicit
   account identity resolution (REAL requires a configured `account_id`;
   never "the first account").
-- `core/presets.py` — versioned Conservative/Balanced/Aggressive presets.
+- `core/presets.py` — versioned Conservative/Balanced/Aggressive presets,
+  each carrying its `target_account_multiple` growth objective.
+- `core/exit_playbook.py` — deterministic HOLD/TAKE_PROFIT/ROLL/CLOSE verdicts
+  for open short options (profit-capture %, roll DTE window, delta breach,
+  deep-ITM, earnings-in-window), surfaced on the position monitor.
+- `core/position_diff.py` + `core/portfolio_snapshot.py` — per-run portfolio
+  snapshots and trade-event inference (entry/exit/roll/assignment) feeding the
+  persisted journal and win-rate analytics.
+- `core/growth_mode.py::growth_pace` — path-to-target math from persisted
+  snapshots: progress, annualized pace, ETA, required premium/day. No fixed
+  deadline; verdicts derive from realized pace.
+- `db/portfolio_snapshots_repository.py` — one snapshot row per completed run;
+  served by `GET /api/portfolio/history` (equity curve + pace payload).
 - `core/broker_protocol.py` — the query-only surface; forbidden SDK members
   are enforced by tests and an AST/repository scan.
 - `api/services/recommendations.py` — complete watchlist CSP/CC lanes,

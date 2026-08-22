@@ -40,6 +40,8 @@ class WheelPreset:
     min_open_interest: int
     # Sizing cap (per CSP, % of buying power)
     max_buying_power_pct_per_csp: float
+    # Long-horizon growth objective this preset is tuned for (e.g., 10x capital).
+    target_account_multiple: float
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -62,6 +64,7 @@ class WheelPreset:
             "min_premium_per_contract": self.min_premium_per_contract,
             "min_open_interest": self.min_open_interest,
             "max_buying_power_pct_per_csp": self.max_buying_power_pct_per_csp,
+            "target_account_multiple": self.target_account_multiple,
             "max_watchlist_tickers": 25,
             "require_cash_fit": True,
         }
@@ -70,9 +73,10 @@ class WheelPreset:
 WHEEL_PRESETS: dict[str, WheelPreset] = {
     "conservative": WheelPreset(
         key="conservative",
-        version=2,
+        version=3,
         label="Conservative",
         description="Stricter liquidity, smaller allocations, farther OTM strikes.",
+        target_account_multiple=5.0,
         csp_target_delta=0.25,
         csp_delta_tolerance=0.08,
         csp_min_dte=35,
@@ -90,9 +94,10 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
     ),
     "balanced": WheelPreset(
         key="balanced",
-        version=2,
+        version=3,
         label="Balanced",
         description="Moderate DTE/delta/liquidity and position-size limits (default).",
+        target_account_multiple=10.0,
         csp_target_delta=0.30,
         csp_delta_tolerance=0.12,
         csp_min_dte=30,
@@ -110,9 +115,10 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
     ),
     "aggressive": WheelPreset(
         key="aggressive",
-        version=2,
+        version=3,
         label="Aggressive",
         description="Shorter DTE, broader deltas, and larger allocations.",
+        target_account_multiple=10.0,
         csp_target_delta=0.35,
         csp_delta_tolerance=0.15,
         csp_min_dte=21,

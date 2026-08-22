@@ -172,6 +172,17 @@ class WheelRunner:
             # Persist snapshot, then publish (in-memory + DB latest).
             self._db.save_run_snapshot(snapshot)
             self._latest_snapshot = snapshot
+
+            # Persist a portfolio snapshot for equity history and trade-event
+            # inference. Never blocks or fails the run publish.
+            self._persist_portfolio_state(
+                run_id=snapshot.run.run_id,
+                env=env,
+                opaque_account=opaque,
+                captured_at=snapshot.run.published_at,
+                portfolio_context=portfolio_context,
+            )
+
             self._persist_attempt(
                 RefreshAttempt(
                     attempt_id=attempt_id,
@@ -322,6 +333,45 @@ class WheelRunner:
 
     def latest(self) -> WheelRunSnapshot | None:
         return self._latest_snapshot
+
+    def _persist_portfolio_state(
+        self,
+        run_id: str,
+        env: str,
+        opaque_account: str,
+        captured_at: str,
+        portfolio_context: dict,
+    ) -> None:
+        """Persist one portfolio snapshot per completed run.
+
+        Also diffs positions against the previous snapshot to infer trade
+        events (entry/exit/roll/assignment). Best-effort: any failure is logged
+        and never fails the run publish.
+        """
+        try:
+            from core.position_diff import infer_trade_events
+            from core.portfolio_snapshot import build_portfolio_snapshot
+
+            previous = self._db.get_latest_portfolio_snapshot()
+            snapshot = build_portfolio_snapshot(
+                portfolio_context=portfolio_context,
+                run_id=run_id,
+                env=env,
+                opaque_account=opaque_account,
+                captured_at=captured_at or utc_now_iso(),
+            )
+            if not self._db.save_portfolio_snapshot(snapshot):
+                logger.warning("Portfolio snapshot not persisted for run %s", run_id)
+                return
+
+            events = infer_trade_events(previous, snapshot)
+            for event in events:
+                event.setdefault("details", {})["run_id"] = run_id
+                self._db.save_trade_event(event)
+            if events:
+                logger.info("Inferred %d trade event(s) from position diff (run %s)", len(events), run_id)
+        except Exception as exc:
+            logger.warning("Portfolio state persistence skipped for run %s: %s", run_id, exc)
 
 
 def start_background_refresh(runner: WheelRunner) -> bool:

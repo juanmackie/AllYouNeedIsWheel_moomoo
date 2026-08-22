@@ -10,6 +10,7 @@
 
 - `templates/` owns server-rendered page and partial structure.
 - `static/js/` owns browser behavior, API calls, state handling, rendering helpers, and UI events.
+- Growth cockpit UI: `templates/partials/dashboard/growth_panel.html` + `static/js/dashboard/growth-panel.js` (equity curve, pace, ETA, journal stats from `/api/portfolio/history` and `/api/options/analytics/lifecycle`); `templates/partials/dashboard/position_monitor.html` + the position table in `dashboard-init.js` (open short options with exit-playbook verdicts, live P&L, delta, earnings, roll pressure).
 - `static/css/` owns visual styling and responsive layout.
 - `static/img/` owns static visual assets.
 

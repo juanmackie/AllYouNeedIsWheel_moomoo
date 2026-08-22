@@ -1,15 +1,94 @@
 """
-Growth-aware metrics — stress loss, risk budget, confidence, intent labels.
+Growth-aware metrics — stress loss, risk budget, confidence, intent labels,
+and 10x-goal pace math.
 
 Always-on helpers used by wheel_decision.py to compute growth-oriented
 risk metrics regardless of mode.  No longer a toggleable "mode" — these
 are always computed for every recommendation.
 """
 
+from __future__ import annotations
+
+import math
+from datetime import datetime
+
 
 # ---------------------------------------------------------------------------
 # Growth-related helpers
 # ---------------------------------------------------------------------------
+
+
+def growth_pace(history: list[dict], target_multiple: float = 10.0) -> dict:
+    """Compute path-to-target pace from persisted portfolio snapshots.
+
+    No fixed deadline: the verdict is derived from realized pace, not a
+    promised date. Inputs are snapshot dicts (oldest first) with at least
+    ``captured_at`` and ``net_liquidation``.
+
+    Returns a dict with:
+        current_nav, target_nav, first_captured_at, last_captured_at,
+        elapsed_days, progress_pct (0-100 toward the multiple from the first
+        snapshot), annualized_pace (decimal), eta_days, required_premium_per_day,
+        on_track (bool|None — None when pace cannot be computed yet).
+    """
+    snaps = [s for s in (history or []) if isinstance(s, dict)]
+    if not snaps:
+        return {
+            "current_nav": 0.0,
+            "target_nav": 0.0,
+            "elapsed_days": 0.0,
+            "progress_pct": 0.0,
+            "annualized_pace": None,
+            "eta_days": None,
+            "required_premium_per_day": None,
+            "on_track": None,
+        }
+
+    first, last = snaps[0], snaps[-1]
+    first_nav = float(first.get("net_liquidation", 0) or 0)
+    current_nav = float(last.get("net_liquidation", 0) or 0)
+    target_nav = current_nav * target_multiple
+
+    elapsed_days = 0.0
+    try:
+        t0 = datetime.fromisoformat(str(first.get("captured_at", "")))
+        t1 = datetime.fromisoformat(str(last.get("captured_at", "")))
+        elapsed_days = max((t1 - t0).total_seconds() / 86_400.0, 0.0)
+    except (TypeError, ValueError):
+        elapsed_days = 0.0
+
+    progress_pct = 0.0
+    annualized = None
+    eta_days = None
+    if first_nav > 0 and current_nav > first_nav and elapsed_days > 0:
+        progress_pct = ((current_nav / first_nav - 1) / (target_multiple - 1)) * 100.0
+        years = elapsed_days / 365.25
+        if years > 0:
+            annualized = (current_nav / first_nav) ** (1.0 / years) - 1.0
+            if annualized > 0:
+                years_needed = math.log(target_nav / current_nav) / math.log1p(annualized)
+                if math.isfinite(years_needed) and years_needed > 0:
+                    eta_days = years_needed * 365.25
+
+    # Required pace: premium per day needed to compound the remaining gap
+    # over the ETA implied by current pace (or None when unknown).
+    required_premium_per_day = None
+    if eta_days and eta_days > 0:
+        required_premium_per_day = round((target_nav - current_nav) / eta_days, 2)
+
+    on_track = None if annualized is None else annualized > 0
+    return {
+        "current_nav": round(current_nav, 2),
+        "target_nav": round(target_nav, 2),
+        "first_captured_at": first.get("captured_at", ""),
+        "last_captured_at": last.get("captured_at", ""),
+        "elapsed_days": round(elapsed_days, 2),
+        "progress_pct": round(max(0.0, min(progress_pct, 100.0)), 2),
+        "annualized_pace": None if annualized is None else round(annualized, 6),
+        "eta_days": None if eta_days is None else round(eta_days, 1),
+        "required_premium_per_day": required_premium_per_day,
+        "on_track": on_track,
+    }
 
 
 def estimate_target_gap(

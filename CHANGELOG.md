@@ -1,3 +1,24 @@
+## 2026-08-22 — Growth cockpit: portfolio monitoring, account-aware picks, exit playbook
+
+- Portfolio monitoring: one `portfolio_snapshots` row per completed run (schema v7);
+  `GET /api/portfolio/history` serves the equity series plus server-side growth pace.
+- Growth panel: path-to-target (10x by default) — equity curve, progress, annualized
+  pace, ETA, required premium/day, on-track verdict. No fixed deadline; verdicts derive
+  from realized pace. Presets now carry `target_account_multiple` (v3: Conservative 5x,
+  Balanced/Aggressive 10x) and drive the target everywhere (previously a hardcoded 2.0).
+- Trade journal wired: `core/position_diff.py` infers entry/exit/roll/assignment events
+  from consecutive position snapshots and persists them via the existing trade_events
+  repository; win-rate/leakage analytics now receive real data (were dead code before).
+- Account-aware picks: concentration guard caps new picks per already-exposed underlying;
+  every CSP card shows income at recommended size, cash remaining after the trade, and its
+  coverage of the daily 10x pace.
+- Exit playbook (`core/exit_playbook.py`): deterministic HOLD/TAKE_PROFIT/ROLL/CLOSE
+  verdicts with reasons for open short options, computed in `score_existing_position`,
+  exposed via `/api/portfolio/roll-pressure`, rendered on the new position monitor table
+  (live P&L from entry credit vs mark, delta, DTE, earnings, roll pressure).
+- Entry timing: server-computed intraday window advice (`entry_window_advice`) shown above
+  the signal list; earnings-before-expiry risk remains enforced by event tiers.
+
 ## 2026-08-22 — Freshness window sized for full-union scans
 
 - Raised the quote freshness window (`max_tradeable_age_sec` / preflight budget) from

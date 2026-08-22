@@ -10,8 +10,9 @@ from datetime import datetime
 from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
 from core.scoring_factors import premium_velocity_per_day
+from core.sizing import existing_short_exposure_by_underlying
 from core.ticker_utils import canonical_underlying
-from core.utils import is_market_open
+from core.utils import entry_window_advice, is_market_open
 from core.wheel_decision import WheelDecision, score_contract
 
 logger = logging.getLogger("api.services.recommendations")
@@ -1197,14 +1198,21 @@ class RecommendationEngine:
             all_candidates = _rank_candidates(all_candidates)
 
             # ── Build lane results with diversity safeguard ──────────
+            # Portfolio-aware concentration guard: an underlying you already
+            # have short options on gets at most ONE new pick, not max_per.
+            short_exposure = existing_short_exposure_by_underlying(portfolio_context)
+
             def _select_top(candidates, max_per=1):
                 """Select top candidates with at most max_per per canonical underlying."""
                 selected = []
                 for opt in candidates:
                     t = opt.get("ticker", "UNKNOWN")
                     cu = canonical_underlying(t)
+                    already_on = int(short_exposure.get(str(cu).upper(), 0) or 0)
+                    effective_cap = min(max_per, 1) if already_on > 0 else max_per
                     count = sum(1 for o in selected if canonical_underlying(o.get("ticker", "UNKNOWN")) == cu)
-                    if count < max_per:
+                    opt["existing_exposure_contracts"] = already_on
+                    if count < effective_cap:
                         selected.append(opt)
                 return selected
 
@@ -1301,6 +1309,7 @@ class RecommendationEngine:
                 "total_scored": len(all_candidates),
                 "generated_at": datetime.now().isoformat(),
                 "signals": formatted_signals,
+                "entry_context": entry_window_advice(),
                 "covered_calls": {
                     "signals": formatted_cc,
                     "count": len(formatted_cc),

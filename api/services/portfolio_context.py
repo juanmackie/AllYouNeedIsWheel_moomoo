@@ -252,9 +252,17 @@ class PortfolioContext:
                     context["positions"][raw_symbol] = position
 
             for position in option_positions:
-                symbol = parse_moomoo_symbol(position.get("symbol", ""))
+                raw_symbol = str(position.get("symbol", "") or "")
+                symbol = parse_moomoo_symbol(raw_symbol)
                 if not symbol:
                     continue
+                # Keep individual option positions in the book (keyed by broker
+                # code) so portfolio snapshots, roll diagnostics, and exit
+                # verdicts see the same contracts the aggregates count.
+                pos_copy = dict(position)
+                pos_copy["shares"] = parse_position_qty(position.get("position", 0))
+                if raw_symbol not in context["positions"]:
+                    context["positions"][raw_symbol] = pos_copy
 
                 pos_qty = parse_position_qty(position.get("position", 0))
                 option_type = str(position.get("option_type", "") or "").upper()

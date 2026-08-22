@@ -53,7 +53,7 @@ class TestOptionsDatabase(unittest.TestCase):
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 6)
+        self.assertEqual(cursor.fetchone()[0], 7)
 
         evaluator_tables = {t for t in actual_tables if t.startswith("evaluator_")}
         self.assertEqual(evaluator_tables, set(), f"Evaluator tables should be dropped: {evaluator_tables}")

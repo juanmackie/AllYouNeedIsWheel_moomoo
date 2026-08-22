@@ -4,6 +4,8 @@ Tests for api/services/options_service.py — pure functions and watchlist logic
 
 import os
 import sys
+import os
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -58,9 +60,15 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
     def test_static_mode_returns_static(self, mock_get_config, mock_get_service):
         """Static mode should return the static watchlist."""
         mock_config = MagicMock()
+        # Pin an isolated temp-file DB so the repo's local options.db (which
+        # may hold app-managed symbols from real runs) never leaks into this
+        # test. ":memory:" is unusable here because the pool opens one file
+        # path per pooled connection.
+        temp_db = os.path.join(tempfile.mkdtemp(), "test_watchlist.db")
         mock_config.get.side_effect = lambda key, default=None: {
             "watchlist": ["AAPL", "TSLA", "NVDA"],
             "watchlist_mode": "static",
+            "db_path": temp_db,
         }.get(key, default)
         mock_get_config.return_value = mock_config
         mock_get_service.return_value = None

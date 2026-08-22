@@ -16,6 +16,14 @@ from core.ticker_utils import earnings_underlying_ticker
 
 logger = get_logger("api.routes.roll_pressure", "api")
 
+
+def _safe_float(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 bp = Blueprint("roll_pressure", __name__, url_prefix="/api/portfolio")
 
 
@@ -88,6 +96,7 @@ def get_roll_pressure():
                     "bid": decision.bid,
                     "ask": decision.ask,
                     "mid_price": decision.mid_price,
+                    "avg_cost": _safe_float(pos.get("avg_cost", 0)),
                     "implied_volatility": decision.implied_volatility,
                     "delta": decision.delta,
                     "roll_pressure": decision.roll_pressure,
@@ -96,6 +105,8 @@ def get_roll_pressure():
                     "otm_pct": decision.otm_pct,
                     "size_fit": decision.size_fit,
                     "expected_move_buffer": decision.expected_move_buffer,
+                    "exit_verdict": decision.exit_verdict,
+                    "exit_reasons": decision.exit_reasons,
                     "warnings": decision.warnings,
                     "wheel_decision": decision.to_dict(),
                 }
