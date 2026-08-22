@@ -90,3 +90,9 @@ docker/
 # Local secrets dir must contain only its own .gitignore, never credentials
 secrets/*
 !secrets/.gitignore
+
+# Planning/working notes — never ship (repo rules)
+PLAN.md
+REPO-AUDIT-PUNCHLIST.md
+REPO-REVIEW-PLAN.md
+research.md
