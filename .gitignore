@@ -100,10 +100,7 @@ research.md
 
 # Local agent-harness state — never ship (F-O4/F-O5)
 .claude/
-.pi/.goals-pool-snapshot.json
-.pi/goals/.goal-ledger-checkpoint.json
-.pi/goals/goal_events.jsonl
-.pi/goals/active_goal_*.md
+.pi/
 
 # Playwright artifacts
 test-results/
