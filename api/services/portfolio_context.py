@@ -184,6 +184,52 @@ class PortfolioContext:
         }
         return context
 
+    def get_cash_status(self, refresh=True):
+        """Compose the /cash-status payload from broker-true context plus
+        per-open-put collateral detail (diagnostics only)."""
+        context = self.get_portfolio_context(refresh=refresh)
+
+        open_puts = []
+        try:
+            portfolio_service = self._get_portfolio_service()
+            option_positions = portfolio_service.get_positions("OPT") or [] if portfolio_service else []
+            for position in option_positions:
+                pos_qty = int(position.get("position", 0) or 0)
+                option_type = str(position.get("option_type", "") or "").upper()
+                if pos_qty < 0 and option_type == "PUT":
+                    ticker = str(position.get("symbol", "") or "").replace("US.", "")
+                    strike = float(position.get("strike", 0) or 0)
+                    contracts = abs(pos_qty)
+                    cash_required = strike * 100 * contracts
+                    open_puts.append(
+                        {
+                            "ticker": ticker,
+                            "strike": strike,
+                            "contracts": contracts,
+                            "expiration": position.get("expiration", ""),
+                            "cash_required": round(cash_required, 2),
+                        }
+                    )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("api.services.portfolio_context").debug(f"Open-put collateral detail unavailable: {exc}")
+
+        return {
+            "cash_balance": round(float(context.get("cash_balance", 0) or 0), 2),
+            "cash_reserved": round(float(context.get("cash_reserved_for_csp", 0) or 0), 2),
+            "available_cash": round(float(context.get("available_cash", 0) or 0), 2),
+            "cash_available": round(float(context.get("available_cash", 0) or 0), 2),
+            "cash_available_for_csp": round(float(context.get("cash_available_for_csp", 0) or 0), 2),
+            "cash_reserved_for_csp": round(float(context.get("cash_reserved_for_csp", 0) or 0), 2),
+            "broker_buying_power": round(float(context.get("broker_buying_power", 0) or 0), 2),
+            "broker_buying_power_source": context.get("broker_buying_power_source", "none"),
+            "excess_liquidity": round(float(context.get("excess_liquidity", 0) or 0), 2),
+            "reserve_enabled": bool(self.config.get("cash_reserve_enabled", True)),
+            "open_puts": open_puts,
+            "open_puts_count": len(open_puts),
+        }
+
     def get_portfolio_context(self, refresh=True):
         context = {
             "cash_balance": 0.0,

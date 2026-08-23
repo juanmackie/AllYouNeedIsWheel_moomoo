@@ -11,8 +11,6 @@ vi.mock('../../frontend/static/js/dashboard/options-table-state.js', () => ({
 
 import {
   calculatePremium,
-  calculateOTMPercentage,
-  calculateRecommendedPutQuantity,
   getPremiumPerContract,
 } from '../../frontend/static/js/dashboard/options-table-calc.js';
 
@@ -53,35 +51,4 @@ describe('options-table-calc', () => {
     });
   });
 
-  describe('calculateOTMPercentage', () => {
-    it('computes OTM percentage for put', () => {
-      expect(calculateOTMPercentage(95, 100)).toBe(-5);
-    });
-
-    it('returns 0 for missing values', () => {
-      expect(calculateOTMPercentage(0, 100)).toBe(0);
-      expect(calculateOTMPercentage(95, 0)).toBe(0);
-    });
-  });
-
-  describe('calculateRecommendedPutQuantity', () => {
-    beforeEach(() => {
-      const { state } = require('../../frontend/static/js/dashboard/options-table-state.js');
-      state.portfolioSummary = { cash_balance: 50000 };
-    });
-
-    it('returns default 1 when no portfolio summary', () => {
-      const { state } = require('../../frontend/static/js/dashboard/options-table-state.js');
-      state.portfolioSummary = null;
-      const r = calculateRecommendedPutQuantity(100, 95, 'AAPL');
-      expect(r.quantity).toBe(1);
-    });
-
-    it('computes quantity from cash balance', () => {
-      const { state } = require('../../frontend/static/js/dashboard/options-table-state.js');
-      state.portfolioSummary = { cash_balance: 100000 };
-      const r = calculateRecommendedPutQuantity(100, 95, 'AAPL');
-      expect(r.quantity).toBeGreaterThanOrEqual(1);
-    });
-  });
 });

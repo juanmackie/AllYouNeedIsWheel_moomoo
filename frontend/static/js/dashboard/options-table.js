@@ -4,9 +4,10 @@
  */
 import { fetchTickers, fetchAccountData, fetchOptionExpirations, fetchStockPrices } from './api.js';
 import { fetchWatchlistTickers } from './api-portfolio.js';
+import { escapeHtml } from '../utils/formatters.js';
 import { state, loadOtmSettings, loadCustomTickers, ensureTickerDataState, getSavedTabPreference, setSavedTabPreference } from './options-table-state.js';
 import { calculateEarningsSummary } from './options-table-calc.js';
-import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, addPutQtyInputEventListeners, initializeOptionsTableTooltips, insertProgressBanner, updateProgressBanner, finishProgressBanner, failProgressBanner } from './options-table-rendering.js';
+import { buildTabsHTML, updateOptionsTable, addTickerRowToTable, displayPremiumSummary, addPutQtyInputEventListeners, initializeOptionsTableTooltips, insertProgressBanner, updateProgressBanner, finishProgressBanner, failProgressBanner } from './options-table-rendering.js';
 import { addOptionsTableEventListeners, setupCustomTickerEventListeners } from './options-table-events.js';
 import { refreshOptionsForTicker, refreshAllOptions, refreshOptionsForTickerByType, sellAllOptions } from './options-table-actions.js';
 
@@ -90,111 +91,7 @@ async function loadTickers() {
     const defaultTab = savedTab || cfg.defaultTab || 'CALL';
     const putTabWasActive = defaultTab === 'PUT';
 
-    const tabsHTML = `
-        <ul class="nav nav-tabs mb-3" id="options-tabs" role="tablist">
-            <li class="nav-item" role="presentation">
-                <button class="nav-link ${putTabWasActive ? '' : 'active'}" id="call-options-tab" data-bs-toggle="tab" data-bs-target="#call-options-section" type="button" role="tab" aria-controls="call-options-section" aria-selected="${putTabWasActive ? 'false' : 'true'}">
-                    Covered Calls
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link ${putTabWasActive ? 'active' : ''}" id="put-options-tab" data-bs-toggle="tab" data-bs-target="#put-options-section" type="button" role="tab" aria-controls="put-options-section" aria-selected="${putTabWasActive ? 'true' : 'false'}">
-                    Cash-Secured Puts
-                </button>
-            </li>
-        </ul>
-
-        <div class="tab-content" id="options-tabs-content">
-            <div class="tab-pane fade ${putTabWasActive ? '' : 'show active'}" id="call-options-section" role="tabpanel" aria-labelledby="call-options-tab">
-                <div class="d-flex justify-content-end mb-2">
-                    <button class="btn btn-sm btn-outline-success me-2" id="sell-all-calls">
-                        <i class="bi bi-check2-all"></i> Add All
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary" id="refresh-all-calls">
-                        <i class="bi bi-arrow-repeat"></i> Refresh All Calls
-                    </button>
-                </div>
-                <div class="table-responsive">
-                    <table class="table table-striped table-hover table-sm" id="call-options-table">
-                        <thead>
-                            <tr>
-                                <th data-bs-toggle="tooltip" title="Stock symbol and quality metrics">Ticker</th>
-                                <th data-bs-toggle="tooltip" title="Number of shares you own (need 100+ to sell calls)">Shares</th>
-                                <th data-bs-toggle="tooltip" title="Current stock market price">Stock Price</th>
-                                <th data-bs-toggle="tooltip" title="Out-of-the-Money %: Distance from current price. Higher = safer but less premium.">OTM %</th>
-                                <th data-bs-toggle="tooltip" title="Price where your shares would be called away">Strike</th>
-                                <th data-bs-toggle="tooltip" title="When the option expires">Expiration</th>
-                                <th data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price">Mid Price</th>
-                                <th data-bs-toggle="tooltip" title="Probability option finishes in-the-money (0-1 scale). Lower = safer.">Delta</th>
-                                <th data-bs-toggle="tooltip" title="Implied Volatility: Market's price movement expectation. Higher IV = more premium.">IV%</th>
-                                <th data-bs-toggle="tooltip" title="Number of contracts you can sell (1 = 100 shares)">Qty</th>
-                                <th data-bs-toggle="tooltip" title="Total income you'll receive from selling">Total Premium</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td colspan="12" class="text-center p-3">
-                                    <div class="spinner-border text-primary" role="status"></div>
-                                    <p class="mt-2">Loading options data...</p>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="tab-pane fade ${putTabWasActive ? 'show active' : ''}" id="put-options-section" role="tabpanel" aria-labelledby="put-options-tab">
-                <div class="d-flex justify-content-between mb-2">
-                    <div class="d-flex align-items-center">
-                        <div class="input-group input-group-sm" style="width: 250px;">
-                            <input type="text" class="form-control" id="custom-ticker-input" 
-                                placeholder="Add ticker (e.g., AAPL)" maxlength="5">
-                            <button class="btn btn-outline-primary" id="add-custom-ticker">
-                                <i class="bi bi-plus-circle"></i> Add
-                            </button>
-                        </div>
-                    </div>
-                    <div>
-                        <button class="btn btn-sm btn-outline-success me-2" id="sell-all-puts">
-                            <i class="bi bi-check2-all"></i> Add All
-                        </button>
-                        <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
-                            <i class="bi bi-arrow-repeat"></i> Refresh All Puts
-                        </button>
-                    </div>
-                </div>
-                <div class="table-responsive">
-                    <table class="table table-striped table-hover table-sm" id="put-options-table">
-                        <thead>
-                            <tr>
-                                <th data-bs-toggle="tooltip" title="Stock symbol and quality metrics">Ticker</th>
-                                <th data-bs-toggle="tooltip" title="Current stock market price">Stock Price</th>
-                                <th data-bs-toggle="tooltip" title="Out-of-the-Money %: Distance from current price. Higher = safer but less premium.">OTM %</th>
-                                <th data-bs-toggle="tooltip" title="Price where you'd be obligated to buy shares">Strike</th>
-                                <th data-bs-toggle="tooltip" title="When the option expires">Expiration</th>
-                                <th data-bs-toggle="tooltip" title="Midpoint between bid and ask - target this price">Mid Price</th>
-                                <th data-bs-toggle="tooltip" title="Probability option finishes in-the-money (0-1 scale). Lower = safer.">Delta</th>
-                                <th data-bs-toggle="tooltip" title="Implied Volatility: Market's price movement expectation. Higher IV = more premium.">IV%</th>
-                                <th data-bs-toggle="tooltip" title="Number of contracts to sell (1 = obligation to buy 100 shares)">Qty</th>
-                                <th data-bs-toggle="tooltip" title="Total income you'll receive from selling">Total Premium</th>
-                                <th data-bs-toggle="tooltip" title="Cash needed in your account as collateral">Cash Required</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td colspan="12" class="text-center p-3">
-                                    <div class="spinner-border text-primary" role="status"></div>
-                                    <p class="mt-2">Loading options data...</p>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    `;
+    const tabsHTML = buildTabsHTML(putTabWasActive);
 
     optionsTableContainer.innerHTML = tabsHTML;
 
@@ -304,7 +201,7 @@ async function loadTickers() {
                 if (row) {
                     row.innerHTML = `
                         <td colspan="13" class="text-center text-danger">
-                            <i class="bi bi-exclamation-triangle"></i> ${errorMessage}
+                            <i class="bi bi-exclamation-triangle"></i> ${escapeHtml(errorMessage)}
                         </td>
                     `;
                     setTimeout(() => row.remove(), 3000);
@@ -332,7 +229,7 @@ async function loadTickers() {
         const row = document.createElement('tr');
         row.innerHTML = `
             <td colspan="13" class="text-center p-3">
-                <div class="alert alert-info m-0">${message}</div>
+                <div class="alert alert-info m-0">${escapeHtml(message)}</div>
             </td>
         `;
         tbody.appendChild(row);

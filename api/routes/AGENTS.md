@@ -4,7 +4,7 @@
 
 ## Purpose
 
-`api/routes/` exposes Flask blueprints for portfolio, options, alerts, signals, earnings, macro, risk, ledger, roll-pressure, llm, and source-policy endpoints.
+`api/routes/` exposes Flask blueprints for run, settings, watchlist, options, portfolio (incl. alerts), roll-pressure, earnings, ledger, and source-policy endpoints.
 
 ## Ownership
 

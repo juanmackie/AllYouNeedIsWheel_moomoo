@@ -124,7 +124,6 @@ def create_app(config=None):
     app.config.from_mapping(
         SECRET_KEY=_resolve_secret_key(config),
         DATABASE="sqlite:///:memory:",
-        LLM_ENABLED=os.environ.get("LLM_ENABLED", "false"),
     )
 
     # Override with passed config
@@ -278,9 +277,18 @@ def _register_services():
 
     register_service("ivearnings", _create_iv_earnings_service)
 
+    def _create_watchlist_manager():
+        from api.services.config import get_config
+        from api.services.watchlist_manager import WatchlistManager
+
+        return WatchlistManager(config_provider=get_config())
+
+    register_service("watchlist", _create_watchlist_manager)
+
     def _create_wheel_runner():
         from flask import current_app
 
+        from api.services.roll_diagnostics import build_roll_decisions
         from core.wheel_runner import WheelRunner
 
         config = current_app.config.get("connection_config", {})
@@ -288,6 +296,7 @@ def _register_services():
             db=current_app.config.get("database"),
             options_service=get_service("options"),
             config=config,
+            roll_diagnostics_provider=build_roll_decisions,
         )
 
     register_service("wheel_runner", _create_wheel_runner)

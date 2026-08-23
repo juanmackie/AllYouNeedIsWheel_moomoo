@@ -11,6 +11,9 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from api.services.recommendation_ranking import format_recommendation
+from api.services.recommendations import RecommendationEngine
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -86,8 +89,6 @@ class TestRecommendationEngine(unittest.TestCase):
         }
 
     def _import_engine(self):
-        from api.services.recommendations import RecommendationEngine
-
         return RecommendationEngine(
             self.mock_connection_provider,
             self.mock_config_provider,
@@ -441,9 +442,7 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         }
 
     def test_format_recommendation_preserves_source_fields(self):
-        engine = self._import_engine()
-
-        rec = engine._format_recommendation(
+        rec = format_recommendation(
             {
                 "ticker": "AAPL",
                 "option_type": "PUT",
@@ -485,7 +484,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
                 "cash_required": 15000,
                 "breakeven": 148.75,
                 "breakeven_buffer_pct": 1.5,
-                "macro_multiplier": 1.0,
                 "score_rationale": "Balanced",
                 "remaining_gap_to_target": 0,
                 "risk_budget_used_pct": 0,
@@ -563,7 +561,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "cash_required": 15000,
             "breakeven": 148.75,
             "breakeven_buffer_pct": 1.5,
-            "macro_multiplier": 1.0,
             "score_rationale": "Fallback",
             "remaining_gap_to_target": 0,
             "risk_budget_used_pct": 0,
@@ -647,7 +644,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "cash_required": 15000,
             "breakeven": 148.75,
             "breakeven_buffer_pct": 1.5,
-            "macro_multiplier": 1.0,
             "score_rationale": "Fallback",
             "remaining_gap_to_target": 0,
             "risk_budget_used_pct": 0,
@@ -1313,9 +1309,7 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         }
 
     def test_format_recommendation_preserves_source_fields(self):
-        engine = self._import_engine()
-
-        rec = engine._format_recommendation(
+        rec = format_recommendation(
             {
                 "ticker": "AAPL",
                 "option_type": "PUT",
@@ -1357,7 +1351,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
                 "cash_required": 15000,
                 "breakeven": 148.75,
                 "breakeven_buffer_pct": 1.5,
-                "macro_multiplier": 1.0,
                 "score_rationale": "Balanced",
                 "remaining_gap_to_target": 0,
                 "risk_budget_used_pct": 0,
@@ -1435,7 +1428,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "cash_required": 15000,
             "breakeven": 148.75,
             "breakeven_buffer_pct": 1.5,
-            "macro_multiplier": 1.0,
             "score_rationale": "Fallback",
             "remaining_gap_to_target": 0,
             "risk_budget_used_pct": 0,
@@ -1519,7 +1511,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "cash_required": 15000,
             "breakeven": 148.75,
             "breakeven_buffer_pct": 1.5,
-            "macro_multiplier": 1.0,
             "score_rationale": "Fallback",
             "remaining_gap_to_target": 0,
             "risk_budget_used_pct": 0,

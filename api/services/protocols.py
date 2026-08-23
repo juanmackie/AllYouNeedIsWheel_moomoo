@@ -37,9 +37,6 @@ class IVEarningsProvider(Protocol):
 class PortfolioServiceProvider(Protocol):
     """Provides portfolio service."""
 
-    @property
-    def portfolio_service(self): ...
-
 
 class ScreeningProfileProvider(Protocol):
     """Provides screening profile configuration."""

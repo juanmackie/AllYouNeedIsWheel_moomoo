@@ -83,7 +83,6 @@ def extract_data_sources(portfolio_context: dict, decisions: list | None = None)
                     "greeks_source",
                     "iv_source",
                     "earnings_source",
-                    "macro_source",
                 ):
                     val = wd.get(key, "")
                     if val and val not in ("missing", ""):
@@ -95,7 +94,6 @@ def extract_data_sources(portfolio_context: dict, decisions: list | None = None)
                     "greeks_source",
                     "iv_source",
                     "earnings_source",
-                    "macro_source",
                 ):
                     val = getattr(wd, attr, "")
                     if val and val not in ("missing", ""):

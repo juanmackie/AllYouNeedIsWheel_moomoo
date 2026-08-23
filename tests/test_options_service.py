@@ -4,7 +4,6 @@ Tests for api/services/options_service.py — pure functions and watchlist logic
 
 import os
 import sys
-import os
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch

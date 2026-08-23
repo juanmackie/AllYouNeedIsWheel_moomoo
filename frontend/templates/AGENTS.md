@@ -4,7 +4,7 @@
 
 ## Purpose
 
-`frontend/templates/` owns Jinja-rendered pages and partials for dashboard, portfolio, rollover, common tables, and modal components.
+`frontend/templates/` owns Jinja-rendered pages and partials for the one-screen dashboard (base layout, dashboard partials, common tables).
 
 ## Ownership
 

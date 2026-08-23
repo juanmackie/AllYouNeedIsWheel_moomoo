@@ -15,9 +15,7 @@ from core.exit_playbook import (
 
 class TestEvaluateExit(unittest.TestCase):
     def test_healthy_position_holds(self):
-        verdict = evaluate_exit(
-            option_type="PUT", dte=35, delta=-0.30, otm_pct=8.0, captured_profit_pct=10.0
-        )
+        verdict = evaluate_exit(option_type="PUT", dte=35, delta=-0.30, otm_pct=8.0, captured_profit_pct=10.0)
         self.assertEqual(verdict.verdict, VERDICT_HOLD)
         self.assertTrue(any("credit captured" in r for r in verdict.reasons))
 
@@ -50,16 +48,12 @@ class TestEvaluateExit(unittest.TestCase):
         self.assertTrue(any("Deeply ITM" in r for r in verdict.reasons))
 
     def test_earnings_before_expiry_at_risk_closes(self):
-        verdict = evaluate_exit(
-            option_type="PUT", dte=14, delta=-0.30, otm_pct=3.0, days_to_earnings=10
-        )
+        verdict = evaluate_exit(option_type="PUT", dte=14, delta=-0.30, otm_pct=3.0, days_to_earnings=10)
         self.assertEqual(verdict.verdict, VERDICT_CLOSE)
         self.assertTrue(any("Earnings" in r for r in verdict.reasons))
 
     def test_earnings_far_otm_only_warns(self):
-        verdict = evaluate_exit(
-            option_type="PUT", dte=40, delta=-0.20, otm_pct=12.0, days_to_earnings=10
-        )
+        verdict = evaluate_exit(option_type="PUT", dte=40, delta=-0.20, otm_pct=12.0, days_to_earnings=10)
         self.assertEqual(verdict.verdict, VERDICT_HOLD)
         self.assertTrue(any("Earnings" in r for r in verdict.reasons))
 

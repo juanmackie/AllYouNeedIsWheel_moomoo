@@ -8,11 +8,10 @@ Orchestrates scoring by composing pure factor functions from scoring_factors.py.
 
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from core.connection_constants import _normalize_iv
-from core.exit_playbook import ExitThresholds, captured_profit_pct_for_short, evaluate_exit
 from core.growth_mode import (
     classify_covered_call_intent,
     compute_confidence_score,
@@ -58,23 +57,6 @@ from core.scoring_factors import (
 from core.utils import is_market_open
 
 logger = logging.getLogger(__name__)
-
-
-def disabled_macro_context() -> dict:
-    """Macro/FRED enrichment is out of scope; return an explicit disabled
-    context so call sites never depend on a live macro service."""
-    return {
-        "rate_regime": "unknown",
-        "credit_stress": "unknown",
-        "growth_regime": "unknown",
-        "inflation_trend": "unknown",
-        "yield_curve_slope": 0,
-        "macro_multiplier": 1.0,
-        "summary": "",
-        "advice": "",
-        "enabled": False,
-        "macro_regime": "unknown",
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +140,8 @@ class WheelDecision:
 
     # -- Roll / hold / close signals (open positions) -----------------------
     roll_pressure: float = 0.0  # 0-100: urgency to roll
+    exit_verdict: str = ""  # HOLD | TAKE_PROFIT | ROLL | CLOSE (exit playbook)
+    exit_reasons: list[str] = field(default_factory=list)  # ranked reasons for the verdict
     extrinsic_remaining: float = 0.0  # Remaining extrinsic value ($)
     profit_target_progress: float = 0.0  # 0-100: how close to profit target
 
@@ -170,11 +154,6 @@ class WheelDecision:
     days_to_earnings: Optional[int] = None
     vix_regime: str = "normal"
     vix_level: float = 20.0
-    macro_multiplier: float = 1.0
-    macro_regime: str = "unknown"
-    macro_credit_stress: str = "unknown"
-    macro_summary: str = ""
-    macro_advice: str = ""
     profile_type: str = "monthly"
 
     # -- Quote quality ------------------------------------------------------
@@ -211,7 +190,6 @@ class WheelDecision:
     greeks_source: str = ""  # broker, Black-Scholes computed, missing
     iv_source: str = ""  # broker, yfinance, historical cache
     earnings_source: str = ""  # provider/cache/manual
-    macro_source: str = ""  # FRED/cache/disabled
     quote_timestamp: Optional[str] = None
     generated_at: Optional[str] = None
 
@@ -324,7 +302,6 @@ __all__ = [
     "_compute_size_fit",
     "_compute_expected_move_buffer",
     "score_contract",
-    "score_existing_position",
 ]
 
 
@@ -344,7 +321,6 @@ def score_contract(
     iv_status_str: str = "normal",
     earnings_adjustment: float = 0.0,
     earnings_info: dict | None = None,
-    macro_regime: dict | None = None,
     growth_profile: dict | None = None,
     research_only_mode: bool = False,
 ) -> WheelDecision:
@@ -357,7 +333,6 @@ def score_contract(
     Returns a WheelDecision with hard_blockers populated if the contract fails hard filters.
     """
     earnings_info = earnings_info or {}
-    macro_regime = macro_regime or {}
 
     # -- Parse inputs -------------------------------------------------------
     strike = float(option.get("strike", 0) or 0)
@@ -590,18 +565,12 @@ def score_contract(
         days_to_earnings=earnings_info.get("days_to_earnings"),
         vix_regime=vix_regime.get("regime", "normal") if vix_regime else "normal",
         vix_level=vix_regime.get("vix", 20.0) if vix_regime else 20.0,
-        macro_multiplier=macro_regime.get("macro_multiplier", 1.0),
-        macro_regime=macro_regime.get("rate_regime", "unknown"),
-        macro_credit_stress=macro_regime.get("credit_stress", "unknown"),
-        macro_summary=macro_regime.get("summary", ""),
-        macro_advice=macro_regime.get("advice", ""),
         profile_type=profile.get("profile_type", "monthly"),
         # Data provenance (TODO 2.1)
         price_source=price_source,
         chain_source=chain_source,
         greeks_source=(option.get("greeks_source") or ("broker" if abs(delta) > 0.001 else "Black-Scholes computed")),
         iv_source=iv_source,
-        macro_source=macro_regime.get("source", "FRED/cache/disabled"),
         quote_timestamp=quote_fetched_at_utc or None,
         generated_at=datetime.now().isoformat(),
     )
@@ -653,7 +622,6 @@ def score_contract(
     _compute_shared_subscores(decision, profile)
 
     # -- Hard blocker checks ------------------------------------------------
-    macro_multiplier = macro_regime.get("macro_multiplier", 1.0)
 
     profile_type = str(profile.get("profile_type", "") or "").lower()
     is_long_research = research_only_mode and profile_type in {"long_call", "long_put"}
@@ -735,7 +703,6 @@ def score_contract(
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
         score = iv_adjusted_score_final
         score *= 0.65 + (0.35 * cost_basis_score)
-        score *= macro_multiplier
 
         decision.contract_score = round(_clamp(score / 100) * 100, 2)
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
@@ -764,8 +731,6 @@ def score_contract(
                 decision.warnings.append(f"Low VIX ({vix_regime['vix']}) - premiums compressed")
             elif vix_regime.get("regime") == "fear":
                 decision.warnings.append(f"High VIX ({vix_regime['vix']}) - elevated risk, wider stops")
-        if macro_multiplier < 1.0:
-            decision.warnings.append(f"{macro_regime.get('summary', 'Macro headwinds')}")
 
         # Rationale
         decision.rationale = [
@@ -899,7 +864,6 @@ def score_contract(
         iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
         score = iv_adjusted_score_final
         score *= 0.75 + (0.25 * capital_fit)
-        score *= macro_multiplier
 
         decision.contract_score = round(_clamp(score / 100) * 100, 2)
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
@@ -925,8 +889,6 @@ def score_contract(
             decision.warnings.append(f"Earnings in {earnings_info.get('days_to_earnings')}d - high assignment risk")
         elif earnings_info.get("warning_level") == "soon":
             decision.warnings.append(f"Earnings in {earnings_info.get('days_to_earnings')} days")
-        if macro_multiplier < 1.0:
-            decision.warnings.append(f"{macro_regime.get('summary', 'Macro headwinds')}")
 
         # Rationale
         decision.rationale = [
@@ -1023,190 +985,35 @@ def score_contract(
     return decision
 
 
-def score_existing_position(
-    ticker: str,
-    position_data: dict,
-    current_stock_price: float,
-    portfolio_context: dict,
-    iv_env_adjustment: float = 0.0,
-    iv_rank: float = 0.0,
-    iv_status_str: str = "normal",
-    earnings_adjustment: float = 0.0,
-    earnings_info: dict | None = None,
-    macro_regime: dict | None = None,
-) -> WheelDecision:
-    """
-    Score an existing open option position for roll/hold/close decisions.
-
-    Unlike score_contract(), this works with position data (entry details,
-    current market price, etc.) rather than candidate contracts.
-    """
-    earnings_info = earnings_info or {}
-    macro_regime = macro_regime or {}
-
-    option_type = str(position_data.get("option_type", "") or "").upper()
-    strike = float(position_data.get("strike", 0) or 0)
-    expiration = str(position_data.get("expiration", "") or "")
-    dte = int(position_data.get("dte", 0) or 0)
-
-    # Current market data
-    bid = float(position_data.get("bid", 0) or 0)
-    ask = float(position_data.get("ask", 0) or 0)
-    last = float(position_data.get("last", 0) or 0)
-    mid_price = _calculate_mid_price(bid, ask, last)
-    premium_per_contract = mid_price * 100
-
-    # Greeks
-    delta = float(position_data.get("delta", 0) or 0)
-    theta = float(position_data.get("theta", 0) or 0)
-    iv = _normalize_iv(position_data.get("implied_volatility", 0))
-
-    # Extrinsic value approximation: option price - intrinsic
-    if option_type == "CALL":
-        intrinsic = max(current_stock_price - strike, 0)
+def _is_stale_utc_stamp(ts: object) -> bool:
+    """Staleness for a UTC fetch stamp (tz-aware ISO or naive-UTC)."""
+    if isinstance(ts, datetime):
+        dt = ts
+    elif isinstance(ts, str):
+        try:
+            dt = datetime.fromisoformat(ts)
+        except ValueError:
+            return True
     else:
-        intrinsic = max(strike - current_stock_price, 0)
-    extrinsic = max(mid_price - intrinsic, 0)
-
-    # OTM %
-    if current_stock_price > 0:
-        if option_type == "CALL":
-            otm_pct = ((strike - current_stock_price) / current_stock_price) * 100
-        else:
-            otm_pct = ((current_stock_price - strike) / current_stock_price) * 100
-    else:
-        otm_pct = 0.0
-
-    decision = WheelDecision(
-        ticker=ticker,
-        option_type=option_type,
-        strike=strike,
-        expiration=expiration,
-        dte=dte,
-        stock_price=current_stock_price,
-        bid=bid,
-        ask=ask,
-        mid_price=round(mid_price, 4),
-        premium_per_contract=round(premium_per_contract, 2),
-        delta=round(delta, 5),
-        theta=round(theta, 5),
-        implied_volatility=round(iv, 2),
-        extrinsic_remaining=round(extrinsic, 2),
-        otm_pct=round(otm_pct, 2),
-        iv_rank=round(iv_rank * 100, 1),
-        iv_status=iv_status_str,
-        iv_env_adjustment=iv_env_adjustment,
-        earnings_adjustment=earnings_adjustment,
-        vix_regime=portfolio_context.get("vix_regime", {}).get("regime", "normal"),
-        vix_level=portfolio_context.get("vix_regime", {}).get("vix", 20.0),
-    )
-
-    # Compute roll pressure
-    decision.roll_pressure = _compute_roll_pressure(decision)
-
-    # Compute profit target progress
-    decision.profit_target_progress = _compute_profit_target_progress(decision)
-
-    # Exit playbook verdict (deterministic rules, preset-driven thresholds).
-    entry_credit = float(position_data.get("avg_cost", 0) or 0)
-    decision.exit_verdict, decision.exit_reasons = _evaluate_position_exit(
-        decision,
-        entry_credit_per_contract=entry_credit,
-        earnings_info=earnings_info or {},
-        thresholds=ExitThresholds(
-            profit_take_pct=float(portfolio_context.get("exit_profit_take_pct", 50.0) or 50.0),
-            roll_dte=int(portfolio_context.get("exit_roll_dte", 21) or 21),
-            exit_delta=float(portfolio_context.get("exit_delta", 0.65) or 0.65),
-            deep_itm_pct=float(portfolio_context.get("exit_deep_itm_pct", 15.0) or 15.0),
-        ),
-    )
-
-    # Size fit
-    decision.size_fit = _compute_size_fit(decision, portfolio_context)
-
-    # Expected move buffer
-    decision.expected_move_buffer = _compute_expected_move_buffer(decision)
-
-    # Simple warnings
-    if decision.dte <= 7:
-        decision.warnings.append(f"Only {decision.dte} DTE remaining")
-    if decision.roll_pressure >= 70:
-        decision.warnings.append(f"High roll pressure ({decision.roll_pressure:.0f}%)")
-    if otm_pct < 5 and otm_pct >= 0:
-        decision.warnings.append(f"Approaching strike ({otm_pct:.1f}% OTM)")
-    elif otm_pct < 0:
-        decision.warnings.append(f"Strike crossed ({abs(otm_pct):.1f}% ITM)")
-
-    logger.info(
-        "score_existing_position ticker=%s type=%s strike=%.2f exp=%s dte=%d "
-        "roll_pressure=%.1f profit_progress=%.1f extrinsic=%.2f",
-        ticker,
-        option_type,
-        strike,
-        expiration,
-        dte,
-        decision.roll_pressure,
-        decision.profit_target_progress,
-        extrinsic,
-    )
-    return decision
-
-
-def _evaluate_position_exit(
-    decision: WheelDecision,
-    entry_credit_per_contract: float,
-    earnings_info: dict,
-    thresholds: ExitThresholds | None = None,
-):
-    """Bridge a scored open position into the exit playbook.
-
-    Returns (verdict, reasons). Days-to-earnings prefers the enriched earnings
-    info, then whatever the decision already carries. Entry credit unknown ->
-    profit-take rule cannot fire (explicitly modeled as None).
-    """
-    days_to_earnings = None
-    for source in (
-        earnings_info.get("days_to_earnings") if isinstance(earnings_info, dict) else None,
-        decision.days_to_earnings,
-    ):
-        if source is not None:
-            try:
-                days_to_earnings = int(source)
-                break
-            except (TypeError, ValueError):
-                continue
-
-    captured = captured_profit_pct_for_short(
-        entry_credit_per_contract=entry_credit_per_contract,
-        current_mark_per_contract=decision.mid_price,
-    )
-    verdict = evaluate_exit(
-        option_type=decision.option_type,
-        dte=int(decision.dte or 0),
-        delta=float(decision.delta or 0),
-        otm_pct=float(decision.otm_pct or 0),
-        captured_profit_pct=captured,
-        days_to_earnings=days_to_earnings,
-        thresholds=thresholds,
-    )
-    return verdict.verdict, verdict.reasons
-
-
-# ---------------------------------------------------------------------------
-# Extracted helpers to reduce god-function size (Punchlist #14)
-# ---------------------------------------------------------------------------
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - dt
+    return age.total_seconds() > STALE_QUOTE_THRESHOLD
 
 
 def _is_quote_stale(option: dict, from_yfinance: bool) -> bool:
-    """Determine if a quote is stale based on timestamp and data source."""
-    quote_ts = option.get("quote_timestamp")
-    if not quote_ts:
-        return False
-    try:
-        ts = datetime.fromisoformat(quote_ts) if isinstance(quote_ts, str) else quote_ts
-        return (datetime.now() - ts).total_seconds() > STALE_QUOTE_THRESHOLD
-    except (ValueError, TypeError):
-        return False
+    """Determine if a quote is stale based on broker timestamp evidence.
+
+    Live broker chains carry ``update_time`` (broker wall clock,
+    America/New_York); persisted-broker chains are stamped with a UTC
+    ``quote_timestamp``. Missing or unparseable evidence fails closed
+    (stale), matching SCORING.md. Provenance alone never marks staleness.
+    """
+    del from_yfinance  # provenance only; staleness is timestamp-based
+    if option.get("quote_timestamp"):
+        return _is_stale_utc_stamp(option["quote_timestamp"])
+    return quote_is_stale(option.get("update_time"))
 
 
 def _apply_growth_scoring(

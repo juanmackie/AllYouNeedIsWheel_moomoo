@@ -97,3 +97,14 @@ PLAN.md
 REPO-AUDIT-PUNCHLIST.md
 REPO-REVIEW-PLAN.md
 research.md
+
+# Local agent-harness state — never ship (F-O4/F-O5)
+.claude/
+.pi/.goals-pool-snapshot.json
+.pi/goals/.goal-ledger-checkpoint.json
+.pi/goals/goal_events.jsonl
+.pi/goals/active_goal_*.md
+
+# Playwright artifacts
+test-results/
+playwright-report/

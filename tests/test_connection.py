@@ -531,13 +531,13 @@ class TestMoomooConnectionCaching(unittest.TestCase):
         mock_data = {"symbol": "AAPL", "options": []}
 
         # Test cache miss
-        self.assertIsNone(conn._get_cached_option_chain("AAPL", "20230616", "C"))
+        self.assertIsNone(conn._quote_cache.get_option_chain("AAPL", "20230616", "C"))
 
         # Test cache set
-        conn._cache_option_chain("AAPL", "20230616", "C", mock_data)
+        conn._quote_cache.cache_option_chain("AAPL", "20230616", "C", mock_data)
 
         # Test cache hit
-        self.assertEqual(conn._get_cached_option_chain("AAPL", "20230616", "C"), mock_data)
+        self.assertEqual(conn._quote_cache.get_option_chain("AAPL", "20230616", "C"), mock_data)
 
     def test_option_chain_cache_bypassed_when_data_filter_provided(self):
         """Test that option chain cache is bypassed when data_filter is provided"""
@@ -550,7 +550,7 @@ class TestMoomooConnectionCaching(unittest.TestCase):
         conn.is_connected = MagicMock(return_value=True)
         conn.quote_ctx.get_option_chain.return_value = (RET_OK, mock_chain_df)
 
-        conn._cache_option_chain("AAPL", "20230616", "C", {"cached": True})
+        conn._quote_cache.cache_option_chain("AAPL", "20230616", "C", {"cached": True})
 
         from moomoo import OptionDataFilter
 
@@ -567,33 +567,33 @@ class TestMoomooConnectionCaching(unittest.TestCase):
         """Test that broker_cache_after_hours=False disables after-hours cache serving"""
         MoomooConnection._instances.clear()
         conn = MoomooConnection(broker_cache_after_hours=False)
-        conn._cache_option_chain("AAPL", "20230616", "C", {"chain": "data"})
+        conn._quote_cache.cache_option_chain("AAPL", "20230616", "C", {"chain": "data"})
 
         old_time = time.time() - 1000
-        with conn._cache_lock:
+        with conn._quote_cache._lock:
             cache_key = "AAPL_20230616_C"
-            if cache_key in conn._option_chain_cache:
-                data, _ = conn._option_chain_cache[cache_key]
-                conn._option_chain_cache[cache_key] = (data, old_time)
+            if cache_key in conn._quote_cache._chain_cache:
+                data, _ = conn._quote_cache._chain_cache[cache_key]
+                conn._quote_cache._chain_cache[cache_key] = (data, old_time)
 
-        with patch("core.connection_manager.is_market_open", return_value=False):
-            result = conn._get_cached_option_chain("AAPL", "20230616", "C")
+        with patch("core.quote_cache.is_market_open", return_value=False):
+            result = conn._quote_cache.get_option_chain("AAPL", "20230616", "C")
         self.assertIsNone(result)
 
     def test_broker_cache_after_hours_enabled(self):
         """Test that broker_cache_after_hours=True serves stale cache when market closed"""
         MoomooConnection._instances.clear()
         conn = MoomooConnection(broker_cache_after_hours=True)
-        conn._cache_option_chain("AAPL", "20230616", "C", {"chain": "data"})
+        conn._quote_cache.cache_option_chain("AAPL", "20230616", "C", {"chain": "data"})
 
         old_time = time.time() - 10000
-        with conn._cache_lock:
+        with conn._quote_cache._lock:
             cache_key = "AAPL_20230616_C"
-            data, _ = conn._option_chain_cache[cache_key]
-            conn._option_chain_cache[cache_key] = (data, old_time)
+            data, _ = conn._quote_cache._chain_cache[cache_key]
+            conn._quote_cache._chain_cache[cache_key] = (data, old_time)
 
-        with patch("core.connection_manager.is_market_open", return_value=False):
-            result = conn._get_cached_option_chain("AAPL", "20230616", "C")
+        with patch("core.quote_cache.is_market_open", return_value=False):
+            result = conn._quote_cache.get_option_chain("AAPL", "20230616", "C")
         self.assertIsNotNone(result)
         self.assertEqual(result, {"chain": "data"})
 
@@ -636,7 +636,7 @@ class TestMoomooConnectionExpirationCaching(unittest.TestCase):
         conn.connect = MagicMock(return_value=True)
 
         pending_result = (RET_OK, pd.DataFrame({"expiration_date": ["20260619"]}))
-        conn._wait_for_pending_request = MagicMock(return_value=pending_result)
+        conn._pending_requests.wait_for = MagicMock(return_value=pending_result)
 
         result = conn.get_option_expiration_dates("MSFT")
 
@@ -646,17 +646,17 @@ class TestMoomooConnectionExpirationCaching(unittest.TestCase):
 
     def test_pending_request_result_is_reusable_across_waiters(self):
         conn = MoomooConnection()
-        conn._pending_result_ttl_seconds = 60
+        conn._pending_requests._result_ttl_seconds = 60
 
         request_key = "stock_price:US.AAPL"
-        entry, is_new = conn._get_or_create_pending_request(request_key)
+        entry, is_new = conn._pending_requests.get_or_create(request_key)
         self.assertTrue(is_new)
 
         expected = 123.45
-        conn._complete_pending_request(request_key, expected)
+        conn._pending_requests.complete(request_key, expected)
 
-        first = conn._wait_for_pending_request(request_key)
-        second = conn._wait_for_pending_request(request_key)
+        first = conn._pending_requests.wait_for(request_key)
+        second = conn._pending_requests.wait_for(request_key)
 
         self.assertEqual(first, expected)
         self.assertEqual(second, expected)

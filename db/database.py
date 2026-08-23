@@ -128,18 +128,19 @@ class OptionsDatabase:
     # --- Completed wheel run snapshots + refresh attempts ---
 
     def save_run_snapshot(self, snapshot):
-        """Persist a completed WheelRunSnapshot (one row, atomically)."""
+        """Persist a completed WheelRunSnapshot (one row, publish-once).
+
+        The persistence layer itself enforces immutability: an already-published
+        ``run_id`` is never overwritten (F-C7).
+        """
         payload = snapshot.to_dict()
         run = snapshot.run
         with pooled_connection(self.db_path) as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 INSERT INTO run_metadata (run_id, generated_at, published_at, env, account_id, status, snapshot_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    published_at = excluded.published_at,
-                    status = excluded.status,
-                    snapshot_json = excluded.snapshot_json
+                ON CONFLICT(run_id) DO NOTHING
                 """,
                 (
                     run.run_id,
@@ -151,6 +152,13 @@ class OptionsDatabase:
                     json.dumps(payload),
                 ),
             )
+            inserted = cur.rowcount > 0
+            if not inserted:
+                import logging
+
+                logging.getLogger("db.database").warning(
+                    "Run %s already published; snapshot left immutable", run.run_id
+                )
             conn.commit()
         return run.run_id
 

@@ -11,7 +11,7 @@ from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
 from core.scoring_factors import premium_velocity_per_day
 from core.utils import get_closest_friday, is_market_open
-from core.wheel_decision import disabled_macro_context, score_contract
+from core.wheel_decision import score_contract
 
 logger = logging.getLogger("api.services.options_data")
 
@@ -137,7 +137,6 @@ class OptionsDataService:
         )
         earnings_adjustment, earnings_warning = self.iv_earnings_service.get_earnings_score_impact(ticker)
         earnings_info = self.iv_earnings_service.get_earnings_info(ticker)
-        macro_regime = disabled_macro_context()
 
         # Broker chains carry IV/greeks; no external enrichment is applied.
         # Delegate to unified scorer
@@ -152,7 +151,6 @@ class OptionsDataService:
             iv_status_str=iv_status,
             earnings_adjustment=earnings_adjustment,
             earnings_info=earnings_info,
-            macro_regime=macro_regime,
             growth_profile=None,
         )
 
@@ -238,11 +236,6 @@ class OptionsDataService:
             "profile_type": decision.profile_type,
             "vix_regime": decision.vix_regime,
             "vix_level": decision.vix_level,
-            "macro_multiplier": decision.macro_multiplier,
-            "macro_regime": decision.macro_regime,
-            "macro_credit_stress": decision.macro_credit_stress,
-            "macro_summary": decision.macro_summary,
-            "macro_advice": decision.macro_advice,
             "earnings_date": decision.earnings_date,
             "days_to_earnings": decision.days_to_earnings,
             "earnings_adjustment": decision.earnings_adjustment,
@@ -256,7 +249,6 @@ class OptionsDataService:
             "greeks_source": decision.greeks_source,
             "iv_source": decision.iv_source,
             "earnings_source": decision.earnings_source,
-            "macro_source": decision.macro_source,
             "quote_timestamp": decision.quote_timestamp,
             "quote_update_time": decision.quote_update_time,
             "quote_fetched_at_utc": decision.quote_fetched_at_utc,

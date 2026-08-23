@@ -13,16 +13,6 @@
 {% include "partials/dashboard/weekly_income.html" %}
 {% include "partials/dashboard/position_monitor.html" %}
 {% include "partials/dashboard/options_table.html" %}
-
-{% with
-    modal_id="confirmCloseModal",
-    title="Review Position",
-    body="Review this position signal before taking any action in your broker.",
-    confirm_button_text="Review Position",
-    confirm_button_class="btn-warning"
-%}
-    {% include "partials/components/confirm_modal.html" %}
-{% endwith %}
 {% endblock %}
 
 {% block scripts %}

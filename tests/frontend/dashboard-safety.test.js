@@ -75,3 +75,45 @@ describe('dashboard rendering safety', () => {
     expect(target.innerHTML).not.toContain('<img src=x onerror=alert(1)>');
   });
 });
+
+describe('options-table rendering safety', () => {
+  it('escapes API-fed ticker and error text in options-table rows', async () => {
+    vi.mock('../../frontend/static/js/dashboard/options-table-state.js', () => ({
+      state: {
+        customTickers: new Set(),
+        watchlistTickers: new Set(),
+        tickersData: {
+          'BAD<script>': {
+            errors: { PUT: '<img src=x onerror=alert(1)>' },
+            data: { data: {} },
+            callOtmPercentage: 5,
+            putOtmPercentage: 5,
+          },
+        },
+      },
+      getUnavailableTickerMessage: () => '',
+      getRenderExpirationValue: () => null,
+      formatExpirationLabel: (v) => v,
+      loadExcludedTickers: () => [],
+      saveOtmSettings: () => {},
+      getOtmBounds: () => ({ min: 1, max: 40, defaultValue: 8 }),
+      normalizeOtmValue: (_t, v) => v ?? 8,
+    }));
+
+    document.body.innerHTML = `
+      <table id="put-options-table"><tbody></tbody></table>
+    `;
+
+    const { addTickerRowToTable } = await import(
+      '../../frontend/static/js/dashboard/options-table-rendering.js'
+    );
+    const ok = addTickerRowToTable('put-options-table', 'PUT', 'BAD<script>');
+    expect(ok).toBe(true);
+
+    const html = document.querySelector('#put-options-table tbody').innerHTML;
+    // Ticker text and error message must be entity-escaped, not injected raw.
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).not.toContain('<img src=x');
+  });
+});

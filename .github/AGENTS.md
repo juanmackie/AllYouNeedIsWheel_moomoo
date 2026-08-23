@@ -8,7 +8,7 @@
 
 ## Ownership
 
-- `workflows/ci.yml` owns the Python matrix, dependency install, Ruff check, pytest coverage run, Codecov upload, and Gitleaks scan.
+- `workflows/ci.yml` owns the single Windows job: dependency sync (uv), Ruff check + format check, pytest run via `scripts/ci_pytest.py`, frontend Vitest (`npm ci` + `npm test`), generated-artifact hygiene scans, and a fresh-clone import smoke.
 
 ## Local Contracts
 

@@ -175,6 +175,42 @@ class TestRunnerFailurePreservesLastSnapshot(unittest.TestCase):
         self.assertIsNone(saved[-1].run_id)
 
 
+class TestRunnerRollDiagnosticsInjection(unittest.TestCase):
+    """F-H1 regression: core must not import api; roll diagnostics arrive via
+    an injected provider callable."""
+
+    def test_wheel_runner_source_has_no_api_import(self):
+        import inspect
+
+        from core import wheel_runner
+
+        source = inspect.getsource(wheel_runner)
+        self.assertNotIn("from api", source)
+        self.assertNotRegex(source, r"\bimport api\b")
+
+    def test_default_provider_returns_empty(self):
+        db = MagicMock()
+        service = MagicMock()
+        runner = WheelRunner(db, service, {"portfolio_env": "SIMULATE", "account_id": ""})
+        self.assertEqual(runner._build_roll_decisions({"positions": {}}, MagicMock()), [])
+
+    def test_injected_provider_is_used(self):
+        db = MagicMock()
+        service = MagicMock()
+        provider = MagicMock(return_value=[{"ticker": "AAPL"}])
+        runner = WheelRunner(
+            db,
+            service,
+            {"portfolio_env": "SIMULATE", "account_id": ""},
+            roll_diagnostics_provider=provider,
+        )
+        ctx = {"positions": {"AAPL": {"security_type": "OPT"}}}
+        conn = MagicMock()
+        result = runner._build_roll_decisions(ctx, conn)
+        provider.assert_called_once_with(ctx, conn)
+        self.assertEqual(result, [{"ticker": "AAPL"}])
+
+
 class TestAttemptModel(unittest.TestCase):
     def test_attempt_roundtrip_dict(self):
         a = RefreshAttempt(attempt_id="a1", run_id=None, state="queued")

@@ -55,9 +55,7 @@ def _serialize_position(raw_symbol: str, pos: dict) -> dict | None:
             entry[field] = _safe_float(value)
     # Canonical contract key for options: SYMBOL yyyymmdd C/P strike.
     if security_type == "OPT":
-        entry["contract_key"] = (
-            f"{symbol} {entry['expiration']} {entry['option_type'][:1] or '?'}{entry['strike']}"
-        )
+        entry["contract_key"] = f"{symbol} {entry['expiration']} {entry['option_type'][:1] or '?'}{entry['strike']}"
     return entry
 
 

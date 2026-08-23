@@ -12,15 +12,6 @@ except ImportError:
     RET_ERROR = None
 
 
-def _screening_min_volatility_pct(criteria: dict, fallback: float) -> float:
-    if "min_volatility_pct" in criteria:
-        return float(criteria.get("min_volatility_pct") or fallback)
-    legacy_iv_rank = criteria.get("min_iv_rank")
-    if legacy_iv_rank is not None:
-        return float(legacy_iv_rank) / 10
-    return fallback
-
-
 logger = logging.getLogger("api.services.watchlist_manager")
 
 
@@ -104,10 +95,6 @@ class WatchlistManager:
         except Exception as e:
             logger.warning(f"Moomoo watchlist fetch failed: {e}")
             return []
-
-    def _get_tvscreener_service(self):
-        """Dynamic screening is out of scope; always returns None."""
-        return None
 
     def get_watchlist_sources(self):
         """Return each watchlist source as a labelled list.

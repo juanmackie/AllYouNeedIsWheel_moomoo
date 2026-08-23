@@ -16,39 +16,24 @@ from api.routes.utils import (
     enforce_route_rate_limit,
     error_response,
     normalize_ticker_list,
-    opend_unavailable_response,
     success_response,
 )
-from core.connection import probe_opend_status
+from api.routes.utils import (
+    ensure_opend_available as _ensure_opend_available,
+)
+from core.presets import DEFAULT_PRESET_KEY, get_preset
 
 # Set up logger
 logger = logging.getLogger("api.routes.options")
 
 bp = Blueprint("options", __name__, url_prefix="/api/options")
 
-# Lazy service access - service created on first use
-_options_service_instance = None
-
 
 def get_options_service():
-    """Get or create the options service instance."""
-    global _options_service_instance
-    if _options_service_instance is None:
-        import api
+    """Get the registered options service singleton (lazy registry)."""
+    import api
 
-        _options_service_instance = api.get_service("options")
-    return _options_service_instance
-
-
-def _ensure_opend_available():
-    connection_config = current_app.config.get("connection_config", {})
-    status = probe_opend_status(
-        host=connection_config.get("host", "127.0.0.1"), port=connection_config.get("port", 11111)
-    )
-    if status.get("status") == "connected":
-        return None
-
-    return opend_unavailable_response(status)
+    return api.get_service("options")
 
 
 @bp.route("/connection-status", methods=["GET"])
@@ -301,19 +286,37 @@ def get_screening_config():
             }
         )
     except Exception as e:
+        # Degraded mode: derive fallbacks from the default preset (single
+        # source of truth) and say so, instead of presenting hand-copied
+        # literals as live config (F-O3).
         logger.error(f"Error getting screening config: {e}")
+        sp = get_preset(DEFAULT_PRESET_KEY).to_screener_profile()
+        min_dte = int(sp.get("csp_min_dte", 30))
+        max_dte = int(sp.get("csp_max_dte", 45))
+        preferred_dte = int(sp.get("csp_preferred_dte", 37))
+        min_otm_pct = int(sp.get("csp_min_otm_pct", 5))
+        max_otm_pct = int(sp.get("csp_max_otm_pct", 15))
         return success_response(
             {
                 "growth_mode_enabled": True,
-                "csp_default_otm_pct": 10,
-                "call_default_otm_pct": 10,
+                "csp_default_otm_pct": int(sp.get("csp_default_otm_pct", 10)),
+                "call_default_otm_pct": int(sp.get("call_default_otm_pct", 10)),
                 "default_tab": "PUT",
-                "csp_min_dte": 30,
-                "csp_max_dte": 45,
-                "csp_preferred_dte": 37,
-                "csp_min_otm_pct": 5,
-                "csp_max_otm_pct": 15,
-                "csp_profile_summary": None,
+                "csp_min_dte": min_dte,
+                "csp_max_dte": max_dte,
+                "csp_preferred_dte": preferred_dte,
+                "csp_min_otm_pct": min_otm_pct,
+                "csp_max_otm_pct": max_otm_pct,
+                "csp_profile_summary": {
+                    "delta": f"{float(sp.get('csp_target_delta', 0.30)):.2f}",
+                    "delta_tolerance": f"{float(sp.get('csp_delta_tolerance', 0.12)):.2f}",
+                    "dte_range": f"{min_dte}-{max_dte}",
+                    "preferred_dte": preferred_dte,
+                    "otm_range": f"{min_otm_pct}-{max_otm_pct}",
+                    "otm_pct": int(sp.get("csp_default_otm_pct", 10)),
+                    "min_volatility_pct": 4.5,
+                },
+                "degraded": True,
             }
         )
 
@@ -325,64 +328,23 @@ def get_cash_status():
         if opend_error:
             return opend_error
 
+        # This route forces a broker round-trip (refresh=True), so it shares
+        # the broker-backed rate-limit budget (F-O1).
+        allowed, retry_after = enforce_route_rate_limit(
+            "cash-status", request.remote_addr or "local", max_requests=30, window_seconds=60
+        )
+        if not allowed:
+            return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
+
         # Delegate CSP affordability to PortfolioContext, which computes true
         # available cash minus reserved short-put collateral (margin buying
         # power is display-only and is never used for CSP capacity).
         service = get_options_service()
-        context = service._get_portfolio_context(refresh=True)
-
-        cash_balance = float(context.get("cash_balance", 0) or 0)
-        available_cash = float(context.get("available_cash", 0) or 0)
-        cash_reserved = float(context.get("cash_reserved_for_csp", 0) or 0)
-        cash_available_for_csp = float(context.get("cash_available_for_csp", 0) or 0)
-        broker_buying_power = float(context.get("broker_buying_power", 0) or 0)
-        broker_buying_power_source = context.get("broker_buying_power_source", "none")
-        excess_liquidity = float(context.get("excess_liquidity", 0) or 0)
-        reserve_enabled = service.config.get("cash_reserve_enabled", True)
-
-        # Per-open-put collateral detail (diagnostics only).
-        open_puts = []
-        try:
-            from api.services.portfolio_service import PortfolioService
-
-            option_positions = PortfolioService().get_positions("OPT") or []
-            for position in option_positions:
-                pos_qty = int(position.get("position", 0) or 0)
-                option_type = str(position.get("option_type", "") or "").upper()
-                if pos_qty < 0 and option_type == "PUT":
-                    ticker = str(position.get("symbol", "") or "").replace("US.", "")
-                    strike = float(position.get("strike", 0) or 0)
-                    contracts = abs(pos_qty)
-                    expiration = position.get("expiration", "")
-                    cash_required = strike * 100 * contracts
-                    open_puts.append(
-                        {
-                            "ticker": ticker,
-                            "strike": strike,
-                            "contracts": contracts,
-                            "expiration": expiration,
-                            "cash_required": round(cash_required, 2),
-                        }
-                    )
-        except Exception as exc:
-            logger.debug(f"Open-put collateral detail unavailable: {exc}")
+        payload = service.portfolio_context_helper.get_cash_status(refresh=True)
 
         return success_response(
             attach_source_policy(
-                {
-                    "cash_balance": round(cash_balance, 2),
-                    "cash_reserved": round(cash_reserved, 2),
-                    "cash_available": round(available_cash, 2),
-                    "cash_available_for_csp": round(cash_available_for_csp, 2),
-                    "cash_reserved_for_csp": round(cash_reserved, 2),
-                    "broker_buying_power": round(broker_buying_power, 2),
-                    "broker_buying_power_source": broker_buying_power_source,
-                    "available_cash": round(available_cash, 2),
-                    "excess_liquidity": round(excess_liquidity, 2),
-                    "reserve_enabled": reserve_enabled,
-                    "open_puts": open_puts,
-                    "open_puts_count": len(open_puts),
-                },
+                payload,
                 build_account_source_policy("cash_status"),
             )
         )
@@ -396,8 +358,7 @@ def get_cash_status():
 @bp.route("/watchlist-tickers", methods=["GET"])
 def get_watchlist_tickers():
     """
-    Get the effective watchlist (includes dynamic/hybrid screening if configured).
-    Returns the watchlist used for CSP recommendations and scanning.
+    Get the canonical merged watchlist union used by CSP recommendations.
     """
     try:
         from api.services.config import get_config
@@ -405,8 +366,7 @@ def get_watchlist_tickers():
 
         config = get_config()
         manager = WatchlistManager(config_provider=config)
-        growth_mode = config.get("growth_mode", {})
-        effective_tickers = manager.get_effective_watchlist(growth_mode_config=growth_mode)
+        effective_tickers = manager.get_effective_watchlist()
         return success_response(
             {
                 "tickers": effective_tickers,
@@ -440,7 +400,11 @@ def get_trade_lifecycle():
 
         ticker = request.args.get("ticker")
         event_type = request.args.get("event_type")
-        limit = int(request.args.get("limit", 100))
+        try:
+            limit = int(request.args.get("limit", 100))
+        except (TypeError, ValueError):
+            return error_response("limit must be an integer", status_code=400)
+        limit = min(max(limit, 0), 1000)  # negative LIMIT means unlimited in SQLite
 
         events = db.get_trade_events(ticker=ticker, event_type=event_type, limit=limit)
         analytics = db.get_trade_analytics()

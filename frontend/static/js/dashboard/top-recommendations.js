@@ -3,6 +3,7 @@
  * Displays the highest-scoring option opportunities with auto-refresh
  */
 import { fetchRunState, refreshRun } from './api-run.js';
+import { initPresetSelector } from './preset-selector.js';
 import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
 import StateModel from '../utils/state-model.js';
@@ -521,25 +522,6 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         ivRankEl.textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
     }
 
-    // Macro impact line (macro enrichment is out of scope; always neutral)
-    const macroImpactEl = clone.querySelector('.macro-impact');
-    const macroData = null;
-    if (macroImpactEl && rec.macro_multiplier != null && macroData) {
-        const multiplier = rec.macro_multiplier;
-        const impactPct = ((multiplier - 1.0) * 100).toFixed(0);
-        const impactSign = impactPct > 0 ? '+' : '';
-        const impactText = multiplier > 1.0 ? 'boost' : multiplier < 1.0 ? 'penalty' : 'neutral';
-        const impactColor = multiplier > 1.0 ? 'text-success' : multiplier < 1.0 ? 'text-warning' : 'text-muted';
-
-        macroImpactEl.innerHTML = `
-            <span class="${impactColor}">
-                Macro: ${impactSign}${impactPct}% ${escapeHtml(impactText)} (${escapeHtml(macroData.rate_regime)}/${escapeHtml(macroData.credit_stress)})
-            </span>
-        `;
-    } else if (macroImpactEl) {
-        macroImpactEl.innerHTML = '<span class="text-muted">Macro: N/A</span>';
-    }
-
     // CSP-specific details
     const cspSection = clone.querySelector('.csp-details');
     if (signalType === 'csp' || signalType === 'put') {
@@ -923,11 +905,6 @@ function updateTimestamp(timestamp, cacheInfo = null) {
     }
 }
 
-/**
- * Render a lane's cards into its container
- * @param {string} containerId - DOM id of the lane's card row
- * @param {Array} recs - Array of recommendation objects for this lane
- */
 /**
  * Apply the active preset banner and labels (read-only effective values)
  * @param {Object} result - Full API response
@@ -1407,65 +1384,6 @@ function handleVisibilityChange() {
 }
 
 /**
- * Preset selector: three versioned presets; effective values are read-only.
- */
-let _presetState = null;
-
-export async function initPresetSelector() {
-    const buttonsEl = document.getElementById('preset-buttons');
-    if (!buttonsEl || buttonsEl.dataset.bound) return;
-    buttonsEl.dataset.bound = 'true';
-    try {
-        const resp = await fetch('/api/settings');
-        if (!resp.ok) return;
-        _presetState = await resp.json();
-        renderPresetSelector();
-    } catch (err) {
-        console.error('Preset selector failed to load:', err);
-    }
-}
-
-function renderPresetSelector() {
-    const buttonsEl = document.getElementById('preset-buttons');
-    const effectiveEl = document.getElementById('preset-effective');
-    if (!buttonsEl || !_presetState) return;
-    buttonsEl.innerHTML = '';
-    const labels = { conservative: 'Conservative', balanced: 'Balanced', aggressive: 'Aggressive' };
-    for (const [key, preset] of Object.entries(_presetState.presets || {})) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-sm ' + (key === _presetState.active ? 'btn-primary' : 'btn-outline-secondary');
-        btn.textContent = labels[key] || preset.label || key;
-        btn.dataset.preset = key;
-        btn.addEventListener('click', () => selectPreset(key));
-        buttonsEl.appendChild(btn);
-    }
-    if (effectiveEl) {
-        const eff = _presetState.effective || {};
-        effectiveEl.textContent =
-            `Effective: DTE ${eff.csp_min_dte}-${eff.csp_max_dte} (pref ${eff.csp_preferred_dte}), ` +
-            `delta ${eff.csp_target_delta}±${eff.csp_delta_tolerance}, OTM ${eff.csp_min_otm_pct}-${eff.csp_max_otm_pct}%, ` +
-            `min BP $${Math.round(eff.min_csp_buying_power || 0)}, max ${eff.max_buying_power_pct_per_csp || 0}% BP per CSP — read-only`;
-    }
-}
-
-async function selectPreset(key) {
-    try {
-        const resp = await fetch('/api/settings/preset', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ preset: key }),
-        });
-        if (!resp.ok) return;
-        _presetState = await resp.json();
-        renderPresetSelector();
-        loadTopRecommendations(true);
-    } catch (err) {
-        console.error('Preset selection failed:', err);
-    }
-}
-
-/**
  * Set up event listeners
  */
 function setupEventListeners() {
@@ -1489,7 +1407,7 @@ function setupEventListeners() {
     }
 
     // Preset selector
-    initPresetSelector();
+    initPresetSelector(() => loadTopRecommendations(true));
 
     // Signal-type tabs
     initSignalTabs();

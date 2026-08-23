@@ -1,3 +1,5 @@
+import { escapeHtml } from './formatters.js';
+
 /**
  * Alert utility functions for displaying messages to users
  */
@@ -13,15 +15,15 @@ function showAlert(message, type = 'info', duration = 5000) {
     alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
     alertDiv.role = 'alert';
     alertDiv.innerHTML = `
-        ${message}
+        ${escapeHtml(message)}
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     `;
-    
+
     // Add the alert at the top of the content container
     const contentContainer = document.querySelector('.content-container') || document.querySelector('main');
     if (contentContainer) {
         contentContainer.prepend(alertDiv);
-        
+
         // Auto-dismiss after duration
         setTimeout(() => {
             alertDiv.classList.remove('show');
@@ -30,25 +32,5 @@ function showAlert(message, type = 'info', duration = 5000) {
     }
 }
 
-/**
- * Get a CSS class for a badge based on a status
- * @param {string} status - The status value
- * @returns {string} - The appropriate Bootstrap badge color class
- */
-function getBadgeColor(status) {
-    switch(status) {
-        case 'pending':
-            return 'warning';
-        case 'completed':
-            return 'success';
-        case 'cancelled':
-            return 'danger';
-        case 'processing':
-            return 'info';
-        default:
-            return 'secondary';
-    }
-}
-
 // Export the functions
-export { showAlert, getBadgeColor }; 
+export { showAlert };

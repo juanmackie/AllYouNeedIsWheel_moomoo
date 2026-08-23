@@ -5,15 +5,11 @@ Earnings lock and locked tickers endpoints.
 
 import logging
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, jsonify, request
 
 from api import get_service
 from api.routes.utils import error_response, success_response
-from api.services.iv_earnings_service import IVEarningsService
-from api.services.portfolio_service import PortfolioService
-from api.services.watchlist_manager import WatchlistManager
 from core.ticker_utils import earnings_underlying_ticker
-from db.database import OptionsDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +17,7 @@ bp = Blueprint("earnings", __name__, url_prefix="/api/earnings")
 
 
 def _get_earnings_service():
-    db = current_app.config.get("database") or OptionsDatabase()
-    return IVEarningsService(db)
+    return get_service("ivearnings")
 
 
 @bp.route("/locked-tickers")
@@ -152,8 +147,17 @@ def update_single_earnings(ticker):
 @bp.route("/refresh", methods=["POST"])
 def refresh_all_earnings():
     """Trigger a global update for all active symbols."""
+    from api.routes.utils import enforce_route_rate_limit
+
+    # External-provider batch call; rate-limit the trigger (F-O1).
+    allowed, retry_after = enforce_route_rate_limit(
+        "earnings-refresh", request.remote_addr or "local", max_requests=4, window_seconds=300
+    )
+    if not allowed:
+        return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
+
     service = _get_earnings_service()
-    portfolio = PortfolioService()
+    portfolio = get_service("portfolio")
 
     positions = portfolio.get_positions() or []
 
@@ -164,14 +168,8 @@ def refresh_all_earnings():
             all_tickers.add(normalized)
 
     try:
-        connection_config = current_app.config.get("connection_config", {})
-        wm = WatchlistManager(connection_config)
-        growth_mode = connection_config.get("growth_mode", {})
-        watchlist_tickers = [
-            earnings_underlying_ticker(t.strip())
-            for t in wm.get_effective_watchlist(growth_mode_config=growth_mode)
-            if t.strip()
-        ]
+        wm = get_service("watchlist")
+        watchlist_tickers = [earnings_underlying_ticker(t.strip()) for t in wm.get_effective_watchlist() if t.strip()]
         all_tickers.update(t for t in watchlist_tickers if t)
     except Exception:
         logger.warning("Could not load watchlist tickers for earnings update", exc_info=True)
@@ -194,6 +192,10 @@ def refresh_all_earnings():
 @bp.route("/pending")
 def get_pending_earnings():
     """Get tickers with pending earnings in the next 7 days."""
+    from flask import current_app
+
+    from db.database import OptionsDatabase
+
     db = current_app.config.get("database") or OptionsDatabase()
     pending = db.get_pending_earnings(days_threshold=7)
 

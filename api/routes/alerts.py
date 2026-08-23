@@ -8,6 +8,7 @@ import traceback
 
 from flask import Blueprint
 
+from api.routes.utils import ensure_opend_available as _ensure_opend_available
 from api.routes.utils import error_response, success_response
 from api.services.portfolio_scoring import build_portfolio_context, score_position
 from core.logging_config import get_logger
@@ -21,25 +22,6 @@ def _get_portfolio_service():
     import api
 
     return api.get_service("portfolio")
-
-
-def _ensure_opend_available():
-    from flask import current_app
-
-    from core.connection import probe_opend_status
-
-    connection_config = current_app.config.get("connection_config", {})
-    status = probe_opend_status(
-        host=connection_config.get("host", "127.0.0.1"), port=connection_config.get("port", 11111)
-    )
-    if status.get("status") == "connected":
-        return None
-    error_code = "opend_login_required" if status.get("status") == "login_required" else "opend_unavailable"
-    return error_response(
-        status.get("message", "OpenD is unavailable."),
-        status_code=503,
-        extra={"error_code": error_code, "opend_status": status},
-    )
 
 
 @bp.route("/alerts", methods=["GET"])

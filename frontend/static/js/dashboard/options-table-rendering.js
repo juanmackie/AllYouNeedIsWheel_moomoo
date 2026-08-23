@@ -1,12 +1,6 @@
 import { state, getUnavailableTickerMessage, getRenderExpirationValue, formatExpirationLabel, loadExcludedTickers, saveOtmSettings, getOtmBounds, normalizeOtmValue } from './options-table-state.js';
 import { calculateEarningsSummary, getPremiumPerContract, updateEarningsSummary } from './options-table-calc.js';
-import { formatCurrency, formatPercent } from '../utils/formatters.js';
-
-function sanitize(str) {
-    const el = document.createElement('div');
-    el.textContent = str;
-    return el.innerHTML;
-}
+import { escapeHtml as sanitize, formatCurrency, formatPercent } from '../utils/formatters.js';
 
 export function showToast(type, title, message) {
     let toastContainer = document.getElementById('toast-container');
@@ -118,7 +112,7 @@ export function addOtmInputEventListeners() {
                     refreshBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> <strong>Apply</strong>';
                 }
 
-                showToast('info', 'OTM Updated', `Click the Apply button to refresh ${ticker} options with ${normalizedOtm}% OTM`);
+                showToast('info', 'OTM Updated', `Click the Apply button to refresh ${sanitize(ticker)} options with ${normalizedOtm}% OTM`);
             }
         });
     });
@@ -241,8 +235,8 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             row.innerHTML = `
                 <td colspan="13" class="text-center p-3">
                     <div class="alert alert-warning m-0">
-                        <div class="fw-semibold">${ticker} ${optionType === 'CALL' ? 'covered call' : 'cash-secured put'} data unavailable</div>
-                        <div class="small mt-1">${optionError}</div>
+                        <div class="fw-semibold">${sanitize(ticker)} ${optionType === 'CALL' ? 'covered call' : 'cash-secured put'} data unavailable</div>
+                        <div class="small mt-1">${sanitize(optionError)}</div>
                     </div>
                 </td>
             `;
@@ -263,31 +257,31 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             if (expirations.length > 0) {
                 expirations.forEach((exp, index) => {
                     const selected = exp.value === selectedExpirationValue || (!selectedExpirationValue && index === 0) ? 'selected' : '';
-                    expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+                    expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${sanitize(exp.label)}</option>`;
                 });
             } else {
                 expirationOptionsHtml = `<option value="">No expirations available</option>`;
             }
 
             row.innerHTML = `
-                <td class="align-middle">${ticker}</td>
+                <td class="align-middle">${sanitize(ticker)}</td>
                 <td class="align-middle">${sharesOwned}</td>
                 <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
                 <td class="align-middle">
                     <div class="input-group input-group-sm">
-                        <input type="number" class="form-control form-control-sm otm-input" 
-                            data-ticker="${ticker}" 
+                        <input type="number" class="form-control form-control-sm otm-input"
+                            data-ticker="${sanitize(ticker)}"
                             data-option-type="CALL"
-                            min="${callOtmBounds.min}" max="${callOtmBounds.max}" step="1" 
+                            min="${callOtmBounds.min}" max="${callOtmBounds.max}" step="1"
                             value="${normalizeOtmValue('CALL', tickerData.callOtmPercentage ?? callOtmBounds.defaultValue)}">
-                        <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}">
+                        <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${sanitize(ticker)}">
                             <i class="bi bi-arrow-repeat"></i>
                         </button>
                     </div>
                 </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">
-                    <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="CALL">
+                    <select class="form-select form-select-sm expiration-select" data-ticker="${sanitize(ticker)}" data-option-type="CALL">
                         ${expirationOptionsHtml}
                     </select>
                     <div class="small text-muted mt-1">No ranked calls for this expiration yet</div>
@@ -298,10 +292,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 <td class="align-middle">${maxContracts}</td>
                 <td class="align-middle">$ 0.00</td>
                 <td class="align-middle">
-                    <button class="btn btn-sm btn-outline-secondary refresh-option" 
-                        data-ticker="${ticker}" 
+                    <button class="btn btn-sm btn-outline-secondary refresh-option"
+                        data-ticker="${sanitize(ticker)}"
                         data-type="CALL"
-                        data-bs-toggle="tooltip" 
+                        data-bs-toggle="tooltip"
                         title="Refresh options data">
                         <i class="bi bi-arrow-repeat"></i> Refresh
                     </button>
@@ -316,7 +310,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             if (expirations.length > 0) {
                 expirations.forEach((exp, index) => {
                     const selected = exp.value === selectedExpirationValue || (!selectedExpirationValue && index === 0) ? 'selected' : '';
-                    expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+                    expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${sanitize(exp.label)}</option>`;
                 });
             } else {
                 expirationOptionsHtml = `<option value="">No expirations available</option>`;
@@ -324,20 +318,20 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
             row.innerHTML = `
                 <td class="align-middle">
-                    ${ticker}
-                    <button class="btn btn-sm btn-outline-danger ms-2 delete-ticker" data-ticker="${ticker}">
+                    ${sanitize(ticker)}
+                    <button class="btn btn-sm btn-outline-danger ms-2 delete-ticker" data-ticker="${sanitize(ticker)}">
                         <i class="bi bi-trash"></i>
                     </button>
                 </td>
                 <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
                 <td class="align-middle">
                     <div class="input-group input-group-sm">
-                        <input type="number" class="form-control form-control-sm otm-input" 
-                            data-ticker="${ticker}" 
+                        <input type="number" class="form-control form-control-sm otm-input"
+                            data-ticker="${sanitize(ticker)}"
                             data-option-type="PUT"
-                            min="${putOtmBounds.min}" max="${putOtmBounds.max}" step="1" 
+                            min="${putOtmBounds.min}" max="${putOtmBounds.max}" step="1"
                             value="${normalizeOtmValue('PUT', tickerData.putOtmPercentage ?? putOtmBounds.defaultValue)}">
-                        <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}"
+                        <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${sanitize(ticker)}"
                             data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh with new OTM %">
                             <i class="bi bi-arrow-repeat"></i>
                         </button>
@@ -345,7 +339,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 </td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">
-                    <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="PUT">
+                    <select class="form-select form-select-sm expiration-select" data-ticker="${sanitize(ticker)}" data-option-type="PUT">
                         ${expirationOptionsHtml}
                     </select>
                     <div class="small text-muted mt-1">No ranked puts for this expiration yet</div>
@@ -354,24 +348,24 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 <td class="align-middle">-</td>
                 <td class="align-middle">-</td>
                 <td class="align-middle">
-                    <input type="number" class="form-control form-control-sm put-qty-input" 
-                        data-ticker="${ticker}" 
-                        value="${putQuantity}" 
+                    <input type="number" class="form-control form-control-sm put-qty-input"
+                        data-ticker="${sanitize(ticker)}"
+                        value="${putQuantity}"
                         min="1" max="100" step="1">
                 </td>
                 <td class="align-middle total-premium">$ 0.00</td>
                 <td class="align-middle cash-required">$ 0.00</td>
                 <td class="align-middle d-flex">
-                    <button class="btn btn-sm btn-outline-secondary refresh-option me-2" 
-                        data-ticker="${ticker}" 
+                    <button class="btn btn-sm btn-outline-secondary refresh-option me-2"
+                        data-ticker="${sanitize(ticker)}"
                         data-type="PUT"
-                        data-bs-toggle="tooltip" 
+                        data-bs-toggle="tooltip"
                         title="Refresh options data">
                         <i class="bi bi-arrow-repeat"></i> Refresh
                     </button>
-                    <button class="btn btn-sm btn-outline-danger delete-ticker" 
-                        data-ticker="${ticker}" 
-                        data-bs-toggle="tooltip" 
+                    <button class="btn btn-sm btn-outline-danger delete-ticker"
+                        data-ticker="${sanitize(ticker)}"
+                        data-bs-toggle="tooltip"
                         title="Remove ticker">
                         <i class="bi bi-x"></i>
                     </button>
@@ -389,10 +383,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
     const score = option.score || 0;
     const annualizedReturn = option.annualized_return || 0;
-    const rationaleText = (option.rationale || []).join(' | ').replace(/"/g, '&quot;');
+    const rationaleText = sanitize((option.rationale || []).join(' | '));
 
     const warnings = option.warnings || [];
-    const warningHtml = warnings.length > 0 ? 
+    const warningHtml = warnings.length > 0 ?
         `<div class="small mt-1">
             ${warnings.map(w => {
                 let context = '';
@@ -413,7 +407,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                     context = ' - Higher assignment risk';
                     icon = 'bi-shield-exclamation';
                 }
-                return `<div class="text-warning"><i class="bi ${icon} me-1"></i>${w}${context}</div>`;
+                return `<div class="text-warning"><i class="bi ${icon} me-1"></i>${sanitize(w)}${context}</div>`;
             }).join('')}
         </div>` : '';
 
@@ -429,10 +423,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
     const ivPercent = option.implied_volatility ? option.implied_volatility.toFixed(2) : 'N/A';
 
-    const ivRankBadge = option.iv_rank !== undefined ? 
-        `<span class="badge ${option.iv_rank < 30 ? 'bg-danger' : option.iv_rank > 70 ? 'bg-success' : 'bg-secondary'}" 
-               data-bs-toggle="tooltip" 
-               data-bs-placement="top" 
+    const ivRankBadge = option.iv_rank !== undefined ?
+        `<span class="badge ${option.iv_rank < 30 ? 'bg-danger' : option.iv_rank > 70 ? 'bg-success' : 'bg-secondary'}"
+               data-bs-toggle="tooltip"
+               data-bs-placement="top"
                title="IV Rank shows if volatility is ${option.iv_rank < 30 ? 'LOW (cheaper options)' : option.iv_rank > 70 ? 'HIGH (expensive options - good for selling)' : 'moderate'} relative to the past year">
             IV Rank: ${option.iv_rank.toFixed(0)}%
         </span>` : '';
@@ -448,7 +442,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
         if (expirations.length > 0) {
             expirations.forEach(exp => {
                 const selected = exp.value === selectedExpirationValue ? 'selected' : '';
-                expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+                expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${sanitize(exp.label)}</option>`;
             });
         } else {
             expirationOptionsHtml = `<option value="${selectedExpirationValue}" selected>${formatExpirationLabel(selectedExpirationValue)}</option>`;
@@ -456,10 +450,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
         row.innerHTML = `
             <td class="align-middle">
-                <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
+                <div class="fw-semibold" title="${rationaleText}">${sanitize(ticker)}</div>
                 <div class="d-flex align-items-center gap-1 mt-1">
-                    <span class="badge ${scoreBadgeClass} badge--compact" 
-                          data-bs-toggle="tooltip" 
+                    <span class="badge ${scoreBadgeClass} badge--compact"
+                          data-bs-toggle="tooltip"
                           title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
                         Score: ${score.toFixed(1)}
                     </span>
@@ -474,14 +468,14 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <div class="input-group input-group-sm">
-                    <input type="number" class="form-control form-control-sm otm-input" 
-                        data-ticker="${ticker}" 
+                    <input type="number" class="form-control form-control-sm otm-input"
+                        data-ticker="${sanitize(ticker)}"
                         data-option-type="CALL"
-                        min="1" max="50" step="1" 
+                        min="1" max="50" step="1"
                         value="${tickerData.callOtmPercentage || 10}"
-                        data-bs-toggle="tooltip" 
+                        data-bs-toggle="tooltip"
                         title="Out-of-the-Money %: Distance from current stock price. Higher = safer but less premium.">
-                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}"
+                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${sanitize(ticker)}"
                         data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh with new OTM %">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
@@ -489,7 +483,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Price where your shares would be called away">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
-                <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="CALL">
+                <select class="form-select form-select-sm expiration-select" data-ticker="${sanitize(ticker)}" data-option-type="CALL">
                     ${expirationOptionsHtml}
                 </select>
                 <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Days To Expiration: Time until option expires">${option.dte || '-'} DTE</div>
@@ -507,13 +501,13 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle d-flex">
                 <span class="badge bg-light text-muted border small me-2"
-                    data-bs-toggle="tooltip" 
+                    data-bs-toggle="tooltip"
                     title="Signal only — review trades in your broker app">
                     <i class="bi bi-eye"></i> Signal
                 </span>
-                <button class="btn btn-sm btn-outline-danger delete-ticker" 
-                    data-ticker="${ticker}" 
-                    data-bs-toggle="tooltip" 
+                <button class="btn btn-sm btn-outline-danger delete-ticker"
+                    data-ticker="${sanitize(ticker)}"
+                    data-bs-toggle="tooltip"
                     title="Remove ticker">
                     <i class="bi bi-x"></i>
                 </button>
@@ -535,7 +529,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
         if (expirations.length > 0) {
             expirations.forEach((exp, index) => {
                 const selected = exp.value === selectedExpirationValue || (!selectedExpirationValue && index === 0) ? 'selected' : '';
-                expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${exp.label}</option>`;
+                expirationOptionsHtml += `<option value="${exp.value}" ${selected}>${sanitize(exp.label)}</option>`;
             });
         } else {
             expirationOptionsHtml = `<option value="${selectedExpirationValue}" selected>${formatExpirationLabel(selectedExpirationValue)}</option>`;
@@ -559,10 +553,10 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
         row.innerHTML = `
             <td class="align-middle">
-                <div class="fw-semibold" title="${rationaleText}">${ticker}</div>
+                <div class="fw-semibold" title="${rationaleText}">${sanitize(ticker)}</div>
                 <div class="d-flex align-items-center gap-1 mt-1">
-                    <span class="badge ${scoreBadgeClass} badge--compact" 
-                          data-bs-toggle="tooltip" 
+                    <span class="badge ${scoreBadgeClass} badge--compact"
+                          data-bs-toggle="tooltip"
                           title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
                         Score: ${score.toFixed(1)}
                     </span>
@@ -577,14 +571,14 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle">${stockPrice ? '$ ' + stockPrice.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <div class="input-group input-group-sm">
-                    <input type="number" class="form-control form-control-sm otm-input" 
-                        data-ticker="${ticker}" 
+                    <input type="number" class="form-control form-control-sm otm-input"
+                        data-ticker="${sanitize(ticker)}"
                         data-option-type="PUT"
-                        min="1" max="50" step="1" 
+                        min="1" max="50" step="1"
                         value="${tickerData.putOtmPercentage || 10}"
-                        data-bs-toggle="tooltip" 
+                        data-bs-toggle="tooltip"
                         title="Out-of-the-Money %: Distance from current stock price. Higher = safer but less premium.">
-                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${ticker}"
+                    <button class="btn btn-outline-secondary btn-sm refresh-otm" data-ticker="${sanitize(ticker)}"
                         data-bs-toggle="tooltip" data-bs-placement="top" title="Refresh with new OTM %">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
@@ -592,7 +586,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Price where you'd be obligated to buy shares">${option.strike ? '$ ' + option.strike.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
-                <select class="form-select form-select-sm expiration-select" data-ticker="${ticker}" data-option-type="PUT">
+                <select class="form-select form-select-sm expiration-select" data-ticker="${sanitize(ticker)}" data-option-type="PUT">
                     ${expirationOptionsHtml}
                 </select>
                 <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Days To Expiration: Time until option expires">${option.dte || '-'} DTE</div>
@@ -604,9 +598,9 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 <div>${ivRankBadge}</div>
             </td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Number of contracts to sell (1 contract = obligation to buy 100 shares)">
-                <input type="number" class="form-control form-control-sm put-qty-input" 
-                    data-ticker="${ticker}" 
-                    value="${putQuantity}" 
+                <input type="number" class="form-control form-control-sm put-qty-input"
+                    data-ticker="${sanitize(ticker)}"
+                    value="${putQuantity}"
                     min="1" max="${maxAffordableContracts}" step="1">
             </td>
             <td class="align-middle total-premium">
@@ -619,13 +613,13 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             </td>
             <td class="align-middle d-flex">
                 <span class="badge bg-light text-muted border small me-2"
-                    data-bs-toggle="tooltip" 
+                    data-bs-toggle="tooltip"
                     title="Signal only — review trades in your broker app">
                     <i class="bi bi-eye"></i> Signal
                 </span>
-                <button class="btn btn-sm btn-outline-danger delete-ticker" 
-                    data-ticker="${ticker}" 
-                    data-bs-toggle="tooltip" 
+                <button class="btn btn-sm btn-outline-danger delete-ticker"
+                    data-ticker="${sanitize(ticker)}"
+                    data-bs-toggle="tooltip"
                     title="Remove ticker">
                     <i class="bi bi-x"></i>
                 </button>
@@ -695,9 +689,9 @@ export function updateProgressBanner(current, total, ticker, step, error) {
     if (countEl) countEl.textContent = `${current}/${total}`;
     if (detailEl) {
         if (error) {
-            detailEl.innerHTML = `<span class="text-danger">${ticker}: ${error}</span>`;
+            detailEl.innerHTML = `<span class="text-danger">${sanitize(ticker)}: ${sanitize(error)}</span>`;
         } else {
-            detailEl.textContent = `${ticker}: ${step}`;
+            detailEl.textContent = `${sanitize(ticker)}: ${step}`;
         }
     }
 }
@@ -875,43 +869,14 @@ export function buildOptionsTable(tableId, optionType) {
     initializeOptionsTableTooltips();
 }
 
-export function updateOptionsTable() {
-    const optionsTableContainer = document.getElementById('options-table-container');
-    if (!optionsTableContainer) {
-        console.error("Options table container not found in the DOM");
-        return;
-    }
+/**
+ * Shared Calls/Puts tab scaffold (single source of truth).
+ * @param {boolean} putTabWasActive
+ * @returns {string}
+ */
+export function buildTabsHTML(putTabWasActive) {
+    return `
 
-    const putTabWasActive = document.querySelector('#put-options-tab.active') !== null ||
-                           document.querySelector('#put-options-section.active') !== null;
-
-    optionsTableContainer.innerHTML = '';
-
-    const tickers = Object.keys(state.tickersData);
-
-    if (tickers.length === 0) {
-        optionsTableContainer.innerHTML = `<div class="alert alert-info">${getUnavailableTickerMessage()}</div>`;
-        return;
-    }
-
-    const eligibleTickers = tickers.filter(ticker => {
-        const tickerData = state.tickersData[ticker];
-
-        if (!tickerData || !tickerData.data || !tickerData.data.data || !tickerData.data.data[ticker]) {
-            return true;
-        }
-
-        const optionData = tickerData.data.data[ticker];
-
-        if (state.customTickers.has(ticker) || state.watchlistTickers?.has(ticker)) {
-            return true;
-        }
-
-        const sharesOwned = optionData.position || 0;
-        return sharesOwned > 0;
-    });
-
-    const tabsHTML = `
         <ul class="nav nav-tabs mb-3" id="options-tabs" role="tablist">
             <li class="nav-item" role="presentation">
                 <button class="nav-link ${putTabWasActive ? '' : 'active'}" id="call-options-tab" data-bs-toggle="tab" data-bs-target="#call-options-section" type="button" role="tab" aria-controls="call-options-section" aria-selected="${putTabWasActive ? 'false' : 'true'}">
@@ -992,7 +957,46 @@ export function updateOptionsTable() {
                 </div>
             </div>
         </div>
-    `;
+`;
+}
+
+export function updateOptionsTable() {
+    const optionsTableContainer = document.getElementById('options-table-container');
+    if (!optionsTableContainer) {
+        console.error("Options table container not found in the DOM");
+        return;
+    }
+
+    const putTabWasActive = document.querySelector('#put-options-tab.active') !== null ||
+                           document.querySelector('#put-options-section.active') !== null;
+
+    optionsTableContainer.innerHTML = '';
+
+    const tickers = Object.keys(state.tickersData);
+
+    if (tickers.length === 0) {
+        optionsTableContainer.innerHTML = `<div class="alert alert-info">${getUnavailableTickerMessage()}</div>`;
+        return;
+    }
+
+    const eligibleTickers = tickers.filter(ticker => {
+        const tickerData = state.tickersData[ticker];
+
+        if (!tickerData || !tickerData.data || !tickerData.data.data || !tickerData.data.data[ticker]) {
+            return true;
+        }
+
+        const optionData = tickerData.data.data[ticker];
+
+        if (state.customTickers.has(ticker) || state.watchlistTickers?.has(ticker)) {
+            return true;
+        }
+
+        const sharesOwned = optionData.position || 0;
+        return sharesOwned > 0;
+    });
+
+    const tabsHTML = buildTabsHTML(putTabWasActive);
 
     optionsTableContainer.innerHTML = tabsHTML;
 

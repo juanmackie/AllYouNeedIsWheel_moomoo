@@ -1,9 +1,8 @@
 """
-Auto-Trader Web Application
+All You Need Is Wheel — Web Application
 Main entry point for the web application
 """
 
-import atexit
 import json
 import os
 
@@ -15,21 +14,17 @@ from flask import current_app, redirect, render_template, request, url_for
 
 from api import create_app
 from config import apply_env_overrides
-from core.background_manager import BackgroundTaskManager
 from core.logging_config import get_logger
 from db.database import OptionsDatabase
 
 # Configure logging
 logger = get_logger("autotrader.app", "api")
 
-# Global task manager for background tasks
-task_manager = BackgroundTaskManager()
-
 # Module-level app handle. Built lazily by ensure_app() so that importing
 # this module never opens the database, starts threads, or writes to disk.
 _app = None
 
-__all__ = ["create_application", "ensure_app", "start_runtime"]
+__all__ = ["create_application", "ensure_app"]
 
 
 def _resolve_local_path(path_value, base_dir):
@@ -83,7 +78,11 @@ def create_application():
 
     # Store connection config in the app
     app.config["connection_config"] = connection_config
-    logger.info(f"Using connection config: {connection_config}")
+    _redacted = {
+        k: ("<redacted>" if any(secret in k.lower() for secret in ("account_id", "password", "login")) else v)
+        for k, v in connection_config.items()
+    }
+    logger.info(f"Using connection config: {_redacted}")
 
     @app.context_processor
     def inject_screening_config():
@@ -173,24 +172,8 @@ def ensure_app():
     return _app
 
 
-def start_runtime(app):
-    """Start runtime services (health monitor).
-
-    Called only from explicit entry points (run_api.py, python app.py).
-    Importing this module or ensure_app() must NOT start threads or
-    background work; only start_runtime() does.
-    """
-    # Start health monitor
-    try:
-        task_manager.start_health_monitor(interval=60)
-        atexit.register(task_manager.stop_health_monitor)
-    except Exception as e:
-        logger.error(f"Failed to start health monitor: {e}")
-
-
 if __name__ == "__main__":
     application = ensure_app()
-    start_runtime(application)
     port = int(os.environ.get("PORT", 8000))
 
     # Run the application (loopback only; single-user local app)

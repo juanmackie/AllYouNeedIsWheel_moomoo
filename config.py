@@ -21,7 +21,7 @@ DEFAULT_CONNECTION_CONFIG = {
     "auto_launch_opend": False,
     "opend_path": "",
     "cash_reserve_enabled": True,
-    "watchlist_mode": "static",  # 'static', 'dynamic', 'hybrid', 'moomoo'
+    "watchlist_mode": "static",  # 'static' or 'moomoo' (dynamic/hybrid screening removed 2026-08)
     "moomoo_watchlist_group": "My Watchlist",
     "broker_cache_after_hours": True,  # use cached broker data outside US market hours
     "screening_criteria": {"min_volatility_pct": 3.0, "min_volume": 1000000, "max_stocks": 50},

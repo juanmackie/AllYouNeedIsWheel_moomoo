@@ -76,7 +76,6 @@ def evaluate_exit(
         thresholds: preset overrides; defaults when omitted.
     """
     t = thresholds or ExitThresholds()
-    opt = str(option_type or "").upper()
     abs_delta = abs(float(delta or 0))
     otm = float(otm_pct or 0)
     is_itm = otm < 0
@@ -107,9 +106,7 @@ def evaluate_exit(
 
     # 4. Profit target captured.
     if captured_profit_pct is not None and captured_profit_pct >= t.profit_take_pct > 0:
-        reasons.append(
-            f"{captured_profit_pct:.0f}% of entry credit captured (target {t.profit_take_pct:.0f}%)"
-        )
+        reasons.append(f"{captured_profit_pct:.0f}% of entry credit captured (target {t.profit_take_pct:.0f}%)")
         return _verdict(VERDICT_TAKE_PROFIT)
 
     # 5. Roll window for a safe OTM position.

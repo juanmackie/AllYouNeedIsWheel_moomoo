@@ -3,10 +3,11 @@ Tests for core/wheel_decision.py - Unified Wheel Decision Engine
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import core.wheel_decision as _wd_module
+from core.position_scorer import score_existing_position
 from core.wheel_decision import (
     WheelDecision,
     _calculate_mid_price,
@@ -19,7 +20,6 @@ from core.wheel_decision import (
     _score_positive_metric,
     _score_proximity,
     score_contract,
-    score_existing_position,
 )
 
 # Deterministic across market hours: the freshness fail-closed gate only
@@ -904,6 +904,16 @@ class TestScoreExistingPositionEdgeCases(unittest.TestCase):
         self.assertEqual(result.otm_pct, 0.0)
         self.assertEqual(result.expected_move_buffer, 0.0)
 
+    def test_existing_position_exit_verdict_serialized(self):
+        """F-C2 regression: exit verdict/reasons are declared dataclass fields,
+        so to_dict() (what WheelRunner persists) carries them."""
+        result = score_existing_position("AAPL", self.base_position, 100.0, self.base_portfolio)
+        serialized = result.to_dict()
+        self.assertIn("exit_verdict", serialized)
+        self.assertIn("exit_reasons", serialized)
+        self.assertTrue(serialized["exit_verdict"])
+        self.assertIsInstance(serialized["exit_reasons"], list)
+
     def test_existing_position_empty_portfolio(self):
         """score_existing_position handles empty portfolio_context"""
         result = score_existing_position("AAPL", self.base_position, 100.0, {})
@@ -972,22 +982,6 @@ class TestScoreExistingPositionEdgeCases(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.iv_rank, 80.0)
         self.assertEqual(result.iv_status, "high")
-
-    def test_existing_position_macro_regime(self):
-        """score_existing_position accepts macro_regime override"""
-        mr = {
-            "macro_multiplier": 0.85,
-            "rate_regime": "tightening",
-            "credit_stress": "elevated",
-            "summary": "Macro headwinds",
-            "advice": "Reduce risk",
-        }
-        result = score_existing_position("AAPL", self.base_position, 100.0, self.base_portfolio, macro_regime=mr)
-        self.assertIsNotNone(result)
-
-
-class TestScoreExistingPosition(unittest.TestCase):
-    """Test score_existing_position function"""
 
     def test_valid_position(self):
         """Test scoring a valid existing position"""
@@ -1110,18 +1104,32 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         warning_text = " ".join(result.warnings)
         self.assertTrue("IV below average" in warning_text or "IV" in warning_text)
 
-    def test_regression_stale_quote_yfinance_fallback(self):
-        """Stale quotes from yfinance must be flagged — regression guard."""
+    def test_regression_stale_quote_fail_closed(self):
+        """Quote staleness must use real broker evidence and fail closed.
+
+        F-C1 regression: live chains carry ``update_time`` (NY wall clock);
+        persisted chains carry tz-aware UTC ``quote_timestamp``. Missing or
+        unparseable evidence is stale (fail closed, SCORING.md).
+        """
         from core.wheel_decision import _is_quote_stale
 
-        stale = _is_quote_stale({"quote_timestamp": "2020-01-01T00:00:00"}, from_yfinance=False)
+        # Persisted chain: tz-aware UTC quote_timestamp.
+        stale = _is_quote_stale({"quote_timestamp": "2020-01-01T00:00:00+00:00"}, from_yfinance=False)
         self.assertTrue(stale)
-        not_stale = _is_quote_stale({"quote_timestamp": datetime.now().isoformat()}, from_yfinance=False)
+        not_stale = _is_quote_stale({"quote_timestamp": datetime.now(timezone.utc).isoformat()}, from_yfinance=False)
         self.assertFalse(not_stale)
+        # Live chain fallback: broker update_time (naive NY wall clock).
+        stale_update_time = _is_quote_stale({"update_time": "2020-01-01 00:00:00"}, from_yfinance=False)
+        self.assertTrue(stale_update_time)
+        fresh_update_time = _is_quote_stale(
+            {"update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, from_yfinance=False
+        )
+        self.assertFalse(fresh_update_time)
+        # Missing evidence fails closed regardless of provenance.
         missing_ts = _is_quote_stale({}, from_yfinance=False)
-        self.assertFalse(missing_ts)
+        self.assertTrue(missing_ts)
         yfinance_missing_ts = _is_quote_stale({}, from_yfinance=True)
-        self.assertFalse(yfinance_missing_ts)
+        self.assertTrue(yfinance_missing_ts)
 
     def test_regression_wide_spread_hard_blocks(self):
         """Wide spread must hard-block with reason code — regression guard."""

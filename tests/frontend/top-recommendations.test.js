@@ -49,17 +49,6 @@ function setupDOM() {
         <div id="bp-diagnostics"></div>
       </div>
       <div id="signal-tabs" class="d-none"></div>
-      <label
-        class="best-plays-toggle"
-        data-bs-toggle="tooltip"
-        data-bs-placement="top"
-        title="Reloads rankings without CSP cash or broker buying-power filters. Over-budget CSPs are marked Research only; no trades are placed."
-      >
-        <input id="ignore-cash-limits-toggle" type="checkbox" aria-describedby="best-plays-help">
-        <span>Best plays</span>
-        <i class="bi bi-info-circle best-plays-toggle__info" aria-hidden="true"></i>
-      </label>
-      <div id="best-plays-help" class="best-plays-help d-none"></div>
       <button id="research-long-options"></button>
       <button id="refresh-top-recommendations"></button>
     </div>

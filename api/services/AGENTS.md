@@ -4,7 +4,7 @@
 
 ## Purpose
 
-`api/services/` owns application-level workflows: Moomoo-backed portfolio/options data, recommendations, watchlists, signal overlays, market/macro enrichment, LLM advice, and external-provider integration.
+`api/services/` owns application-level workflows: Moomoo-backed portfolio/options data, the recommendation engine (backend shortlist authority), watchlists, IV/earnings enrichment (`iv_earnings_service` + `alpha_vantage_provider`), portfolio scoring/context, and roll diagnostics (`roll_diagnostics.py`).
 
 ## Ownership
 
@@ -14,7 +14,7 @@
 ## Local Contracts
 
 - Moomoo/OpenD remains authoritative for portfolio, positions, cash, account state, and option-chain truth.
-- Optional providers such as yfinance, FRED, Alpha Vantage, TradingView, Ape Wisdom, OpenBB, or LLMs may enrich or widen context, but must not silently replace broker truth.
+- Optional providers such as yfinance (fallback quotes) and Alpha Vantage (bulk earnings calendar) may enrich or widen context, but must not silently replace broker truth.
 - Services must degrade gracefully when external providers fail, rate-limit, or return partial data.
 - Keep caches and TTLs explicit so stale market data is not presented as fresh.
 - Do not introduce production mocks or simulated account data.
@@ -33,7 +33,7 @@
 
 - Run the feature-specific service tests for changed files.
 - For recommendation/scoring-adjacent service changes, run `pytest tests/test_recommendations.py tests/test_score_regression.py`.
-- For source expansion or Catalyst Watch, run `pytest tests/test_catalyst_flow.py tests/test_catalyst_watch_route.py tests/test_apewisdom_service.py`.
+- For provider changes, run `pytest tests/test_routes_earnings.py` plus the matching provider test if one exists.
 
 ## Child DOX Index
 

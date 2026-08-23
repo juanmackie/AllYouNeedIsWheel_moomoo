@@ -46,17 +46,21 @@ class TestOptionsDatabase(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        expected_tables = ["recommendations", "iv_history", "earnings_calendar", "trade_events"]
+        expected_tables = ["iv_history", "earnings_calendar", "trade_events"]
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         actual_tables = {row[0] for row in cursor.fetchall()}
         for table in expected_tables:
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 7)
+        self.assertEqual(cursor.fetchone()[0], 8)
 
         evaluator_tables = {t for t in actual_tables if t.startswith("evaluator_")}
         self.assertEqual(evaluator_tables, set(), f"Evaluator tables should be dropped: {evaluator_tables}")
+
+        # Retired 2026-08 consolidation tables must not exist at schema v8.
+        self.assertNotIn("recommendations", actual_tables)
+        self.assertNotIn("playbook_hypotheses", actual_tables)
 
         conn.close()
 

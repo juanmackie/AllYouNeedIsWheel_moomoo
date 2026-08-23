@@ -19,12 +19,12 @@
 
 ## Work Guidance
 
-- Prefer smoke tests for dashboard, portfolio, rollover, and OpenD-state visibility.
+- Prefer smoke tests for the dashboard one-screen flow: run strip, top recommendations, position monitor, and OpenD-state visibility.
 - Keep selectors stable and user-oriented.
 
 ## Verification
 
-- Run the configured e2e command when available; otherwise document manual smoke coverage in `tests/README.md`.
+- Run `npm run test:e2e` (Playwright, chromium; app must be running on 127.0.0.1:8000 — set `E2E_BASE_URL` to override).
 
 ## Child DOX Index
 

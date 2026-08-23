@@ -224,64 +224,6 @@ export function addOptionsTableEventListeners() {
                 }
             }
 
-            if (event.target.classList.contains('sell-option') ||
-                event.target.closest('.sell-option')) {
-
-                const button = event.target.classList.contains('sell-option') ?
-                               event.target :
-                               event.target.closest('.sell-option');
-
-                if (button.disabled) {
-                    return;
-                }
-
-                const ticker = button.dataset.ticker;
-                const optionType = button.dataset.optionType;
-                const strike = button.dataset.strike;
-                const expiration = button.dataset.expiration;
-
-                if (ticker && optionType && strike && expiration) {
-                    const orderData = {
-                        ticker: ticker,
-                        option_type: optionType,
-                        strike: parseFloat(strike),
-                        expiration: expiration,
-                        action: 'SELL',
-                        quantity: optionType === 'CALL' ?
-                            Math.floor(state.tickersData[ticker]?.data?.data?.[ticker]?.position / 100) || 1 :
-                            (state.tickersData[ticker]?.putQuantity || 1),
-                        bid: parseFloat(button.dataset.bid || 0),
-                        ask: parseFloat(button.dataset.ask || 0),
-                        last: parseFloat(button.dataset.last || 0),
-                        premium: calculatePremium(button.dataset.bid, button.dataset.ask, button.dataset.last),
-                        delta: parseFloat(button.dataset.delta || 0),
-                        gamma: parseFloat(button.dataset.gamma || 0),
-                        theta: parseFloat(button.dataset.theta || 0),
-                        vega: parseFloat(button.dataset.vega || 0),
-                        implied_volatility: parseFloat(button.dataset.implied_volatility || 0),
-                        timestamp: new Date().toISOString(),
-                        stock_price: state.tickersData[ticker]?.data?.data?.[ticker]?.stock_price || 0
-                    };
-
-                    if (orderData.bid <= 0 && button.closest('tr')) {
-                        const row = button.closest('tr');
-                        const bidCell = row.querySelector('td[data-field="bid"]');
-                        const askCell = row.querySelector('td[data-field="ask"]');
-                        const lastCell = row.querySelector('td[data-field="last"]');
-
-                        if (bidCell) orderData.bid = parseFloat(bidCell.textContent) || orderData.bid;
-                        if (askCell) orderData.ask = parseFloat(askCell.textContent) || orderData.ask;
-                        if (lastCell) orderData.last = parseFloat(lastCell.textContent) || orderData.last;
-                    }
-
-                    if (orderData.bid <= 0 && orderData.ask <= 0 && orderData.last <= 0 && orderData.premium <= 0) {
-                        orderData.premium = Math.max(orderData.strike * 0.01, 0.05);
-                    }
-
-                    showAlert('Signal only mode — review trades in your broker app', 'info');
-                }
-            }
-
             if (event.target.id === 'sell-all-calls' ||
                 event.target.closest('#sell-all-calls')) {
 
@@ -317,32 +259,6 @@ export function addOptionsTableEventListeners() {
                     await sellAllOptions('PUT');
                 } catch (error) {
                     console.error('Error in sell all puts handler:', error);
-                }
-            }
-
-            if (event.target.id === 'refresh-all-options' ||
-                event.target.closest('#refresh-all-options')) {
-
-                const button = event.target.id === 'refresh-all-options' ?
-                               event.target :
-                               event.target.closest('#refresh-all-options');
-
-                if (button.disabled) {
-                    return;
-                }
-
-                button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Loading...';
-                button.disabled = true;
-
-                try {
-                    const { refreshAllOptions } = await getOptionsTableActions();
-                    await refreshAllOptions();
-                    } catch (error) {
-                        const isTimeout = error?.message?.includes('Request timed out');
-                        (isTimeout ? console.warn : console.error)('Error refreshing all options:', error);
-                } finally {
-                    button.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All';
-                    button.disabled = false;
                 }
             }
 
@@ -422,69 +338,12 @@ export function addOptionsTableEventListeners() {
         return;
     }
 
-    const refreshAllButton = document.getElementById('refresh-all-options');
-    if (refreshAllButton) {
-        refreshAllButton.addEventListener('click', async () => {
-            refreshAllButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Loading...';
-            refreshAllButton.disabled = true;
-
-            try {
-                const { refreshAllOptions } = await getOptionsTableActions();
-                await refreshAllOptions();
-                } catch (error) {
-                    const isTimeout = error?.message?.includes('Request timed out');
-                    (isTimeout ? console.warn : console.error)('Error refreshing all options:', error);
-            } finally {
-                refreshAllButton.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All';
-                refreshAllButton.disabled = false;
-            }
-        });
-    }
-
     container.addEventListener('change', async (event) => {
         const expirationSelect = event.target.closest('.expiration-select');
         if (expirationSelect && container.contains(expirationSelect)) {
             await handleExpirationChange(expirationSelect);
         }
     });
-
-    const refreshAllCallsButton = document.getElementById('refresh-all-calls');
-    if (refreshAllCallsButton) {
-        refreshAllCallsButton.addEventListener('click', async () => {
-            refreshAllCallsButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Loading...';
-            refreshAllCallsButton.disabled = true;
-
-            try {
-                const { refreshAllOptions } = await getOptionsTableActions();
-                await refreshAllOptions('CALL');
-                } catch (error) {
-                    const isTimeout = error?.message?.includes('Request timed out');
-                    (isTimeout ? console.warn : console.error)('Error refreshing all call options:', error);
-            } finally {
-                refreshAllCallsButton.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All Calls';
-                refreshAllCallsButton.disabled = false;
-            }
-        });
-    }
-
-    const refreshAllPutsButton = document.getElementById('refresh-all-puts');
-    if (refreshAllPutsButton) {
-        refreshAllPutsButton.addEventListener('click', async () => {
-            refreshAllPutsButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Loading...';
-            refreshAllPutsButton.disabled = true;
-
-            try {
-                const { refreshAllOptions } = await getOptionsTableActions();
-                await refreshAllOptions('PUT');
-                } catch (error) {
-                    const isTimeout = error?.message?.includes('Request timed out');
-                    (isTimeout ? console.warn : console.error)('Error refreshing all put options:', error);
-            } finally {
-                refreshAllPutsButton.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh All Puts';
-                refreshAllPutsButton.disabled = false;
-            }
-        });
-    }
 
     state.eventListenersInitialized = true;
 

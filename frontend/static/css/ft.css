@@ -516,47 +516,6 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   flex: 0 1 auto;
   min-width: 0;
 }
-.best-plays-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--ft-rule);
-  background: var(--ft-paper);
-  color: var(--ft-ink);
-  font-family: var(--ft-font-body);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-}
-.best-plays-toggle input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--ft-ink);
-}
-.best-plays-toggle__info {
-  color: var(--ft-ink-mute);
-  font-size: 12px;
-  line-height: 1;
-}
-.best-plays-toggle:has(input:checked) {
-  border-color: var(--ft-warn);
-  background: var(--ft-warn-soft);
-  color: var(--ft-ink);
-}
-.best-plays-toggle:has(input:checked) .best-plays-toggle__info {
-  color: var(--ft-ink);
-}
-.best-plays-help {
-  margin-top: -8px;
-  margin-bottom: 12px;
-  color: var(--ft-ink-mute);
-  font-family: var(--ft-font-body);
-  font-size: 12px;
-}
 #top-recommendations-section .app-section__header h2,
 #top-recommendations-section .app-section__header p {
   min-width: 0;

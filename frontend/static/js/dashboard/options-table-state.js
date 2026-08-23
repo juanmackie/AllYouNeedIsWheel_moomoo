@@ -137,10 +137,6 @@ function loadOtmSettings() {
                 state.tickersData[ticker].putQuantity = settings[ticker].putQuantity || 1;
             });
 
-            if (needsMigration) {
-                localStorage.setItem('_otmMigratedToGrowth', 'true');
-                localStorage.setItem('otmSettings', JSON.stringify(settings));
-            }
         }
     } catch (error) {
         console.error('Error loading OTM settings:', error);

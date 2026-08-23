@@ -9,7 +9,7 @@ Covers:
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from core.growth_mode import (
     classify_covered_call_intent,
@@ -401,7 +401,9 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
     def test_stale_quote_reduces_confidence_via_is_stale(self):
         """A stale quote_timestamp should reduce confidence_score."""
         opt = _make_option(strike=85, bid=3.0, ask=3.20, oi=800, vol=400, delta=-0.30, iv=0.35, option_type="PUT")
-        old_ts = (datetime.now() - timedelta(minutes=10)).isoformat()
+        # quote_timestamp is a tz-aware UTC stamp (see utc_now_iso), the shape
+        # persisted-broker chains actually carry.
+        old_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         opt["quote_timestamp"] = old_ts
         result = score_contract(
             "AAPL",
@@ -429,32 +431,6 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
         self.assertGreater(
             result.remaining_gap_to_target, 0, "remaining_gap_to_target should be > 0 when shortfall exists"
         )
-
-    def test_wheel_decision_includes_macro_multiplier(self):
-        """WheelDecision should include macro_multiplier in serialized dict."""
-        opt = _make_option(strike=85, bid=3.0, ask=3.20, oi=800, vol=400, delta=-0.30, iv=0.35, option_type="PUT")
-        result = score_contract(
-            "AAPL",
-            opt,
-            100.0,
-            self.profile,
-            self.portfolio,
-            growth_profile=self.gp,
-            macro_regime={"macro_multiplier": 0.85, "rate_regime": "tightening", "credit_stress": "elevated"},
-        )
-        self.assertIsNotNone(result)
-        d = result.to_dict()
-        self.assertIn("macro_multiplier", d)
-        self.assertEqual(d["macro_multiplier"], 0.85)
-
-
-# ---------------------------------------------------------------------------
-# Data quality blocking tests
-# ---------------------------------------------------------------------------
-
-
-class TestShouldBlockForDataQuality(unittest.TestCase):
-    """Stale/fallback recommendations should be blocked from execution."""
 
     def test_hard_blockers_block(self):
         blocked, reason = should_block_for_data_quality(

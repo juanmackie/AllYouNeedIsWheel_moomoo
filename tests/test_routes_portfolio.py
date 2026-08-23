@@ -29,7 +29,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         mock_ps.last_error = None
         return mock_ps
 
-    @patch("api.routes.portfolio.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_get_portfolio_opend_unavailable(self, mock_probe):
         mock_probe.return_value = {"status": "unavailable", "message": "Not connected"}
         response = self.client.get("/api/portfolio/")
@@ -41,7 +41,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         self.assertIn("opend_status", data)
         self.assertEqual(data["opend_status"]["status"], "unavailable")
 
-    @patch("api.routes.portfolio.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     @patch("api.routes.portfolio.get_portfolio_service")
     def test_get_portfolio_success(self, mock_get_ps, mock_probe):
         mock_probe.return_value = {"status": "connected"}
@@ -55,7 +55,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         self.assertEqual(data["source_policy"]["mode"], "broker_only")
         self.assertEqual(data["source_policy"]["source_of_truth"], "opend")
 
-    @patch("api.routes.portfolio.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     @patch("api.routes.portfolio.get_portfolio_service")
     def test_get_positions_opend_unavailable(self, mock_get_ps, mock_probe):
         mock_probe.return_value = {"status": "unavailable", "message": "Not connected"}
@@ -66,7 +66,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         self.assertIn("error_code", data)
         self.assertEqual(data["error_code"], "opend_unavailable")
 
-    @patch("api.routes.portfolio.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     @patch("api.routes.portfolio.get_portfolio_service")
     def test_get_positions_success(self, mock_get_ps, mock_probe):
         mock_probe.return_value = {"status": "connected"}
@@ -78,7 +78,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         self.assertEqual(response.headers.get("X-Source-Policy"), "broker_only")
         self.assertEqual(response.headers.get("X-Source-Truth"), "opend")
 
-    @patch("api.routes.portfolio.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     @patch("api.routes.portfolio.get_portfolio_service")
     def test_get_positions_invalid_type(self, mock_get_ps, mock_probe):
         mock_probe.return_value = {"status": "connected"}
@@ -87,7 +87,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         data = json.loads(response.data)
         self.assertIn("error", data)
 
-    @patch("api.routes.portfolio.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     @patch("api.routes.portfolio.get_portfolio_service")
     def test_get_weekly_income_success(self, mock_get_ps, mock_probe):
         mock_probe.return_value = {"status": "connected"}
@@ -109,7 +109,7 @@ class TestPortfolioRoutes(unittest.TestCase):
         self.assertIn("open_short_contracts_count", data)
         self.assertIn("open_short_total_income", data)
 
-    @patch("api.routes.portfolio.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     @patch("api.routes.portfolio.get_portfolio_service")
     def test_get_weekly_income_error(self, mock_get_ps, mock_probe):
         mock_probe.return_value = {"status": "connected"}
@@ -131,7 +131,7 @@ class TestRollPressureRoutes(unittest.TestCase):
         self.app.config["TESTING"] = True
 
     def test_roll_pressure_opend_unavailable(self):
-        with patch("core.connection.probe_opend_status", return_value={"status": "unavailable"}):
+        with patch("api.routes.utils.probe_opend_status", return_value={"status": "unavailable"}):
             response = self.client.get("/api/portfolio/roll-pressure")
             self.assertEqual(response.status_code, 503)
 
@@ -147,7 +147,7 @@ class TestAlertsRoutes(unittest.TestCase):
         self.app.config["TESTING"] = True
 
     def test_alerts_opend_unavailable(self):
-        with patch("core.connection.probe_opend_status", return_value={"status": "unavailable"}):
+        with patch("api.routes.utils.probe_opend_status", return_value={"status": "unavailable"}):
             response = self.client.get("/api/portfolio/alerts")
             self.assertEqual(response.status_code, 503)
 

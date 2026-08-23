@@ -80,11 +80,22 @@ def resolve_account(conn, config: dict) -> str:
 class WheelRunner:
     """Runs the wheel engine and publishes immutable snapshots."""
 
-    def __init__(self, db, options_service, config: dict, max_tradeable_age_sec: int = 300):
+    def __init__(
+        self,
+        db,
+        options_service,
+        config: dict,
+        max_tradeable_age_sec: int = 300,
+        roll_diagnostics_provider=None,
+    ):
         self._db = db
         self._options_service = options_service
         self._config = config
         self._max_tradeable_age_sec = int(max_tradeable_age_sec or 300)
+        # Injected api-layer callable (portfolio_context, conn) -> list[dict];
+        # core must never depend on the api layer, so roll diagnostics are
+        # composed there and injected here.
+        self._roll_diagnostics_provider = roll_diagnostics_provider
         self._latest_snapshot: WheelRunSnapshot | None = None
 
     # -- attempt helpers -------------------------------------------------
@@ -215,44 +226,9 @@ class WheelRunner:
 
     def _build_roll_decisions(self, portfolio_context, conn):
         """Roll/hold/close diagnostics for actual option positions."""
-        try:
-            option_positions = []
-            positions = portfolio_context.get("positions", {}) or {}
-            for pos in positions.values():
-                if str(pos.get("security_type", "") or "").upper() == "OPT":
-                    option_positions.append(pos)
-            if not option_positions:
-                return []
-            from api import get_service
-            from api.services.portfolio_scoring import build_portfolio_context, score_position
-
-            ps = get_service("portfolio")
-            ctx, _, _ = build_portfolio_context(option_positions, ps)
-            iv_earnings = get_service("ivearnings")
-            decisions = []
-            for pos in option_positions:
-                decision = score_position(pos, conn, ctx, iv_earnings)
-                if decision is None:
-                    continue
-                decisions.append(
-                    {
-                        "ticker": decision.ticker,
-                        "option_type": decision.option_type,
-                        "strike": decision.strike,
-                        "expiration": decision.expiration,
-                        "dte": decision.dte,
-                        "roll_pressure": decision.roll_pressure,
-                        "profit_target_progress": decision.profit_target_progress,
-                        "otm_pct": decision.otm_pct,
-                        "extrinsic_remaining": decision.extrinsic_remaining,
-                        "warnings": decision.warnings,
-                        "wheel_decision": decision.to_dict(),
-                    }
-                )
-            return decisions
-        except Exception as exc:
-            logger.warning(f"Roll diagnostics unavailable: {exc}")
+        if self._roll_diagnostics_provider is None:
             return []
+        return self._roll_diagnostics_provider(portfolio_context, conn)
 
     def _build_snapshot(self, env, opaque_account, attempt_started, result, portfolio, roll_decisions):
         generated_at = result.get("generated_at") or utc_now_iso()
@@ -349,8 +325,8 @@ class WheelRunner:
         and never fails the run publish.
         """
         try:
-            from core.position_diff import infer_trade_events
             from core.portfolio_snapshot import build_portfolio_snapshot
+            from core.position_diff import infer_trade_events
 
             previous = self._db.get_latest_portfolio_snapshot()
             snapshot = build_portfolio_snapshot(

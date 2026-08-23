@@ -1,4 +1,4 @@
-import { formatCurrency } from '../utils/formatters.js';
+import { escapeHtml, formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { isOpenDUnavailable } from './api.js';
 import StateModel from '../utils/state-model.js';
@@ -50,7 +50,7 @@ function row(position) {
     : '—';
 
   return `<tr>
-    <td><strong>${position.symbol || '—'}</strong></td>
+    <td><strong>${escapeHtml(position.symbol) || '—'}</strong></td>
     <td><span class="${typeClass} fw-semibold">${typeLabel}</span></td>
     <td>${strike}</td>
     <td class="small">${expiration}</td>

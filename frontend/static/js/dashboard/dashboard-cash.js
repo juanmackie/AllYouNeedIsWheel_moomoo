@@ -44,7 +44,6 @@ export async function updateIdleCashPanel() {
         const deployedEl = document.getElementById('deployed-cash-amount');
         const barEl = document.getElementById('cash-utilization-bar');
         const hintEl = document.getElementById('idle-cash-hint');
-        const modeEl = document.getElementById('idle-cash-mode');
         if (!idleEl) return;
         let deployed = 0;
         try {
@@ -62,7 +61,6 @@ export async function updateIdleCashPanel() {
         idleEl.textContent = '$' + Math.max(0, idle).toLocaleString();
         if (deployedEl) deployedEl.textContent = '$' + deployed.toLocaleString();
         if (barEl) barEl.style.width = utilPct.toFixed(0) + '%';
-        if (modeEl) modeEl.textContent = localStorage.getItem('wheelPreset') || 'Balanced';
         if (barEl) barEl.className = 'progress-bar ' + (utilPct >= 70 ? 'bg-success' : utilPct >= 40 ? 'bg-warning' : 'bg-danger');
         if (hintEl) { if (idle > accountValue * 0.3) hintEl.classList.remove('d-none'); else hintEl.classList.add('d-none'); }
         if (idleEl) idleEl.className = utilPct >= 70 ? 'fw-bold text-success' : utilPct >= 40 ? 'fw-bold text-warning' : 'fw-bold text-danger';

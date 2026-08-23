@@ -4,13 +4,11 @@
 
 ## Purpose
 
-`frontend/static/js/` owns browser-side behavior for dashboard, portfolio, rollover, API calls, state models, rendering, calculations, alerts, and small visual helpers.
+`frontend/static/js/` owns browser-side behavior for the one-screen dashboard: API clients, state models, rendering, calculations, alerts, and small visual helpers.
 
 ## Ownership
 
-- `dashboard/` owns dashboard widgets, options table behavior (`options-table-actions.js`), recommendations, earnings-vol signals, Catalyst Watch, macro/regime display, and account panels.
-- `rollover/` owns rollover state, API calls (`rollover-api.js`), calculations, and UI rendering (`rollover-ui.js`). Uses a handler-registration pattern (`registerRolloverUiHandlers`) to expose DOM-render functions to `rollover-api.js` without a direct import cycle.
-- `portfolio/` owns portfolio page interactions.
+- `dashboard/` owns all dashboard widgets: run strip (`run-strip.js`, `api-run.js`), options table (`options-table-*.js`), top recommendations/preset selector/copy tickets (`top-recommendations.js`), position monitor + account panels (`account.js`, `weekly-income.js`, `dashboard-cash.js`), growth panel (`growth-panel.js`), and watchlist panel (`watchlist-panel.js`).
 - `utils/` owns shared formatting (`formatters.js` exports `escapeHtml`), alerts, sparklines, and state helpers.
 
 ## Local Contracts
@@ -28,7 +26,7 @@
 - Reuse existing formatting helpers for currency, percentages, dates, and alert display.
 - Keep DOM selectors stable when tests depend on them.
 - Avoid large cross-feature files; place behavior near the feature folder that owns it.
-- Break circular dependencies between `dashboard/` and `rollover/` with a handler-registration pattern: the UI module exports a registration function, the API module stores references internally via a local `rolloverUiHandlers` map. Tests must import the UI module (which triggers registration) before calling the API entrypoint.
+- `api.js` re-exports the API surface from `api-core.js` / `api-options.js` / `api-portfolio.js` / `api-run.js`; import feature modules through it or directly, but keep cross-feature imports acyclic.
 - Use `escapeHtml` from `utils/formatters.js` for any API-fed `innerHTML` assignment; never interpolate raw strings fetched over HTTP.
 - `top-recommendations.js` consumes the immutable `/api/run` snapshot. Any `copy_eligible` candidate (qualified or marginal broker-sourced signal with positive capacity) can copy a manual ticket; when the run is not live-tradeable the ticket is staged for US open with last-quote labelling and event-risk warnings. The parallel cached recommendation endpoint and browser-side rank math are retired.
 

@@ -166,8 +166,7 @@ export async function refreshAllOptions(optionType) {
             tableId = 'put-options-table';
             buttonId = 'refresh-all-puts';
         } else {
-            tableId = 'call-options-table';
-            buttonId = 'refresh-all-options';
+            return;
         }
 
         let tickersToRefresh = [];
@@ -189,9 +188,6 @@ export async function refreshAllOptions(optionType) {
                 // Portfolio ticker — include unless explicitly excluded
                 return !excludedTickers.includes(ticker);
             });
-        } else {
-            tickersToRefresh = allTickers;
-        }
 
         for (let i = 0; i < tickersToRefresh.length; i++) {
             const ticker = tickersToRefresh[i];

@@ -2,6 +2,7 @@
  * Watchlist panel: merged canonical union (Moomoo group + app + config)
  * with origin labels, add/remove, and scan-feasibility notice.
  */
+import { escapeHtml } from '../utils/formatters.js';
 
 let _watchlistData = null;
 
@@ -9,12 +10,6 @@ function originBadge(origin) {
     const labels = { moomoo: 'Moomoo', app: 'App', config: 'Config' };
     const classes = { moomoo: 'bg-primary', app: 'bg-success', config: 'bg-secondary' };
     return `<span class="badge ${classes[origin] || 'bg-secondary'}">${labels[origin] || origin}</span>`;
-}
-
-function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[ch]));
 }
 
 export async function loadWatchlist() {

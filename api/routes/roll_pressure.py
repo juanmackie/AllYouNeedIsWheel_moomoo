@@ -7,8 +7,9 @@ Extracted from api/routes/portfolio.py (F008).
 import traceback
 from datetime import datetime
 
-from flask import Blueprint, jsonify
+from flask import Blueprint
 
+from api.routes.utils import ensure_opend_available as _ensure_opend_available
 from api.routes.utils import error_response, success_response
 from api.services.portfolio_scoring import build_portfolio_context, score_position
 from core.logging_config import get_logger
@@ -31,23 +32,6 @@ def _get_portfolio_service():
     import api
 
     return api.get_service("portfolio")
-
-
-def _ensure_opend_available():
-    from flask import current_app
-
-    from core.connection import probe_opend_status
-
-    connection_config = current_app.config.get("connection_config", {})
-    status = probe_opend_status(
-        host=connection_config.get("host", "127.0.0.1"), port=connection_config.get("port", 11111)
-    )
-    if status.get("status") == "connected":
-        return None
-    error_code = "opend_login_required" if status.get("status") == "login_required" else "opend_unavailable"
-    return error_response(
-        status.get("message", "OpenD is unavailable."), status_code=503, error_code=error_code, opend_status=status
-    )
 
 
 @bp.route("/roll-pressure", methods=["GET"])
@@ -121,4 +105,4 @@ def get_roll_pressure():
     except Exception as e:
         logger.error(f"Error getting roll pressure: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return error_response(str(e), status_code=500)

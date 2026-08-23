@@ -13,6 +13,19 @@ uv run python scripts/ci_pytest.py tests/ -q
 npm test --silent
 ```
 
+Browser-level smoke (requires the app running on 127.0.0.1:8000 and Playwright
+chromium: `npx playwright install chromium`):
+
+```bash
+npm run test:e2e
+```
+
+The e2e suite (`tests/e2e/smoke.spec.js`) asserts the one-screen dashboard
+scaffolds render (run strip, options table, position monitor, top
+recommendations), the read-only signal is visible, and no execution-capable
+controls exist. It does not require broker data — panels may show empty/error
+states when OpenD is unavailable. Set `E2E_BASE_URL` to target another port.
+
 Focused shortlist checks:
 
 ```bash

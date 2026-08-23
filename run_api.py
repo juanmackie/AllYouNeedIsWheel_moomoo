@@ -106,10 +106,9 @@ def main():
             try:
                 from waitress import serve
 
-                from app import ensure_app, start_runtime
+                from app import ensure_app
 
                 application = ensure_app()
-                start_runtime(application)
                 serve(application, host="127.0.0.1", port=port, threads=2)
             except ImportError:
                 logger.error("Waitress is not installed. Please install it with: pip install waitress")
@@ -117,10 +116,9 @@ def main():
         else:
             # Non-Windows fallback: single Flask process, loopback only
             logger.info(f"Starting Auto-Trader API server on port {port} (Flask, loopback)")
-            from app import ensure_app, start_runtime
+            from app import ensure_app
 
             application = ensure_app()
-            start_runtime(application)
             application.run(host="127.0.0.1", port=port)
 
     except Exception as e:

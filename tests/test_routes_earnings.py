@@ -11,12 +11,11 @@ class TestEarningsRoutes(unittest.TestCase):
         self.app = create_app({"TESTING": True})
         self.client = self.app.test_client()
 
-    @patch("api.routes.earnings.IVEarningsService")
-    @patch("api.routes.earnings.OptionsDatabase")
-    def test_get_earnings_status(self, mock_db, mock_service_cls):
+    @patch("api.routes.earnings.get_service")
+    def test_get_earnings_status(self, mock_get_service):
         mock_service = MagicMock()
         mock_service.get_cache_stats.return_value = {"hits": 3, "misses": 1}
-        mock_service_cls.return_value = mock_service
+        mock_get_service.return_value = mock_service
 
         response = self.client.get("/api/earnings/status")
         data = response.get_json()
@@ -25,15 +24,14 @@ class TestEarningsRoutes(unittest.TestCase):
         self.assertEqual(data["status"], "manual")
         self.assertFalse(data["scheduler"]["running"])
         self.assertEqual(data["cache_stats"]["hits"], 3)
-        mock_db.assert_called_once()
+        mock_get_service.assert_called_once_with("ivearnings")
 
-    @patch("api.routes.earnings.IVEarningsService")
-    @patch("api.routes.earnings.OptionsDatabase")
-    def test_update_single_earnings(self, mock_db, mock_service_cls):
+    @patch("api.routes.earnings.get_service")
+    def test_update_single_earnings(self, mock_get_service):
         mock_service = MagicMock()
         mock_service.update_earnings_data.return_value = True
         mock_service.get_earnings_info.return_value = {"ticker": "AAPL"}
-        mock_service_cls.return_value = mock_service
+        mock_get_service.return_value = mock_service
 
         response = self.client.get("/api/earnings/update/AAPL")
         data = response.get_json()
@@ -42,24 +40,25 @@ class TestEarningsRoutes(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["ticker"], "AAPL")
         self.assertEqual(data["earnings_info"]["ticker"], "AAPL")
-        mock_db.assert_called_once()
 
-    @patch("api.routes.earnings.WatchlistManager")
-    @patch("api.routes.earnings.PortfolioService")
-    @patch("api.routes.earnings.IVEarningsService")
-    @patch("api.routes.earnings.OptionsDatabase")
-    def test_refresh_all_earnings(self, mock_db, mock_service_cls, mock_portfolio_cls, mock_watchlist_cls):
-        mock_service = MagicMock()
-        mock_service.batch_update_earnings.return_value = {"successful": 2, "failed": 1}
-        mock_service_cls.return_value = mock_service
+    @patch("api.routes.earnings.get_service")
+    def test_refresh_all_earnings(self, mock_get_service):
+        def _service(name):
+            if name == "ivearnings":
+                service = MagicMock()
+                service.batch_update_earnings.return_value = {"successful": 2, "failed": 1}
+                return service
+            if name == "portfolio":
+                portfolio = MagicMock()
+                portfolio.get_positions.return_value = [{"symbol": "AAPL"}]
+                return portfolio
+            if name == "watchlist":
+                watchlist = MagicMock()
+                watchlist.get_effective_watchlist.return_value = ["MSFT"]
+                return watchlist
+            raise AssertionError(f"unexpected service: {name}")
 
-        mock_portfolio = MagicMock()
-        mock_portfolio.get_positions.return_value = [{"symbol": "AAPL"}]
-        mock_portfolio_cls.return_value = mock_portfolio
-
-        mock_watchlist = MagicMock()
-        mock_watchlist.get_effective_watchlist.return_value = ["MSFT"]
-        mock_watchlist_cls.return_value = mock_watchlist
+        mock_get_service.side_effect = _service
 
         response = self.client.post("/api/earnings/refresh")
         data = response.get_json()
@@ -69,9 +68,8 @@ class TestEarningsRoutes(unittest.TestCase):
         self.assertEqual(data["updated_count"], 2)
         self.assertEqual(data["failed_count"], 1)
         self.assertEqual(data["total_attempted"], 2)
-        mock_db.assert_called_once()
 
-    @patch("api.routes.earnings.OptionsDatabase")
+    @patch("db.database.OptionsDatabase")
     def test_get_pending_earnings(self, mock_db):
         mock_db_instance = MagicMock()
         mock_db_instance.get_pending_earnings.return_value = [{"ticker": "AAPL"}]

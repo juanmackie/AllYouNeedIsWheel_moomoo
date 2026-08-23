@@ -1,11 +1,10 @@
 import logging
-import traceback
 
 from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def create_tables(conn):
@@ -53,25 +52,6 @@ def create_tables(conn):
             latest_failure_at TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS recommendations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            option_type TEXT NOT NULL,
-            action TEXT NOT NULL,
-            strike REAL NOT NULL,
-            expiration TEXT NOT NULL,
-            premium REAL,
-            details TEXT
-        )
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_timestamp
-        ON recommendations(ticker, timestamp)
     """)
 
     cursor.execute("""
@@ -179,27 +159,6 @@ def create_tables(conn):
     """)
 
     # ── Wheel Playbook Hypotheses (borrowed from Vibe-Trading hypothesis registry) ──
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS playbook_hypotheses (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            hypothesis_id   TEXT NOT NULL UNIQUE,
-            title           TEXT NOT NULL,
-            description     TEXT NOT NULL,
-            category        TEXT NOT NULL DEFAULT 'general',
-            status          TEXT NOT NULL DEFAULT 'exploring',
-            tags_json       TEXT NOT NULL DEFAULT '[]',
-            notes           TEXT DEFAULT '',
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
-        )
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_playbook_hypotheses_status
-        ON playbook_hypotheses(status)
-    """)
-
-    # ── Option Chain Snapshots (persistent cache for after-hours / broker-unavailable) ──
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS option_chain_snapshots (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -346,17 +305,15 @@ def migrate_database(db_path):
                 conn.commit()
 
             if current_version < 4:
-                # Add missing indexes for recommendations and earnings_calendar
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_recommendations_ticker_timestamp ON recommendations(ticker, timestamp)"
-                )
+                # Add missing indexes for earnings_calendar (the retired
+                # recommendations index is intentionally not recreated).
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_earnings_calendar_ticker_date ON earnings_calendar(ticker, earnings_date)"
                 )
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_earnings_calendar_last_updated ON earnings_calendar(last_updated)"
                 )
-                logger.info("Migration: Added missing indexes for recommendations and earnings_calendar")
+                logger.info("Migration: Added missing index for earnings_calendar")
                 cursor.execute("PRAGMA user_version = 4")
                 conn.commit()
 
@@ -461,7 +418,19 @@ def migrate_database(db_path):
                 cursor.execute("PRAGMA user_version = 7")
                 conn.commit()
 
+            if current_version < 8:
+                # Drop tables retired with the 2026-08 consolidation: the
+                # recommendations shortlist is served from run snapshots and
+                # the playbook evaluator was removed. No code reads/writes them.
+                for table in ("recommendations", "playbook_hypotheses"):
+                    cursor.execute(f"DROP TABLE IF EXISTS {table}")
+                logger.info("Migration: Dropped retired tables recommendations, playbook_hypotheses")
+                cursor.execute("PRAGMA user_version = 8")
+                conn.commit()
+
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)
     except Exception as e:
+        # Fail loudly: running against an unknown schema version is worse than
+        # refusing to start (F-C6).
         logger.error(f"Error during database migration: {str(e)}")
-        logger.error(traceback.format_exc())
+        raise

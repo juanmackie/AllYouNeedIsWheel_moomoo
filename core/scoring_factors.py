@@ -15,38 +15,8 @@ logger = logging.getLogger(__name__)
 NY_TZ = ZoneInfo("America/New_York")
 
 # ── Named constants for score thresholds ─────────────────────────────────
-# Extract these from magic numbers throughout wheel_decision.py.
-
-# Spread / liquidity
-MAX_ACCEPTABLE_SPREAD_PCT = 60
-IDEAL_SPREAD_PCT = 12
-MIN_OPEN_INTEREST = 10
-MIN_VOLUME = 1
-IDEAL_OPEN_INTEREST = 500
-
-# Premium
-MIN_PREMIUM_PER_CONTRACT = 10
-MIN_MID_PRICE = 0.05
-
-# DTE
-CSP_MIN_DTE_DEFAULT = 30
-CSP_MAX_DTE_DEFAULT = 45
-CSP_PREFERRED_DTE_DEFAULT = 37
-
-# OTM
-CSP_DEFAULT_OTM_PCT = 10
-CSP_MIN_OTM_PCT = 5
-CSP_MAX_OTM_PCT = 15
-
-# Target values for scoring
-TARGET_ANNUALIZED_RETURN_CALL = 24
-TARGET_ANNUALIZED_RETURN_PUT = 18
-TARGET_IV_ADJUSTED = 50
-TARGET_CAPITAL_EFFICIENCY = 100
-TARGET_BUFFER_PCT = 10
-TARGET_BREAKEVEN_BUFFER = 8
-TARGET_THETA_DELTA_RATIO = 0.005
-TARGET_IF_CALLED_RETURN = 12
+# Only thresholds with live consumers live here; preset values come from
+# core/presets.py and cache TTLs from their call sites.
 
 # Score weights — tuned toward contribution-to-2x objective
 CALL_W_IV_ADJ = 0.30
@@ -67,35 +37,10 @@ PUT_W_CE = 0.20
 PUT_W_EARNINGS = 0.05
 PUT_W_DELTA = 0.05
 
-# Score adjustments
-IV_ENV_SCORE_MAX = 20
-IV_ENV_SCORE_MIN = -20
-EARNINGS_PENALTY_TODAY = -30
-EARNINGS_PENALTY_VERY_SOON = -15
-EARNINGS_PENALTY_SOON = -5
-
 # Max loss estimates
-CALL_MAX_LOSS_ESTIMATE_PCT = 0.05
 PUT_MAX_LOSS_ESTIMATE_PCT = 0.10
 
-# Cache TTLs
-PRICE_CACHE_TTL = 120
-FAILED_TICKER_TTL = 300
-OPTION_CHAIN_CACHE_TTL = 180
-EXPIRATION_CACHE_TTL = 300
-
-# Connection
-CONNECTION_IDLE_WARNING = 30  # seconds
-CONNECTION_IDLE_TIMEOUT = 300  # seconds
 STALE_QUOTE_THRESHOLD = 300  # seconds
-
-# Scheduler
-SCHEDULER_LOCK_STALE_TIMEOUT = 300  # seconds (5 min)
-GENERATION_IN_FLIGHT_TIMEOUT = 180  # seconds (3 min)
-
-# Recommendation limits
-MAX_RECOMMENDATIONS = 10
-DEFAULT_RECOMMENDATIONS = 5
 
 # Capital efficiency
 ACCOUNT_VALUE_MIN = 1

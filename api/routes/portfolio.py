@@ -5,24 +5,18 @@ Portfolio API routes
 from flask import Blueprint, current_app, jsonify, request
 
 from api.routes.source_policy import attach_source_policy, build_account_source_policy
+from api.routes.utils import ensure_opend_available as _ensure_opend_available
 from api.routes.utils import error_response
-from core.connection import probe_opend_status
 from core.logging_config import get_logger
 
 bp = Blueprint("portfolio", __name__, url_prefix="/api/portfolio")
 
-# Lazy service access - service created on first use
-_portfolio_service_instance = None
-
 
 def get_portfolio_service():
-    """Get or create the portfolio service instance."""
-    global _portfolio_service_instance
-    if _portfolio_service_instance is None:
-        import api
+    """Get the registered portfolio service singleton (lazy registry)."""
+    import api
 
-        _portfolio_service_instance = api.get_service("portfolio")
-    return _portfolio_service_instance
+    return api.get_service("portfolio")
 
 
 logger = get_logger("api.routes.portfolio", "api")
@@ -46,20 +40,6 @@ def _service_unavailable_response(message, fallback_message):
         extra["error_code"] = "real_account_unavailable"
         extra["opend_status"] = {"status": "real_account_unavailable", "message": error_message}
     return error_response(error_message, status_code=503, **extra)
-
-
-def _ensure_opend_available():
-    connection_config = current_app.config.get("connection_config", {})
-    status = probe_opend_status(
-        host=connection_config.get("host", "127.0.0.1"), port=connection_config.get("port", 11111)
-    )
-    if status.get("status") == "connected":
-        return None
-
-    error_code = "opend_login_required" if status.get("status") == "login_required" else "opend_unavailable"
-    return error_response(
-        status.get("message", "OpenD is unavailable."), status_code=503, error_code=error_code, opend_status=status
-    )
 
 
 @bp.route("/", methods=["GET"])
@@ -160,7 +140,8 @@ def get_weekly_income():
 
         return jsonify(attach_source_policy(results, build_account_source_policy("weekly_income"))), 200
     except Exception as e:
-        return jsonify({"error": str(e), "positions": [], "total_income": 0, "positions_count": 0}), 500
+        payload = {"positions": [], "total_income": 0, "positions_count": 0}
+        return error_response(str(e), status_code=500, **payload)
 
 
 @bp.route("/history", methods=["GET"])

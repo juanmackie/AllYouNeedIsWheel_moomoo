@@ -30,7 +30,7 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and call o
 
 ## Architecture Map
 
-- `app.py` creates the Flask application, loads connection config, initializes the SQLite-backed data layer, registers the one-screen dashboard, and serves top-level pages (portfolio/rollover/options redirect to the dashboard). Runtime services start only via explicit entry points (`run_api.py`, `python app.py`); importing the module never opens the DB or starts threads.
+- `app.py` creates the Flask application, loads connection config, initializes the SQLite-backed data layer, registers the one-screen dashboard, and redirects retired top-level paths (/portfolio, /options) to it. Runtime services start only via explicit entry points (`run_api.py`, `python app.py`); importing the module never opens the DB or starts threads.
 - `config.py` owns application defaults and environment overrides, including the wheel risk preset default.
 - `api/` owns Flask app setup, route blueprints, and service orchestration (run, settings, watchlist, options, portfolio, roll pressure, alerts, earnings, ledger, source policy).
 - `core/` owns reusable trading, scoring, connection, cache, the wheel runner, the immutable run model, presets, and decision logic.
@@ -38,9 +38,7 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and call o
 - `frontend/` owns Jinja templates, CSS, images, and browser JavaScript (one-screen dashboard).
 - `tests/` owns Python, frontend, fixture, and e2e verification.
 - `.github/` owns GitHub Actions workflow automation.
-- `core/scheduler.py` and out-of-scope features (LLM, macro, catalyst, dynamic screening, long options) were removed in the 2026-08-02 consolidation; see `docs/migration-ledger.md`.
-- `docker/` owns OpenD container support used by the Docker Compose stack.
-- `Dockerfile` and `docker-compose.yml` own local container packaging and service wiring.
+- `core/scheduler.py` and out-of-scope features (LLM, macro, catalyst, dynamic screening, long options) were removed in the 2026-08-02 consolidation; Docker packaging was also removed (Windows/loopback single-process only); see `docs/migration-ledger.md`.
 
 ## Work Guidance
 
@@ -59,7 +57,7 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and call o
 - Python unit/integration tests: `pytest tests/`
 - Frontend unit tests: `npm test`
 - For focused work, run the narrowest relevant pytest/Vitest file first, then broaden when touching shared contracts.
-- Manual UI smoke coverage is documented in `tests/README.md`; use it for dashboard, portfolio, rollover, and OpenD-state changes.
+- Manual UI smoke coverage is documented in `tests/README.md`; use it for dashboard and OpenD-state changes.
 
 ## Local Python Environment
 

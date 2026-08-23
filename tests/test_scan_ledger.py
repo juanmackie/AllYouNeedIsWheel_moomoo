@@ -72,7 +72,6 @@ class TestScanLedgerSources(unittest.TestCase):
             greeks_source="Black-Scholes computed",
             iv_source="broker",
             earnings_source="provider/cache/manual",
-            macro_source="FRED/cache/disabled",
         )
         sources = extract_data_sources({}, [d])
         names = [s["name"] for s in sources]

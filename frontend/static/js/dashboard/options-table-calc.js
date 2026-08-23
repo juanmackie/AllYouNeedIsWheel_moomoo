@@ -43,37 +43,6 @@ function getPremiumPerContract(option) {
     return null;
 }
 
-function calculateOTMPercentage(strikePrice, currentPrice) {
-    if (!strikePrice || !currentPrice) return 0;
-    const diff = strikePrice - currentPrice;
-    return (diff / currentPrice) * 100;
-}
-
-function calculateRecommendedPutQuantity(stockPrice, putStrike, ticker) {
-    const defaultRecommendation = {
-        quantity: 1,
-        explanation: "Default recommendation"
-    };
-    if (!state.portfolioSummary || !stockPrice || !putStrike) {
-        return defaultRecommendation;
-    }
-    try {
-        const cashBalance = state.portfolioSummary.cash_balance || 0;
-        const totalStocks = Object.keys(state.tickersData).length || 1;
-        const maxAllocationPerStock = (2.0 * cashBalance) / totalStocks;
-        const potentialContracts = Math.floor(maxAllocationPerStock / (putStrike * 100));
-        const maxContracts = Math.min(potentialContracts, 10);
-        const recommendedQuantity = Math.max(1, maxContracts);
-        return {
-            quantity: recommendedQuantity,
-            explanation: `Based on cash: ${formatCurrency(cashBalance)}, diversification across ${totalStocks} stocks`
-        };
-    } catch (error) {
-        console.error("Error calculating recommended put quantity:", error);
-        return defaultRecommendation;
-    }
-}
-
 function calculateEarningsSummary() {
     const summary = {
         totalWeeklyCallPremium: 0,
@@ -201,8 +170,6 @@ function updateEarningsSummary() {
 export {
     calculatePremium,
     getPremiumPerContract,
-    calculateOTMPercentage,
-    calculateRecommendedPutQuantity,
     calculateEarningsSummary,
     updateEarningsSummary,
 };

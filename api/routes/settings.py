@@ -8,7 +8,10 @@ there are no granular overrides.
 
 from flask import Blueprint, jsonify, request
 
+from core.logging_config import get_logger
 from core.presets import DEFAULT_PRESET_KEY, WHEEL_PRESETS, all_presets, get_preset
+
+logger = get_logger("api.routes.settings", "api")
 
 bp = Blueprint("settings", __name__, url_prefix="/api/settings")
 
@@ -73,11 +76,9 @@ def set_preset():
     # Propagate to the live recommendation engine so the next run uses it.
     try:
         service = _get_options_service()
-        engine = service.recommendation_engine
-        engine._preset = get_preset(key)
-        engine._preset_profile = engine._preset.to_screener_profile()
-    except Exception:
-        pass
+        service.recommendation_engine.set_active_preset(key)
+    except Exception as exc:
+        logger.warning(f"Live engine preset propagation failed (next run re-reads persisted key): {exc}")
 
     preset = get_preset(key)
     return jsonify({"success": True, "active": key, "effective": preset.to_dict(), "read_only": True})

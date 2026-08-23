@@ -16,9 +16,10 @@ import time
 from collections import defaultdict, deque
 from pathlib import Path
 
-from flask import jsonify
+from flask import current_app, jsonify
 
 from api.services.utils import clean_yfinance_ticker, validate_ticker
+from core.connection import probe_opend_status
 
 _logger = logging.getLogger("api.routes.utils")
 
@@ -26,7 +27,6 @@ _SANITIZE_ERRORS = os.environ.get("SANITIZE_ERRORS", "true").lower() in ("1", "t
 _RATE_LIMIT_LOCK = threading.Lock()
 _RATE_LIMIT_INIT_LOCK = threading.Lock()
 _RATE_LIMIT_STORE_PATH = Path(__file__).resolve().parents[2] / "_tmp" / "route_rate_limits.db"
-_RATE_LIMIT_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _clear_rate_limit_store() -> None:
@@ -39,6 +39,7 @@ def _clear_rate_limit_store() -> None:
 
 
 def _ensure_rate_limit_store() -> None:
+    _RATE_LIMIT_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _RATE_LIMIT_INIT_LOCK:
         with sqlite3.connect(str(_RATE_LIMIT_STORE_PATH), timeout=5) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -195,6 +196,20 @@ def success_response(data=None, status_code=200):
         else:
             body["data"] = data
     return jsonify(body), status_code
+
+
+def ensure_opend_available():
+    """Probe OpenD; return None when connected, else a standardized 503.
+
+    Single shared gate for all broker-backed routes.
+    """
+    connection_config = current_app.config.get("connection_config", {})
+    status = probe_opend_status(
+        host=connection_config.get("host", "127.0.0.1"), port=connection_config.get("port", 11111)
+    )
+    if status.get("status") == "connected":
+        return None
+    return opend_unavailable_response(status)
 
 
 def opend_unavailable_response(probe_result):

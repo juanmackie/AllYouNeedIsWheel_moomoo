@@ -13,8 +13,6 @@ import traceback
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from core.utils import is_market_open
-
 try:
     from moomoo import (
         RET_ERROR,
@@ -55,6 +53,7 @@ from core.connection_constants import (
 )
 from core.context_factory import create_contexts
 from core.logging_config import get_logger
+from core.quote_cache import OptionChainCache, PendingRequestCoordinator
 from core.rate_limiter import RateLimiter
 from core.ticker_utils import TickerCache, format_symbol
 
@@ -256,62 +255,16 @@ class MoomooConnection:
 
         self._ticker_cache = TickerCache(price_ttl=120, failed_ttl=300)
 
-        self._option_chain_cache = {}
-        self._cache_lock = threading.Lock()
-        self._cache_ttl = 180
-
-        # Expiration lists are much cheaper to reuse than to re-fetch.
-        self._option_expiration_cache = {}
-        self._expiration_cache_ttl = 300
-
-        self._pending_requests = {}
-        self._pending_requests_lock = threading.Lock()
-        self._pending_result_ttl_seconds = 1.0
+        # Quote caches + single-flight coordination live in dedicated modules.
+        self._quote_cache = OptionChainCache(
+            chain_ttl=180,
+            expiration_ttl=300,
+            broker_cache_after_hours=self._broker_cache_after_hours,
+        )
+        self._pending_requests = PendingRequestCoordinator(result_ttl_seconds=1.0)
 
         self._connection_created_at = datetime.now()
         self._cash_diagnostics_logged = False
-
-    def _get_cached_option_chain(self, symbol, expiration, right):
-        cache_key = f"{symbol}_{expiration}_{right}"
-        with self._cache_lock:
-            if cache_key in self._option_chain_cache:
-                cached_data, timestamp = self._option_chain_cache[cache_key]
-                cache_age = time.time() - timestamp
-                if is_market_open():
-                    if cache_age < self._cache_ttl:
-                        logger.debug(f"Using cached option chain for {cache_key}")
-                        return cached_data
-                elif self._broker_cache_after_hours:
-                    logger.debug(f"Using cached option chain for {cache_key} (after-hours, age={cache_age:.0f}s)")
-                    return cached_data
-                del self._option_chain_cache[cache_key]
-        return None
-
-    def _cache_option_chain(self, symbol, expiration, right, data):
-        cache_key = f"{symbol}_{expiration}_{right}"
-        with self._cache_lock:
-            self._option_chain_cache[cache_key] = (data, time.time())
-            logger.debug(f"Cached option chain for {cache_key}")
-
-    def _get_cached_option_expirations(self, symbol):
-        with self._cache_lock:
-            if symbol in self._option_expiration_cache:
-                cached_data, timestamp = self._option_expiration_cache[symbol]
-                cache_age = time.time() - timestamp
-                if is_market_open():
-                    if cache_age < self._expiration_cache_ttl:
-                        logger.debug(f"Using cached option expirations for {symbol}")
-                        return cached_data
-                    del self._option_expiration_cache[symbol]
-                elif self._broker_cache_after_hours:
-                    logger.debug(f"Using cached option expirations for {symbol} (after-hours, age={cache_age:.0f}s)")
-                    return cached_data
-        return None
-
-    def _cache_option_expirations(self, symbol, data):
-        with self._cache_lock:
-            self._option_expiration_cache[symbol] = (data, time.time())
-            logger.debug(f"Cached option expirations for {symbol}")
 
     @classmethod
     def get_connection_pool_stats(cls):
@@ -536,67 +489,17 @@ class MoomooConnection:
     def _mark_ticker_failed(self, symbol):
         self._ticker_cache.mark_ticker_failed(symbol)
 
-    def _get_or_create_pending_request(self, request_key):
-        with self._pending_requests_lock:
-            if request_key in self._pending_requests:
-                return self._pending_requests[request_key], False
-            entry = {
-                "event": threading.Event(),
-                "result": None,
-                "completed_at": None,
-            }
-            self._pending_requests[request_key] = entry
-            return entry, True
-
-    def _cleanup_pending_request(self, request_key):
-        with self._pending_requests_lock:
-            entry = self._pending_requests.get(request_key)
-            if not entry:
-                return
-            if not entry.get("event") or not entry["event"].is_set():
-                return
-            self._pending_requests.pop(request_key, None)
-
-    def _complete_pending_request(self, request_key, result):
-        with self._pending_requests_lock:
-            entry = self._pending_requests.get(request_key)
-            if entry is not None:
-                entry["result"] = result
-                entry["completed_at"] = time.time()
-                entry["event"].set()
-                timer = threading.Timer(
-                    self._pending_result_ttl_seconds,
-                    self._cleanup_pending_request,
-                    args=(request_key,),
-                )
-                timer.daemon = True
-                timer.start()
-            return
-
-    def _wait_for_pending_request(self, request_key, timeout=90):
-        entry, is_new = self._get_or_create_pending_request(request_key)
-        if not is_new:
-            logger.debug(f"Waiting for pending request: {request_key}")
-            entry["event"].wait(timeout=timeout)
-            with self._pending_requests_lock:
-                current = self._pending_requests.get(request_key)
-                if current is not None:
-                    return current.get("result")
-            logger.warning(f"Timeout waiting for pending request: {request_key}")
-            return None
-        return None
-
     def get_option_expiration_dates(self, symbol):
         symbol = self._format_symbol(symbol)
         request_key = f"option_expirations:{symbol}"
 
-        cached_result = self._get_cached_option_expirations(symbol)
+        cached_result = self._quote_cache.get_option_expirations(symbol)
         if cached_result is not None:
             return cached_result
 
-        pending_result = self._wait_for_pending_request(request_key)
+        pending_result = self._pending_requests.wait_for(request_key)
         if pending_result is not None:
-            cached_result = self._get_cached_option_expirations(symbol)
+            cached_result = self._quote_cache.get_option_expirations(symbol)
             return cached_result if cached_result is not None else pending_result
 
         try:
@@ -604,17 +507,17 @@ class MoomooConnection:
             if not self.is_connected():
                 if not self.connect():
                     result = (RET_ERROR, None)
-                    self._complete_pending_request(request_key, result)
+                    self._pending_requests.complete(request_key, result)
                     return result
             ret, data = self.quote_ctx.get_option_expiration_date(code=symbol)
             result = (ret, data)
-            self._cache_option_expirations(symbol, result)
-            self._complete_pending_request(request_key, result)
+            self._quote_cache.cache_option_expirations(symbol, result)
+            self._pending_requests.complete(request_key, result)
             return result
         except Exception as e:
             logger.error(f"Error getting option expirations for {symbol}: {str(e)}")
             result = (RET_ERROR, None)
-            self._complete_pending_request(request_key, result)
+            self._pending_requests.complete(request_key, result)
             return result
 
     def get_stock_price(self, symbol):
@@ -629,7 +532,7 @@ class MoomooConnection:
         if cached_price is not None:
             return cached_price
 
-        pending_result = self._wait_for_pending_request(request_key)
+        pending_result = self._pending_requests.wait_for(request_key)
         if pending_result is not None:
             return pending_result
 
@@ -637,22 +540,22 @@ class MoomooConnection:
             self._rate_limiter.check_rate_limit()
             if not self.is_connected():
                 if not self.connect():
-                    self._complete_pending_request(request_key, None)
+                    self._pending_requests.complete(request_key, None)
                     return None
 
             ret, data = self.quote_ctx.get_market_snapshot([symbol])
             if ret != RET_OK or data is None or data.empty:
                 logger.error(f"Failed to get stock price for {symbol}: {data}")
-                self._complete_pending_request(request_key, None)
+                self._pending_requests.complete(request_key, None)
                 return None
 
             price = float(data.iloc[0].get("last_price", 0))
             self._cache_stock_price(symbol, price)
-            self._complete_pending_request(request_key, price)
+            self._pending_requests.complete(request_key, price)
             return price
         except Exception as e:
             logger.error(f"Error getting stock price for {symbol}: {str(e)}")
-            self._complete_pending_request(request_key, None)
+            self._pending_requests.complete(request_key, None)
             return None
 
     def _ensure_quote_context(self):
@@ -782,13 +685,13 @@ class MoomooConnection:
         request_key = f"option_chain:{cache_key}"
 
         if data_filter is None:
-            cached_result = self._get_cached_option_chain(symbol, expiration, right)
+            cached_result = self._quote_cache.get_option_chain(symbol, expiration, right)
             if cached_result is not None:
                 return cached_result
 
-            pending_result = self._wait_for_pending_request(request_key)
+            pending_result = self._pending_requests.wait_for(request_key)
             if pending_result is not None:
-                cached_result = self._get_cached_option_chain(symbol, expiration, right)
+                cached_result = self._quote_cache.get_option_chain(symbol, expiration, right)
                 if cached_result is not None:
                     return cached_result
                 return pending_result
@@ -797,7 +700,7 @@ class MoomooConnection:
             self._option_chain_rate_limiter.check_rate_limit()
             if not self.is_connected():
                 if not self.connect():
-                    self._complete_pending_request(request_key, None)
+                    self._pending_requests.complete(request_key, None)
                     return None
 
             opt_type = OptionType.CALL if right == "C" else OptionType.PUT
@@ -828,13 +731,13 @@ class MoomooConnection:
 
                 if ret != RET_OK:
                     logger.error(f"Failed to get option chain for {symbol}: {_safe_str(data)}")
-                    self._complete_pending_request(request_key, None)
+                    self._pending_requests.complete(request_key, None)
                     return None
 
                 if data.empty:
                     if data_filter is None:
-                        self._cache_option_chain(symbol, expiration, right, result)
-                    self._complete_pending_request(request_key, result)
+                        self._quote_cache.cache_option_chain(symbol, expiration, right, result)
+                    self._pending_requests.complete(request_key, result)
                     return result
 
                 if target_strike:
@@ -844,8 +747,8 @@ class MoomooConnection:
                 option_codes = data["code"].tolist()
                 if not option_codes:
                     if data_filter is None:
-                        self._cache_option_chain(symbol, expiration, right, result)
-                    self._complete_pending_request(request_key, result)
+                        self._quote_cache.cache_option_chain(symbol, expiration, right, result)
+                    self._pending_requests.complete(request_key, result)
                     return result
 
                 ret, snap_data = self.quote_ctx.get_market_snapshot(option_codes)
@@ -883,13 +786,13 @@ class MoomooConnection:
                 result["expiration"] = result["options"][0]["expiration"]
 
             if data_filter is None:
-                self._cache_option_chain(symbol, expiration, right, result)
-            self._complete_pending_request(request_key, result)
+                self._quote_cache.cache_option_chain(symbol, expiration, right, result)
+            self._pending_requests.complete(request_key, result)
             return result
         except Exception as e:
             logger.error(f"Error retrieving option chain for {symbol}: {_safe_str(e)}")
             logger.debug(traceback.format_exc())
-            self._complete_pending_request(request_key, None)
+            self._pending_requests.complete(request_key, None)
             return None
 
     def get_portfolio(self):

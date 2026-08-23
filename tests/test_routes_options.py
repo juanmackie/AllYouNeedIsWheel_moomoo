@@ -40,10 +40,13 @@ def _make_app(**overrides):
 
 
 def _reset_service_global():
-    """Reset the module-level service singleton between tests."""
-    import api.routes.options as mod
+    """Reset the cached service singleton between tests."""
+    try:
+        import api
 
-    mod._options_service_instance = None
+        api.clear_service_cache()
+    except Exception:
+        pass
 
 
 def _patch_service(mock_options_service=None):
@@ -134,7 +137,7 @@ class TestOtmOptions(unittest.TestCase):
         return client.get("/api/options/otm", query_string=params)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_returns_options_successfully(self, mock_probe, mock_get_svc):
         """Should return OTM options for valid parameters."""
         mock_probe.return_value = {"status": "connected"}
@@ -161,7 +164,7 @@ class TestOtmOptions(unittest.TestCase):
         )
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_passes_option_type_and_expiration(self, mock_probe, mock_get_svc):
         """Should forward optional option_type and expiration parameters."""
         mock_probe.return_value = {"status": "connected"}
@@ -178,7 +181,7 @@ class TestOtmOptions(unittest.TestCase):
         )
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_validates_invalid_option_type(self, mock_probe, mock_get_svc):
         """Should reject invalid option_type."""
         mock_probe.return_value = {"status": "connected"}
@@ -193,7 +196,7 @@ class TestOtmOptions(unittest.TestCase):
         self.assertFalse(data["success"])
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_returns_503_when_opend_unavailable(self, mock_probe, mock_get_svc):
         """Should return 503 when OpenD is unavailable."""
         mock_probe.return_value = {"status": "unavailable", "message": "OpenD is not responding."}
@@ -213,7 +216,7 @@ class TestOtmOptions(unittest.TestCase):
         self.mock_service.get_otm_options.assert_not_called()
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_rejects_put_otm_outside_growth_range(self, mock_probe, mock_get_svc):
         """Should reject PUT OTM requests outside the Growth Mode CSP range."""
         mock_probe.return_value = {"status": "connected"}
@@ -278,7 +281,7 @@ class TestStockPrice(unittest.TestCase):
         self.mock_service.get_stock_price.side_effect = lambda t: {"AAPL": 150.0, "TSLA": 200.0}.get(t, 0)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_single_ticker(self, mock_probe, mock_get_svc):
         """Should return price for a single ticker."""
         mock_probe.return_value = {"status": "connected"}
@@ -294,7 +297,7 @@ class TestStockPrice(unittest.TestCase):
         self.assertEqual(data["data"]["AAPL"], 150.0)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_multiple_tickers(self, mock_probe, mock_get_svc):
         """Should return prices for comma-separated tickers."""
         mock_probe.return_value = {"status": "connected"}
@@ -310,7 +313,7 @@ class TestStockPrice(unittest.TestCase):
         self.assertEqual(data["data"]["TSLA"], 200.0)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_missing_tickers_returns_400(self, mock_probe, mock_get_svc):
         """Should return 400 when no tickers provided."""
         mock_probe.return_value = {"status": "connected"}
@@ -325,7 +328,7 @@ class TestStockPrice(unittest.TestCase):
         self.assertFalse(data["success"])
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_rejects_invalid_tickers(self, mock_probe, mock_get_svc):
         """Should reject ticker values with unsafe characters."""
         mock_probe.return_value = {"status": "connected"}
@@ -341,7 +344,7 @@ class TestStockPrice(unittest.TestCase):
         self.assertIn("Invalid ticker", data["error"])
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_opend_unavailable_503(self, mock_probe, mock_get_svc):
         """Should return 503 when OpenD is unavailable."""
         mock_probe.return_value = {"status": "unavailable", "message": "OpenD is not responding."}
@@ -375,7 +378,7 @@ class TestExpirations(unittest.TestCase):
         }
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_returns_expirations(self, mock_probe, mock_get_svc):
         """Should return option expirations for a ticker."""
         mock_probe.return_value = {"status": "connected"}
@@ -398,7 +401,7 @@ class TestExpirations(unittest.TestCase):
         self.mock_service.get_option_expirations.assert_called_once_with("AAPL", None)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_forwards_option_type(self, mock_probe, mock_get_svc):
         """Should forward option_type parameter."""
         mock_probe.return_value = {"status": "connected"}
@@ -411,7 +414,7 @@ class TestExpirations(unittest.TestCase):
         self.mock_service.get_option_expirations.assert_called_once_with("AAPL", "CALL")
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_rejects_missing_ticker(self, mock_probe, mock_get_svc):
         """Should return 400 when ticker not provided."""
         mock_probe.return_value = {"status": "connected"}
@@ -426,7 +429,7 @@ class TestExpirations(unittest.TestCase):
         self.assertIn("error", data)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_rejects_invalid_ticker(self, mock_probe, mock_get_svc):
         """Should return 400 for unsafe ticker input."""
         mock_probe.return_value = {"status": "connected"}
@@ -441,7 +444,7 @@ class TestExpirations(unittest.TestCase):
         self.assertFalse(data["success"])
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_rejects_invalid_option_type(self, mock_probe, mock_get_svc):
         """Should return 400 for invalid option_type."""
         mock_probe.return_value = {"status": "connected"}
@@ -455,7 +458,7 @@ class TestExpirations(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_returns_404_on_service_error(self, mock_probe, mock_get_svc):
         """Should return 404 when service reports error."""
         mock_probe.return_value = {"status": "connected"}
@@ -471,7 +474,7 @@ class TestExpirations(unittest.TestCase):
         self.assertIn("error", data)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_opend_unavailable_503(self, mock_probe, mock_get_svc):
         """Should return 503 when OpenD is unavailable."""
         mock_probe.return_value = {"status": "unavailable", "message": "OpenD down."}
@@ -500,27 +503,37 @@ class TestCashStatus(unittest.TestCase):
         _reset_service_global()
         self.mock_service = _patch_service()
         self.mock_service.config = {"cash_reserve_enabled": True}
+        self.mock_portfolio = MagicMock()
+        self.mock_portfolio.get_positions.return_value = [
+            {
+                "symbol": "US.AAPL",
+                "position": -2,
+                "option_type": "PUT",
+                "strike": 150.0,
+                "expiration": "20240510",
+            }
+        ]
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     @patch("api.services.portfolio_service.PortfolioService")
     def test_returns_cash_status(self, mock_portfolio_cls, mock_probe, mock_get_svc):
         """Should return cash balance and reserve info."""
         mock_probe.return_value = {"status": "connected"}
         mock_get_svc.return_value = self.mock_service
 
-        mock_portfolio = MagicMock()
-        mock_portfolio.get_portfolio_summary.return_value = {"cash_balance": 50000}
-        mock_portfolio.get_positions.return_value = []
-        mock_portfolio_cls.return_value = mock_portfolio
-        self.mock_service._get_portfolio_context.return_value = {
+        # Route now delegates payload composition to PortfolioContext.
+        self.mock_service.portfolio_context_helper.get_cash_status.return_value = {
             "cash_balance": 50000.0,
             "available_cash": 50000.0,
-            "cash_reserved_for_csp": 0.0,
+            "cash_available": 50000.0,
+            "cash_reserved": 0.0,
             "cash_available_for_csp": 50000.0,
             "broker_buying_power": 0.0,
             "broker_buying_power_source": "none",
             "excess_liquidity": 0.0,
+            "open_puts": [],
+            "open_puts_count": 0,
         }
 
         app = _make_app()
@@ -534,51 +547,37 @@ class TestCashStatus(unittest.TestCase):
         self.assertEqual(data["cash_reserved"], 0.0)
         self.assertEqual(data["cash_available"], 50000.0)
 
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.services.portfolio_service.PortfolioService")
-    def test_calculates_cash_reserved_for_short_puts(self, mock_portfolio_cls, mock_probe, mock_get_svc):
-        """Should calculate cash reserved for short put positions."""
-        mock_probe.return_value = {"status": "connected"}
-        mock_get_svc.return_value = self.mock_service
+    def test_calculates_cash_reserved_for_short_puts(self):
+        """Collateral math lives in PortfolioContext; route passes it through."""
+        from api.services.portfolio_context import PortfolioContext
 
-        mock_portfolio = MagicMock()
-        mock_portfolio.get_portfolio_summary.return_value = {"cash_balance": 50000}
-        mock_portfolio.get_positions.return_value = [
-            {
-                "symbol": "US.AAPL",
-                "position": -2,
-                "option_type": "PUT",
-                "strike": 150.0,
-                "expiration": "20240510",
-            }
-        ]
-        mock_portfolio_cls.return_value = mock_portfolio
-        self.mock_service._get_portfolio_context.return_value = {
-            "cash_balance": 50000.0,
-            "available_cash": 50000.0,
-            "cash_reserved_for_csp": 30000.0,
-            "cash_available_for_csp": 20000.0,
-            "broker_buying_power": 0.0,
-            "broker_buying_power_source": "none",
-            "excess_liquidity": 0.0,
-        }
+        helper = PortfolioContext(portfolio_service_provider=None, config_provider=None)
+        helper.config = {"cash_reserve_enabled": True}
+        with (
+            patch.object(
+                helper,
+                "get_portfolio_context",
+                return_value={
+                    "cash_balance": 50000.0,
+                    "available_cash": 50000.0,
+                    "cash_reserved_for_csp": 30000.0,
+                    "cash_available_for_csp": 20000.0,
+                    "broker_buying_power": 0.0,
+                    "broker_buying_power_source": "none",
+                    "excess_liquidity": 0.0,
+                },
+            ),
+            patch.object(helper, "_get_portfolio_service", return_value=self.mock_portfolio),
+        ):
+            payload = helper.get_cash_status(refresh=True)
 
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/cash-status")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
         # cash_reserved = 2 contracts * 150 strike * 100 = 30000
-        self.assertEqual(data["cash_reserved"], 30000.0)
-        # cash_available is true available cash; cash_available_for_csp is deployable (minus reserved).
-        self.assertEqual(data["cash_available"], 50000.0)
-        self.assertEqual(data["cash_available_for_csp"], 20000.0)
-        self.assertEqual(len(data["open_puts"]), 1)
+        self.assertEqual(payload["cash_reserved"], 30000.0)
+        self.assertEqual(payload["cash_available_for_csp"], 20000.0)
+        self.assertEqual(len(payload["open_puts"]), 1)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
+    @patch("api.routes.utils.probe_opend_status")
     def test_opend_unavailable_503(self, mock_probe, mock_get_svc):
         """Should return 503 when OpenD is unavailable."""
         mock_probe.return_value = {"status": "unavailable", "message": "OpenD down."}
@@ -717,9 +716,7 @@ class TestWatchlistTickers(unittest.TestCase):
         self.assertEqual(data["count"], 3)
         self.assertIn("mode", data)
         self.assertTrue(data["growth_mode_enabled"])
-        mock_wl.get_effective_watchlist.assert_called_once_with(
-            growth_mode_config={"enabled": True, "screener_profile": {"min_volatility_pct": 4.5}}
-        )
+        mock_wl.get_effective_watchlist.assert_called_once_with()
 
     @patch("api.services.watchlist_manager.WatchlistManager")
     @patch("api.services.config.get_config")
@@ -801,21 +798,25 @@ class TestCashStatusCSPFields(unittest.TestCase):
         _reset_service_global()
         self.mock_service = _patch_service()
         self.mock_service.config = {"cash_reserve_enabled": True}
+        self.mock_portfolio = MagicMock()
+        self.mock_portfolio.get_positions.return_value = [
+            {
+                "symbol": "US.AAPL",
+                "position": -2,
+                "option_type": "PUT",
+                "strike": 150.0,
+                "expiration": "20240510",
+            }
+        ]
 
-    @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.services.portfolio_service.PortfolioService")
-    def test_returns_csp_fields(self, mock_portfolio_cls, mock_probe, mock_get_svc):
+    def test_returns_csp_fields(self):
         """Should include cash_available_for_csp and cash_reserved_for_csp."""
-        mock_probe.return_value = {"status": "connected"}
-        mock_get_svc.return_value = self.mock_service
+        from api.services.portfolio_context import PortfolioContext
 
-        mock_portfolio = MagicMock()
-        mock_portfolio.get_portfolio_summary.return_value = {
-            "cash_balance": 50000,
-            "excess_liquidity": 55000,
-        }
-        mock_portfolio.get_positions.return_value = [
+        helper = PortfolioContext(portfolio_service_provider=None, config_provider=None)
+        helper.config = {"cash_reserve_enabled": True}
+        portfolio = MagicMock()
+        portfolio.get_positions.return_value = [
             {
                 "symbol": "US.AAPL",
                 "position": -1,
@@ -824,58 +825,47 @@ class TestCashStatusCSPFields(unittest.TestCase):
                 "expiration": "20240510",
             }
         ]
-        mock_portfolio_cls.return_value = mock_portfolio
-        self.mock_service._get_portfolio_context.return_value = {
-            "cash_balance": 50000.0,
-            "available_cash": 50000.0,
-            "cash_reserved_for_csp": 15000.0,
-            "cash_available_for_csp": 40000.0,
-            "broker_buying_power": 55000.0,
-            "broker_buying_power_source": "excess_liquidity",
-            "excess_liquidity": 55000.0,
-        }
+        with (
+            patch.object(
+                helper,
+                "get_portfolio_context",
+                return_value={
+                    "cash_balance": 50000.0,
+                    "available_cash": 50000.0,
+                    "cash_reserved_for_csp": 15000.0,
+                    "cash_available_for_csp": 40000.0,
+                    "broker_buying_power": 55000.0,
+                    "broker_buying_power_source": "excess_liquidity",
+                    "excess_liquidity": 55000.0,
+                },
+            ),
+            patch.object(helper, "_get_portfolio_service", return_value=portfolio),
+        ):
+            payload = helper.get_cash_status(refresh=True)
 
-        app = _make_app()
-        with app.test_client() as client:
-            resp = client.get("/api/options/cash-status")
-            data = resp.get_json()
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("cash_available_for_csp", data)
-        self.assertIn("cash_reserved_for_csp", data)
-        self.assertIn("available_cash", data)
-        self.assertIn("broker_buying_power", data)
-        self.assertIn("broker_buying_power_source", data)
+        self.assertIn("cash_available_for_csp", payload)
+        self.assertIn("cash_reserved_for_csp", payload)
+        self.assertIn("available_cash", payload)
+        self.assertIn("broker_buying_power", payload)
+        self.assertIn("broker_buying_power_source", payload)
         # available_cash is true cash; excess_liquidity remains broker buying power.
-        self.assertEqual(data["available_cash"], 50000.0)
+        self.assertEqual(payload["available_cash"], 50000.0)
         # cash_reserved = 1 * 150 * 100 = 15000
-        self.assertEqual(data["cash_reserved_for_csp"], 15000.0)
-        self.assertEqual(data["broker_buying_power"], 55000.0)
-        self.assertEqual(data["broker_buying_power_source"], "excess_liquidity")
-        self.assertEqual(data["cash_available_for_csp"], 40000.0)
+        self.assertEqual(payload["cash_reserved_for_csp"], 15000.0)
+        self.assertEqual(payload["broker_buying_power"], 55000.0)
+        self.assertEqual(payload["broker_buying_power_source"], "excess_liquidity")
+        self.assertEqual(payload["cash_available_for_csp"], 40000.0)
 
     @patch("api.routes.options.get_options_service")
-    @patch("api.routes.options.probe_opend_status")
-    @patch("api.services.portfolio_service.PortfolioService")
-    def test_preserves_existing_aliases(self, mock_portfolio_cls, mock_probe, mock_get_svc):
+    @patch("api.routes.utils.probe_opend_status")
+    def test_preserves_existing_aliases(self, mock_probe, mock_get_svc):
         """Should preserve existing cash_balance, cash_reserved, cash_available aliases."""
         mock_probe.return_value = {"status": "connected"}
         mock_get_svc.return_value = self.mock_service
-
-        mock_portfolio = MagicMock()
-        mock_portfolio.get_portfolio_summary.return_value = {
-            "cash_balance": 50000,
-        }
-        mock_portfolio.get_positions.return_value = []
-        mock_portfolio_cls.return_value = mock_portfolio
-        self.mock_service._get_portfolio_context.return_value = {
+        self.mock_service.portfolio_context_helper.get_cash_status.return_value = {
             "cash_balance": 50000.0,
-            "available_cash": 50000.0,
-            "cash_reserved_for_csp": 0.0,
-            "cash_available_for_csp": 50000.0,
-            "broker_buying_power": 50000.0,
-            "broker_buying_power_source": "available_cash",
-            "excess_liquidity": 50000.0,
+            "cash_reserved": 0.0,
+            "cash_available": 50000.0,
         }
 
         app = _make_app()
