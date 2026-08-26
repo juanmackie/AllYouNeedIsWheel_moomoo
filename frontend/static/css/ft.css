@@ -1387,3 +1387,98 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
   opacity: 1;
   transform: translateY(0);
 }
+
+/* ── 37. TEMPLATE CLASS EXTRACTIONS (inline-style replacements) ─ */
+.ft-eyebrow--faint { color: var(--ft-ink-faint); }
+.ft-masthead__rule--heavy { height: 1px; background: var(--ft-ink); }
+
+.app-footer__rule {
+  height: 1px;
+  background: var(--ft-rule-soft);
+  margin-top: 64px;
+}
+.app-footer__brand { padding-bottom: 6px; }
+.app-footer__tagline { color: var(--ft-ink-mute); }
+
+.premium-velocity__value {
+  font-family: var(--ft-font-display);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+.watchlist-add-input { width: 120px; flex-shrink: 0; }
+.weekly-income__loading-cell { padding: 32px 0; }
+.weekly-income__foot-cell { padding: 18px 0 0; }
+
+/* ── 38. RUN STRIP (operational status) ────────────────────── */
+.run-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 0;
+  margin: 24px 0 8px;
+  border-top: 1px solid var(--ft-ink);
+  border-bottom: 1px solid var(--ft-rule-soft);
+}
+.run-strip #run-refresh-btn { margin-left: auto; }
+.badge--dark {
+  background: var(--ft-ink);
+  color: var(--ft-paper);
+  border-color: var(--ft-ink);
+}
+
+/* ── 39. ERROR STAGE ──────────────────────────────────────── */
+.error-stage {
+  text-align: center;
+  padding: 88px 0 32px;
+}
+.error-stage__code {
+  font-family: var(--ft-font-display);
+  font-weight: 700;
+  font-size: clamp(72px, 14vw, 128px);
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  color: var(--ft-ink);
+}
+.error-stage__title {
+  font-family: var(--ft-font-display);
+  font-weight: 600;
+  font-size: 24px;
+  letter-spacing: -0.015em;
+  margin: 20px 0 0;
+}
+.error-stage__message {
+  max-width: 520px;
+  margin: 12px auto 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ft-ink-soft);
+}
+.error-stage__actions {
+  margin-top: 28px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── 40. MISSING SHIMS STILL EMITTED BY TEMPLATES/JS ───────── */
+.py-5 { padding-top: 40px; padding-bottom: 40px; }
+.list-unstyled { list-style: none; padding-left: 0; }
+.form-control-sm { padding: 4px 8px; font-size: 12px; }
+
+/* ── 41. REDUCED MOTION ─────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ft-fade-up {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

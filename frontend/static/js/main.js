@@ -97,6 +97,35 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+// Staggered section entry (progressive enhancement).
+// Only hides sections when IntersectionObserver + motion are both allowed;
+// no-JS and reduced-motion users always see full content.
+function initSectionReveal() {
+    if (!('IntersectionObserver' in window)) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const sections = document.querySelectorAll('.ft-section, .app-section');
+    if (!sections.length) return;
+
+    const observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (!entry.isIntersecting) return;
+            entry.target.style.transitionDelay = '';
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+        });
+    }, { threshold: 0.05, rootMargin: '0px 0px -40px 0px' });
+
+    let index = 0;
+    sections.forEach(function (section) {
+        section.classList.add('ft-fade-up');
+        // Stagger the initially-visible sections; off-screen ones reveal on scroll.
+        section.style.transitionDelay = `${Math.min(index * 60, 300)}ms`;
+        observer.observe(section);
+        index += 1;
+    });
+}
+
 // Set the current year in the footer
 document.addEventListener('DOMContentLoaded', function() {
     const currentYearElement = document.getElementById('current-year');
@@ -119,4 +148,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     pollOpenDStatus();
     window.setInterval(pollOpenDStatus, 10000);
+
+    initSectionReveal();
 });

@@ -1,28 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Error {{ error_code }} - All You Need Is Wheel{% endblock %}
+{% block title %}Error {{ error_code }} - AYNIWHEEL{% endblock %}
 {% block body_class %}page-error{% endblock %}
 
-{% block page_header %}
-<div class="page-header flex-grow-1">
-    <div class="page-header__inner">
-        <div>
-            <h1 class="page-header__title">{{ error_code }}</h1>
-            <div class="page-header__meta">System error</div>
-        </div>
-    </div>
-</div>
-{% endblock %}
-
 {% block content %}
-<div class="app-section">
-    <div class="text-center py-5">
-        <div class="error-masthead__code mb-3">{{ error_code }}</div>
-        <h2 class="h4 mb-2">Something went wrong</h2>
-        <p class="text-muted mb-4">{{ message }}. The page could not be loaded in the current workspace state.</p>
-        <a href="{{ url_for('index') }}" class="btn btn-primary">
-            <i class="bi bi-house-door me-2"></i> Return to dashboard
-        </a>
+<section class="error-stage">
+    <div class="error-stage__code">{{ error_code }}</div>
+    <h2 class="error-stage__title">This page could not be loaded</h2>
+    <p class="error-stage__message">{{ message }}. Signals, positions, and account state are unaffected — only this view failed.</p>
+    <div class="error-stage__actions">
+        <a href="{{ url_for('index') }}" class="btn btn-primary">Back to dashboard</a>
+        <button type="button" class="btn btn-secondary" onclick="window.location.reload()">Retry</button>
     </div>
-</div>
+</section>
 {% endblock %}
