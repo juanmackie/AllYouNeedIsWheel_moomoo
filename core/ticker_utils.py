@@ -9,7 +9,7 @@ import time
 
 from core.logging_config import get_logger
 
-logger = get_logger("autotrader.connection", "moomoo")
+logger = get_logger("ayniwheel.connection", "moomoo")
 
 _OPTION_CODE_RE = re.compile(r"^(?P<underlying>[A-Z0-9-]+)(?P<expiry>\d{6})(?P<right>[CP])(?P<strike>\d+)$")
 

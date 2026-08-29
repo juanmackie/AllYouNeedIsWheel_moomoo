@@ -221,14 +221,14 @@ class OptionsDataService:
             "score_details": decision.score_details,
             "rationale": decision.rationale,
             "warnings": decision.warnings,
-            "hard_blockers": decision.hard_blockers,  # TODO 1.1
+            "hard_blockers": decision.hard_blockers,
             "quote_quality": decision.quote_quality,
             "blocked_reason_codes": decision.blocked_reason_codes,
             "avg_cost": float(portfolio_context.get("positions", {}).get(ticker, {}).get("avg_cost", 0) or 0),
             "otm_pct": decision.otm_pct,
             "annualized_return": decision.annualized_return,
-            "return_on_underlying": decision.return_on_underlying,  # TODO 1.2
-            "return_on_secured_cash": decision.return_on_secured_cash,  # TODO 1.2
+            "return_on_underlying": decision.return_on_underlying,
+            "return_on_secured_cash": decision.return_on_secured_cash,
             "iv_adjusted_return": decision.iv_adjusted_return,
             "iv_rank": decision.iv_rank,
             "iv_status": decision.iv_status,
@@ -243,7 +243,7 @@ class OptionsDataService:
             "size_fit": decision.size_fit,
             "expected_move_buffer": decision.expected_move_buffer,
             "wheel_decision": decision.to_dict(),
-            # Data provenance (TODO 2.1)
+            # Preserve data provenance for actionability checks.
             "price_source": decision.price_source,
             "chain_source": decision.chain_source,
             "greeks_source": decision.greeks_source,

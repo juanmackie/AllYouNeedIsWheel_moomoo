@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 
-logger = logging.getLogger("autotrader.rate_limiter")
+logger = logging.getLogger("ayniwheel.rate_limiter")
 
 
 class RateLimiter:
@@ -17,7 +17,15 @@ class RateLimiter:
     _min_request_spacing = 0.1
     _burst_cooldown_seconds = 5.0
 
-    def __init__(self, max_requests_per_window=8, rate_limit_window=30, burst_threshold=5, burst_window=5):
+    def __init__(
+        self,
+        max_requests_per_window=8,
+        rate_limit_window=30,
+        burst_threshold=5,
+        burst_window=5,
+        min_request_spacing=None,
+        min_effective_requests=2,
+    ):
         """
         Initialize rate limiter.
 
@@ -27,15 +35,72 @@ class RateLimiter:
             burst_threshold: Number of requests in burst_window that triggers burst protection
             burst_window: Time window for burst detection in seconds
         """
-        self.max_requests_per_window = max_requests_per_window
-        self.rate_limit_window = rate_limit_window
-        self.burst_threshold = burst_threshold
-        self.burst_window = burst_window
+        self.rate_limit_window = max(0.1, float(rate_limit_window))
+        self.burst_threshold = max(1, int(burst_threshold))
+        self.burst_window = max(0.1, float(burst_window))
+        self._configured_max_requests = max(1, int(max_requests_per_window))
+        self._configured_min_spacing = max(
+            0.0, float(self._min_request_spacing if min_request_spacing is None else min_request_spacing)
+        )
+        self._min_effective_requests = max(1, int(min_effective_requests))
+        self.max_requests_per_window = self._configured_max_requests
+        self._min_request_spacing = self._configured_min_spacing
 
         self._request_timestamps = []
         self._lock = threading.Lock()
         self._rate_limit_waits = 0
         self._api_calls_count = 0
+        self._rate_limit_events = 0
+        self._last_rate_limit_at = None
+
+    def configure(
+        self,
+        max_requests_per_window=None,
+        rate_limit_window=None,
+        min_request_spacing=None,
+        burst_threshold=None,
+        burst_window=None,
+    ):
+        """Apply a new base quota and discard any temporary adaptation."""
+        with self._lock:
+            if max_requests_per_window is not None:
+                self._configured_max_requests = max(1, int(max_requests_per_window))
+            if rate_limit_window is not None:
+                self.rate_limit_window = max(0.1, float(rate_limit_window))
+            if burst_threshold is not None:
+                self.burst_threshold = max(1, int(burst_threshold))
+            if burst_window is not None:
+                self.burst_window = max(0.1, float(burst_window))
+            if min_request_spacing is not None:
+                self._configured_min_spacing = max(0.0, float(min_request_spacing))
+            self.max_requests_per_window = self._configured_max_requests
+            self._min_request_spacing = self._configured_min_spacing
+            self._last_rate_limit_at = None
+
+    def _restore_after_clean_window(self, now):
+        if self._last_rate_limit_at is not None and now - self._last_rate_limit_at >= self.rate_limit_window:
+            self.max_requests_per_window = self._configured_max_requests
+            self._min_request_spacing = self._configured_min_spacing
+            self._last_rate_limit_at = None
+            logger.info("Rate limiter restored to configured quota after a clean window")
+
+    def record_rate_limit(self, reason="provider rate limit"):
+        """Reduce the effective quota after a provider rate-limit response."""
+        with self._lock:
+            floor = min(self._min_effective_requests, self._configured_max_requests)
+            reduced = max(floor, self.max_requests_per_window // 2)
+            self.max_requests_per_window = reduced
+            if reduced:
+                self._min_request_spacing = max(self._configured_min_spacing, self.rate_limit_window / reduced)
+            self._last_rate_limit_at = time.time()
+            self._rate_limit_events += 1
+            logger.warning(
+                "%s; adapting quota to %d requests/%gs (spacing %.2fs)",
+                reason,
+                self.max_requests_per_window,
+                self.rate_limit_window,
+                self._min_request_spacing,
+            )
 
     def check_rate_limit(self):
         """
@@ -48,6 +113,7 @@ class RateLimiter:
 
         with self._lock:
             now = time.time()
+            self._restore_after_clean_window(now)
             self._request_timestamps = [ts for ts in self._request_timestamps if now - ts < self.rate_limit_window]
 
             scheduled_time = now
@@ -98,4 +164,9 @@ class RateLimiter:
                 "current_queue_length": len(self._request_timestamps),
                 "max_requests_per_window": self.max_requests_per_window,
                 "rate_limit_window": self.rate_limit_window,
+                "configured_max_requests_per_window": self._configured_max_requests,
+                "configured_min_request_spacing": self._configured_min_spacing,
+                "min_request_spacing": self._min_request_spacing,
+                "rate_limit_events": self._rate_limit_events,
+                "adapted": self._last_rate_limit_at is not None,
             }

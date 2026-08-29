@@ -57,7 +57,7 @@ from core.quote_cache import OptionChainCache, PendingRequestCoordinator
 from core.rate_limiter import RateLimiter
 from core.ticker_utils import TickerCache, format_symbol
 
-logger = get_logger("autotrader.connection", "moomoo")
+logger = get_logger("ayniwheel.connection", "moomoo")
 
 
 def _safe_str(value) -> str:
@@ -68,6 +68,15 @@ def _safe_str(value) -> str:
         return raw
     except UnicodeEncodeError:
         return raw.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
+def _is_rate_limit_response(value) -> bool:
+    """Recognize provider responses that indicate frequency pressure."""
+    text = _safe_str(value).lower()
+    return any(
+        marker in text
+        for marker in ("rate limit", "frequency limit", "too frequent", "quota exceeded", "request limit")
+    )
 
 
 def _safe_cash_value(value) -> float | None:
@@ -163,6 +172,9 @@ class MoomooConnection:
         portfolio_env=None,
         security_firm=None,
         broker_cache_after_hours=True,
+        chain_rate_limit_max_requests=10,
+        chain_rate_limit_window_sec=30,
+        chain_min_request_spacing_sec=3.0,
     ):
         cleaned_account_id = _clean_account_id(account_id)
 
@@ -212,6 +224,9 @@ class MoomooConnection:
         portfolio_env=None,
         security_firm=None,
         broker_cache_after_hours=True,
+        chain_rate_limit_max_requests=10,
+        chain_rate_limit_window_sec=30,
+        chain_min_request_spacing_sec=3.0,
     ):
         if not readonly:
             raise ValueError(
@@ -245,14 +260,23 @@ class MoomooConnection:
         with MoomooConnection._option_chain_rate_lock:
             if MoomooConnection._option_chain_rate_limiter is None:
                 oc_rl = RateLimiter(
-                    max_requests_per_window=10,
-                    rate_limit_window=30,
-                    burst_threshold=5,
-                    burst_window=30,
+                    max_requests_per_window=chain_rate_limit_max_requests,
+                    rate_limit_window=chain_rate_limit_window_sec,
+                    # The quota/window is the chain burst boundary; the minimum
+                    # spacing already prevents an unsafe request burst.
+                    burst_threshold=chain_rate_limit_max_requests,
+                    burst_window=chain_rate_limit_window_sec,
+                    min_request_spacing=chain_min_request_spacing_sec,
                 )
-                oc_rl._min_request_spacing = 3.0
                 MoomooConnection._option_chain_rate_limiter = oc_rl
-
+            else:
+                MoomooConnection._option_chain_rate_limiter.configure(
+                    max_requests_per_window=chain_rate_limit_max_requests,
+                    rate_limit_window=chain_rate_limit_window_sec,
+                    min_request_spacing=chain_min_request_spacing_sec,
+                    burst_threshold=chain_rate_limit_max_requests,
+                    burst_window=chain_rate_limit_window_sec,
+                )
         self._ticker_cache = TickerCache(price_ttl=120, failed_ttl=300)
 
         # Quote caches + single-flight coordination live in dedicated modules.
@@ -444,6 +468,7 @@ class MoomooConnection:
             uptime_seconds = (datetime.now() - self._connection_created_at).total_seconds()
 
         price_size, failed_size = self._ticker_cache.get_cache_stats()
+        chain_limiter = MoomooConnection._option_chain_rate_limiter
 
         return {
             "connected": self._connected,
@@ -468,6 +493,14 @@ class MoomooConnection:
                 "burst_threshold": self._rate_limiter.burst_threshold,
                 "burst_window": self._rate_limiter.burst_window,
             },
+            "option_chain_rate_limit_stats": chain_limiter.get_stats() if chain_limiter else None,
+            "option_chain_rate_limit_config": {
+                "max_requests_per_window": chain_limiter.max_requests_per_window,
+                "rate_limit_window": chain_limiter.rate_limit_window,
+                "min_request_spacing": chain_limiter.get_stats().get("min_request_spacing"),
+            }
+            if chain_limiter
+            else None,
         }
 
     def _format_symbol(self, symbol):
@@ -730,6 +763,8 @@ class MoomooConnection:
                 ret, data = self.quote_ctx.get_option_chain(**chain_kwargs)
 
                 if ret != RET_OK:
+                    if _is_rate_limit_response(data):
+                        self._option_chain_rate_limiter.record_rate_limit(_safe_str(data))
                     logger.error(f"Failed to get option chain for {symbol}: {_safe_str(data)}")
                     self._pending_requests.complete(request_key, None)
                     return None
@@ -790,6 +825,8 @@ class MoomooConnection:
             self._pending_requests.complete(request_key, result)
             return result
         except Exception as e:
+            if _is_rate_limit_response(e):
+                self._option_chain_rate_limiter.record_rate_limit(_safe_str(e))
             logger.error(f"Error retrieving option chain for {symbol}: {_safe_str(e)}")
             logger.debug(traceback.format_exc())
             self._pending_requests.complete(request_key, None)

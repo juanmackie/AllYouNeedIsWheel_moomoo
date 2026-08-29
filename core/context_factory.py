@@ -13,7 +13,7 @@ from moomoo import (
 
 from core.logging_config import get_logger
 
-logger = get_logger("autotrader.connection", "moomoo")
+logger = get_logger("ayniwheel.connection", "moomoo")
 
 
 def probe_opend_status(host="127.0.0.1", port=11111):

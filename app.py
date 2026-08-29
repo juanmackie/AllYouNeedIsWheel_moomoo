@@ -18,7 +18,7 @@ from core.logging_config import get_logger
 from db.database import OptionsDatabase
 
 # Configure logging
-logger = get_logger("autotrader.app", "api")
+logger = get_logger("ayniwheel.app", "api")
 
 # Module-level app handle. Built lazily by ensure_app() so that importing
 # this module never opens the database, starts threads, or writes to disk.

@@ -25,7 +25,7 @@ from core.context_factory import probe_opend_status
 from core.logging_config import get_logger
 
 # Configure logging
-logger = get_logger("autotrader.api", "api")
+logger = get_logger("ayniwheel.api", "api")
 
 # Service registry for lazy initialization
 # Maps service name -> factory function that creates the service
@@ -234,10 +234,12 @@ def create_app(config=None):
             logger.warning("Health check OpenD probe failed: %s", exc, exc_info=True)
             opend_status = {"status": "error"}
 
+        opend_state = opend_status.get("status", "unknown")
+        overall_status = "healthy" if database_status == "available" and opend_state == "connected" else "degraded"
         return {
-            "status": "healthy",
+            "status": overall_status,
             "database": database_status,
-            "opend": opend_status.get("status", "unknown"),
+            "opend": opend_state,
             "timestamp": datetime.now().isoformat(),
         }
 

@@ -1,5 +1,5 @@
 """
-AutoTrader Core Module
+All You Need Is Wheel core module
 """
 
 # Import tools and utilities

@@ -88,6 +88,34 @@ class TestRateLimiter(unittest.TestCase):
         self.assertEqual(len(errors), 0, f"Errors occurred: {errors}")
         self.assertEqual(stats["api_calls_count"], 50)
 
+    def test_adaptive_quota_restores_after_clean_window(self):
+        """A provider limit halves the quota until one clean window passes."""
+        clock = FakeClock()
+        with (
+            patch("core.rate_limiter.time.time", side_effect=clock.time),
+            patch("core.rate_limiter.time.sleep", side_effect=clock.sleep),
+        ):
+            limiter = RateLimiter(
+                max_requests_per_window=8,
+                rate_limit_window=30,
+                min_request_spacing=1,
+            )
+            limiter.record_rate_limit("quota exceeded")
+            adapted = limiter.get_stats()
+            self.assertEqual(adapted["max_requests_per_window"], 4)
+            self.assertTrue(adapted["adapted"])
+            self.assertEqual(adapted["rate_limit_events"], 1)
+
+            clock.sleep(30)
+            restored = limiter.get_stats()
+            self.assertTrue(restored["adapted"])
+            limiter.check_rate_limit()
+            restored = limiter.get_stats()
+
+        self.assertEqual(restored["max_requests_per_window"], 8)
+        self.assertFalse(restored["adapted"])
+        self.assertEqual(restored["min_request_spacing"], 1.0)
+
     def test_get_stats(self):
         """Test stats return correct structure."""
         limiter = RateLimiter()
@@ -97,6 +125,8 @@ class TestRateLimiter(unittest.TestCase):
         self.assertIn("current_queue_length", stats)
         self.assertIn("max_requests_per_window", stats)
         self.assertIn("rate_limit_window", stats)
+        self.assertIn("configured_max_requests_per_window", stats)
+        self.assertIn("min_request_spacing", stats)
 
 
 if __name__ == "__main__":

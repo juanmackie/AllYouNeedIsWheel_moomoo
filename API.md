@@ -8,11 +8,11 @@ order, unlock, or trading-password endpoint.
 ## Endpoints
 
 ### System
-- `GET /health` — healthy + database + opend status
+- `GET /health` — top-level `healthy`/`degraded` status plus database and OpenD dependency states
 - `GET /api/system/opend-status` — OpenD probe
 
 ### Wheel run
-- `GET /api/run` — latest refresh attempt plus immutable last-good snapshot; response recomputes effective `tradeable`, `effective_status`, and stale symbols at read time
+- `GET /api/run` — latest refresh attempt plus immutable last-good snapshot; response recomputes effective `tradeable`, `effective_status`, and stale symbols at read time. When `auto_refresh_at_open=true`, it may start one serialized data-only refresh per market day.
 - `POST /api/run/refresh` — start one background refresh (202; 409 if running); failed attempts never overwrite the last-good snapshot
 
 ### Settings

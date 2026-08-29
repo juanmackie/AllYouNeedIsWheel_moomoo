@@ -144,7 +144,7 @@ class TestUtilsLogging(unittest.TestCase):
         mock_dt.MARKET_TIMEZONE = "America/New_York"
         utils.MARKET_TIMEZONE = "America/New_York"
 
-        with self.assertLogs("autotrader.utils", level="INFO") as log:
+        with self.assertLogs("ayniwheel.utils", level="INFO") as log:
             is_market_open()
             self.assertTrue(any("Market" in msg for msg in log.output))
 
@@ -221,7 +221,7 @@ class TestApiLogging(unittest.TestCase):
         ):
             app = self._build_health_app()
 
-            with self.assertLogs("autotrader.api", level="INFO") as log:
+            with self.assertLogs("ayniwheel.api", level="INFO") as log:
                 with app.test_client() as client:
                     resp = client.get("/health", headers={"X-Request-Id": "req-123"})
 
@@ -243,7 +243,7 @@ class TestApiLogging(unittest.TestCase):
                 config={"database": database, "connection_config": {"host": "127.0.0.1", "port": 11111}}
             )
 
-            with self.assertLogs("autotrader.api", level="WARNING") as log:
+            with self.assertLogs("ayniwheel.api", level="WARNING") as log:
                 with app.test_client() as client:
                     resp = client.get("/health")
                     data = resp.get_json()
@@ -347,6 +347,9 @@ class TestServiceConnectionLogging(unittest.TestCase):
             portfolio_env="SIMULATE",
             security_firm="FUTUAU",
             broker_cache_after_hours=True,
+            chain_rate_limit_max_requests=10,
+            chain_rate_limit_window_sec=30,
+            chain_min_request_spacing_sec=3.0,
         )
 
     def test_portfolio_service_get_positions_logs_errors(self):

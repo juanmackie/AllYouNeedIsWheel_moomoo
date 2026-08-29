@@ -2,7 +2,7 @@ import json
 import logging
 import os
 
-logger = logging.getLogger("autotrader.config")
+logger = logging.getLogger("ayniwheel.config")
 
 
 def _parse_watchlist_env(raw_watchlist):
@@ -24,7 +24,11 @@ DEFAULT_CONNECTION_CONFIG = {
     "watchlist_mode": "static",  # 'static' or 'moomoo' (dynamic/hybrid screening removed 2026-08)
     "moomoo_watchlist_group": "My Watchlist",
     "broker_cache_after_hours": True,  # use cached broker data outside US market hours
-    "screening_criteria": {"min_volatility_pct": 3.0, "min_volume": 1000000, "max_stocks": 50},
+    # Conservative option-chain quota defaults; tune only after observing OpenD.
+    "chain_rate_limit_max_requests": 10,
+    "chain_rate_limit_window_sec": 30,
+    "chain_min_request_spacing_sec": 3.0,
+    "auto_refresh_at_open": False,
     "watchlist": _parse_watchlist_env(os.environ.get("WATCHLIST")),
     # Versioned wheel risk preset (conservative | balanced | aggressive).
     # The UI persists the selection in the settings table; this is only the default.
@@ -39,6 +43,10 @@ def apply_env_overrides(config):
         "portfolio_env": "MOOMOO_PORTFOLIO_ENV",
         "security_firm": "MOOMOO_SECURITY_FIRM",
         "account_id": "MOOMOO_ACCOUNT_ID",
+        "chain_rate_limit_max_requests": "MOOMOO_CHAIN_RATE_LIMIT_MAX_REQUESTS",
+        "chain_rate_limit_window_sec": "MOOMOO_CHAIN_RATE_LIMIT_WINDOW_SEC",
+        "chain_min_request_spacing_sec": "MOOMOO_CHAIN_MIN_REQUEST_SPACING_SEC",
+        "auto_refresh_at_open": "MOOMOO_AUTO_REFRESH_AT_OPEN",
     }
 
     for key, env_var in env_mapping.items():
@@ -46,11 +54,20 @@ def apply_env_overrides(config):
         if env_value is None or env_value == "":
             continue
 
-        if key == "port":
+        if key in {"port", "chain_rate_limit_max_requests", "chain_rate_limit_window_sec"}:
             try:
                 config[key] = int(env_value)
             except ValueError:
                 logger.warning(f"Ignoring invalid integer for {env_var}: {env_value}")
+            continue
+        if key == "chain_min_request_spacing_sec":
+            try:
+                config[key] = float(env_value)
+            except ValueError:
+                logger.warning(f"Ignoring invalid number for {env_var}: {env_value}")
+            continue
+        if key == "auto_refresh_at_open":
+            config[key] = env_value.strip().lower() in {"1", "true", "yes", "y", "on"}
             continue
 
         config[key] = env_value
@@ -74,7 +91,7 @@ def apply_env_overrides(config):
 
 class Config:
     """
-    Configuration class for the AutoTrader application
+    Configuration for the All You Need Is Wheel application
     """
 
     def __init__(self, default_config=None, config_file=None):

@@ -23,6 +23,17 @@ from .trade_events_repository import TradeEventsRepository
 logger = logging.getLogger("db.database")
 
 
+DEFAULT_RETENTION_DAYS = {
+    "option_chain_snapshots": ("as_of", 14),
+    "run_metadata": ("published_at", 365),
+    "refresh_attempts": ("created_at", 365),
+    "portfolio_snapshots": ("captured_at", 365),
+    "trade_events": ("timestamp", 365),
+    "scan_ledger": ("timestamp", 365),
+    "iv_history": ("timestamp", 45),
+}
+
+
 class OptionsDatabase:
     def __init__(self, db_name=None):
         self._closed = False
@@ -45,6 +56,7 @@ class OptionsDatabase:
         self._option_chains = OptionChainRepository(self.db_path)
         self._portfolio_snapshots = PortfolioSnapshotsRepository(self.db_path)
 
+        self.prune_retained_data()
         logger.info("OptionsDatabase initialized at %s", self.db_path)
         logger.debug(
             "Repositories: IV=%s Earnings=%s TradeEvents=%s OptionChains=%s",
@@ -72,6 +84,36 @@ class OptionsDatabase:
                 conn.rollback()
                 logger.warning("DB transaction rolled back", exc_info=True)
                 raise
+
+    def prune_retained_data(self, retention_days=None):
+        """Delete expired operational history while preserving current state.
+
+        Retention is deliberately explicit and bounded: option-chain payloads are
+        short-lived evidence, while run/portfolio/trade history remains available
+        for the growth cockpit for one year. Failures are raised so startup or a
+        publish path cannot silently claim cleanup occurred when it did not.
+        """
+        policies = dict(DEFAULT_RETENTION_DAYS)
+        if retention_days:
+            for table, days in retention_days.items():
+                if table in policies:
+                    column, _default_days = policies[table]
+                    policies[table] = (column, max(1, int(days)))
+
+        deleted = {}
+        with pooled_connection(self.db_path) as conn:
+            for table, (column, days) in policies.items():
+                cursor = conn.execute(
+                    f"DELETE FROM {table} WHERE datetime({column}) < datetime('now', ?)",
+                    (f"-{days} days",),
+                )
+                deleted[table] = cursor.rowcount
+            conn.commit()
+
+        removed = sum(deleted.values())
+        if removed:
+            logger.info("Pruned %d expired database rows: %s", removed, deleted)
+        return deleted
 
     # --- Settings (key/value) ---
 

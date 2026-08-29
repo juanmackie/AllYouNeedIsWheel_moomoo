@@ -177,6 +177,50 @@ class TestOptionsDatabase(unittest.TestCase):
         history = self.db.get_iv_history("AAPL")
         self.assertEqual(len(history), 0)
 
+    def test_prune_retained_data_removes_expired_operational_history(self):
+        """Retention cleanup removes old rows across operational history tables."""
+        old_history = (datetime.now() - timedelta(days=400)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            INSERT INTO option_chain_snapshots
+                (ticker, expiration, right, chain_json, as_of)
+            VALUES ('AAPL', '20270115', 'P', '{}', '2000-01-01 00:00:00');
+            INSERT INTO run_metadata
+                (run_id, generated_at, published_at, env, snapshot_json, status)
+            VALUES ('old-run', '2000-01-01 00:00:00', '2000-01-01 00:00:00',
+                    'SIMULATE', '{}', 'planning');
+            INSERT INTO refresh_attempts
+                (attempt_id, state, stage, created_at)
+            VALUES ('old-attempt', 'failed', 'scan', '2000-01-01 00:00:00');
+            INSERT INTO portfolio_snapshots
+                (run_id, captured_at, env)
+            VALUES ('old-run', '2000-01-01 00:00:00', 'SIMULATE');
+            INSERT INTO trade_events
+                (timestamp, event_type, ticker, option_type, strike, expiration)
+            VALUES ('2000-01-01 00:00:00', 'entry', 'AAPL', 'PUT', 100, '20270115');
+            INSERT INTO scan_ledger
+                (scan_type, timestamp, config_hash, portfolio_hash)
+            VALUES ('recommendations', '2000-01-01 00:00:00', 'config', 'portfolio');
+            """
+        )
+        conn.execute(
+            "INSERT INTO iv_history (ticker, timestamp, implied_volatility) VALUES (?, ?, ?)",
+            ("AAPL", old_history, 0.3),
+        )
+        conn.commit()
+        conn.close()
+
+        deleted = self.db.prune_retained_data()
+
+        self.assertEqual(deleted["option_chain_snapshots"], 1)
+        self.assertEqual(deleted["run_metadata"], 1)
+        self.assertEqual(deleted["refresh_attempts"], 1)
+        self.assertEqual(deleted["portfolio_snapshots"], 1)
+        self.assertEqual(deleted["trade_events"], 1)
+        self.assertEqual(deleted["scan_ledger"], 1)
+        self.assertEqual(deleted["iv_history"], 1)
+
     def test_save_and_get_earnings_date(self):
         """Test saving and retrieving earnings dates"""
         self.db.save_earnings_date(ticker="AAPL", earnings_date="2024-04-25", fetch_status="success")

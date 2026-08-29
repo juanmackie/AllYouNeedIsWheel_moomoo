@@ -123,7 +123,11 @@ copy .env.example .env
 The launcher health-checks `http://127.0.0.1:8000/health` and opens the
 dashboard. For a REAL account view you must set `portfolio_env=REAL` and an
 explicit `account_id` in `connection.json`; missing or ambiguous accounts
-hard-fail with a clear message.
+hard-fail with a clear message. Dashboard assets are served locally, so the
+screen does not depend on a font/icon/Bootstrap CDN. Option-chain quota
+defaults are conservative; tune them only after observing connection
+diagnostics. `auto_refresh_at_open` optionally starts one data-only refresh per
+market day and is disabled by default.
 
 ## Configuration
 
@@ -136,6 +140,10 @@ hard-fail with a clear message.
 | `CONNECTION_CONFIG` | `connection.json` | Config file |
 | `WATCHLIST` | — | Legacy static tickers (merged as the `config` source) |
 | `MOOMOO_WATCHLIST_GROUP` | `My Watchlist` | Named Moomoo group (merged as the `moomoo` source) |
+| `MOOMOO_CHAIN_RATE_LIMIT_MAX_REQUESTS` | `10` | Conservative option-chain requests per window |
+| `MOOMOO_CHAIN_RATE_LIMIT_WINDOW_SEC` | `30` | Option-chain quota window in seconds |
+| `MOOMOO_CHAIN_MIN_REQUEST_SPACING_SEC` | `3.0` | Minimum spacing between chain calls |
+| `MOOMOO_AUTO_REFRESH_AT_OPEN` | `false` | Optional one-shot data refresh per market day |
 | `wheel_preset` (in config/DB) | `balanced` | Selected risk preset; persisted via `/api/settings/preset` |
 
 ## Tests and quality gates

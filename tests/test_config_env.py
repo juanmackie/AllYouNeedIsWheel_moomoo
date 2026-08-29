@@ -36,6 +36,23 @@ class TestWatchlistEnvOverride(unittest.TestCase):
 
         self.assertEqual(result["watchlist"], ["AAPL"])
 
+    def test_chain_limit_env_overrides_are_typed(self):
+        config = {}
+        env = {
+            "MOOMOO_CHAIN_RATE_LIMIT_MAX_REQUESTS": "30",
+            "MOOMOO_CHAIN_RATE_LIMIT_WINDOW_SEC": "60",
+            "MOOMOO_CHAIN_MIN_REQUEST_SPACING_SEC": "1.5",
+            "MOOMOO_AUTO_REFRESH_AT_OPEN": "true",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            result = apply_env_overrides(config)
+
+        self.assertEqual(result["chain_rate_limit_max_requests"], 30)
+        self.assertEqual(result["chain_rate_limit_window_sec"], 60)
+        self.assertEqual(result["chain_min_request_spacing_sec"], 1.5)
+        self.assertTrue(result["auto_refresh_at_open"])
+
 
 if __name__ == "__main__":
     unittest.main()

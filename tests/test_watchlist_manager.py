@@ -52,6 +52,22 @@ class TestPreflightScanFeasibility(unittest.TestCase):
         self.assertFalse(result["feasible"])
         self.assertEqual(result["estimated_scan_sec"], 360.0)
 
+    def test_configured_chain_quota_drives_estimate_and_capacity(self):
+        self.mock_context.config = {
+            "chain_rate_limit_max_requests": 30,
+            "chain_rate_limit_window_sec": 30,
+            "chain_min_request_spacing_sec": 1.0,
+        }
+
+        result = self.manager.preflight_scan_feasibility(27)
+
+        self.assertTrue(result["feasible"], result)
+        self.assertEqual(result["estimated_scan_sec"], 54.0)
+        self.assertEqual(result["chain_calls"], 54)
+        self.assertTrue(result["chain_quota_ok"])
+        self.assertEqual(result["chain_rate_limit_max_requests"], 30)
+        self.assertEqual(result["chain_min_request_spacing_sec"], 1.0)
+
 
 class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
     """Test get_effective_watchlist behavior."""

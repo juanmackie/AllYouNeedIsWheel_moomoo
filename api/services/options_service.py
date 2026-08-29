@@ -90,6 +90,9 @@ class OptionsService:
                 portfolio_env=self.config.get("portfolio_env"),
                 security_firm=self.config.get("security_firm"),
                 broker_cache_after_hours=self.config.get("broker_cache_after_hours", True),
+                chain_rate_limit_max_requests=self.config.get("chain_rate_limit_max_requests", 10),
+                chain_rate_limit_window_sec=self.config.get("chain_rate_limit_window_sec", 30),
+                chain_min_request_spacing_sec=self.config.get("chain_min_request_spacing_sec", 3.0),
             )
 
             if not self.connection.connect():

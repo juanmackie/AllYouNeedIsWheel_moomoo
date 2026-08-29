@@ -114,6 +114,9 @@ class TestOptionsServiceConnectionConfig(unittest.TestCase):
                 portfolio_env="REAL",
                 security_firm="FUTUAU",
                 broker_cache_after_hours=True,
+                chain_rate_limit_max_requests=10,
+                chain_rate_limit_window_sec=30,
+                chain_min_request_spacing_sec=3.0,
             )
 
 

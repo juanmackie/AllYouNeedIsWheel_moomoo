@@ -184,7 +184,7 @@ class WheelDecision:
     warnings: list[str] = field(default_factory=list)
     rationale: list[str] = field(default_factory=list)
 
-    # -- Data provenance (TODO 2.1) --------------------------------------
+    # -- Data provenance -----------------------------------------------
     price_source: str = ""  # Moomoo, portfolio fallback, yfinance
     chain_source: str = ""  # Moomoo, yfinance
     greeks_source: str = ""  # broker, Black-Scholes computed, missing
@@ -203,7 +203,7 @@ class WheelDecision:
     # -- Capital efficiency -------------------------------------------------
     capital_efficiency: float = 0.0
 
-    # -- Return breakdown (TODO 1.2) ------------------------------------
+    # -- Return breakdown ----------------------------------------------
     return_on_underlying: Optional[float] = None  # CALL: premium / (stock_price * 100)
     return_on_secured_cash: Optional[float] = None  # PUT: premium / (strike * 100)
 
@@ -471,7 +471,7 @@ def score_contract(
             ticker, option_type, strike, expiration, "Open interest and volume too low", ["low_liquidity"]
         )
 
-    # -- Enrich Greeks if missing (TODO 0.3) -----------------------
+    # -- Enrich Greeks if missing --------------------------------------
     if implied_volatility > 0 and abs(delta) < 0.001:
         from core.greeks import enrich_option_with_greeks
 
@@ -512,7 +512,7 @@ def score_contract(
     account_value = portfolio_context.get("account_value", cash_balance)
     vix_regime = portfolio_context.get("vix_regime")
 
-    # -- Check for yfinance fallback data (TODO 2.2) -----------------------
+    # -- Check for external fallback data ------------------------------
     price_source = _normalize_source_value(option.get("price_source"), "")
     chain_source = _normalize_source_value(option.get("chain_source"), "")
     iv_source = _normalize_source_value(option.get("iv_source"), "")
@@ -566,7 +566,7 @@ def score_contract(
         vix_regime=vix_regime.get("regime", "normal") if vix_regime else "normal",
         vix_level=vix_regime.get("vix", 20.0) if vix_regime else 20.0,
         profile_type=profile.get("profile_type", "monthly"),
-        # Data provenance (TODO 2.1)
+        # Data provenance
         price_source=price_source,
         chain_source=chain_source,
         greeks_source=(option.get("greeks_source") or ("broker" if abs(delta) > 0.001 else "Black-Scholes computed")),
@@ -575,7 +575,7 @@ def score_contract(
         generated_at=datetime.now().isoformat(),
     )
 
-    # Add yfinance warning if applicable (TODO 2.2)
+    # Add external-source warning if applicable
     if from_yfinance:
         decision.warnings.append("Data from yfinance (not Moomoo) - verify before trading")
 

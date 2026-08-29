@@ -18,7 +18,7 @@ from core.logging_config import get_logger
 load_dotenv()
 
 # Configure logging
-logger = get_logger("autotrader.server", "server")
+logger = get_logger("ayniwheel.server", "server")
 
 
 def ensure_local_connection_config():

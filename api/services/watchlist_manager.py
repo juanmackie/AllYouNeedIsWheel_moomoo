@@ -45,6 +45,9 @@ class WatchlistManager:
                     portfolio_env=cfg.get("portfolio_env"),
                     security_firm=cfg.get("security_firm"),
                     broker_cache_after_hours=cfg.get("broker_cache_after_hours", True),
+                    chain_rate_limit_max_requests=cfg.get("chain_rate_limit_max_requests", 10),
+                    chain_rate_limit_window_sec=cfg.get("chain_rate_limit_window_sec", 30),
+                    chain_min_request_spacing_sec=cfg.get("chain_min_request_spacing_sec", 3.0),
                 )
             except Exception as e:
                 logger.warning(f"Moomoo watchlist connection init failed: {e}")
@@ -148,14 +151,19 @@ class WatchlistManager:
         calls spaced >= 3s by the chain rate limiter. Total chain time is
         approximately 6s per symbol.
         """
-        freshness_window = int(self.config.get("max_tradeable_quote_age_sec", 300) or 300)
-        chain_spacing_sec = 3.0
+        freshness_window = max(1, int(self.config.get("max_tradeable_quote_age_sec", 300) or 300))
+        max_requests = max(1, int(self.config.get("chain_rate_limit_max_requests", 10) or 10))
+        rate_window = max(1.0, float(self.config.get("chain_rate_limit_window_sec", 30) or 30))
+        chain_spacing_sec = max(0.0, float(self.config.get("chain_min_request_spacing_sec", 3.0) or 0))
         per_symbol_chain_sec = 2 * chain_spacing_sec
         estimated_scan_sec = watchlist_size * per_symbol_chain_sec
-        # Chain calls also share the 30s/10-call quota
         chain_calls = watchlist_size * 2
-        chain_quota_ok = chain_calls <= 10 * (max(1, freshness_window // 30))
+        quota_windows = max(1, int(freshness_window // rate_window))
+        chain_quota_ok = chain_calls <= max_requests * quota_windows
         feasible = watchlist_size > 0 and estimated_scan_sec <= freshness_window and chain_quota_ok
+        recommended_max_size = (
+            max(1, int(freshness_window // per_symbol_chain_sec)) if per_symbol_chain_sec else watchlist_size
+        )
         return {
             "feasible": feasible,
             "watchlist_size": watchlist_size,
@@ -163,7 +171,10 @@ class WatchlistManager:
             "freshness_window_sec": freshness_window,
             "chain_calls": chain_calls,
             "chain_quota_ok": chain_quota_ok,
-            "recommended_max_size": max(1, int(freshness_window // per_symbol_chain_sec)),
+            "chain_rate_limit_max_requests": max_requests,
+            "chain_rate_limit_window_sec": rate_window,
+            "chain_min_request_spacing_sec": chain_spacing_sec,
+            "recommended_max_size": recommended_max_size,
         }
 
     def get_effective_watchlist(self, growth_mode_config=None, portfolio_context=None):

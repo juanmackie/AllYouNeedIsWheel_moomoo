@@ -1,5 +1,5 @@
 """
-Utility functions for the autotrader package
+Shared utility functions for the All You Need Is Wheel application
 """
 
 import logging
@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # Configure logger
-logger = logging.getLogger("autotrader.utils")
+logger = logging.getLogger("ayniwheel.utils")
 
 
 def get_closest_friday():

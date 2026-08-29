@@ -65,6 +65,41 @@ jobs:
           npm ci
           npm test --silent
 
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+
+      - name: Start local app for browser smoke
+        run: |
+          $env:CONNECTION_CONFIG = "connection.json.example"
+          $process = Start-Process -FilePath "uv.exe" `
+            -ArgumentList @("run", "python", "app.py") `
+            -WorkingDirectory $PWD `
+            -RedirectStandardOutput "e2e-ci-server.log" `
+            -RedirectStandardError "e2e-ci-server-error.log" `
+            -PassThru
+          "E2E_PID=$($process.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -UseBasicParsing -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $ready = $true; break }
+            } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ready) {
+            Get-Content e2e-ci-server-error.log -ErrorAction SilentlyContinue
+            throw "Local app did not become ready for E2E smoke"
+          }
+
+      - name: Browser E2E smoke
+        run: npm run test:e2e
+
+      - name: Stop local app
+        if: always()
+        run: |
+          if ($env:E2E_PID) {
+            taskkill /PID $env:E2E_PID /T /F 2>$null
+          }
+
       - name: Hygiene scan — no order-capable runtime surface
         run: |
           $hits = Get-ChildItem -Recurse -File -Include *.py |

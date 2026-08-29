@@ -12,7 +12,7 @@ from moomoo import (
 
 from core.logging_config import get_logger
 
-logger = get_logger("autotrader.connection", "moomoo")
+logger = get_logger("ayniwheel.connection", "moomoo")
 
 
 def _safe_close_context(context):
