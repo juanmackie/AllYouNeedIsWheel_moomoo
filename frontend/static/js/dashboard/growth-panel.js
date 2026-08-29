@@ -1,5 +1,5 @@
 /**
- * Growth panel — equity curve + path-to-10x pace + trade journal stats.
+ * Growth panel — equity curve + path-to-5x pace + trade journal stats.
  *
  * Data sources (both read-only):
  * - /api/portfolio/history          → persisted per-run portfolio snapshots
@@ -98,8 +98,8 @@ function renderPace(payload, series) {
     const targetEl = document.getElementById('growth-target-nav');
     if (!badge && !navEl && !targetEl) return; // panel not present in this DOM
     // Server-declared target multiple (active preset); falls back to the
-    // project-wide 10x goal.
-    const targetMultiple = Number(payload?.target_multiple) || 10;
+    // project-wide 5x goal.
+    const targetMultiple = Number(payload?.target_multiple) || 5;
     const latest = series && series.length ? series[series.length - 1] : null;
 
     if (!latest) {
@@ -129,7 +129,7 @@ function renderPace(payload, series) {
     const progressEl = document.getElementById('growth-progress');
     const barEl = document.getElementById('growth-progress-bar');
     if (progressEl) {
-        progressEl.textContent = `${Math.max(0, Math.min(progressPct, 100)).toFixed(1)}% of the way to 10x`;
+        progressEl.textContent = `${Math.max(0, Math.min(progressPct, 100)).toFixed(1)}% of the way to ${targetMultiple}x`;
     }
     if (barEl) {
         barEl.style.width = `${Math.max(0, Math.min(progressPct, 100)).toFixed(1)}%`;

@@ -1,6 +1,6 @@
 # All You Need Is Wheel (Moomoo Edition)
 
-A focused premium-velocity scanner for the Wheel Strategy, powered by
+A focused capital-return scanner for the Wheel Strategy, powered by
 [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html)
 via local OpenD. One screen, one broker truth boundary, one ranked wheel
 decision flow.
@@ -14,13 +14,13 @@ manual copy-to-ticket suggestions for your broker UI.
 1. Start OpenD and log in, then launch the app.
 2. Open the dashboard: operational strip (env, read-only, market state, run
    status, coverage, quote freshness) → portfolio summary → growth panel
-   (path to 10x: equity curve, pace, ETA) → watchlist union → top-three CSP
+   (path to 5x: equity curve, pace, ETA) → watchlist union → top-three CSP
    picks with contract sizing and entry-timing advice → position monitor
    (open short options with exit-playbook verdicts) → covered-call/roll
    actions → diagnostics.
 3. Choose a risk preset (Conservative / Balanced / Aggressive; **Balanced by
    default**; effective values are read-only). Each preset carries a growth
-   objective (`target_account_multiple`; Balanced targets **10x**) that drives
+   objective (`target_account_multiple`; all presets target **5x**) that drives
    pace math.
 4. Refresh a run. A completed `WheelRunSnapshot` is persisted and atomically
    published — alongside one portfolio snapshot per run for equity history,
@@ -42,8 +42,9 @@ manual copy-to-ticket suggestions for your broker UI.
 - Each hard-gate-passing candidate is classified as `qualified` or `marginal`,
   then receives an event tier (`event_safe`, `event_not_applicable`,
   `earnings_before_expiry`, or `event_unknown`). Ordering is quality tier,
-  event tier, executable bid premium velocity (`bid × 100 ÷ DTE`), then stable
-  ticker/expiry/strike keys. Composite score cannot override that order.
+  event tier, executable annualized return on deployed capital, then executable
+  bid premium velocity as a tie-break, then stable ticker/expiry/strike keys.
+  Composite score cannot override that order.
 - Moomoo `update_time` is preserved verbatim and interpreted in
   `America/New_York`; UTC fetch time is carried separately. Missing/invalid/
   stale broker time blocks actionable candidates while the market is open.

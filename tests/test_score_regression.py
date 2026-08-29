@@ -179,8 +179,9 @@ class TestScoreRegression(unittest.TestCase):
         self.assertIn("missing_iv", result.blocked_reason_codes)
 
     def test_put_sizing_can_exceed_one_contract_under_risk_cap(self):
-        """PUT max_contracts should reflect available buying power before 10% sizing cap."""
+        """PUT sizing may recommend multiple contracts under the configured cap."""
         profile = _get_base_profile()
+        profile["max_buying_power_pct_per_csp"] = 10.0
         portfolio = _get_csp_portfolio(cash=100000)
         portfolio["broker_buying_power"] = 100000.0
         portfolio["account_value"] = 100000.0

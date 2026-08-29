@@ -1,6 +1,6 @@
 """
 Growth-aware metrics — stress loss, risk budget, confidence, intent labels,
-and 10x-goal pace math.
+and 5x-goal pace math.
 
 Always-on helpers used by wheel_decision.py to compute growth-oriented
 risk metrics regardless of mode.  No longer a toggleable "mode" — these
@@ -17,7 +17,7 @@ from datetime import datetime
 # ---------------------------------------------------------------------------
 
 
-def growth_pace(history: list[dict], target_multiple: float = 10.0) -> dict:
+def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
     """Compute path-to-target pace from persisted portfolio snapshots.
 
     No fixed deadline: the verdict is derived from realized pace, not a

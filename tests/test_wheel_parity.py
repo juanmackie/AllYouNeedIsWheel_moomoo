@@ -257,7 +257,7 @@ class TestPresetParity(unittest.TestCase):
     def test_balanced_default_and_versions(self):
         preset = get_preset(None)
         self.assertEqual(preset.key, "balanced")
-        self.assertEqual(preset.version, 3)
+        self.assertEqual(preset.version, 4)
         self.assertTrue(preset.to_screener_profile()["require_cash_fit"])
 
 

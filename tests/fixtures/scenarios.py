@@ -412,4 +412,5 @@ def _base_profile(profile_type="monthly"):
         "profile_type": profile_type,
         "min_dte": 7,
         "max_dte": 45,
+        "max_buying_power_pct_per_csp": 100,
     }

@@ -10,7 +10,7 @@ Pure helpers extracted from RecommendationEngine (F-S1).
 
 from __future__ import annotations
 
-from core.scoring_factors import premium_velocity_per_day
+from core.scoring_factors import capital_velocity_per_day, premium_velocity_per_day
 
 QUALITY_ORDER = {"qualified": 0, "marginal": 1}
 EVENT_ORDER = {
@@ -38,9 +38,38 @@ def rank_velocity(candidate: dict) -> float:
             pass
     bid_premium = candidate_field(candidate, "bid_premium_per_contract")
     if bid_premium is None:
-        bid = candidate.get("bid", 0) or 0
+        bid = candidate_field(candidate, "bid", 0) or 0
         bid_premium = float(bid) * 100
-    return premium_velocity_per_day(bid_premium, candidate.get("dte", 0))
+    return premium_velocity_per_day(bid_premium, candidate_field(candidate, "dte", 0))
+
+
+def rank_capital_velocity(candidate: dict) -> float:
+    """Return executable premium per secured dollar per day for ranking."""
+    explicit = candidate_field(candidate, "capital_velocity_per_day")
+    if explicit is not None:
+        try:
+            return float(explicit or 0)
+        except (TypeError, ValueError):
+            pass
+
+    annualized = candidate_field(candidate, "annualized_return")
+    if annualized is not None:
+        try:
+            # annualized_return is stored as a percentage, while this helper
+            # returns a decimal daily rate.
+            return float(annualized or 0) / (365 * 100)
+        except (TypeError, ValueError):
+            pass
+
+    bid_premium = candidate_field(candidate, "bid_premium_per_contract")
+    if bid_premium is None:
+        bid = candidate_field(candidate, "bid", 0) or 0
+        bid_premium = float(bid) * 100
+    option_type = str(candidate_field(candidate, "option_type", "")).upper()
+    capital_base = candidate_field(candidate, "strike", 0) * 100
+    if option_type == "CALL":
+        capital_base = candidate_field(candidate, "stock_price", 0) * 100
+    return capital_velocity_per_day(bid_premium, capital_base, candidate_field(candidate, "dte", 0))
 
 
 def rank_key(candidate: dict):
@@ -57,6 +86,7 @@ def rank_key(candidate: dict):
     return (
         QUALITY_ORDER.get(quality, 1),
         EVENT_ORDER.get(event, EVENT_ORDER["event_unknown"]),
+        -rank_capital_velocity(candidate),
         -rank_velocity(candidate),
         str(candidate.get("ticker", "")).upper(),
         str(candidate.get("expiration", "")),
@@ -123,6 +153,7 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "bid_premium_per_contract": option.get("bid_premium_per_contract", wd.get("bid_premium_per_contract")),
         "limit_target_per_contract": option.get("limit_target_per_contract", wd.get("limit_target_per_contract")),
         "premium_velocity_per_day": option.get("premium_velocity_per_day", wd.get("premium_velocity_per_day")),
+        "capital_velocity_per_day": option.get("capital_velocity_per_day", wd.get("capital_velocity_per_day")),
         "score": option.get("score"),
         "annualized_return": option.get("annualized_return"),
         "iv_adjusted_return": option.get("iv_adjusted_return"),

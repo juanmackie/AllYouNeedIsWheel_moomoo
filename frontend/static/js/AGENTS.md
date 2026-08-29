@@ -15,7 +15,7 @@
 
 - Treat API responses as the source for portfolio/options data; localStorage is only a UI preference/input cache.
 - Keep calculations that affect displayed signal decisions aligned with backend services and tests.
-- Prefer service-vetted executable-bid fields (`bid_premium_per_contract`, `premium_velocity_per_day`) for signal display. Midpoint is a separately labelled, non-guaranteed limit target; do not recompute backend ranking in the browser.
+- Prefer service-vetted executable-bid fields (`annualized_return`, `capital_velocity_per_day`, `bid_premium_per_contract`, `premium_velocity_per_day`) for signal display. Midpoint is a separately labelled, non-guaranteed limit target; do not recompute backend ranking in the browser.
 - Preserve loading, empty, error, and stale states for networked widgets.
 - Empty states for signal panels should surface the dominant blockers or scan diagnostics when the payload provides them.
 - Do not add hidden trading execution calls from UI controls.

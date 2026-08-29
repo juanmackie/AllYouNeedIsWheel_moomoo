@@ -37,7 +37,7 @@ class TestPreflightScanFeasibility(unittest.TestCase):
         result = self.manager.preflight_scan_feasibility(27)
         self.assertTrue(result["feasible"], result)
         self.assertEqual(result["freshness_window_sec"], 300)
-        self.assertEqual(result["estimated_scan_sec"], 162.0)
+        self.assertEqual(result["estimated_scan_sec"], 243.0)
         self.assertTrue(result["chain_quota_ok"])
 
     def test_explicit_config_override_is_respected(self):
@@ -50,7 +50,7 @@ class TestPreflightScanFeasibility(unittest.TestCase):
         """Complete-union-or-planning still gates genuinely oversized lists."""
         result = self.manager.preflight_scan_feasibility(60)
         self.assertFalse(result["feasible"])
-        self.assertEqual(result["estimated_scan_sec"], 360.0)
+        self.assertEqual(result["estimated_scan_sec"], 540.0)
 
     def test_configured_chain_quota_drives_estimate_and_capacity(self):
         self.mock_context.config = {
@@ -62,8 +62,8 @@ class TestPreflightScanFeasibility(unittest.TestCase):
         result = self.manager.preflight_scan_feasibility(27)
 
         self.assertTrue(result["feasible"], result)
-        self.assertEqual(result["estimated_scan_sec"], 54.0)
-        self.assertEqual(result["chain_calls"], 54)
+        self.assertEqual(result["estimated_scan_sec"], 81.0)
+        self.assertEqual(result["chain_calls"], 81)
         self.assertTrue(result["chain_quota_ok"])
         self.assertEqual(result["chain_rate_limit_max_requests"], 30)
         self.assertEqual(result["chain_min_request_spacing_sec"], 1.0)
@@ -310,9 +310,9 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
         sp = {
             "csp_target_delta": 0.30,
             "csp_delta_tolerance": 0.12,
-            "csp_min_dte": 30,
+            "csp_min_dte": 14,
             "csp_max_dte": 45,
-            "csp_preferred_dte": 37,
+            "csp_preferred_dte": 21,
             "csp_default_otm_pct": 10,
             "csp_min_otm_pct": 5,
             "csp_max_otm_pct": 15,
@@ -337,11 +337,19 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
         """Selected preset drives the CSP DTE window."""
         preset = self._flat_preset()
         profile = self.manager.get_screening_profile("PUT", growth_mode_config=preset)
-        self.assertEqual(profile["preferred_dte"], 37)
-        self.assertEqual(profile["min_dte"], 30)
+        self.assertEqual(profile["preferred_dte"], 21)
+        self.assertEqual(profile["min_dte"], 14)
         self.assertEqual(profile["max_dte"], 45)
         self.assertEqual(profile.get("min_otm_pct"), 5)
         self.assertEqual(profile.get("max_otm_pct"), 15)
+
+    def test_preset_profile_call_uses_preset_dte(self):
+        """Covered calls inherit the active preset DTE window."""
+        preset = self._flat_preset()
+        profile = self.manager.get_screening_profile("CALL", growth_mode_config=preset)
+        self.assertEqual(profile["preferred_dte"], 21)
+        self.assertEqual(profile["min_dte"], 14)
+        self.assertEqual(profile["max_dte"], 45)
 
     def test_preset_profile_put_default_otm(self):
         """Selected preset drives the CSP default OTM."""

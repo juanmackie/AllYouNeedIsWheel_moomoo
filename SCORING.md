@@ -2,7 +2,8 @@
 
 The dashboard is a watchlist-only, signals-only shortlist. Moomoo/OpenD is the
 only source that can create an actionable candidate. External earnings data can
-classify risk or demote a Moomoo candidate; it cannot create one.
+classify risk or demote a Moomoo candidate; it cannot create one. Signals rank
+by executable return on deployed capital so the shortlist reflects the 5x goal.
 
 ## Qualification before ranking
 
@@ -45,14 +46,23 @@ limit_target_per_contract = ((bid + ask) / 2) * 100
 ```
 
 It is labelled **limit target — not guaranteed** and is never used to outrank a
-candidate. CSP cycle yield uses bid credit divided by `strike * 100`; covered
-call cycle yield uses bid credit divided by `stock_price * 100`. Annualized
-return is cycle yield times `365 / DTE`.
+candidate. Capital-normalized executable return is:
 
-The existing composite, delta-based POP, expected-value proxy, IV adjustment,
-and Greeks diagnostics remain secondary explanations/gates. They are heuristics,
-not calibrated probabilities, expectancy, or profitability evidence, and they
-cannot break a premium-velocity tie.
+```text
+capital_velocity_per_day = bid_premium_per_contract / (capital_base * DTE)
+annualized_return = capital_velocity_per_day * 365 * 100
+```
+
+For CSPs, `capital_base = strike * 100` (secured cash). For covered calls,
+`capital_base = stock_price * 100` (covered underlying value). The legacy
+per-contract `premium_velocity_per_day = bid_premium_per_contract / DTE`
+remains visible and breaks capital-velocity ties.
+
+The compact composite uses four secondary explainers: capital efficiency,
+liquidity/quality, delta fit, and event safety. Delta-based POP, expected-value
+proxy, IV adjustment, and Greeks diagnostics remain heuristics, not calibrated
+probabilities, expectancy, or profitability evidence. None can outrank a
+capital-velocity result.
 
 ## Deterministic ordering
 
@@ -61,7 +71,8 @@ The backend sorts candidates by:
 ```text
 quality tier
 → event tier
-→ descending executable-bid premium velocity
+→ descending executable return on deployed capital
+→ descending executable-bid premium velocity (tie-break)
 → canonical ticker
 → expiration
 → strike
@@ -114,7 +125,7 @@ before entry is already enforced by event tiers.
 One portfolio snapshot is persisted per completed run (NAV, cash, reserved
 collateral, full position book). `GET /api/portfolio/history` serves the
 series plus a `pace` payload from `core.growth_mode.growth_pace`: progress
-toward the active preset's `target_account_multiple`, annualized pace from
+toward the active preset's 5x `target_account_multiple`, annualized pace from
 realized NAV change, ETA to target, required premium/day, and an on-track
 verdict derived from realized pace — never a promised date.
 

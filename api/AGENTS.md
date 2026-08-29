@@ -13,7 +13,7 @@
 - `api/services/` owns broker-facing, market-data, portfolio, recommendation, earnings/IV enrichment, and roll-diagnostics orchestration.
 - `api/routes/portfolio.py::get_portfolio_history` serves persisted per-run portfolio snapshots plus growth-pace math from `core.growth_mode.growth_pace` (target multiple from the active preset); it reads local SQLite only and does not gate on live OpenD.
 - `api/routes/roll_pressure.py` enriches each open position with the exit-playbook verdict (`exit_verdict`, `exit_reasons`) and Moomoo entry credit (`avg_cost`) for P&L display.
-- `api/services/recommendations.py` attaches `entry_context` (intraday entry-window advice) and applies the portfolio-aware concentration guard (`existing_exposure_contracts`).
+- `api/services/recommendations.py` attaches `entry_context` (intraday entry-window advice), applies the portfolio-aware concentration guard (`existing_exposure_contracts`), ranks capital-normalized returns with per-contract velocity as tie-break, and exposes the remaining-cash deployment plan.
 
 ## Local Contracts
 

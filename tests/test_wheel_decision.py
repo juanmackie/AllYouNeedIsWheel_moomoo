@@ -1374,6 +1374,7 @@ class TestQuoteFreshness(unittest.TestCase):
             "ideal_spread_pct": 12,
             "liquidity_weight_multiplier": 1.0,
             "profile_type": "monthly",
+            "max_buying_power_pct_per_csp": 100.0,
         }
         self.portfolio = {
             "positions": {},

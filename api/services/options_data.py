@@ -151,7 +151,7 @@ class OptionsDataService:
             iv_status_str=iv_status,
             earnings_adjustment=earnings_adjustment,
             earnings_info=earnings_info,
-            growth_profile=None,
+            growth_profile=profile,
         )
 
         if decision is None:
@@ -216,6 +216,7 @@ class OptionsDataService:
             "bid_premium_per_contract": round(decision.bid_premium_per_contract, 2),
             "limit_target_per_contract": round(decision.limit_target_per_contract, 2),
             "premium_velocity_per_day": round(decision.premium_velocity_per_day, 4),
+            "capital_velocity_per_day": round(decision.capital_velocity_per_day, 8),
             "spread_pct": round(decision.spread_pct, 2),
             "score": round(decision.contract_score, 2),
             "score_details": decision.score_details,
@@ -384,7 +385,14 @@ class OptionsDataService:
         return {"data": result}
 
     def _process_ticker_for_otm(
-        self, conn, ticker, otm_percentage, portfolio_context, expiration=None, option_type=None
+        self,
+        conn,
+        ticker,
+        otm_percentage,
+        portfolio_context,
+        expiration=None,
+        option_type=None,
+        screening_profile=None,
     ):
         result = {
             "symbol": ticker,
@@ -414,10 +422,14 @@ class OptionsDataService:
             options_chains = []
 
             for side in sides:
-                profile = self._screening_profile_provider.get_screening_profile(
-                    side,
-                    vix_regime=portfolio_context.get("vix_regime"),
-                    growth_mode_config=self._get_config().get("growth_mode", {}),
+                profile = (
+                    dict(screening_profile)
+                    if screening_profile is not None and side == option_type
+                    else self._screening_profile_provider.get_screening_profile(
+                        side,
+                        vix_regime=portfolio_context.get("vix_regime"),
+                        growth_mode_config=self._get_config().get("growth_mode", {}),
+                    )
                 )
                 logger.debug(
                     f"Processing {ticker} {side} with profile: min_dte={profile.get('min_dte')}, max_dte={profile.get('max_dte')}, preferred_dte={profile.get('preferred_dte')}"

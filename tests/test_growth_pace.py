@@ -20,7 +20,7 @@ class TestGrowthPace(unittest.TestCase):
     def test_single_snapshot_no_pace(self):
         pace = growth_pace([_snap(10_000.0, "2026-08-20T15:00:00+00:00")])
         self.assertEqual(pace["current_nav"], 10_000.0)
-        self.assertEqual(pace["target_nav"], 100_000.0)
+        self.assertEqual(pace["target_nav"], 50_000.0)
         self.assertIsNone(pace["annualized_pace"])
         self.assertIsNone(pace["eta_days"])
 

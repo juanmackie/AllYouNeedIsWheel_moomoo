@@ -216,7 +216,7 @@ class TestRecommendationEngine(unittest.TestCase):
             result = engine.get_top_recommendations(limit=5)
 
         self.assertGreater(len(result["signals"]), 1)
-        self.assertEqual(result["signals"][0]["ticker"], "AAA")
+        self.assertEqual(result["signals"][0]["ticker"], "BBB")
         ranked = {signal["ticker"]: signal for signal in result["signals"]}
         self.assertLess(ranked["AAA"]["annualized_return"], ranked["BBB"]["annualized_return"])
         self.assertGreater(

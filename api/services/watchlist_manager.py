@@ -147,17 +147,17 @@ class WatchlistManager:
     def preflight_scan_feasibility(self, watchlist_size: int) -> dict:
         """Estimate whether a full watchlist scan fits the quota + freshness budget.
 
-        Model: per symbol ~1 price + 1 expiration call (cheap) and 2 option-chain
+        Model: per symbol ~1 price + 1 expiration call (cheap) and 3 option-chain
         calls spaced >= 3s by the chain rate limiter. Total chain time is
-        approximately 6s per symbol.
+        approximately 9s per symbol.
         """
         freshness_window = max(1, int(self.config.get("max_tradeable_quote_age_sec", 300) or 300))
         max_requests = max(1, int(self.config.get("chain_rate_limit_max_requests", 10) or 10))
         rate_window = max(1.0, float(self.config.get("chain_rate_limit_window_sec", 30) or 30))
         chain_spacing_sec = max(0.0, float(self.config.get("chain_min_request_spacing_sec", 3.0) or 0))
-        per_symbol_chain_sec = 2 * chain_spacing_sec
+        per_symbol_chain_sec = 3 * chain_spacing_sec
         estimated_scan_sec = watchlist_size * per_symbol_chain_sec
-        chain_calls = watchlist_size * 2
+        chain_calls = watchlist_size * 3
         quota_windows = max(1, int(freshness_window // rate_window))
         chain_quota_ok = chain_calls <= max_requests * quota_windows
         feasible = watchlist_size > 0 and estimated_scan_sec <= freshness_window and chain_quota_ok
@@ -355,6 +355,8 @@ class WatchlistManager:
                 "max_spread_pct": sp.get("max_spread_pct"),
                 "min_open_interest": sp.get("min_open_interest"),
                 "min_volume": sp.get("min_volume"),
+                "max_buying_power_pct_per_csp": sp.get("max_buying_power_pct_per_csp"),
+                "target_account_multiple": sp.get("target_account_multiple"),
             }
             for key, value in generic.items():
                 if value is not None:
@@ -376,6 +378,11 @@ class WatchlistManager:
             if option_type == "CALL":
                 call_overrides = {
                     "default_otm_pct": sp.get("call_default_otm_pct"),
+                    # Covered calls use the same active preset DTE risk
+                    # window as CSPs; only the OTM target differs by side.
+                    "min_dte": sp.get("csp_min_dte"),
+                    "max_dte": sp.get("csp_max_dte"),
+                    "preferred_dte": sp.get("csp_preferred_dte"),
                 }
                 for key, value in call_overrides.items():
                     if value is not None:

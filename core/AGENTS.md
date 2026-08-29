@@ -10,7 +10,7 @@
 
 - Own business-critical trading logic that should not depend on Flask.
 - Own reusable decision functions for Wheel strategy signals, scoring factors, Greeks, and evidence-gated advice.
-- Own executable-bid premium velocity calculation and quote-evidence gates; quality/event tiers precede stable bid-velocity ranking for surfaced signals.
+- Own executable-bid capital-return and premium-velocity calculations plus quote-evidence gates; quality/event tiers precede stable capital-return ranking, with bid velocity as a tie-break for surfaced signals.
 - Own OpenD connection lifecycle helpers and shared runtime utilities.
 - Own the growth cockpit pure logic: `exit_playbook` (HOLD/TAKE_PROFIT/ROLL/CLOSE verdicts), `position_diff` + `portfolio_snapshot` (per-run snapshots and trade-event inference), `sizing` (exposure/concentration arithmetic), and `growth_mode.growth_pace` (path-to-target math). All are pure and broker-free.
 

@@ -61,6 +61,11 @@
     <div id="top-recommendations-container" class="recommendation-stage__body">
         <div id="top-recommendations-state"></div>
         <div id="top-recommendations-content" class="d-none">
+            <div id="deployment-plan" class="d-none mb-3" aria-live="polite">
+                <div class="small fw-semibold text-info" id="deployment-plan-heading"></div>
+                <div class="small text-muted mb-2" id="deployment-plan-summary"></div>
+                <div id="deployment-plan-cards" class="row g-2"></div>
+            </div>
             <div id="top-recommendations-cards"></div>
         </div>
     </div>
@@ -77,7 +82,7 @@
     </div>
 
     <div class="app-section__footer">
-        Signals ranked by quality and event tier, then executable-bid premium velocity. Midpoint values are limit targets—not guaranteed fills; copy remains disabled for review-only signals.
+        Signals ranked by quality and event tier, then annualized return on deployed capital; executable-bid premium velocity breaks ties. Midpoint values are limit targets—not guaranteed fills; copy remains disabled for review-only signals.
     </div>
 </section>
 
@@ -103,12 +108,12 @@
                     </div>
                 </div>
 
-                <!-- REWARD: premium velocity headline -->
+                <!-- REWARD: capital-normalized return headline -->
                 <div class="recommendation-card__group">
                     <div class="row g-1">
                         <div class="col-12 text-center mb-2">
-                            <small class="text-muted d-block">Premium velocity</small>
-                            <span class="premium-velocity fw-bold premium-velocity__value"></span>
+                            <small class="text-muted d-block">Return on deployed capital (annualized)</small>
+                            <span class="annualized-return fw-bold fs-4"></span>
                         </div>
                     </div>
                     <div class="row g-1">
@@ -118,8 +123,8 @@
                             <small class="text-muted d-block">per cont.</small>
                         </div>
                         <div class="col-6 text-center">
-                            <small class="text-muted d-block">Annualized</small>
-                            <span class="annualized-return fw-bold fs-6"></span>
+                            <small class="text-muted d-block">Premium velocity</small>
+                            <span class="premium-velocity fw-bold premium-velocity__value"></span>
                         </div>
                     </div>
 

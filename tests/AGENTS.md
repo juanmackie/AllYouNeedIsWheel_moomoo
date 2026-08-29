@@ -27,7 +27,7 @@
 - Use `conftest.py` fixtures where shared app/database setup already exists.
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
-- `test_recommendations.py` verifies complete watchlist-union scanning and deterministic quality/event-tier then executable-bid velocity ordering; infeasible unions publish `planning` rather than truncating.
+- `test_recommendations.py` verifies complete watchlist-union scanning and deterministic quality/event-tier then capital-return ordering with executable-bid velocity as tie-break; infeasible unions publish `planning` rather than truncating.
 
 ## Verification
 

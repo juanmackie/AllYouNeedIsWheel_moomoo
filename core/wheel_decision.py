@@ -21,23 +21,11 @@ from core.growth_mode import (
 )
 from core.scoring_factors import (
     ACCOUNT_VALUE_MIN,
-    CALL_W_CE,
-    CALL_W_EARNINGS,
-    CALL_W_EV,
-    CALL_W_IV_ADJ,
-    CALL_W_LIQ,
-    CALL_W_OTM,
-    CALL_W_TDR,
-    CALL_W_UPSIDE,
+    COMPOSITE_W_CAPITAL,
+    COMPOSITE_W_DELTA,
+    COMPOSITE_W_EVENT,
+    COMPOSITE_W_LIQUIDITY,
     PUT_MAX_LOSS_ESTIMATE_PCT,
-    PUT_W_BUF,
-    PUT_W_CE,
-    PUT_W_DELTA,
-    PUT_W_EARNINGS,
-    PUT_W_EV,
-    PUT_W_IV_ADJ,
-    PUT_W_LIQ,
-    PUT_W_TDR,
     STALE_QUOTE_THRESHOLD,
     _calculate_mid_price,
     _clamp,
@@ -49,8 +37,10 @@ from core.scoring_factors import (
     _compute_size_fit,
     _score_positive_metric,
     _score_proximity,
+    capital_velocity_per_day,
     classify_event_tier,
     is_crossed_market,
+    iv_environment_multiplier,
     premium_velocity_per_day,
     quote_is_stale,
 )
@@ -173,6 +163,7 @@ class WheelDecision:
     bid_premium_per_contract: float = 0.0
     limit_target_per_contract: float = 0.0  # midpoint, labelled "limit target — not guaranteed"
     premium_velocity_per_day: float = 0.0  # bid_premium_per_contract / DTE
+    capital_velocity_per_day: float = 0.0  # bid premium / secured capital / DTE
     # Broker quote timestamp (verbatim) and UTC fetch time, kept separate so
     # freshness reflects the broker quote, not local processing time.
     quote_update_time: str = ""
@@ -600,6 +591,9 @@ def score_contract(
     )
     iv_adjusted_return = annualized_return_raw / max(implied_volatility, 0.05)
     decision.annualized_return = round(annualized_return_raw, 2)
+    decision.capital_velocity_per_day = round(
+        capital_velocity_per_day(premium_per_contract, capital_at_risk, dte), 8
+    )
     decision.iv_adjusted_return = round(iv_adjusted_return, 2)
     decision.iv_adjusted_score = _score_positive_metric(iv_adjusted_return, profile.get("target_iv_adjusted", 50)) * 100
 
@@ -669,38 +663,16 @@ def score_contract(
         # Earnings risk score from earnings_adjustment (e.g., -30 → 70, 0 → 100)
         earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
 
-        # CALL base score — growth-oriented weights (premium, capital efficiency, liquidity, theta decay)
-        w_iv_adj = CALL_W_IV_ADJ
-        w_tdr = CALL_W_TDR
-        w_liq = CALL_W_LIQ
-        w_ev = CALL_W_EV
-        w_upside = CALL_W_UPSIDE
-        w_otm = CALL_W_OTM
-        w_earnings = CALL_W_EARNINGS
-        w_ce = CALL_W_CE
-        total_w = w_iv_adj + w_tdr + w_liq + w_ev + w_upside + w_otm + w_earnings + w_ce
-        if total_w > 0:
-            w_iv_adj /= total_w
-            w_tdr /= total_w
-            w_liq /= total_w
-            w_ev /= total_w
-            w_upside /= total_w
-            w_otm /= total_w
-            w_earnings /= total_w
-            w_ce /= total_w
-
+        # Compact secondary score: capital efficiency, liquidity, delta fit,
+        # and event safety explain quality without competing with rank_key.
         base_score = (
-            decision.iv_adjusted_score * w_iv_adj
-            + decision.tdr_score * w_tdr
-            + decision.liquidity_score * w_liq
-            + decision.ev_score * w_ev
-            + decision.upside_score * w_upside
-            + decision.otm_score * w_otm
-            + earnings_risk_score * w_earnings
-            + decision.ce_score * w_ce
+            decision.ce_score * COMPOSITE_W_CAPITAL
+            + decision.liquidity_score * COMPOSITE_W_LIQUIDITY
+            + decision.delta_score * COMPOSITE_W_DELTA
+            + earnings_risk_score * COMPOSITE_W_EVENT
         )
 
-        iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
+        iv_adjusted_score_final = base_score * iv_environment_multiplier(iv_status_str) * (1 + iv_env_adjustment / 100)
         score = iv_adjusted_score_final
         score *= 0.65 + (0.35 * cost_basis_score)
 
@@ -745,6 +717,12 @@ def score_contract(
             "liquidity": decision.liquidity_score,
             "delta_fit": decision.delta_score,
             "otm_fit": decision.otm_score,
+            "composite": {
+                "capital_efficiency": decision.ce_score,
+                "liquidity": decision.liquidity_score,
+                "delta_fit": decision.delta_score,
+                "event_safety": earnings_risk_score,
+            },
             "cost_basis_fit": decision.cost_basis_score,
             "iv_adjusted": decision.iv_adjusted_score,
             "theta_delta": decision.tdr_score,
@@ -753,7 +731,7 @@ def score_contract(
         }
 
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
-        decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context)
+        decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context, profile)
         if is_long_research:
             decision.warnings.append("Research-only long call signal - user executes manually")
 
@@ -830,38 +808,16 @@ def score_contract(
         # Earnings risk score from earnings_adjustment (e.g., -30 → 70, 0 → 100)
         earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
 
-        # PUT base score — growth-oriented weights (premium, theta decay, EV, liquidity, buffer, capital efficiency)
-        w_iv_adj = PUT_W_IV_ADJ
-        w_tdr = PUT_W_TDR
-        w_ev = PUT_W_EV
-        w_liq = PUT_W_LIQ
-        w_buf = PUT_W_BUF
-        w_ce = PUT_W_CE
-        w_earnings = PUT_W_EARNINGS
-        w_delta = PUT_W_DELTA
-        total_w = w_iv_adj + w_tdr + w_ev + w_liq + w_buf + w_ce + w_earnings + w_delta
-        if total_w > 0:
-            w_iv_adj /= total_w
-            w_tdr /= total_w
-            w_ev /= total_w
-            w_liq /= total_w
-            w_buf /= total_w
-            w_ce /= total_w
-            w_earnings /= total_w
-            w_delta /= total_w
-
+        # Compact secondary score: capital efficiency, liquidity, delta fit,
+        # and event safety explain quality without competing with rank_key.
         base_score = (
-            decision.iv_adjusted_score * w_iv_adj
-            + decision.tdr_score * w_tdr
-            + decision.ev_score * w_ev
-            + decision.liquidity_score * w_liq
-            + decision.buffer_score * w_buf
-            + decision.ce_score * w_ce
-            + earnings_risk_score * w_earnings
-            + decision.delta_score * w_delta
+            decision.ce_score * COMPOSITE_W_CAPITAL
+            + decision.liquidity_score * COMPOSITE_W_LIQUIDITY
+            + decision.delta_score * COMPOSITE_W_DELTA
+            + earnings_risk_score * COMPOSITE_W_EVENT
         )
 
-        iv_adjusted_score_final = base_score * (1 + iv_env_adjustment / 100)
+        iv_adjusted_score_final = base_score * iv_environment_multiplier(iv_status_str) * (1 + iv_env_adjustment / 100)
         score = iv_adjusted_score_final
         score *= 0.75 + (0.25 * capital_fit)
 
@@ -909,10 +865,16 @@ def score_contract(
             "expected_value": decision.ev_score,
             "capital_efficiency": decision.ce_score,
             "iv_environment": _clamp((iv_env_adjustment + 20) / 40) * 100,
+            "composite": {
+                "capital_efficiency": decision.ce_score,
+                "liquidity": decision.liquidity_score,
+                "delta_fit": decision.delta_score,
+                "event_safety": earnings_risk_score,
+            },
         }
 
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
-        decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context)
+        decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context, profile)
         if is_long_research:
             decision.warnings.append("Research-only long put signal - user executes manually")
 
@@ -960,8 +922,8 @@ def score_contract(
     )
 
     # Risk-budget gate: penalize trade scores that consume too much drawdown budget.
-    # Trades using >25% of the budget are progressively penalized so ranking
-    # reflects contribution-to-2x within the account's risk envelope.
+    # Trades using >25% of the budget are progressively penalized so the
+    # secondary quality score remains inside the account's risk envelope.
     _rbp = decision.risk_budget_used_pct
     if _rbp > 25:
         _penalty = max(0.0, 1.0 - ((_rbp - 25) / 150))
@@ -1083,14 +1045,14 @@ def _apply_growth_scoring(
         )
 
         if decision.covered_call_intent == "upside-capping risk" and annualized_return_raw < 12:
-            decision.warnings.append("Low-premium CC caps upside without meaningful 2x acceleration")
+            decision.warnings.append("Low-premium CC caps upside without meaningful growth acceleration")
         elif decision.covered_call_intent == "income" and annualized_return_raw < 6:
             decision.warnings.append("Low premium relative to growth target")
 
     income_per_month = premium_per_contract * 4
     # Aligned with the active preset's growth objective (defaults to the
-    # project-wide 10x goal when no preset profile is provided).
-    target_multiple = float(growth_obj.get("target_account_multiple", 10.0))
+    # project-wide 5x goal when no preset profile is provided).
+    target_multiple = float(growth_obj.get("target_account_multiple", 5.0))
     decision.remaining_gap_to_target = estimate_target_gap(
         account_value=max(account_value, cash_balance, ACCOUNT_VALUE_MIN),
         target_multiple=target_multiple,

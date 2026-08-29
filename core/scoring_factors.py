@@ -18,24 +18,12 @@ NY_TZ = ZoneInfo("America/New_York")
 # Only thresholds with live consumers live here; preset values come from
 # core/presets.py and cache TTLs from their call sites.
 
-# Score weights — tuned toward contribution-to-2x objective
-CALL_W_IV_ADJ = 0.30
-CALL_W_TDR = 0.15
-CALL_W_LIQ = 0.15
-CALL_W_EV = 0.10
-CALL_W_UPSIDE = 0.10
-CALL_W_OTM = 0.10
-CALL_W_EARNINGS = 0.05
-CALL_W_CE = 0.10
-
-PUT_W_IV_ADJ = 0.30
-PUT_W_TDR = 0.15
-PUT_W_EV = 0.10
-PUT_W_LIQ = 0.15
-PUT_W_BUF = 0.10
-PUT_W_CE = 0.20
-PUT_W_EARNINGS = 0.05
-PUT_W_DELTA = 0.05
+# Secondary composite weights. These explain qualification quality but never
+# outrank the capital-normalized rank key.
+COMPOSITE_W_CAPITAL = 0.40
+COMPOSITE_W_LIQUIDITY = 0.25
+COMPOSITE_W_DELTA = 0.20
+COMPOSITE_W_EVENT = 0.15
 
 # Max loss estimates
 PUT_MAX_LOSS_ESTIMATE_PCT = 0.10
@@ -184,6 +172,35 @@ def premium_velocity_per_day(premium_per_contract: float, dte: float) -> float:
     velocity = premium / days
     logger.debug("premium_velocity ticker=NA premium=%.2f dte=%.0f velocity=%.4f", premium, days, velocity)
     return velocity
+
+
+def iv_environment_multiplier(iv_status: str) -> float:
+    """Return a small quality adjustment for the IV environment label."""
+    return {
+        "extreme_low": 0.86,
+        "low": 0.90,
+        "normal": 1.00,
+        "high": 1.00,
+        "extreme_high": 1.00,
+    }.get(str(iv_status or "normal").lower(), 1.00)
+
+
+def capital_velocity_per_day(premium_per_contract: float, capital_base: float, dte: float) -> float:
+    """Return executable premium as a fraction of deployed capital per day.
+
+    ``capital_base`` is the cash secured by a put (strike * 100) or the
+    underlying value covered by a call (stock price * 100). The result is a
+    decimal; multiplying it by 365 * 100 gives an annualized percentage.
+    """
+    try:
+        premium = float(premium_per_contract or 0)
+        capital = float(capital_base or 0)
+        days = float(dte or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if premium <= 0 or capital <= 0 or days <= 0:
+        return 0.0
+    return premium / (capital * days)
 
 
 def _compute_shared_subscores(decision, profile: dict, growth_mode_weights: dict | None = None) -> None:
@@ -336,16 +353,15 @@ def _compute_size_fit(decision, portfolio_context: dict) -> float:
     return round(fit, 1)
 
 
-def _compute_recommended_contracts(decision, portfolio_context: dict) -> int:
-    """
-    Compute recommended number of contracts based on account value,
-    risk allocation, and contract-specific constraints.
+def _compute_recommended_contracts(
+    decision, portfolio_context: dict, sizing_profile: dict | None = None
+) -> int:
+    """Compute an affordable recommendation using the active sizing contract.
 
-    Aims for no more than 10% of account value per position for PUTs,
-    and all available shares for CALLs (subject to diversification).
+    CSP capacity is constrained by true unreserved cash and the preset's
+    ``max_buying_power_pct_per_csp``. Missing or invalid sizing configuration
+    fails closed at zero contracts. Covered calls use available lots.
     """
-    account_value = max(float(portfolio_context.get("account_value", 0) or 0), ACCOUNT_VALUE_MIN)
-    max(len(portfolio_context.get("positions", {})), 1)
     max_contracts = max(int(decision.max_contracts or 0), 0)
     if max_contracts <= 0:
         return 0
@@ -353,13 +369,28 @@ def _compute_recommended_contracts(decision, portfolio_context: dict) -> int:
     if decision.option_type == "CALL":
         return max_contracts
 
-    cash_required = max(decision.cash_required, 1)
-    position_target = account_value * 0.10
-    by_value = max(int(position_target / cash_required), 1)
-    by_available = max_contracts
+    cash_required = max(float(decision.cash_required or 0), 0.0)
+    cash_available = max(
+        float(
+            portfolio_context.get(
+                "cash_available_for_csp",
+                portfolio_context.get("available_cash", portfolio_context.get("cash_balance", 0)),
+            )
+            or 0
+        ),
+        0.0,
+    )
+    if cash_required <= 0 or cash_available <= 0:
+        return 0
 
-    recommended = min(by_value, by_available)
-    return max(recommended, 1)
+    profile = sizing_profile or {}
+    try:
+        max_pct = max(0.0, min(float(profile.get("max_buying_power_pct_per_csp", 0)), 100.0))
+    except (TypeError, ValueError):
+        max_pct = 0.0
+    position_budget = cash_available * (max_pct / 100.0)
+    by_budget = int(position_budget // cash_required)
+    return min(by_budget, max_contracts)
 
 
 def _compute_expected_move_buffer(decision) -> float:

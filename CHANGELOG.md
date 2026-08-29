@@ -1,3 +1,16 @@
+## 2026-08-29 — 5x signal surfacing and capital-aware ranking
+
+- Ranked signals by executable annualized return on secured/covered capital, with
+  per-contract premium velocity retained as a tie-break and display evidence.
+- Widened version 4 preset windows toward short cycles and aligned all preset growth
+  targets to 5x; active preset sizing now caps CSPs against true available CSP cash.
+- CSP scans sample shortest, preferred, and longest valid expirations; covered calls
+  inherit the active preset DTE window.
+- Added a server-side remaining-cash deployment plan and dashboard surfacing for next
+  ranked affordable CSPs. The dashboard now leads with return on deployed capital.
+- Simplified the secondary composite to capital efficiency, liquidity, delta fit, and
+  event safety without changing signals-only or Moomoo provenance gates.
+
 ## 2026-08-22 — Growth cockpit: portfolio monitoring, account-aware picks, exit playbook
 
 - Portfolio monitoring: one `portfolio_snapshots` row per completed run (schema v7);

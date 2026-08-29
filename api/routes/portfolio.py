@@ -172,11 +172,11 @@ def get_portfolio_history():
         from core.presets import WHEEL_PRESETS, get_preset
 
         # Pace target follows the active wheel preset (read-only effective value).
-        target_multiple = 10.0
+        target_multiple = 5.0
         try:
             persisted = db.get_setting("wheel_preset")
             key = persisted if persisted in WHEEL_PRESETS else None
-            target_multiple = float(get_preset(key).target_account_multiple or 10.0)
+            target_multiple = float(get_preset(key).target_account_multiple or 5.0)
         except Exception:
             pass
 

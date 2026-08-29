@@ -11,7 +11,7 @@ import StateModel from '../utils/state-model.js';
 // Module state
 let signalsData = null;
 
-// Daily premium needed to stay on the 10x pace (from portfolio history).
+// Daily premium needed to stay on the active preset's 5x pace (from portfolio history).
 // Fetched lazily once; null when history is insufficient.
 let requiredPremiumPerDay = null;
 let requiredPaceFetched = false;
@@ -337,7 +337,8 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     const dteBadge = clone.querySelector('.dte-badge');
     dteBadge.textContent = rec.dte != null ? `${rec.dte} DTE` : 'N/A DTE';
     
-    // Premium velocity — headlining metric
+    // Premium velocity — secondary supporting metric; ranking is based on
+    // backend-provided annualized return on deployed capital.
     const velocityEl = clone.querySelector('.premium-velocity');
     const dte = rec.dte;
     const dailyVelocity = rec.premium_velocity_per_day != null
@@ -374,12 +375,12 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         quantityEl.textContent = `${recommended} recommended / ${maximum} max`;
     }
     
-    // Annualized return
+    // Annualized return on the secured/covered capital base (primary metric).
     const annualizedEl = clone.querySelector('.annualized-return');
     annualizedEl.textContent = rec.annualized_return != null ? `${rec.annualized_return.toFixed(1)}%` : 'N/A';
     annualizedEl.classList.add(rec.annualized_return != null && rec.annualized_return > 0 ? 'text-success' : 'text-danger');
     
-    // Score badge (secondary — premium velocity is the primary ranking metric)
+    // Score badge (secondary — capital-normalized return is the primary rank metric)
     const scoreBadge = clone.querySelector('.score-badge');
     scoreBadge.textContent = rec.score != null ? `Score: ${rec.score.toFixed(1)}` : 'Score: N/A';
     addClassTokens(scoreBadge, getScoreColorClass(rec.score));
@@ -462,24 +463,14 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         riskBadge.classList.remove('d-none');
     }
 
-    // Why this winner: backend-provided bid velocity; browser does not rank.
+    // Why this winner: backend-provided rank evidence; browser does not rank
+    // or compare candidates.
     const whyEl = clone.querySelector('.why-winner');
     if (whyEl) {
-        const velocity = dailyVelocity != null ? dailyVelocity.toFixed(2) : null;
-        const next = rankedNeighbor;
-        if (velocity != null) {
-            if (next && next.premium_velocity_per_day != null) {
-                const nextVelocity = Number(next.premium_velocity_per_day).toFixed(2);
-                whyEl.textContent = `Why this pick: $${velocity}/day premium velocity` +
-                    (parseFloat(velocity) > parseFloat(nextVelocity)
-                        ? ` beats next candidate ($${nextVelocity}/day)`
-                        : ` (next candidate $${nextVelocity}/day)`);
-            } else {
-                whyEl.textContent = `Why this pick: $${velocity}/day premium velocity`;
-            }
-        } else {
-            whyEl.textContent = 'Why this pick: passed all hard gates';
-        }
+        const annualized = rec.annualized_return != null ? Number(rec.annualized_return).toFixed(1) : null;
+        whyEl.textContent = annualized != null
+            ? `Why this pick: ${annualized}% annualized return on deployed capital`
+            : 'Why this pick: passed all hard gates';
     }
     
     // Copy-to-ticket (explicit; clipboard success/failure feedback)
@@ -550,13 +541,14 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
             cashAfterEl.classList.toggle('text-warning', cashAfter != null && cashAfter < 0);
         }
 
-        // Contribution to the 10x goal: this trade's credit vs the required
-        // daily pace derived from persisted portfolio history.
+        // Contribution to the active preset goal: this trade's credit vs the
+        // required daily pace derived from persisted portfolio history.
         const contributionEl = clone.querySelector('.csp-pace-contribution');
         if (contributionEl) {
             if (incomeAtSize != null && requiredPremiumPerDay != null && requiredPremiumPerDay > 0) {
                 const coverage = (incomeAtSize / requiredPremiumPerDay) * 100;
-                contributionEl.textContent = `Covers ${coverage.toFixed(1)}% of the daily pace to 10x`;
+                const targetMultiple = Number(signalsData?.preset?.screener_profile?.target_account_multiple || 5);
+                contributionEl.textContent = `Covers ${coverage.toFixed(1)}% of the daily pace to ${targetMultiple}x`;
                 contributionEl.classList.remove('d-none');
             } else {
                 contributionEl.textContent = '';
@@ -1123,6 +1115,43 @@ async function fetchRequiredPace() {
 }
 
 /**
+ * Render backend-selected next CSPs for cash that remains after the visible
+ * top signals. This widget only displays server-vetted fields.
+ */
+function renderDeploymentPlan(result) {
+    const section = document.getElementById('deployment-plan');
+    const heading = document.getElementById('deployment-plan-heading');
+    const summary = document.getElementById('deployment-plan-summary');
+    const cards = document.getElementById('deployment-plan-cards');
+    if (!section || !heading || !summary || !cards) return;
+
+    const plan = result?.deployment_plan;
+    const signals = Array.isArray(plan?.signals) ? plan.signals : [];
+    if (signals.length === 0) {
+        section.classList.add('d-none');
+        cards.innerHTML = '';
+        return;
+    }
+
+    heading.textContent = 'Deploy remaining CSP cash';
+    summary.textContent = `After visible picks: ${formatCurrency(Number(plan.cash_remaining || 0))} remains available. Next ranked options:`;
+    cards.innerHTML = signals.map((signal) => {
+        const ticker = escapeHtml(String(signal.ticker || '—'));
+        const expiry = escapeHtml(signal.expiration ? formatExpiration(signal.expiration) : '—');
+        const strike = signal.strike != null ? `$${Number(signal.strike).toFixed(2)}` : '—';
+        const contracts = Number(signal.deployment_contracts || 0);
+        const cash = formatCurrency(Number(signal.deployment_cash_required || 0));
+        const income = formatCurrency(Number(signal.deployment_income || 0));
+        return `<div class="col-md-6 col-xl-4"><div class="border rounded p-2 h-100 bg-light-subtle">
+            <div class="d-flex justify-content-between"><strong>${ticker}</strong><span>${escapeHtml(strike)}</span></div>
+            <div class="small text-muted">${expiry} · ${contracts} contract${contracts === 1 ? '' : 's'}</div>
+            <div class="small">Cash ${escapeHtml(cash)} · Bid income ${escapeHtml(income)}</div>
+        </div></div>`;
+    }).join('');
+    section.classList.remove('d-none');
+}
+
+/**
  * Render signals filtered by active tab
  */
 function renderFilteredSignals() {
@@ -1211,6 +1240,8 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
     
     // Show market state badge (after-hours indicator)
     showMarketStateBadge(result?._freshness);
+
+    renderDeploymentPlan(result);
     
     // Apply growth mode banner
     applyPreset(result);

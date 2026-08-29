@@ -20,7 +20,7 @@ from api.services.recommendation_ranking import (
 from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
 from core.scoring_factors import premium_velocity_per_day
-from core.sizing import existing_short_exposure_by_underlying
+from core.sizing import deployment_plan, existing_short_exposure_by_underlying
 from core.ticker_utils import canonical_underlying
 from core.utils import entry_window_advice, is_market_open
 from core.wheel_decision import WheelDecision, score_contract
@@ -112,6 +112,7 @@ def _format_decision_to_candidate(
         "bid_premium_per_contract": round(decision.bid_premium_per_contract, 2),
         "limit_target_per_contract": round(decision.limit_target_per_contract, 2),
         "premium_velocity_per_day": round(decision.premium_velocity_per_day, 4),
+        "capital_velocity_per_day": round(decision.capital_velocity_per_day, 8),
         "bid": decision.bid,
         "ask": decision.ask,
         "annualized_return": decision.annualized_return,
@@ -351,7 +352,7 @@ class RecommendationEngine:
             iv_status_str=iv_status,
             earnings_adjustment=earnings_adjustment,
             earnings_info=earnings_info,
-            growth_profile=None,
+            growth_profile=self._preset_profile,
             research_only_mode=research_only_mode,
         )
 
@@ -452,8 +453,17 @@ class RecommendationEngine:
             if not valid_expirations:
                 return None
 
-            valid_expirations.sort(key=lambda x: abs(pref_dte - x[1]))
-            expirations_to_check = valid_expirations[:2]
+            # Sample the DTE window instead of clustering only around the
+            # preferred date. The shortest cycle can lead capital-normalized
+            # ranking, while the preferred and longest dates provide stable
+            # alternatives. Deduplication keeps the chain budget bounded at
+            # three calls per ticker.
+            by_dte = sorted(valid_expirations, key=lambda x: x[1])
+            by_preference = sorted(valid_expirations, key=lambda x: abs(pref_dte - x[1]))
+            expirations_to_check = []
+            for expiration_choice in (by_dte[0], by_preference[0], by_dte[-1]):
+                if expiration_choice not in expirations_to_check:
+                    expirations_to_check.append(expiration_choice)
 
             candidates = []
             seen = set()
@@ -927,7 +937,14 @@ class RecommendationEngine:
                         sp = self._preset_profile
                         otm_target = sp.get("call_default_otm_pct", 10)
 
-                        # Fetch options data for this ticker
+                        # Fetch options data for this ticker. Pass the active
+                        # preset's resolved CALL profile so its DTE window is
+                        # applied rather than the legacy generic profile.
+                        call_profile = self._watchlist_provider.get_screening_profile(
+                            "CALL",
+                            vix_regime=portfolio_context.get("vix_regime"),
+                            growth_mode_config=self._preset_profile,
+                        )
                         result = self._options_data_provider._process_ticker_for_otm(
                             conn=conn,
                             ticker=ticker,
@@ -935,6 +952,7 @@ class RecommendationEngine:
                             portfolio_context=portfolio_context,
                             expiration=None,  # Get all expirations
                             option_type="CALL",  # Covered-call lane only
+                            screening_profile=call_profile,
                         )
 
                         if "error" in result:
@@ -1077,6 +1095,54 @@ class RecommendationEngine:
             formatted_cc = _format_rec_list(top_covered_calls)
             formatted_csp = _format_rec_list(top_watchlist_csp)
 
+            # Reserve the recommended cash from the visible top signals,
+            # then offer the next ranked affordable CSPs for idle cash. This
+            # is a planning surface only; it does not create candidates or
+            # place orders.
+            selected_keys = {
+                (
+                    str(opt.get("ticker", "")).upper(),
+                    str(opt.get("option_type", "")).upper(),
+                    str(opt.get("expiration", "")),
+                    float(opt.get("strike", 0) or 0),
+                )
+                for opt in signals
+            }
+            reserved_cash = 0.0
+            for opt in signals:
+                if str(opt.get("option_type", "")).upper() != "PUT":
+                    continue
+                try:
+                    reserved_cash += max(int(opt.get("recommended_contracts", 0) or 0), 0) * max(
+                        float(opt.get("cash_required", 0) or 0), 0.0
+                    )
+                except (TypeError, ValueError):
+                    continue
+            remaining_cash = max(cash_available_for_csp - reserved_cash, 0.0)
+            deployment_candidates = [
+                opt
+                for opt in all_candidates
+                if (
+                    str(opt.get("ticker", "")).upper(),
+                    str(opt.get("option_type", "")).upper(),
+                    str(opt.get("expiration", "")),
+                    float(opt.get("strike", 0) or 0),
+                )
+                not in selected_keys
+            ]
+            deployment = deployment_plan(deployment_candidates, remaining_cash)
+            formatted_deployment = []
+            for rank, opt in enumerate(deployment, 1):
+                formatted = format_recommendation(opt, rank)
+                for field_name in (
+                    "deployment_contracts",
+                    "deployment_cash_required",
+                    "deployment_income",
+                    "deployment_cash_remaining",
+                ):
+                    formatted[field_name] = opt.get(field_name)
+                formatted_deployment.append(formatted)
+
             scoring_elapsed = time.time() - cc_start - cc_elapsed
             elapsed = time.time() - start_time
             logger.info(f"[TIMING] Scoring & ranking: {scoring_elapsed:.2f}s")
@@ -1160,6 +1226,13 @@ class RecommendationEngine:
                 "watchlist_csps": {
                     "signals": formatted_csp,
                     "count": len(formatted_csp),
+                },
+                "deployment_plan": {
+                    "signals": formatted_deployment,
+                    "count": len(formatted_deployment),
+                    "cash_available": round(cash_available_for_csp, 2),
+                    "cash_reserved_by_top_signals": round(reserved_cash, 2),
+                    "cash_remaining": round(remaining_cash, 2),
                 },
                 "broker_buying_power": round(broker_buying_power, 2),
                 "cash_available_for_csp": round(cash_available_for_csp, 2),
