@@ -28,6 +28,7 @@
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
 - `test_recommendations.py` verifies complete watchlist-union scanning and deterministic quality/event-tier then capital-return ordering with executable-bid velocity as tie-break; infeasible unions publish `planning` rather than truncating.
+- Testing approach aligns with V7.0 §8: Arrange-Act-Assert when conventional; cover success/failure/boundary; report skipped/flaky/blockers explicitly; close with brief changed/verified/assumptions/risks (§13).
 
 ## Verification
 

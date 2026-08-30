@@ -150,4 +150,38 @@ document.addEventListener('DOMContentLoaded', function() {
     window.setInterval(pollOpenDStatus, 10000);
 
     initSectionReveal();
+
+    // Theme preference: initialize data-theme from localStorage; if 'auto', respect OS preference
+    (function initTheme() {
+        try {
+            const stored = localStorage.getItem('ui-theme');
+            const html = document.documentElement;
+            if (stored === 'dark' || stored === 'light') {
+                html.setAttribute('data-theme', stored);
+            } else {
+                html.setAttribute('data-theme', 'auto');
+            }
+        } catch (e) {
+            document.documentElement.setAttribute('data-theme', 'auto');
+        }
+    })();
 });
+
+window.cycleTheme = function cycleTheme() {
+    const html = document.documentElement;
+    try {
+        let current = html.getAttribute('data-theme');
+        if (current === 'auto') {
+            html.setAttribute('data-theme', 'dark');
+            localStorage.setItem('ui-theme', 'dark');
+        } else if (current === 'dark') {
+            html.setAttribute('data-theme', 'light');
+            localStorage.setItem('ui-theme', 'light');
+        } else {
+            html.setAttribute('data-theme', 'auto');
+            localStorage.setItem('ui-theme', 'auto');
+        }
+    } catch (e) {
+        html.setAttribute('data-theme', 'auto');
+    }
+};

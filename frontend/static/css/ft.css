@@ -7,28 +7,66 @@
    ───────────────────────────────────────────────────────────── */
 
 /* ── 1. TOKENS ───────────────────────────────────────────────── */
+/* ── 1. TOKENS (telemetry dual mode: dark default + light print) ── */
 :root {
-  --ft-paper: #FFF1E5;
-  --ft-ink: #0A0A0A;
-  --ft-ink-soft: rgba(10,10,10,0.72);
-  --ft-ink-mute: rgba(10,10,10,0.48);
-  --ft-ink-faint: rgba(10,10,10,0.32);
-  --ft-rule: rgba(10,10,10,0.88);
-  --ft-rule-soft: rgba(10,10,10,0.16);
-  --ft-rule-softer: rgba(10,10,10,0.08);
-  --ft-signal: #0E7C3A;
-  --ft-signal-soft: rgba(14,124,58,0.10);
-  --ft-warn: #B8763A;
-  --ft-warn-soft: rgba(184,118,58,0.12);
-  --ft-down: #B23A3A;
-  --ft-down-soft: rgba(178,58,58,0.10);
-  --ft-info: #2563EB;
-  --ft-font-display: "Source Serif 4", "Source Serif Pro", Georgia, serif;
-  --ft-font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --ft-font-mono: "JetBrains Mono", "IBM Plex Mono", "SF Mono", monospace;
+  /* Substrate & ink (dark telemetry default) */
+  --ft-paper: #0A0A0A;
+  --ft-ink: #EAEAEA;
+  --ft-ink-soft: rgba(234,234,234,0.72);
+  --ft-ink-mute: rgba(234,234,234,0.48);
+  --ft-ink-faint: rgba(234,234,234,0.32);
+  --ft-rule: rgba(234,234,234,0.88);
+  --ft-rule-soft: rgba(234,234,234,0.16);
+  --ft-rule-softer: rgba(234,234,234,0.08);
+  --ft-signal: #E61919;
+  --ft-signal-soft: rgba(230,25,25,0.14);
+  --ft-warn: #FF8C2A;
+  --ft-warn-soft: rgba(255,140,42,0.14);
+  --ft-down: #E61919;
+  --ft-down-soft: rgba(230,25,25,0.14);
+  --ft-info: #4A90E2;
+  --ft-info-soft: rgba(74,144,226,0.14);
+  --ft-green: #4AF626;
+  --ft-green-soft: rgba(74,246,38,0.14);
+  --ft-font-display: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ft-font-body: "JetBrains Mono", "IBM Plex Mono", monospace;
+  --ft-font-mono: "JetBrains Mono", "IBM Plex Mono", monospace;
   --ft-shell-max: 1320px;
   --ft-radius: 0;
   --ft-sidebar-w: 0px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ft-paper: #F4F4F0;
+    --ft-ink: #111111;
+    --ft-ink-soft: rgba(17,17,17,0.72);
+    --ft-ink-mute: rgba(17,17,17,0.48);
+    --ft-ink-faint: rgba(17,17,17,0.32);
+    --ft-rule: rgba(17,17,17,0.88);
+    --ft-rule-soft: rgba(17,17,17,0.16);
+    --ft-rule-softer: rgba(17,17,17,0.08);
+    --ft-signal: #E61919;
+    --ft-signal-soft: rgba(230,25,25,0.10);
+    --ft-warn: #B8763A;
+    --ft-warn-soft: rgba(184,118,58,0.10);
+    --ft-down: #B23A3A;
+    --ft-down-soft: rgba(178,58,58,0.10);
+    --ft-info: #2563EB;
+    --ft-info-soft: rgba(37,99,235,0.10);
+    --ft-green: #2A7A12;
+    --ft-green-soft: rgba(42,122,18,0.14);
+  }
+}
+
+html[data-theme="light"] :root,
+html[data-theme="light"] {
+  --ft-paper: #F4F4F0; --ft-ink: #111111; --ft-ink-soft: rgba(17,17,17,0.72); --ft-ink-mute: rgba(17,17,17,0.48); --ft-ink-faint: rgba(17,17,17,0.32); --ft-rule: rgba(17,17,17,0.88); --ft-rule-soft: rgba(17,17,17,0.16); --ft-rule-softer: rgba(17,17,17,0.08); --ft-signal: #E61919; --ft-signal-soft: rgba(230,25,25,0.10); --ft-warn: #B8763A; --ft-warn-soft: rgba(184,118,58,0.10); --ft-down: #B23A3A; --ft-down-soft: rgba(178,58,58,0.10); --ft-info: #2563EB; --ft-info-soft: rgba(37,99,235,0.10); --ft-green: #2A7A12; --ft-green-soft: rgba(42,122,18,0.14);
+}
+
+html[data-theme="dark"] :root,
+html[data-theme="dark"] {
+  --ft-paper: #0A0A0A; --ft-ink: #EAEAEA; --ft-ink-soft: rgba(234,234,234,0.72); --ft-ink-mute: rgba(234,234,234,0.48); --ft-ink-faint: rgba(234,234,234,0.32); --ft-rule: rgba(234,234,234,0.88); --ft-rule-soft: rgba(234,234,234,0.16); --ft-rule-softer: rgba(234,234,234,0.08); --ft-signal: #E61919; --ft-signal-soft: rgba(230,25,25,0.14); --ft-warn: #FF8C2A; --ft-warn-soft: rgba(255,140,42,0.14); --ft-down: #E61919; --ft-down-soft: rgba(230,25,25,0.14); --ft-info: #4A90E2; --ft-info-soft: rgba(74,144,226,0.14); --ft-green: #4AF626; --ft-green-soft: rgba(74,246,38,0.14);
 }
 
 /* ── 2. BASE ─────────────────────────────────────────────────── */
@@ -38,21 +76,24 @@ html, body {
   background: var(--ft-paper);
   color: var(--ft-ink);
   font-family: var(--ft-font-body);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-variant-numeric: tabular-nums;
 }
 body { min-height: 100vh; }
-a { color: var(--ft-ink); text-decoration: none; }
-a:hover { color: var(--ft-ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a { color: var(--ft-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--ft-rule); text-decoration-thickness: 1px; }
+a:hover { text-decoration-color: var(--ft-ink); color: var(--ft-ink); }
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 h1, h2, h3, h4, h5, h6 {
   margin: 0;
   font-family: var(--ft-font-display);
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.04em;
+  line-height: 0.92;
+  text-transform: uppercase;
   color: var(--ft-ink);
 }
 p { margin: 0; }
@@ -95,15 +136,17 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .ft-masthead__meta--right { text-align: right; display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
 .ft-masthead__wordmark {
   font-family: var(--ft-font-display);
-  font-weight: 700;
-  font-size: 32px;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  font-size: clamp(2.2rem, 6vw, 4.5rem);
+  letter-spacing: -0.03em;
+  line-height: 0.9;
   text-align: center;
+  text-transform: uppercase;
   color: var(--ft-ink);
 }
 .ft-masthead__dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--ft-signal);
+  background: var(--ft-green); /* terminal green — single specific element */
 }
 .ft-masthead__rule { height: 1px; background: var(--ft-rule-soft); }
 .ft-masthead__tagline {
@@ -153,11 +196,11 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 }
 .ft-eyebrow {
   font-family: var(--ft-font-mono);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--ft-ink-mute);
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.16em;
 }
 .ft-ticker {
   font-family: var(--ft-font-mono);
@@ -190,16 +233,19 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .ft-section__title {
   font-family: var(--ft-font-display);
   font-weight: 600;
-  font-size: 30px;
-  line-height: 1.1;
-  letter-spacing: -0.015em;
+  font-size: clamp(1.8rem, 4.5vw, 2.2rem);
+  line-height: 0.92;
+  letter-spacing: -0.04em;
+  text-transform: uppercase;
   color: var(--ft-ink);
   margin: 0;
 }
 .ft-section__caption {
-  font-family: var(--ft-font-body);
-  font-size: 14px;
-  line-height: 1.5;
+  font-family: var(--ft-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-transform: uppercase;
   color: var(--ft-ink-soft);
   max-width: 720px;
   padding-bottom: 16px;
@@ -234,9 +280,10 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .ft-metric__value {
   font-family: var(--ft-font-display);
   font-weight: 600;
-  font-size: 30px;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  text-transform: uppercase;
   color: var(--ft-ink);
 }
 .ft-metric__value--signal { color: var(--ft-signal); }
@@ -253,8 +300,10 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .ft-table {
   width: 100%;
   border-collapse: collapse;
-  font-family: var(--ft-font-body);
-  font-size: 14px;
+  font-family: var(--ft-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
   color: var(--ft-ink);
 }
 .ft-table thead th {
@@ -285,7 +334,7 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .ft-table tbody td.ft-td-warn { color: var(--ft-warn); }
 .ft-table tbody td.ft-td-down { color: var(--ft-down); }
 .ft-table tbody td.ft-td-bold { font-weight: 600; }
-.ft-table tbody tr:hover { background: rgba(10,10,10,0.02); }
+.ft-table tbody tr:hover { background: rgba(255,255,255,0.04); }
 .ft-table tfoot td {
   padding: 12px 0 0 0;
   border-bottom: none;
@@ -331,7 +380,7 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .badge.bg-success, .badge.text-success { color: var(--ft-signal); border-color: var(--ft-signal); background: var(--ft-signal-soft); }
 .badge.bg-warning, .badge.text-warning { color: var(--ft-warn);   border-color: var(--ft-warn);   background: var(--ft-warn-soft); }
 .badge.bg-danger,  .badge.text-danger  { color: var(--ft-down);   border-color: var(--ft-down);   background: var(--ft-down-soft); }
-.badge.bg-info,    .badge.text-info    { color: var(--ft-info);   border-color: var(--ft-info);   background: rgba(37,99,235,0.08); }
+.badge.bg-info,    .badge.text-info    { color: var(--ft-info);   border-color: var(--ft-info);   background: var(--ft-info-soft); }
 .badge.bg-secondary, .badge.bg-light, .badge.text-secondary { color: var(--ft-ink-mute); border-color: var(--ft-rule-soft); background: transparent; }
 .badge.bg-primary { color: var(--ft-ink); border-color: var(--ft-ink); background: var(--ft-rule-softer); }
 .stale-badge { margin-left: 8px; }
@@ -341,11 +390,11 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--ft-font-body);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  background: transparent;
+  font-family: var(--ft-font-mono);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--ft-ink);
   border: 1px solid var(--ft-ink);
   padding: 6px 14px;
@@ -740,7 +789,7 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   position: fixed; inset: 0; z-index: 1055;
   display: none; overflow-x: hidden; overflow-y: auto;
   outline: 0;
-  background: rgba(10,10,10,0.55);
+  background: rgba(234,234,234,0.22);
 }
 .modal.show { display: block; }
 .modal-dialog {
@@ -1242,7 +1291,7 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
 .recommendation-card--primary {
   border: 2px solid var(--ft-ink);
   background: var(--ft-paper);
-  box-shadow: 4px 4px 0 rgba(10,10,10,0.08);
+  box-shadow: 4px 4px 0 rgba(234,234,234,0.12);
 }
 
 /* Secondary — quieter signals */

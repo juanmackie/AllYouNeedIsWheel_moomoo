@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="auto">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -22,18 +22,19 @@
         <header class="ft-masthead">
             <div class="ft-masthead__top">
                 <div class="ft-masthead__meta">
-                    {% if _meta_date %}{{ _meta_date }} &middot; Local{% else %}The Wheel &middot; Moomoo OpenD{% endif %}
+                    {% if _meta_date %}[ {{ _meta_date }} · LOCAL ]{% else %}[ THE WHEEL · MOOMOO OPEND ]{% endif %}
                 </div>
                 <div class="ft-masthead__wordmark">AYNIWHEEL</div>
                 <div class="ft-masthead__meta ft-masthead__meta--right">
-                    Cash account
-                    <span class="ft-masthead__dot" aria-hidden="true"></span>
+                    <span class="ft-eyebrow">UNIT / D-01 · REV 2.6</span>
+                    <span style="margin-left:8px;">CASH ACCOUNT <span class="ft-masthead__dot" aria-label="Live connection"></span></span>
+                    <button type="button" onclick="cycleTheme()" class="ft-btn" style="margin-left:12px; font-size:9px; padding:2px 8px;" aria-label="Cycle theme: auto, dark, light">THEME</button>
                 </div>
             </div>
             <div class="ft-masthead__rule"></div>
             <div class="ft-masthead__tagline">
-                <span class="ft-eyebrow">Cash-secured puts &amp; covered calls</span>
-                <span class="ft-eyebrow ft-eyebrow--faint">v2.0 &middot; live</span>
+                <span class="ft-eyebrow">[ CASH-SECURED PUTS // COVERED CALLS ] · OPEN D · LIVE SESSION</span>
+                <span class="ft-eyebrow ft-eyebrow--faint">v2.0 · REV 2.6 · © 2026</span>
             </div>
             <div class="ft-masthead__rule ft-masthead__rule--heavy"></div>
             <nav class="ft-masthead__nav" aria-label="Primary">
