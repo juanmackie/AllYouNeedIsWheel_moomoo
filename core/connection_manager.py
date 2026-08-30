@@ -712,12 +712,14 @@ class MoomooConnection:
             logger.error(f"Error getting owner plate for {symbol}: {str(e)}")
             return RET_ERROR, None
 
-    def get_option_chain(self, symbol, expiration=None, right="C", target_strike=None, data_filter=None):
+    def get_option_chain(
+        self, symbol, expiration=None, right="C", target_strike=None, data_filter=None, force_refresh=False
+    ):
         symbol = self._format_symbol(symbol)
         cache_key = f"{symbol}_{expiration}_{right}"
         request_key = f"option_chain:{cache_key}"
 
-        if data_filter is None:
+        if data_filter is None and not force_refresh:
             cached_result = self._quote_cache.get_option_chain(symbol, expiration, right)
             if cached_result is not None:
                 return cached_result

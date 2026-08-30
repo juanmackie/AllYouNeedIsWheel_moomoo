@@ -77,6 +77,26 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ["AAPL", "NVDA", "TSLA"])
 
+    @patch("api.services.config.get_config")
+    @patch("db.database.OptionsDatabase")
+    @patch("api.services.portfolio_service.PortfolioService")
+    def test_portfolio_context_provider_contract_is_present(
+        self, mock_portfolio_service, mock_options_db, mock_get_config
+    ):
+        """OptionsService must expose the provider attribute used by PortfolioContext."""
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "db_path": ":memory:",
+        }.get(key, default)
+        mock_get_config.return_value = mock_config
+
+        service = OptionsService()
+        portfolio_service = service.portfolio_context_helper._get_portfolio_service()
+
+        self.assertIs(portfolio_service, mock_portfolio_service.return_value)
+        mock_portfolio_service.assert_called_once_with()
+        mock_options_db.assert_called_once_with(":memory:")
+
 
 class TestOptionsServiceConnectionConfig(unittest.TestCase):
     def test_ensure_connection_propagates_portfolio_env(self):

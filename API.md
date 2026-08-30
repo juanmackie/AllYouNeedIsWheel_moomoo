@@ -12,7 +12,7 @@ order, unlock, or trading-password endpoint.
 - `GET /api/system/opend-status` — OpenD probe
 
 ### Wheel run
-- `GET /api/run` — latest refresh attempt plus immutable last-good snapshot; response recomputes effective `tradeable`, `effective_status`, and stale symbols at read time. When `auto_refresh_at_open=true`, it may start one serialized data-only refresh per market day.
+- `GET /api/run` — latest refresh attempt plus immutable last-good snapshot; response recomputes effective `tradeable`, `effective_status`, and stale symbols at read time. Closed-market snapshots may contain broker last-session chains and remain planning-only/staged.
 - `POST /api/run/refresh` — start one background refresh (202; 409 if running); failed attempts never overwrite the last-good snapshot
 
 ### Settings

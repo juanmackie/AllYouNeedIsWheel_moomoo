@@ -31,6 +31,9 @@ class OptionsService:
         from api.services.iv_earnings_service import IVEarningsService
 
         self.iv_earnings_service = IVEarningsService(self.db)
+        # PortfolioContext and RecommendationEngine receive this service as a
+        # provider and use its portfolio_service attribute for lazy access.
+        self.portfolio_service = None
         # Initialize composed services with explicit dependencies
         # Order matters: leaf dependencies first, then consumers
         self.watchlist_manager = WatchlistManager(config_provider=self, db=self.db)
@@ -100,6 +103,8 @@ class OptionsService:
                 return None
             else:
                 logger.info("Successfully connected to moomoo OpenD")
+                if self.portfolio_service is not None:
+                    self.portfolio_service.connection = self.connection
                 return self.connection
         except Exception as e:
             logger.error(f"Error ensuring connection: {str(e)}")

@@ -19,7 +19,7 @@
 - Keep `core` free of `api` imports entirely (any direction): api-layer composition is injected into `WheelRunner` as callables (see `api/services/roll_diagnostics.py`).
 - Preserve live-trading safety assumptions and source-of-truth boundaries.
 - Scoring changes must preserve or deliberately update the methodology documented in `SCORING.md`; midpoint is display-only and never a ranking basis.
-- Connection logic must avoid leaking handles and should be safe under repeated route/service calls.
+- Connection logic must avoid leaking handles and should be safe under repeated route/service calls. `MoomooConnection.get_option_chain(..., force_refresh=True)` is the explicit seam for closed-market last-session reads; it must remain query-only.
 
 ## Work Guidance
 

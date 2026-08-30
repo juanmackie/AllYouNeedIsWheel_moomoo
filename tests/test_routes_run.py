@@ -39,22 +39,6 @@ class TestRunRoute(unittest.TestCase):
         self.assertEqual(snapshot["run"]["status"], "ready")
         self.assertTrue(snapshot["tradeable"])
 
-    @patch("api.routes.run.maybe_start_open_refresh")
-    @patch("api.routes.run._get_runner")
-    def test_get_run_can_trigger_optional_open_refresh(self, mock_get_runner, mock_auto_refresh):
-        self.app.config["connection_config"] = {"auto_refresh_at_open": True}
-        self.db.get_latest_attempt.return_value = None
-        self.db.get_latest_snapshot.return_value = None
-        mock_get_runner.return_value = MagicMock()
-
-        with self.app.test_client() as client:
-            response = client.get("/api/run")
-
-        self.assertEqual(response.status_code, 200)
-        mock_auto_refresh.assert_called_once_with(
-            mock_get_runner.return_value, self.app.config["connection_config"], snapshot=None
-        )
-
     @patch("api.routes.run._get_runner")
     @patch("api.routes.run.start_background_refresh", return_value=True)
     def test_refresh_starts_one_runner_attempt(self, mock_refresh, mock_get_runner):

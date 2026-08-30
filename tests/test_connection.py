@@ -819,6 +819,18 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn("options", result)
 
+    def test_get_option_chain_force_refresh_bypasses_memory_cache(self):
+        conn = self._make_connected_conn()
+        conn._quote_cache.cache_option_chain("AAPL", "20230616", "C", {"cached": True})
+        mock_chain_df = MagicMock()
+        mock_chain_df.empty = True
+        self.mock_quote_ctx.get_option_chain.return_value = (RET_OK, mock_chain_df)
+
+        result = conn.get_option_chain("US.AAPL", "20230616", "C", force_refresh=True)
+
+        self.assertNotIn("cached", result)
+        self.mock_quote_ctx.get_option_chain.assert_called_once()
+
     def test_get_option_chain_uses_shared_gate(self):
         conn = self._make_connected_conn()
         mock_chain_df = MagicMock()

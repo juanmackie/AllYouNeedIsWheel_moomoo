@@ -20,76 +20,13 @@ import hashlib
 import logging
 import threading
 import uuid
-from datetime import datetime
 
 from core.run_model import RefreshAttempt, RunMetadata, WheelRunSnapshot, utc_now_iso
-from core.utils import MARKET_TIMEZONE, is_market_open, market_now
+from core.utils import is_market_open
 
 logger = logging.getLogger("core.wheel_runner")
 
 _refresh_lock = threading.Lock()
-_open_refresh_lock = threading.Lock()
-_last_auto_refresh_date = None
-
-
-def _snapshot_published_market_date(snapshot):
-    """Return the snapshot publication date in the US market timezone."""
-    if not isinstance(snapshot, dict):
-        return None
-    run = snapshot.get("run") if isinstance(snapshot.get("run"), dict) else snapshot
-    published_at = run.get("published_at") if isinstance(run, dict) else None
-    if not published_at:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(published_at).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=MARKET_TIMEZONE)
-    return parsed.astimezone(MARKET_TIMEZONE).date()
-
-
-def should_auto_refresh(snapshot, now=None, market_open=None, already_fired_date=None):
-    """Decide whether the optional once-per-day open refresh should fire."""
-    now = market_now() if now is None else now
-    market_open = is_market_open() if market_open is None else bool(market_open)
-    today = now.astimezone(MARKET_TIMEZONE).date() if now.tzinfo else now.date()
-    return bool(
-        market_open
-        and today.weekday() < 5
-        and today != already_fired_date
-        and _snapshot_published_market_date(snapshot) != today
-    )
-
-
-def maybe_start_open_refresh(runner, config, snapshot=None, now=None):
-    """Start at most one optional data refresh per market day.
-
-    This is intentionally a small trigger around the existing serialized
-    refresh worker. A failed automatic run is not retried; the user can still
-    use the manual refresh button.
-    """
-    global _last_auto_refresh_date
-    enabled = config.get("auto_refresh_at_open", False) if hasattr(config, "get") else False
-    if isinstance(enabled, str):
-        enabled = enabled.strip().lower() in {"1", "true", "yes", "y", "on"}
-    if not enabled:
-        return False
-
-    now = market_now() if now is None else now
-    today = now.astimezone(MARKET_TIMEZONE).date() if now.tzinfo else now.date()
-    with _open_refresh_lock:
-        if not should_auto_refresh(
-            snapshot,
-            now=now,
-            market_open=is_market_open(),
-            already_fired_date=_last_auto_refresh_date,
-        ):
-            return False
-        started = start_background_refresh(runner)
-        if started:
-            _last_auto_refresh_date = today
-        return started
 
 
 def opaque_account_id(account_id: str) -> str:

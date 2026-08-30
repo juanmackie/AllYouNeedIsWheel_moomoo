@@ -7,6 +7,7 @@ import logging
 import time
 from datetime import datetime
 
+from api.services.options_data import fetch_option_chain_live_first
 from api.services.recommendation_ranking import (
     format_recommendation,
     rank_candidates,
@@ -35,11 +36,12 @@ def _is_valid_external_option(option: dict, stock_price: float) -> bool:
         bid = float(option.get("bid", 0) or 0)
         ask = float(option.get("ask", 0) or 0)
         last = float(option.get("last", 0) or 0)
-        dte = int(option.get("dte", 0) or 0)
+        raw_dte = option.get("dte")
+        dte = int(raw_dte) if raw_dte not in (None, "") else None
     except (TypeError, ValueError):
         return False
 
-    if strike <= 0 or stock_price <= 0 or dte <= 0:
+    if strike <= 0 or stock_price <= 0 or (dte is not None and dte <= 0):
         return False
     if bid < 0 or ask < 0 or last < 0:
         return False
@@ -368,11 +370,6 @@ class RecommendationEngine:
         Fetch CSP candidates from Moomoo for a watchlist ticker.
         Returns list of candidate dicts, or None on failure.
         """
-        # Market-closed: no actionable quotes; planning handled at run level.
-        if not is_market_open():
-            logger.debug(f"Market closed: skipping Moomoo CSP fetch for {ticker}")
-            return None
-
         try:
             conn = self._get_connection()
             if not conn:
@@ -470,11 +467,15 @@ class RecommendationEngine:
 
             for exp_str, dte in expirations_to_check:
                 try:
-                    chain = conn.get_option_chain(
+                    chain = fetch_option_chain_live_first(
+                        conn,
+                        self.db,
+                        self.config,
                         ticker,
                         exp_str,
                         "P",
                         target_strike=stock_price * (1 - (sp.get("csp_default_otm_pct", 10) / 100)),
+                        stock_price=stock_price,
                     )
                     if not chain:
                         continue

@@ -62,6 +62,78 @@ def _annotate_chain_sources(
     return annotated
 
 
+def fetch_option_chain_live_first(conn, db, config, ticker, expiration, right, target_strike=None, stock_price=None):
+    """Fetch a broker chain live first, falling back to persisted broker data.
+
+    Closed-market scans are planning-only, but they are the user's normal review
+    window. Bypass the in-memory after-hours cache for the freshest OpenD
+    last-session quote; use the persisted snapshot only when OpenD cannot provide
+    a chain. No external source can enter this path.
+    """
+    market_closed = not is_market_open()
+    right = str(right or "C").upper()
+    try:
+        try:
+            chain = conn.get_option_chain(
+                ticker,
+                expiration,
+                right,
+                target_strike=target_strike,
+                force_refresh=market_closed,
+            )
+        except TypeError as exc:
+            # Keep lightweight test/donor providers compatible while the real
+            # MoomooConnection supports force_refresh explicitly.
+            if "force_refresh" not in str(exc):
+                raise
+            chain = conn.get_option_chain(ticker, expiration, right, target_strike=target_strike)
+
+        if chain and chain.get("options"):
+            chain = _annotate_chain_sources(
+                chain,
+                price_source="broker",
+                chain_source="broker",
+                iv_source="broker",
+                from_yfinance=False,
+            )
+            if db is not None:
+                try:
+                    db.save_option_chain_snapshot(
+                        ticker,
+                        expiration,
+                        right,
+                        stock_price if stock_price is not None else chain.get("stock_price", 0),
+                        chain,
+                        source="broker",
+                    )
+                except Exception:
+                    logger.debug("Could not persist broker chain snapshot", exc_info=True)
+            return chain
+    except Exception:
+        logger.exception("Error getting live option chain for %s %s %s", ticker, expiration, right)
+
+    use_after_hours_cache = bool((config or {}).get("broker_cache_after_hours", True))
+    if market_closed and use_after_hours_cache and db is not None:
+        try:
+            snapshot = db.get_latest_option_chain(ticker, right, max_age_hours=168)
+            if snapshot and snapshot.get("chain_data") and snapshot.get("source") == "broker":
+                chain = _annotate_chain_sources(
+                    snapshot["chain_data"],
+                    price_source="broker",
+                    chain_source="persisted-broker",
+                    iv_source="persisted-broker",
+                    from_yfinance=False,
+                )
+                chain["quote_timestamp"] = snapshot.get("as_of", "")
+                chain["data_source"] = "persisted"
+                for option in chain.get("options", []):
+                    option["quote_timestamp"] = snapshot.get("as_of", "")
+                return chain
+        except Exception:
+            logger.debug("Could not load persisted broker chain fallback", exc_info=True)
+    return None
+
+
 class OptionsDataService:
     """
     Handles options data retrieval, chain processing, and candidate building.
@@ -443,60 +515,24 @@ class OptionsDataService:
                     else stock_price * (1 - (otm_percentage / 100))
                 )
                 for expiry in expirations:
-                    try:
-                        use_after_hours_cache = (
-                            self._get_config().get("broker_cache_after_hours", True) if self._get_config() else True
+                    right = "C" if side == "CALL" else "P"
+                    chain = fetch_option_chain_live_first(
+                        conn,
+                        self.db,
+                        self._get_config(),
+                        ticker,
+                        expiry,
+                        right,
+                        target_strike=target_strike,
+                        stock_price=stock_price,
+                    )
+                    if chain:
+                        options_chains.append(chain)
+                    else:
+                        logger.debug(
+                            f"Moomoo returned no options for {ticker} {expiry} {side}; "
+                            "no external chain fallback is permitted"
                         )
-                        if not is_market_open() and use_after_hours_cache:
-                            snapshot = self.db.get_latest_option_chain(
-                                ticker, "C" if side == "CALL" else "P", max_age_hours=168
-                            )
-                            if snapshot and snapshot.get("chain_data") and snapshot.get("source") == "broker":
-                                chain = snapshot["chain_data"]
-                                chain = _annotate_chain_sources(
-                                    chain,
-                                    price_source=stock_price_source,
-                                    chain_source="persisted-broker",
-                                    iv_source="persisted-broker",
-                                    from_yfinance=False,
-                                )
-                                chain["quote_timestamp"] = snapshot.get("as_of", "")
-                                chain["data_source"] = "persisted"
-                                for opt in chain.get("options", []):
-                                    opt["quote_timestamp"] = snapshot.get("as_of", "")
-                                options_chains.append(chain)
-                                continue
-
-                        chain = conn.get_option_chain(
-                            ticker, expiry, "C" if side == "CALL" else "P", target_strike=target_strike
-                        )
-                        if chain and chain.get("options"):
-                            chain = _annotate_chain_sources(
-                                chain,
-                                price_source=stock_price_source,
-                                chain_source="broker",
-                                iv_source="broker",
-                                from_yfinance=False,
-                            )
-                            options_chains.append(chain)
-                            try:
-                                self.db.save_option_chain_snapshot(
-                                    ticker,
-                                    expiry,
-                                    "C" if side == "CALL" else "P",
-                                    stock_price,
-                                    chain,
-                                    source="broker",
-                                )
-                            except Exception:
-                                logger.debug("Could not persist broker chain snapshot", exc_info=True)
-                        else:
-                            logger.debug(
-                                f"Moomoo returned no options for {ticker} {expiry} {side}; "
-                                "no external chain fallback is permitted"
-                            )
-                    except Exception as chain_exc:
-                        logger.exception(f"Error getting option chain for {ticker} {expiry} {side}: {chain_exc}")
 
             if not options_chains:
                 result["error"] = "No options data available from any source"

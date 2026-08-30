@@ -11,6 +11,5 @@
     "chain_rate_limit_max_requests": 10,
     "chain_rate_limit_window_sec": 30,
     "chain_min_request_spacing_sec": 3.0,
-    "auto_refresh_at_open": false,
-    "comment": "Default port for moomoo OpenD is 11111. The app is structurally query-only and never places orders. portfolio_env controls whether the dashboard reads SIMULATE or REAL portfolio data. security_firm should match your moomoo broker region, such as FUTUAU, FUTUINC, or FUTUSG. account_id must be a trade acc_id, not your moomoo login/user ID. Set auto_launch_opend to true and fill opend_path if you want the local launcher to open OpenD for you. Chain quota defaults are conservative; tune only after observing OpenD rate-limit diagnostics. auto_refresh_at_open is an optional single data refresh per market day and defaults to false."
+    "comment": "Default port for moomoo OpenD is 11111. The app is structurally query-only and never places orders. portfolio_env controls whether the dashboard reads SIMULATE or REAL portfolio data. security_firm should match your moomoo broker region, such as FUTUAU, FUTUINC, or FUTUSG. account_id must be a trade acc_id, not your moomoo login/user ID. Set auto_launch_opend to true and fill opend_path if you want the local launcher to open OpenD for you. Chain quota defaults are conservative; tune only after observing OpenD rate-limit diagnostics."
 }

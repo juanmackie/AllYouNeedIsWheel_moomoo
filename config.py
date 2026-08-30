@@ -28,7 +28,6 @@ DEFAULT_CONNECTION_CONFIG = {
     "chain_rate_limit_max_requests": 10,
     "chain_rate_limit_window_sec": 30,
     "chain_min_request_spacing_sec": 3.0,
-    "auto_refresh_at_open": False,
     "watchlist": _parse_watchlist_env(os.environ.get("WATCHLIST")),
     # Versioned wheel risk preset (conservative | balanced | aggressive).
     # The UI persists the selection in the settings table; this is only the default.
@@ -46,7 +45,6 @@ def apply_env_overrides(config):
         "chain_rate_limit_max_requests": "MOOMOO_CHAIN_RATE_LIMIT_MAX_REQUESTS",
         "chain_rate_limit_window_sec": "MOOMOO_CHAIN_RATE_LIMIT_WINDOW_SEC",
         "chain_min_request_spacing_sec": "MOOMOO_CHAIN_MIN_REQUEST_SPACING_SEC",
-        "auto_refresh_at_open": "MOOMOO_AUTO_REFRESH_AT_OPEN",
     }
 
     for key, env_var in env_mapping.items():
@@ -66,10 +64,6 @@ def apply_env_overrides(config):
             except ValueError:
                 logger.warning(f"Ignoring invalid number for {env_var}: {env_value}")
             continue
-        if key == "auto_refresh_at_open":
-            config[key] = env_value.strip().lower() in {"1", "true", "yes", "y", "on"}
-            continue
-
         config[key] = env_value
 
     readonly_override = os.environ.get("MOOMOO_READONLY")

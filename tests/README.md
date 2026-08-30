@@ -42,12 +42,16 @@ npm test -- tests/frontend/top-recommendations.test.js
    refresh scans every symbol; an infeasible union publishes `planning` rather
    than a silently partial top three.
 3. Refresh `/api/run` from the dashboard. Confirm one immutable last-good
-   snapshot remains visible while a refresh is in flight or fails.
+   snapshot remains visible while a refresh is in flight or fails. When the US
+   market is closed, confirm the scan still produces CSP and covered-call
+   candidates from fresh OpenD last-session chains (or persisted broker fallback)
+   and labels the run `planning`.
 4. Compare each card's executable bid, bid premium velocity, midpoint
    **limit target—not guaranteed**, DTE, spread, OI/volume, cycle/annualized
    yield, source, broker timestamp, and UTC fetch time against Moomoo.
-5. Confirm ordering is qualified quality tier, event tier, descending bid
-   velocity, then ticker/expiry/strike; composite score cannot reorder cards.
+5. Confirm ordering is qualified quality tier, event tier, descending executable
+   capital return per deployed dollar per day, then bid premium velocity and
+   ticker/expiry/strike; composite score cannot reorder cards.
 6. Confirm any copy_eligible card (qualified or marginal, Moomoo-sourced, positive
    `recommended_contracts`) can copy. When the run is live-tradeable the ticket is an
    explicit limit draft on the current quote; when US markets are closed or the quote
@@ -55,7 +59,8 @@ npm test -- tests/frontend/top-recommendations.test.js
    "verify live quote at open", and event-risk warnings). Hard gates still block copy:
    crossed markets, missing/stale quotes while open, yfinance fallback, insufficient
    capacity, and research-only mode. Copied quantity is the backend
-   `recommended_contracts`.
+   `recommended_contracts`. A closed-market ticket is staged for manual placement
+   before/at the US open; verify the live quote before placing it in Moomoo.
 7. Confirm true available cash minus reserved short-put collateral controls CSP
    affordability; margin buying power is display-only.
 8. Confirm no UI or API path places, unlocks, cancels, or modifies an order.

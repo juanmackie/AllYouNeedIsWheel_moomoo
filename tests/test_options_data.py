@@ -13,6 +13,72 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+class TestAfterHoursChainFetch(unittest.TestCase):
+    @patch("api.services.options_data.is_market_open", return_value=False)
+    def test_closed_market_fetches_live_chain_before_persisted_cache(self, _market_open):
+        from api.services.options_data import fetch_option_chain_live_first
+
+        conn = MagicMock()
+        conn.get_option_chain.return_value = {
+            "right": "P",
+            "stock_price": 100.0,
+            "options": [{"strike": 90.0, "bid": 1.0}],
+        }
+        db = MagicMock()
+
+        result = fetch_option_chain_live_first(
+            conn,
+            db,
+            {"broker_cache_after_hours": True},
+            "AAPL",
+            "20260918",
+            "P",
+            target_strike=90.0,
+        )
+
+        self.assertEqual(result["chain_source"], "broker")
+        conn.get_option_chain.assert_called_once_with("AAPL", "20260918", "P", target_strike=90.0, force_refresh=True)
+        db.get_latest_option_chain.assert_not_called()
+        db.save_option_chain_snapshot.assert_called_once()
+
+    @patch("api.services.options_data.is_market_open", return_value=False)
+    def test_closed_market_falls_back_to_persisted_broker_chain(self, _market_open):
+        from api.services.options_data import fetch_option_chain_live_first
+
+        conn = MagicMock()
+        conn.get_option_chain.return_value = None
+        db = MagicMock()
+        db.get_latest_option_chain.return_value = {
+            "as_of": "2026-08-28T20:00:00+00:00",
+            "source": "broker",
+            "chain_data": {
+                "right": "P",
+                "options": [{"strike": 90.0, "bid": 1.0}],
+            },
+        }
+
+        result = fetch_option_chain_live_first(conn, db, {"broker_cache_after_hours": True}, "AAPL", "20260918", "P")
+
+        self.assertEqual(result["chain_source"], "persisted-broker")
+        self.assertEqual(result["quote_timestamp"], "2026-08-28T20:00:00+00:00")
+        db.get_latest_option_chain.assert_called_once_with("AAPL", "P", max_age_hours=168)
+
+
+class TestRecommendationOptionValidation(unittest.TestCase):
+    def test_broker_option_without_dte_is_validated_from_expiration_later(self):
+        from api.services.recommendations import _is_valid_external_option
+
+        option = {
+            "strike": 140.0,
+            "option_type": "PUT",
+            "bid": 1.5,
+            "ask": 1.6,
+            "last": 1.55,
+        }
+
+        self.assertTrue(_is_valid_external_option(option, 150.0))
+
+
 class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
     def _make_service(self, config=None):
         from api.services.options_data import OptionsDataService

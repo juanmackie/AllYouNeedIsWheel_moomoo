@@ -5,10 +5,10 @@ GET  /api/run              -> latest attempt + latest completed snapshot
 POST /api/run/refresh      -> start one background refresh (serialized)
 """
 
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, jsonify
 
 from core.run_model import recompute_effective_snapshot
-from core.wheel_runner import maybe_start_open_refresh, start_background_refresh
+from core.wheel_runner import start_background_refresh
 
 bp = Blueprint("run", __name__, url_prefix="/api/run")
 
@@ -31,9 +31,6 @@ def get_run_state():
     db = _get_db()
     attempt = db.get_latest_attempt() if db is not None else None
     snapshot = db.get_latest_snapshot() if db is not None else None
-    config = current_app.config.get("connection_config", {})
-    if config.get("auto_refresh_at_open", False):
-        maybe_start_open_refresh(_get_runner(), config, snapshot=snapshot)
     return jsonify({"attempt": attempt, "snapshot": recompute_effective_snapshot(snapshot)})
 
 

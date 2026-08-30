@@ -154,6 +154,11 @@ open, yfinance fallback, insufficient capacity, and research-only mode all keep
 a signal review-only. Copy text uses the bid credit and the midpoint only as a
 labelled non-guaranteed limit target.
 
+During closed-market review, both CSP and covered-call lanes request the freshest
+available last-session chain from OpenD first, then fall back to a persisted broker
+snapshot only if OpenD fails. The resulting run remains `planning`; its staged ticket
+must be verified against the live quote before a manual Moomoo order is placed.
+
 ## Evidence and freshness
 
 Moomoo's `update_time` is preserved verbatim and parsed as

@@ -21,6 +21,7 @@
 - When a signal can remain visible only as research-only data, keep that label and caveat explicit rather than silently dropping it.
 - Scanner services should return blocker/diagnostic counts when useful so the UI can explain empty panels.
 - `RecommendationEngine` is the backend shortlist authority: watchlist coverage is complete-or-planning, quality/event tiers precede executable-bid premium velocity, and candidates carry Moomoo quote evidence plus safe recommended quantity. `/api/run` publishes the immutable result.
+- Closed-market CSP and covered-call scans request the freshest available Moomoo/OpenD last-session chain first, then use persisted broker snapshots only as fallback. Closed results remain planning/staged and never bypass freshness or read-only gates.
 
 ## Work Guidance
 

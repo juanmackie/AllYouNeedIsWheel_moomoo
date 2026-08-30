@@ -22,12 +22,17 @@ manual copy-to-ticket suggestions for your broker UI.
    default**; effective values are read-only). Each preset carries a growth
    objective (`target_account_multiple`; all presets target **5x**) that drives
    pace math.
-4. Refresh a run. A completed `WheelRunSnapshot` is persisted and atomically
-   published — alongside one portfolio snapshot per run for equity history,
-   and inferred trade events when positions changed between runs. Only a
-   **ready** run with complete watchlist coverage and fresh Moomoo quotes
-   permits copy actions.
-5. Copy an explicit ticket and execute in Moomoo.
+4. Refresh before bed in the Australian evening. The closed-market scan fetches
+   the freshest available last-session Moomoo chains and publishes a `planning`
+   snapshot with the full CSP/covered-call shortlist, visible math, and stale-data
+   labels. A completed `WheelRunSnapshot` is persisted atomically alongside one
+   portfolio snapshot per run and inferred trade events when positions change.
+5. Copy the staged explicit ticket, verify the live quote and event risk at the
+   US open when practical, then place the limit order manually in Moomoo. Nothing
+   in this app places, modifies, or cancels orders; the resting order may fill
+   while you sleep.
+6. When awake around the US session, refresh again for fresh Moomoo quotes. At
+   the next Australian morning, review fills and open-position verdicts.
 
 ## Data and actionability contract
 
@@ -49,8 +54,9 @@ manual copy-to-ticket suggestions for your broker UI.
   `America/New_York`; UTC fetch time is carried separately. Missing/invalid/
   stale broker time blocks actionable candidates while the market is open.
   Midpoint is shown only as a non-guaranteed limit target.
-- Market-closed results are planning previews: visible, read-only, not
-  copyable.
+- Market-closed results are planning previews: visible, read-only, and staged for
+  manual review. Their last-session Moomoo quotes are explicitly not live; verify
+  the quote before placing a resting limit order.
 
 ## Architecture
 
@@ -127,8 +133,8 @@ explicit `account_id` in `connection.json`; missing or ambiguous accounts
 hard-fail with a clear message. Dashboard assets are served locally, so the
 screen does not depend on a font/icon/Bootstrap CDN. Option-chain quota
 defaults are conservative; tune them only after observing connection
-diagnostics. `auto_refresh_at_open` optionally starts one data-only refresh per
-market day and is disabled by default.
+diagnostics. Closed-market scans remain planning-only but still fetch broker
+last-session chains for the Australian-evening review.
 
 ## Configuration
 
@@ -144,7 +150,6 @@ market day and is disabled by default.
 | `MOOMOO_CHAIN_RATE_LIMIT_MAX_REQUESTS` | `10` | Conservative option-chain requests per window |
 | `MOOMOO_CHAIN_RATE_LIMIT_WINDOW_SEC` | `30` | Option-chain quota window in seconds |
 | `MOOMOO_CHAIN_MIN_REQUEST_SPACING_SEC` | `3.0` | Minimum spacing between chain calls |
-| `MOOMOO_AUTO_REFRESH_AT_OPEN` | `false` | Optional one-shot data refresh per market day |
 | `wheel_preset` (in config/DB) | `balanced` | Selected risk preset; persisted via `/api/settings/preset` |
 
 ## Tests and quality gates

@@ -1,3 +1,17 @@
+## 2026-08-30 — Australia out-of-hours scan alignment
+
+- Closed-market scans now include watchlist CSPs instead of skipping the primary
+  signal lane. Both CSP and covered-call lanes request the freshest available
+  last-session Moomoo chain first and fall back to persisted broker snapshots only
+  when OpenD cannot provide one.
+- Closed-market results remain planning-only and staged for manual review; freshness,
+  provenance, cash, and read-only gates are unchanged.
+- Removed the unused open-time auto-refresh trigger; the Australian workflow is manual
+  evening review → resting limit order in Moomoo → optional live-open review → morning
+  fill/position check.
+- Restored the `OptionsService.portfolio_service` provider contract after a live probe
+  exposed a zero-cash fallback during REAL-account refresh.
+
 ## 2026-08-29 — 5x signal surfacing and capital-aware ranking
 
 - Ranked signals by executable annualized return on secured/covered capital, with
