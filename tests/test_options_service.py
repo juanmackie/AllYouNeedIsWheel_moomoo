@@ -54,9 +54,9 @@ class TestYFinanceTicker(unittest.TestCase):
 class TestGetEffectiveWatchlist(unittest.TestCase):
     """Test watchlist mode logic."""
 
-    @patch("api.get_service")
+    @patch("api.services.watchlist_manager.WatchlistManager._fetch_moomoo_watchlist", return_value=[])
     @patch("api.services.config.get_config")
-    def test_static_mode_returns_static(self, mock_get_config, mock_get_service):
+    def test_static_mode_returns_static(self, mock_get_config, _mock_fetch_moomoo_watchlist):
         """Static mode should return the static watchlist."""
         mock_config = MagicMock()
         # Pin an isolated temp-file DB so the repo's local options.db (which
@@ -70,7 +70,6 @@ class TestGetEffectiveWatchlist(unittest.TestCase):
             "db_path": temp_db,
         }.get(key, default)
         mock_get_config.return_value = mock_config
-        mock_get_service.return_value = None
 
         service = OptionsService()
         result = service.get_effective_watchlist()

@@ -21,6 +21,7 @@ BROKER_NET_BUYING_POWER_SOURCES = {
 
 
 def _first_positive_number(summary: dict, fields: tuple[str, ...]) -> tuple[float, str]:
+    first_zero: tuple[float, str] | None = None
     for field in fields:
         value = summary.get(field)
         if value is None:
@@ -31,7 +32,9 @@ def _first_positive_number(summary: dict, fields: tuple[str, ...]) -> tuple[floa
             continue
         if numeric_value > 0:
             return numeric_value, field
-    return 0.0, "none"
+        if numeric_value == 0 and first_zero is None:
+            first_zero = (numeric_value, field)
+    return first_zero or (0.0, "none")
 
 
 def _broker_buying_power(summary: dict, true_cash: float, true_cash_source: str) -> tuple[float, str]:

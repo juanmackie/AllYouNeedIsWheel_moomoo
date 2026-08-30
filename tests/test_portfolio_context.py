@@ -221,7 +221,7 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         self.assertEqual(context["broker_buying_power"], 50000.0)
         self.assertEqual(context["cash_available_for_csp"], 20000.0)
 
-    def test_csp_cash_true_cash_minus_reserved_collateral(self):
+    def test_csp_cash_uses_true_cash_not_margin_buying_power(self):
         """CSP cash is TRUE available cash minus open short-put collateral (never margin)."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             "available_cash": 0.0,
@@ -246,7 +246,7 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
             "available_cash_minus_open_short_put_collateral",
         )
 
-    def test_csp_cash_true_cash_minus_reserved_collateral(self):
+    def test_csp_cash_subtracts_reserved_collateral_from_true_cash(self):
         """CSP cash is true available cash minus reserved short-put collateral."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             "available_cash": 57360.19,

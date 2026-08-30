@@ -76,7 +76,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
         self.mock_context = MagicMock()
         self.mock_context.config = {}
 
-    def test_static_mode(self):
+    @patch.object(WatchlistManager, "_fetch_moomoo_watchlist", return_value=[])
+    def test_static_mode(self, _mock_fetch_moomoo):
         """Config list is one source of the merged union."""
         self.mock_context.config = {
             "watchlist": ["AAPL", "TSLA", "NVDA"],
@@ -88,7 +89,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ["AAPL", "NVDA", "TSLA"])
 
-    def test_config_only_union(self):
+    @patch.object(WatchlistManager, "_fetch_moomoo_watchlist", return_value=[])
+    def test_config_only_union(self, _mock_fetch_moomoo):
         self.mock_context.config = {
             "watchlist": ["AAPL"],
         }
@@ -98,7 +100,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ["AAPL"])
 
-    def test_dynamic_mode_is_unsupported_and_falls_back_to_static(self):
+    @patch.object(WatchlistManager, "_fetch_moomoo_watchlist", return_value=[])
+    def test_dynamic_mode_is_unsupported_and_falls_back_to_static(self, _mock_fetch_moomoo):
         """Broad dynamic screening is out of scope; dynamic mode returns static."""
         self.mock_context.config = {
             "watchlist": ["AAPL"],
@@ -133,7 +136,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
         self.assertIn("AMC", result)
         self.assertIn("BB", result)
 
-    def test_dynamic_failure_falls_back_to_static(self):
+    @patch.object(WatchlistManager, "_fetch_moomoo_watchlist", return_value=[])
+    def test_dynamic_failure_falls_back_to_static(self, _mock_fetch_moomoo):
         """Any dynamic-mode failure falls back to the static watchlist."""
         self.mock_context.config = {
             "watchlist": ["AAPL"],
@@ -145,7 +149,8 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
 
         self.assertEqual(result, ["AAPL"])
 
-    def test_unknown_mode_falls_back_to_static(self):
+    @patch.object(WatchlistManager, "_fetch_moomoo_watchlist", return_value=[])
+    def test_unknown_mode_falls_back_to_static(self, _mock_fetch_moomoo):
         self.mock_context.config = {
             "watchlist": ["AAPL"],
             "watchlist_mode": "quantum",
