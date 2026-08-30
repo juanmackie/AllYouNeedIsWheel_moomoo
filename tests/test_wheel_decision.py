@@ -1396,6 +1396,9 @@ class TestQuoteFreshness(unittest.TestCase):
             "implied_volatility": 0.30,
             "open_interest": 500,
             "volume": 100,
+            "price_source": "broker",
+            "chain_source": "broker",
+            "iv_source": "broker",
         }
 
     @patch.object(_wd_module, "is_market_open", return_value=True)
@@ -1527,6 +1530,16 @@ class TestCopyEligibility(TestQuoteFreshness):
     def test_yfinance_fallback_not_copy_eligible(self, _mock_open):
         opt = dict(self.base, update_time=self.fresh_ts, from_yfinance=True)
         res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertFalse(res.copy_eligible)
+        self.assertTrue(res.review_only)
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_missing_provenance_not_copy_eligible(self, _mock_open):
+        opt = dict(self.base, update_time=self.fresh_ts)
+        for source in ("price_source", "chain_source", "iv_source"):
+            opt.pop(source)
+        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        self.assertEqual(res.chain_source, "unknown")
         self.assertFalse(res.copy_eligible)
         self.assertTrue(res.review_only)
 

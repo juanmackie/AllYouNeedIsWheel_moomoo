@@ -4,7 +4,6 @@ vi.mock('../../frontend/static/js/dashboard/options-table-state.js', () => ({
   state: {
     tickersData: {},
     portfolioSummary: null,
-    customTickers: new Set(),
     watchlistTickers: new Set(),
   },
 }));

@@ -1231,23 +1231,29 @@ class TestMoomooConnectionAccountResolution(unittest.TestCase):
         self.assertEqual(trd_env, TrdEnv.REAL)
         self.assertEqual(acc_id, "12345")
 
-    def test_resolve_portfolio_account_no_id_finds_by_env(self):
+    def test_resolve_portfolio_account_requires_real_id(self):
         conn = MoomooConnection(portfolio_env="REAL")
         accounts = [{"acc_id": "67890", "trd_env": TrdEnv.REAL, "security_firm": "FUTU"}]
         conn.trd_ctx = self._make_mock_trd_ctx(accounts)
 
-        trd_env, acc_id = conn._resolve_portfolio_account()
-        self.assertEqual(trd_env, TrdEnv.REAL)
-        self.assertEqual(acc_id, "67890")
+        with self.assertRaisesRegex(ValueError, "explicitly configured"):
+            conn._resolve_portfolio_account()
 
-    def test_resolve_portfolio_account_none_found(self):
-        conn = MoomooConnection(portfolio_env="REAL")
+    def test_resolve_portfolio_account_rejects_environment_mismatch(self):
+        conn = MoomooConnection(account_id="67890", portfolio_env="SIMULATE")
+        accounts = [{"acc_id": "67890", "trd_env": TrdEnv.REAL, "security_firm": "FUTU"}]
+        conn.trd_ctx = self._make_mock_trd_ctx(accounts)
+
+        with self.assertRaisesRegex(ValueError, "belongs to REAL"):
+            conn._resolve_portfolio_account()
+
+    def test_resolve_portfolio_account_rejects_missing_real_id(self):
+        conn = MoomooConnection(account_id="67890", portfolio_env="REAL")
         accounts = []
         conn.trd_ctx = self._make_mock_trd_ctx(accounts)
 
-        trd_env, acc_id = conn._resolve_portfolio_account()
-        self.assertEqual(trd_env, TrdEnv.REAL)
-        self.assertEqual(acc_id, "")
+        with self.assertRaisesRegex(ValueError, "not available"):
+            conn._resolve_portfolio_account()
 
     @patch("core.context_factory.OpenQuoteContext")
     @patch("core.context_factory.OpenSecTradeContext")

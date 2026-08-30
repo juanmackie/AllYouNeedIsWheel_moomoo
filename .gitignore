@@ -43,14 +43,8 @@ _tmp/
 # Connection config (may contain secrets)
 connection.json
 connection_real.json
-# WARNING: connection.json has portfolio_env=REAL by default - change to SIMULATE for safety
 
-# But allow Docker config (no secrets)
-!connection_docker.json
-
-# GitHub Actions - workflow files SHOULD be committed
-# Note: connection.json.example and connection_docker.json should be committed
-# connection.json and connection_real.json should NOT be committed
+# Planning/working notes — never ship
 plans/
 
 # Environment variables

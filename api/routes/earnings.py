@@ -8,7 +8,7 @@ import logging
 from flask import Blueprint, jsonify, request
 
 from api import get_service
-from api.routes.utils import error_response, success_response
+from api.routes.utils import enforce_route_rate_limit, error_response, success_response
 from core.ticker_utils import earnings_underlying_ticker
 
 logger = logging.getLogger(__name__)
@@ -128,9 +128,21 @@ def get_earnings_status():
     )
 
 
-@bp.route("/update/<ticker>")
+@bp.route("/update/<ticker>", methods=["POST"])
 def update_single_earnings(ticker):
-    """Manually update earnings for a single ticker."""
+    """Manually update earnings for a validated ticker."""
+    from api.services.utils import validate_ticker
+
+    ticker = ticker.strip().upper()
+    if not validate_ticker(ticker):
+        return error_response("Invalid ticker", status_code=400)
+
+    allowed, retry_after = enforce_route_rate_limit(
+        "earnings-single-update", request.remote_addr or "local", max_requests=10, window_seconds=60
+    )
+    if not allowed:
+        return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
+
     service = _get_earnings_service()
     success = service.update_earnings_data(ticker)
     info = service.get_earnings_info(ticker)

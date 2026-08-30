@@ -365,7 +365,7 @@ def get_watchlist_tickers():
         from api.services.watchlist_manager import WatchlistManager
 
         config = get_config()
-        manager = WatchlistManager(config_provider=config)
+        manager = WatchlistManager(config_provider=config, db=current_app.config.get("database"))
         effective_tickers = manager.get_effective_watchlist()
         return success_response(
             {

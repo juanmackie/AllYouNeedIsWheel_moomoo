@@ -2,13 +2,13 @@
  * Options Table module for handling options display and interaction
  * Orchestrator that composes functionality from focused sub-modules.
  */
-import { fetchTickers, fetchAccountData, fetchOptionExpirations, fetchStockPrices } from './api.js';
+import { fetchTickers, fetchAccountData } from './api.js';
 import { fetchWatchlistTickers } from './api-portfolio.js';
 import { escapeHtml } from '../utils/formatters.js';
-import { state, loadOtmSettings, loadCustomTickers, ensureTickerDataState, getSavedTabPreference, setSavedTabPreference } from './options-table-state.js';
+import { state, loadOtmSettings, ensureTickerDataState, getSavedTabPreference, setSavedTabPreference } from './options-table-state.js';
 import { calculateEarningsSummary } from './options-table-calc.js';
 import { buildTabsHTML, updateOptionsTable, addTickerRowToTable, displayPremiumSummary, addPutQtyInputEventListeners, initializeOptionsTableTooltips, insertProgressBanner, updateProgressBanner, finishProgressBanner, failProgressBanner } from './options-table-rendering.js';
-import { addOptionsTableEventListeners, setupCustomTickerEventListeners } from './options-table-events.js';
+import { addOptionsTableEventListeners } from './options-table-events.js';
 import { refreshOptionsForTicker, refreshAllOptions, refreshOptionsForTickerByType, sellAllOptions } from './options-table-actions.js';
 
 function canonicalTicker(ticker) {
@@ -69,16 +69,6 @@ async function fetchScreeningConfig() {
 }
 
 async function loadTickers() {
-    try {
-        const savedTickers = localStorage.getItem('customTickers');
-        if (savedTickers) {
-            const tickersArray = JSON.parse(savedTickers);
-            state.customTickers = new Set(tickersArray);
-        }
-    } catch (error) {
-        console.error('Error loading custom tickers:', error);
-    }
-
     const optionsTableContainer = document.getElementById('options-table-container');
     if (!optionsTableContainer) {
         console.error("Options table container not found");
@@ -96,8 +86,6 @@ async function loadTickers() {
     optionsTableContainer.innerHTML = tabsHTML;
 
     addOptionsTableEventListeners();
-    setupCustomTickerEventListeners();
-
     try {
         state.portfolioSummary = await fetchAccountData();
     } catch (error) {
@@ -122,7 +110,7 @@ async function loadTickers() {
     state.watchlistTickers = new Set(watchlistTickers);
     state.portfolioTickers = portfolioTickers;
 
-    const putTickers = uniqueTickersByUnderlying(portfolioTickers, watchlistTickers, [...state.customTickers]);
+    const putTickers = uniqueTickersByUnderlying(portfolioTickers, watchlistTickers);
 
     document.querySelector('#call-options-table tbody').innerHTML = '';
     document.querySelector('#put-options-table tbody').innerHTML = '';
@@ -168,7 +156,7 @@ async function loadTickers() {
                 <td colspan="13" class="text-center">
                     <div class="d-flex align-items-center justify-content-center">
                         <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
-                        <span>Loading ${typeLabel} for ${ticker} (${i+1}/${totalTickers})...</span>
+                        <span>Loading ${typeLabel} for ${escapeHtml(ticker)} (${i+1}/${totalTickers})...</span>
                     </div>
                 </td>
             `;
@@ -240,7 +228,7 @@ async function loadTickers() {
         showEmptyTableMessage('call-options-table', 'No eligible covered calls. You need 100+ shares of a ticker and a ranked call contract.');
     } else {
         if (putTickers.length === 0) {
-            showEmptyTableMessage('put-options-table', 'No watchlist or custom tickers for cash-secured puts. Add tickers via the watchlist or the "Add" button above.');
+            showEmptyTableMessage('put-options-table', 'No watchlist tickers for cash-secured puts. Add tickers in the watchlist panel.');
         } else {
             showEmptyTableMessage('put-options-table', 'No cash-secured put opportunities found. Check that tickers have available put data or adjust cash-fit filters.');
         }
@@ -256,9 +244,9 @@ async function loadTickers() {
                 if (inactiveType === 'CALL') {
                     showEmptyTableMessage('call-options-table', 'No eligible covered calls. You need 100+ shares of a ticker and a ranked call contract.');
                 } else {
-                    const putTickersCount = [...new Set([...state.portfolioTickers, ...state.watchlistTickers, ...state.customTickers])].length;
+                    const putTickersCount = [...new Set([...state.portfolioTickers, ...state.watchlistTickers])].length;
                     if (putTickersCount === 0) {
-                        showEmptyTableMessage('put-options-table', 'No watchlist or custom tickers for cash-secured puts. Add tickers via the watchlist or the "Add" button above.');
+                        showEmptyTableMessage('put-options-table', 'No watchlist tickers for cash-secured puts. Add tickers in the watchlist panel.');
                     } else {
                         showEmptyTableMessage('put-options-table', 'No cash-secured put opportunities found. Check that tickers have available put data or adjust cash-fit filters.');
                     }

@@ -9,7 +9,6 @@
 ## Ownership
 
 - `ft.css` owns the telemetry design system: dual-mode tokens (dark default + light print), typography atoms, layout primitives, component shims (tables, badges, alerts, buttons), responsive behavior.
-- `main.css` owns any minimal global CSS entrypoint behavior that remains outside the main redesign file.
 
 ## Theme Mode Contract (binding)
 

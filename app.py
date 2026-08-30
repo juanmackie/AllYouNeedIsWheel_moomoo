@@ -79,7 +79,14 @@ def create_application():
     # Store connection config in the app
     app.config["connection_config"] = connection_config
     _redacted = {
-        k: ("<redacted>" if any(secret in k.lower() for secret in ("account_id", "password", "login")) else v)
+        k: (
+            "<redacted>"
+            if any(
+                secret in k.lower()
+                for secret in ("account_id", "password", "login", "secret", "token", "key", "credential", "api")
+            )
+            else v
+        )
         for k, v in connection_config.items()
     }
     logger.info(f"Using connection config: {_redacted}")

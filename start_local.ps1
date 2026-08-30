@@ -1,25 +1,6 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Invoke-PythonLauncher {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
-    )
-
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        & py -3 @Arguments
-        return
-    }
-
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-        & python @Arguments
-        return
-    }
-
-    throw 'Python 3 was not found. Install Python 3 and try again.'
-}
-
 function Test-TcpPort {
     param(
         [string]$HostName,
@@ -101,36 +82,17 @@ Set-Location $repoRoot
 Write-Host ''
 Write-Host '== All You Need Is Wheel local launcher ==' -ForegroundColor Cyan
 
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw 'uv was not found. Install uv before starting the app.'
+}
+
 $venvDir = Join-Path $repoRoot '.venv'
 $pythonExe = Join-Path $venvDir 'Scripts\python.exe'
-$requirementsFile = Join-Path $repoRoot 'requirements.txt'
-$requirementsStamp = Join-Path $venvDir 'requirements.sha256'
 
-if (-not (Test-Path $pythonExe)) {
-    Write-Host 'Creating local virtual environment...' -ForegroundColor Yellow
-    Invoke-PythonLauncher -Arguments @('-m', 'venv', '.venv')
-}
-
-$requirementsHash = (Get-FileHash $requirementsFile -Algorithm SHA256).Hash
-$needsInstall = -not (Test-Path $requirementsStamp)
-
-if (-not $needsInstall) {
-    $savedHash = (Get-Content $requirementsStamp -Raw).Trim()
-    $needsInstall = $savedHash -ne $requirementsHash
-}
-
-if (-not $needsInstall) {
-    try {
-        & $pythonExe -c "import flask, waitress, dotenv" | Out-Null
-    } catch {
-        $needsInstall = $true
-    }
-}
-
-if ($needsInstall) {
-    Write-Host 'Installing Python dependencies...' -ForegroundColor Yellow
-    & $pythonExe -m pip install -r $requirementsFile
-    Set-Content -Path $requirementsStamp -Value $requirementsHash -NoNewline
+Write-Host 'Syncing the locked Python environment...' -ForegroundColor Yellow
+& uv sync --locked --all-groups
+if ($LASTEXITCODE -ne 0) {
+    throw 'uv sync failed. The locked environment was not installed.'
 }
 
 $connectionPath = Join-Path $repoRoot 'connection.json'

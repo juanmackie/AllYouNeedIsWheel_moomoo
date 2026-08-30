@@ -353,9 +353,7 @@ def _compute_size_fit(decision, portfolio_context: dict) -> float:
     return round(fit, 1)
 
 
-def _compute_recommended_contracts(
-    decision, portfolio_context: dict, sizing_profile: dict | None = None
-) -> int:
+def _compute_recommended_contracts(decision, portfolio_context: dict, sizing_profile: dict | None = None) -> int:
     """Compute an affordable recommendation using the active sizing contract.
 
     CSP capacity is constrained by true unreserved cash and the preset's

@@ -80,7 +80,6 @@ describe('options-table rendering safety', () => {
   it('escapes API-fed ticker and error text in options-table rows', async () => {
     vi.mock('../../frontend/static/js/dashboard/options-table-state.js', () => ({
       state: {
-        customTickers: new Set(),
         watchlistTickers: new Set(),
         tickersData: {
           'BAD<script>': {

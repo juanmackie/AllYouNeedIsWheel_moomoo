@@ -18,7 +18,6 @@ try:
         RET_ERROR,
         RET_OK,
         OpenQuoteContext,
-        OpenSecTradeContext,
         OptionDataFilter,
         OptionType,
         SecurityFirm,
@@ -28,7 +27,6 @@ try:
 except ImportError:
     # Allow graceful fallback during test collection / environments without full moomoo SDK
     OpenQuoteContext = None
-    OpenSecTradeContext = None
     RET_OK = None
     RET_ERROR = None
     SecurityFirm = None
@@ -362,8 +360,20 @@ class MoomooConnection:
         if self.account_id:
             matched_account = self._find_account_by_id(self.account_id)
             if matched_account:
-                return matched_account.get("trd_env", TrdEnv.REAL), matched_account.get("acc_id")
+                matched_env = matched_account.get("trd_env", desired_env)
+                if matched_env != desired_env:
+                    raise ValueError(
+                        f"Configured account_id {self.account_id!r} belongs to {_env_name(matched_env)}, "
+                        f"not {_env_name(desired_env)}."
+                    )
+                return desired_env, matched_account.get("acc_id")
+            if desired_env == TrdEnv.REAL:
+                raise ValueError(f"Configured REAL account_id {self.account_id!r} is not available in OpenD.")
             return desired_env, self.account_id
+
+        if desired_env == TrdEnv.REAL:
+            raise ValueError("REAL portfolio reads require an explicitly configured account_id.")
+
         fallback_account = self._find_account_by_env(desired_env)
         return desired_env, fallback_account.get("acc_id") if fallback_account else ""
 

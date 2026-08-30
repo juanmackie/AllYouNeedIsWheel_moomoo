@@ -180,10 +180,9 @@ export async function refreshAllOptions(optionType) {
             });
         } else if (optionType === 'PUT') {
             tickersToRefresh = allTickers.filter(ticker => {
-                const isCustom = state.customTickers.has(ticker);
                 const isWatchlist = state.watchlistTickers?.has(ticker);
 
-                if (isCustom || isWatchlist) return true;
+                if (isWatchlist) return true;
 
                 // Portfolio ticker — include unless explicitly excluded
                 return !excludedTickers.includes(ticker);

@@ -513,9 +513,10 @@ def score_contract(
         or chain_source.lower() == "yfinance"
         or iv_source.lower() == "yfinance"
     )
-    price_source = _normalize_source_value(price_source, "yfinance" if from_yfinance else "broker")
-    chain_source = _normalize_source_value(chain_source, "yfinance" if from_yfinance else "broker")
-    iv_source = _normalize_source_value(iv_source, "yfinance" if from_yfinance else "broker")
+    source_fallback = "yfinance" if from_yfinance else "unknown"
+    price_source = _normalize_source_value(price_source, source_fallback)
+    chain_source = _normalize_source_value(chain_source, source_fallback)
+    iv_source = _normalize_source_value(iv_source, source_fallback)
 
     # -- Build decision -----------------------------------------------------
     decision = WheelDecision(
@@ -591,9 +592,7 @@ def score_contract(
     )
     iv_adjusted_return = annualized_return_raw / max(implied_volatility, 0.05)
     decision.annualized_return = round(annualized_return_raw, 2)
-    decision.capital_velocity_per_day = round(
-        capital_velocity_per_day(premium_per_contract, capital_at_risk, dte), 8
-    )
+    decision.capital_velocity_per_day = round(capital_velocity_per_day(premium_per_contract, capital_at_risk, dte), 8)
     decision.iv_adjusted_return = round(iv_adjusted_return, 2)
     decision.iv_adjusted_score = _score_positive_metric(iv_adjusted_return, profile.get("target_iv_adjusted", 50)) * 100
 

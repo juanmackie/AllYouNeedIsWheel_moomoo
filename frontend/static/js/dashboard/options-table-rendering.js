@@ -203,10 +203,9 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             return false;
         }
     } else if (optionType === 'PUT') {
-        const isCustom = state.customTickers.has(ticker);
         const isWatchlist = state.watchlistTickers?.has(ticker);
 
-        if (excludedTickers.includes(ticker) && !isCustom && !isWatchlist) {
+        if (excludedTickers.includes(ticker) && !isWatchlist) {
             return false;
         }
     }
@@ -988,7 +987,7 @@ export function updateOptionsTable() {
 
         const optionData = tickerData.data.data[ticker];
 
-        if (state.customTickers.has(ticker) || state.watchlistTickers?.has(ticker)) {
+        if (state.watchlistTickers?.has(ticker)) {
             return true;
         }
 

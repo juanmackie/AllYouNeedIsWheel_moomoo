@@ -16,6 +16,25 @@ from core.logging_config import get_logger
 logger = get_logger("ayniwheel.connection", "moomoo")
 
 
+class QueryOnlyTradeContext:
+    """Expose only the trade-context queries used by this application."""
+
+    def __init__(self, context):
+        self._context = context
+
+    def get_acc_list(self, *args, **kwargs):
+        return self._context.get_acc_list(*args, **kwargs)
+
+    def accinfo_query(self, *args, **kwargs):
+        return self._context.accinfo_query(*args, **kwargs)
+
+    def position_list_query(self, *args, **kwargs):
+        return self._context.position_list_query(*args, **kwargs)
+
+    def close(self):
+        return self._context.close()
+
+
 def probe_opend_status(host="127.0.0.1", port=11111):
     """
     Probe the local OpenD endpoint and return a UI-friendly status payload.
@@ -67,10 +86,10 @@ def create_contexts(host, port, security_firm):
         tuple: (quote_ctx, trd_ctx)
     """
     quote_ctx = OpenQuoteContext(host=host, port=port)
-    trd_ctx = OpenSecTradeContext(
+    raw_trd_ctx = OpenSecTradeContext(
         host=host,
         port=port,
         filter_trdmarket=TrdMarket.NONE,
         security_firm=security_firm,
     )
-    return quote_ctx, trd_ctx
+    return quote_ctx, QueryOnlyTradeContext(raw_trd_ctx)

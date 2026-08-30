@@ -63,10 +63,9 @@ function calculateEarningsSummary() {
         Object.values(tickerData.data.data).forEach(optionData => {
             const sharesOwned = optionData.position || 0;
             const ticker = optionData.symbol || Object.keys(tickerData.data.data)[0];
-            const isCustomTicker = state.customTickers.has(ticker);
             const isWatchlistTicker = state.watchlistTickers?.has(ticker);
 
-            if (sharesOwned < 100 && !isCustomTicker && !isWatchlistTicker) {
+            if (sharesOwned < 100 && !isWatchlistTicker) {
                 return;
             }
 

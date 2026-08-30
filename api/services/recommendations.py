@@ -154,10 +154,10 @@ def _format_decision_to_candidate(
             or getattr(decision, "chain_source", "") == "yfinance"
             or getattr(decision, "iv_source", "") == "yfinance"
         ),
-        "price_source": getattr(decision, "price_source", "broker"),
-        "chain_source": getattr(decision, "chain_source", "broker"),
-        "iv_source": getattr(decision, "iv_source", "broker"),
-        "data_source": getattr(decision, "price_source", "broker"),
+        "price_source": getattr(decision, "price_source", "unknown"),
+        "chain_source": getattr(decision, "chain_source", "unknown"),
+        "iv_source": getattr(decision, "iv_source", "unknown"),
+        "data_source": getattr(decision, "price_source", "unknown"),
     }
 
 
@@ -992,9 +992,9 @@ class RecommendationEngine:
                 kept = []
                 for opt in candidates:
                     wd = opt.get("wheel_decision", {}) or {}
-                    price_source = _option_source_value(opt, wd, "price_source", opt.get("data_source", "broker"))
-                    chain_source = _option_source_value(opt, wd, "chain_source", "broker")
-                    iv_source = _option_source_value(opt, wd, "iv_source", "broker")
+                    price_source = _option_source_value(opt, wd, "price_source", opt.get("data_source", "unknown"))
+                    chain_source = _option_source_value(opt, wd, "chain_source", "unknown")
+                    iv_source = _option_source_value(opt, wd, "iv_source", "unknown")
                     from_yfinance = _option_uses_yfinance(opt, wd)
                     confidence = float(opt.get("confidence", wd.get("confidence_score", 100)) or 0)
                     has_blockers = bool(

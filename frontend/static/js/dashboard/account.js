@@ -47,13 +47,13 @@ function updateUnavailableAccountState() {
     zeroValueIds.forEach((id) => {
         const element = document.getElementById(id);
         if (element) {
-            element.textContent = formatCurrency(0);
+            element.textContent = '—';
         }
     });
 
     const leveragePercentageElement = document.getElementById('leverage-percentage');
     if (leveragePercentageElement) {
-        leveragePercentageElement.textContent = formatPercent(0);
+        leveragePercentageElement.textContent = '—';
     }
 
     const leverageBar = document.getElementById('leverage-bar');
@@ -65,7 +65,7 @@ function updateUnavailableAccountState() {
 
     const positionsCountElement = document.getElementById('positions-count');
     if (positionsCountElement) {
-        positionsCountElement.textContent = '0';
+        positionsCountElement.textContent = '—';
     }
 
     const unavailableMessage = getUnavailablePositionsMessage();
@@ -210,7 +210,11 @@ function populateStockPositionsTable(stockPositions, emptyMessage = 'No stock po
 
     if (stockPositions.length === 0) {
         const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = `<td colspan="6" class="text-center">${emptyMessage}</td>`;
+        const cell = document.createElement('td');
+        cell.colSpan = 6;
+        cell.className = 'text-center';
+        cell.textContent = emptyMessage;
+        noDataRow.appendChild(cell);
         stockTableBody.appendChild(noDataRow);
         return;
     }
@@ -268,7 +272,11 @@ function populateOptionPositionsTable(optionPositions, emptyMessage = 'No option
 
     if (optionPositions.length === 0) {
         const noDataRow = document.createElement('tr');
-        noDataRow.innerHTML = `<td colspan="9" class="text-center">${emptyMessage}</td>`;
+        const cell = document.createElement('td');
+        cell.colSpan = 9;
+        cell.className = 'text-center';
+        cell.textContent = emptyMessage;
+        noDataRow.appendChild(cell);
         optionTableBody.appendChild(noDataRow);
         return;
     }

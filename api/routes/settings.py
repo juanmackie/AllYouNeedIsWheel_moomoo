@@ -8,6 +8,7 @@ there are no granular overrides.
 
 from flask import Blueprint, jsonify, request
 
+from api.routes.utils import error_response
 from core.logging_config import get_logger
 from core.presets import DEFAULT_PRESET_KEY, WHEEL_PRESETS, all_presets, get_preset
 
@@ -71,14 +72,20 @@ def set_preset():
     if db is None:
         return jsonify({"success": False, "error": "Database unavailable"}), 503
 
+    previous_key = _active_preset_key()
     db.set_setting("wheel_preset", key)
 
     # Propagate to the live recommendation engine so the next run uses it.
     try:
         service = _get_options_service()
         service.recommendation_engine.set_active_preset(key)
-    except Exception as exc:
-        logger.warning(f"Live engine preset propagation failed (next run re-reads persisted key): {exc}")
+    except Exception:
+        logger.exception("Live engine preset propagation failed")
+        try:
+            db.set_setting("wheel_preset", previous_key)
+        except Exception:
+            logger.exception("Could not roll back the persisted preset")
+        return error_response("Could not apply the selected preset", status_code=503)
 
     preset = get_preset(key)
     return jsonify({"success": True, "active": key, "effective": preset.to_dict(), "read_only": True})

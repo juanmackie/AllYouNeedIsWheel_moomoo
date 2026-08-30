@@ -36,7 +36,7 @@ def _parse_expiration_date(expiration):
 
 
 def _annotate_chain_sources(
-    chain, price_source="broker", chain_source="broker", iv_source="broker", from_yfinance=False
+    chain, price_source="unknown", chain_source="unknown", iv_source="unknown", from_yfinance=False
 ):
     """Attach provenance metadata to a chain payload and each option row."""
     if not chain:
@@ -565,11 +565,11 @@ class OptionsDataService:
                 chain_type = str(chain.get("right", "") or "").upper()
                 option_side = "CALL" if chain_type == "C" else "PUT"
                 chain_sources = {
-                    "price_source": chain.get("price_source", "broker"),
-                    "chain_source": chain.get("chain_source", "broker"),
-                    "iv_source": chain.get("iv_source", "broker"),
+                    "price_source": chain.get("price_source", "unknown"),
+                    "chain_source": chain.get("chain_source", "unknown"),
+                    "iv_source": chain.get("iv_source", "unknown"),
                     "from_yfinance": bool(chain.get("from_yfinance", False)),
-                    "data_source": chain.get("data_source", chain.get("price_source", "broker")),
+                    "data_source": chain.get("data_source", chain.get("price_source", "unknown")),
                 }
                 for option in chain.get("options", []):
                     annotated = dict(option)

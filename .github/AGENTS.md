@@ -4,7 +4,7 @@
 
 ## Purpose
 
-`.github/` owns repository automation, currently GitHub Actions CI and secret scanning.
+`.github/` owns repository automation, currently GitHub Actions CI.
 
 ## Ownership
 
@@ -13,7 +13,7 @@
 ## Local Contracts
 
 - CI must remain deterministic without live Moomoo/OpenD connectivity, broker credentials, paid market-data accounts, or local databases.
-- Keep secret scanning active and redact output.
+- Keep hygiene scans active and redact output.
 - Do not commit or reference real credentials, account identifiers, or private local paths in workflows.
 - Keep workflow checks aligned with `requirements.txt`, `pyproject.toml`, and `package.json` when those contracts change.
 

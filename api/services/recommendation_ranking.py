@@ -99,7 +99,7 @@ def rank_candidates(candidates: list) -> list:
     return sorted(candidates, key=rank_key)
 
 
-def option_source_value(option: dict, wheel_decision: dict | None, key: str, fallback: str = "broker") -> str:
+def option_source_value(option: dict, wheel_decision: dict | None, key: str, fallback: str = "unknown") -> str:
     option_value = option.get(key)
     if isinstance(option_value, str) and option_value.strip():
         return option_value.strip()

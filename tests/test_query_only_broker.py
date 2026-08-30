@@ -12,6 +12,7 @@ import pandas as pd
 
 from core.broker_protocol import FORBIDDEN_SDK_MEMBERS
 from core.connection_manager import MoomooConnection
+from core.context_factory import QueryOnlyTradeContext
 
 try:
     from moomoo import RET_OK, SecurityFirm, TrdEnv
@@ -88,6 +89,31 @@ def _build_fake_contexts():
         "close": lambda: None,
     }
     return GuardedFakeContext("quote_ctx", quote_methods), GuardedFakeContext("trd_ctx", trade_methods)
+
+
+class TestQueryOnlyTradeContext(unittest.TestCase):
+    def test_forbidden_sdk_members_are_not_exposed(self):
+        class RawContext:
+            def get_acc_list(self):
+                return RET_OK, None
+
+            def accinfo_query(self, **kwargs):
+                return RET_OK, None
+
+            def position_list_query(self, **kwargs):
+                return RET_OK, None
+
+            def close(self):
+                return None
+
+            def place_order(self, **kwargs):
+                raise AssertionError("order method must not be reachable")
+
+        context = QueryOnlyTradeContext(RawContext())
+
+        self.assertTrue(hasattr(context, "get_acc_list"))
+        for member in FORBIDDEN_SDK_MEMBERS:
+            self.assertFalse(hasattr(context, member))
 
 
 class TestReadOnlyStructuralRejection(unittest.TestCase):

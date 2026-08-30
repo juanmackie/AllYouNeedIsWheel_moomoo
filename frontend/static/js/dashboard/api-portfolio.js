@@ -176,7 +176,7 @@ export async function refreshAllEarnings() {
 
 export async function updateSingleEarnings(ticker) {
     try {
-        const response = await fetch(`/api/earnings/update/${ticker}`);
+        const response = await fetch(`/api/earnings/update/${encodeURIComponent(ticker)}`, { method: 'POST' });
         return await readJsonSafely(response);
     } catch (error) {
         console.error(`Error updating earnings for ${ticker}:`, error);

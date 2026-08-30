@@ -344,10 +344,6 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertLessEqual(result["count"], 1)
 
 
-
-
-
-
 class TestRecommendationEngineStripPrefix(unittest.TestCase):
     """Test ticker prefix stripping delegates to utils."""
 
@@ -1515,7 +1511,6 @@ class TestRecommendationEngineSignalFields(unittest.TestCase):
 class TestRecommendationNonDuplication(unittest.TestCase):
     """Test that the unified signal list does not duplicate underlyings."""
 
-
     def _make_mock_decision(self):
         from core.wheel_decision import WheelDecision
 
@@ -1685,7 +1680,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
             cu = canonical_underlying(rec["ticker"])
             self.assertNotIn(cu, seen, f"Duplicate underlying {cu} found")
             seen.add(cu)
-
 
     def test_skip_diagnostics_surface_in_blocked_signals(self):
         """Watchlist CSP skip diagnostics should appear in blocked_signals."""

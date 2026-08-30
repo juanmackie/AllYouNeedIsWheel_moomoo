@@ -10,8 +10,8 @@ DOX is installed here as an `AGENTS.md` hierarchy. These files are binding work 
 - If docs conflict, the closer `AGENTS.md` controls local work details, but no child doc may weaken project-wide rules.
 - After meaningful changes, update the closest owning `AGENTS.md` when purpose, ownership, contracts, workflows, verification, or durable structure changed.
 - Keep DOX docs concise and operational. Document stable contracts, not diary entries.
-- Security: this repo is structurally read-only (`core/broker_protocol.py`). Security controls must be enforced by implementation, not guidance alone (V7.0 §7). For auth/payment/trust-boundary changes, state that human security review is required. Never commit secrets, `.env` files, `plan.md`, `.pi-subagents/`, or any `production-ready-vibe-coding-rules*.md`.
-- Version control / destructive actions: never push, deploy, publish, merge, or perform destructive actions (reset, clean, drop data) without explicit authorization (V7.0 §10). Before destructive work, explain impact and prefer reversible methods. Preserve unrelated user changes.
+- Security: this repo is structurally read-only (`core/broker_protocol.py`). Security controls must be enforced by implementation, not guidance alone (V8.0 §5). For auth/payment/trust-boundary changes, state that human security review is required. Never commit secrets, `.env` files, `plan.md`, `.pi-subagents/`, or any `production-ready-vibe-coding-rules*.md`.
+- Version control / destructive actions: never push, deploy, publish, merge, or perform destructive actions (reset, clean, drop data) without explicit authorization (V8.0 §8). Before destructive work, explain impact and prefer reversible methods. Preserve unrelated user changes.
 
 ## Purpose
 
@@ -54,7 +54,7 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and covere
 - Prefer deterministic pure helpers for scoring, risk, and formatting logic so tests can exercise them without broker connectivity.
 - Preserve Windows local-run ergonomics because the app is designed around OpenD on Windows.
 
-## Verification / Closeout (per V7.0 §8, §13)
+## Verification / Closeout (per V8.0 §6, §9)
 Before closing any significant edit:
 1. **Changed:** brief list of added/changed/deleted.
 2. **Verified:** exact checks run and results (e.g., `pytest tests/test_no_execution_surface.py` passed; `npm test` passed; ruff check clean).
@@ -71,7 +71,7 @@ Perform a DOX pass after meaningful changes: update the closest owning `AGENTS.m
 
 ## Local Python Environment
 
-- `.venv` is the canonical local Python environment. `start_local.ps1` creates and uses `.venv` and installs from `requirements.txt` with a hash-stamped requirements check.
+- `.venv` is the canonical local Python environment. `start_local.ps1` creates and uses it through `uv sync --locked --all-groups`; `uv.lock` is the dependency source of truth.
 - Remove any stale top-level `venv/` directory; it is ignored by git and can hide dependency drift from the canonical `.venv`.
 
 ## Child DOX Index
@@ -80,6 +80,5 @@ Perform a DOX pass after meaningful changes: update the closest owning `AGENTS.m
 - `api/AGENTS.md` - Flask application factory, routes, services, and external-data orchestration.
 - `core/AGENTS.md` - Trading decisions, scoring logic, connection management, caches, wheel runner/run model, presets, and shared utilities.
 - `db/AGENTS.md` - SQLite schema, migrations, pooling, and repositories.
-- `docker/AGENTS.md` - OpenD container assets and Docker runtime support.
 - `frontend/AGENTS.md` - Jinja templates, CSS, static assets, and browser JavaScript.
 - `tests/AGENTS.md` - Python, frontend, fixture, and e2e tests.

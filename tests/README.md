@@ -38,21 +38,23 @@ npm test -- tests/frontend/top-recommendations.test.js
 1. Start OpenD, log in, launch the app, and confirm the operational strip shows
    the environment, read-only state, market state, run status, coverage, and
    quote age.
-2. Confirm the effective watchlist is the complete canonical union. A feasible
+2. Toggle dark and light modes and confirm text, signals, warnings, and the
+   OpenD connection indicator remain readable.
+3. Confirm the effective watchlist is the complete canonical union. A feasible
    refresh scans every symbol; an infeasible union publishes `planning` rather
    than a silently partial top three.
-3. Refresh `/api/run` from the dashboard. Confirm one immutable last-good
+4. Refresh `/api/run` from the dashboard. Confirm one immutable last-good
    snapshot remains visible while a refresh is in flight or fails. When the US
    market is closed, confirm the scan still produces CSP and covered-call
    candidates from fresh OpenD last-session chains (or persisted broker fallback)
    and labels the run `planning`.
-4. Compare each card's executable bid, bid premium velocity, midpoint
+5. Compare each card's executable bid, bid premium velocity, midpoint
    **limit target—not guaranteed**, DTE, spread, OI/volume, cycle/annualized
    yield, source, broker timestamp, and UTC fetch time against Moomoo.
-5. Confirm ordering is qualified quality tier, event tier, descending executable
+6. Confirm ordering is qualified quality tier, event tier, descending executable
    capital return per deployed dollar per day, then bid premium velocity and
    ticker/expiry/strike; composite score cannot reorder cards.
-6. Confirm any copy_eligible card (qualified or marginal, Moomoo-sourced, positive
+7. Confirm any copy_eligible card (qualified or marginal, Moomoo-sourced, positive
    `recommended_contracts`) can copy. When the run is live-tradeable the ticket is an
    explicit limit draft on the current quote; when US markets are closed or the quote
    is stale the ticket is staged for US open (premium labelled as the last broker quote,
@@ -61,9 +63,9 @@ npm test -- tests/frontend/top-recommendations.test.js
    capacity, and research-only mode. Copied quantity is the backend
    `recommended_contracts`. A closed-market ticket is staged for manual placement
    before/at the US open; verify the live quote before placing it in Moomoo.
-7. Confirm true available cash minus reserved short-put collateral controls CSP
+8. Confirm true available cash minus reserved short-put collateral controls CSP
    affordability; margin buying power is display-only.
-8. Confirm no UI or API path places, unlocks, cancels, or modifies an order.
+9. Confirm no UI or API path places, unlocks, cancels, or modifies an order.
 
 If OpenD is unavailable, record the blocked manual-smoke result rather than
 substituting simulated production portfolio or quote data.

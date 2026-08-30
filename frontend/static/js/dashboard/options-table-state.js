@@ -3,10 +3,8 @@ const state = {
     portfolioSummary: null,
     eventListenersInitialized: false,
     containerEventListenersInitialized: false,
-    customTickers: new Set(),
     watchlistTickers: new Set(),
     portfolioTickers: [],
-    customTickerListenersInitialized: false,
     screeningConfig: null,
 };
 
@@ -157,18 +155,6 @@ function setSavedTabPreference(tab) {
     } catch (e) {}
 }
 
-function loadCustomTickers() {
-    try {
-        const savedTickers = localStorage.getItem('customTickers');
-        if (savedTickers) {
-            const tickersArray = JSON.parse(savedTickers);
-            state.customTickers = new Set(tickersArray);
-        }
-    } catch (error) {
-        console.error('Error loading custom tickers:', error);
-    }
-}
-
 function loadExcludedTickers() {
     try {
         const savedExcluded = localStorage.getItem('excludedPositionTickers');
@@ -179,17 +165,6 @@ function loadExcludedTickers() {
         console.error('Error loading excluded tickers:', error);
     }
     return [];
-}
-
-function removeCustomTicker(ticker) {
-    if (state.customTickers.has(ticker)) {
-        state.customTickers.delete(ticker);
-        localStorage.setItem('customTickers', JSON.stringify([...state.customTickers]));
-        if (state.tickersData[ticker]) {
-            delete state.tickersData[ticker];
-        }
-        saveOtmSettings();
-    }
 }
 
 function excludePositionTicker(ticker) {
@@ -205,16 +180,7 @@ function excludePositionTicker(ticker) {
 }
 
 function removeTicker(ticker) {
-    if (state.customTickers.has(ticker)) {
-        removeCustomTicker(ticker);
-    } else {
-        excludePositionTicker(ticker);
-    }
-}
-
-function initialize() {
-    loadCustomTickers();
-    loadOtmSettings();
+    excludePositionTicker(ticker);
 }
 
 export {
@@ -227,12 +193,9 @@ export {
     ensureTickerDataState,
     saveOtmSettings,
     loadOtmSettings,
-    loadCustomTickers,
     loadExcludedTickers,
-    removeCustomTicker,
     excludePositionTicker,
     removeTicker,
-    initialize,
     getSavedTabPreference,
     setSavedTabPreference,
     getDefaultOtm,

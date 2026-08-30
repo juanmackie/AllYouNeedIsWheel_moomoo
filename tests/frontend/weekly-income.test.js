@@ -13,7 +13,11 @@ vi.mock('../../frontend/static/js/utils/state-model.js', () => ({
 }));
 
 vi.mock('../../frontend/static/js/utils/formatters.js', () => ({
-  escapeHtml: vi.fn((value) => String(value ?? '')),
+  escapeHtml: vi.fn((value) => {
+    const element = document.createElement('div');
+    element.textContent = String(value ?? '');
+    return element.innerHTML;
+  }),
   formatCurrency: vi.fn((v) => `$${v.toFixed(2)}`),
   formatPercent: vi.fn((v) => `${v.toFixed(1)}%`),
 }));
@@ -116,6 +120,32 @@ describe('weekly-income rendering', () => {
 
     const countEl = document.getElementById('weekly-order-count');
     expect(countEl.textContent).toBe('2');
+  });
+
+  it('escapes API-fed position fields', async () => {
+    fetchWeeklyOptionIncome.mockResolvedValue({
+      positions: [{
+        symbol: '<img src=x onerror=alert(1)>',
+        option_type: '<script>alert(1)</script>',
+        strike: '<b>100</b>',
+        expiration: '<img src=x>',
+        position: '<b>1</b>',
+        avg_cost: 1,
+        income: 2,
+      }],
+    });
+    isOpenDUnavailable.mockReturnValue(false);
+
+    const { renderWeeklyIncome } = await import(
+      '../../frontend/static/js/dashboard/weekly-income.js'
+    );
+
+    await renderWeeklyIncome();
+
+    const html = document.getElementById('filled-orders-table').innerHTML;
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).not.toContain('<script>alert(1)</script>');
   });
 
   it('shows empty row when no positions', async () => {

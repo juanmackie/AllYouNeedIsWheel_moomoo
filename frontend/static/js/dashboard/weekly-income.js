@@ -51,13 +51,13 @@ function row(position) {
 
   return `<tr>
     <td><strong>${escapeHtml(position.symbol) || '—'}</strong></td>
-    <td><span class="${typeClass} fw-semibold">${typeLabel}</span></td>
-    <td>${strike}</td>
-    <td class="small">${expiration}</td>
-    <td>${avgCost}</td>
-    <td class="text-center">${qty}</td>
-    <td class="fw-semibold">${income}</td>
-    <td class="text-muted small">${notional}</td>
+    <td><span class="${typeClass} fw-semibold">${escapeHtml(typeLabel)}</span></td>
+    <td>${escapeHtml(strike)}</td>
+    <td class="small">${escapeHtml(expiration)}</td>
+    <td>${escapeHtml(avgCost)}</td>
+    <td class="text-center">${escapeHtml(qty)}</td>
+    <td class="fw-semibold">${escapeHtml(income)}</td>
+    <td class="text-muted small">${escapeHtml(notional)}</td>
   </tr>`;
 }
 

@@ -37,7 +37,7 @@ order, unlock, or trading-password endpoint.
 
 ### Earnings calendar (risk metadata for the earnings gate)
 - `GET /api/earnings/status`, `/pending`, `/locked-tickers`, `/lock-status`
-- `POST /api/earnings/refresh`, `GET /api/earnings/update/<ticker>`
+- `POST /api/earnings/refresh`, `POST /api/earnings/update/<ticker>` — update a validated ticker
 
 ### Ledger
 - `GET /api/ledger/*` — scan ledger diagnostics

@@ -33,13 +33,20 @@ class TestEarningsRoutes(unittest.TestCase):
         mock_service.get_earnings_info.return_value = {"ticker": "AAPL"}
         mock_get_service.return_value = mock_service
 
-        response = self.client.get("/api/earnings/update/AAPL")
+        response = self.client.post("/api/earnings/update/AAPL")
         data = response.get_json()
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(data["success"])
         self.assertEqual(data["ticker"], "AAPL")
         self.assertEqual(data["earnings_info"]["ticker"], "AAPL")
+
+    @patch("api.routes.earnings.get_service")
+    def test_update_single_earnings_rejects_invalid_ticker(self, mock_get_service):
+        response = self.client.post("/api/earnings/update/AAPL$bad")
+
+        self.assertEqual(response.status_code, 400)
+        mock_get_service.assert_not_called()
 
     @patch("api.routes.earnings.get_service")
     def test_refresh_all_earnings(self, mock_get_service):

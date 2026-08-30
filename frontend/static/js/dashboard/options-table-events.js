@@ -2,7 +2,7 @@ import { state, setSelectedExpirationPreference, getSelectedExpirationPreference
 import { calculatePremium } from './options-table-calc.js';
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency } from '../utils/formatters.js';
-import { fetchOptionData, fetchOptionExpirations, fetchStockPrices } from './api.js';
+import { fetchOptionData } from './api.js';
 import { updateOptionsTable, showToast, addOtmInputEventListeners } from './options-table-rendering.js';
 
 async function getOptionsTableActions() {
@@ -348,82 +348,4 @@ export function addOptionsTableEventListeners() {
     state.eventListenersInitialized = true;
 
     addOtmInputEventListeners();
-}
-
-export function setupCustomTickerEventListeners() {
-    if (state.customTickerListenersInitialized) return;
-
-    const addCustomTickerBtn = document.getElementById('add-custom-ticker');
-    const customTickerInput = document.getElementById('custom-ticker-input');
-
-    if (addCustomTickerBtn && customTickerInput) {
-        addCustomTickerBtn.addEventListener('click', async () => {
-            const ticker = customTickerInput.value.trim().toUpperCase();
-            if (!ticker) {
-                return;
-            }
-
-            if (state.customTickers.has(ticker)) {
-                showToast('warning', 'Ticker already added', `${ticker} is already in your cash-secured puts list.`);
-                return;
-            }
-
-            addCustomTickerBtn.disabled = true;
-            addCustomTickerBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Adding...';
-
-            try {
-                const otmPercent = getDefaultOtm('CALL');
-
-                const expirationData = await fetchOptionExpirations(ticker);
-
-                if (!expirationData || !expirationData.expirations || expirationData.expirations.length === 0) {
-                    showToast('error', 'Data Error', `Could not find expiration dates for ${ticker}.`);
-                    return;
-                }
-
-                state.customTickers.add(ticker);
-
-                const tickerState = ensureTickerDataState(ticker, {
-                    callOtmPercentage: otmPercent,
-                    putOtmPercentage: getDefaultOtm('PUT'),
-                    putQuantity: 1
-                });
-                tickerState.expirations = expirationData.expirations;
-
-                try {
-                    const stockPriceData = await fetchStockPrices([ticker]);
-                    if (stockPriceData && stockPriceData.data && stockPriceData.data[ticker]) {
-                        state.tickersData[ticker].data.data[ticker].stock_price = stockPriceData.data[ticker];
-                    }
-                } catch (priceError) {
-                    console.error('Error fetching stock price:', priceError);
-                }
-
-                localStorage.setItem('customTickers', JSON.stringify([...state.customTickers]));
-
-                updateOptionsTable();
-
-                addOptionsTableEventListeners();
-
-                customTickerInput.value = '';
-
-                showToast('success', 'Ticker Added', `${ticker} has been added. Select an expiration and click refresh to load options.`);
-            } catch (error) {
-                console.error('Error adding custom ticker:', error);
-                showToast('error', 'Error', `Failed to add ${ticker}: ${error.message}`);
-            } finally {
-                addCustomTickerBtn.disabled = false;
-                addCustomTickerBtn.innerHTML = '<i class="bi bi-plus-circle"></i> Add';
-            }
-        });
-
-        customTickerInput.addEventListener('keypress', (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                addCustomTickerBtn.click();
-            }
-        });
-
-        state.customTickerListenersInitialized = true;
-    }
 }
