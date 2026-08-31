@@ -7,11 +7,9 @@ from __future__ import annotations
 _EXTERNAL_SOURCE_ALIASES = {
     "yfinance": "yfinance",
     "yahoo": "yfinance",
-    "openbb": "openbb",
     "alpha vantage": "alpha_vantage",
     "alpha_vantage": "alpha_vantage",
     "alphavantage": "alpha_vantage",
-    "apewisdom": "apewisdom",
 }
 
 _BROKER_SOURCE_ALIASES = {

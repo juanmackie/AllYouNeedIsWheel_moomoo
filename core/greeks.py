@@ -8,7 +8,6 @@ Falls back to yfinance for implied volatility when other sources return 0.
 import logging
 import math
 from datetime import date, datetime
-from typing import Optional
 
 from scipy.stats import norm
 
@@ -155,64 +154,3 @@ def enrich_option_with_greeks(
         logger.debug(f"BS Greeks computation failed: {e}")
 
     return option
-
-
-def fetch_yfinance_iv_for_chain(
-    ticker: str,
-    expiration: str,
-    option_type: str,
-    yfinance_cache: dict,
-    chain_fetcher=None,
-) -> Optional[dict]:
-    """
-    Fetch an option chain from yfinance and return a dict mapping strike -> IV.
-
-    Uses an external cache dict to avoid redundant API calls.
-    Cache key: f"{ticker}_{expiration}_{option_type}"
-
-    Args:
-        ticker: Stock ticker
-        expiration: Expiration date in 'YYYYMMDD' format
-        option_type: 'C' for CALL, 'P' for PUT
-        yfinance_cache: Mutable dict used as cache (pass a class-level dict)
-
-    Returns:
-        Dict of {strike: implied_volatility} or None on failure
-    """
-    cache_key = f"{ticker}_{expiration}_{option_type}"
-
-    if cache_key in yfinance_cache:
-        return yfinance_cache[cache_key]
-
-    try:
-        if chain_fetcher is None:
-            logger.debug("No yfinance chain fetcher provided for %s %s %s", ticker, expiration, option_type)
-            yfinance_cache[cache_key] = None
-            return None
-
-        chain = chain_fetcher(ticker, expiration)
-        if not chain:
-            yfinance_cache[cache_key] = None
-            return None
-
-        df = chain["calls"] if option_type == "C" else chain["puts"]
-
-        if df is None or df.empty:
-            yfinance_cache[cache_key] = None
-            return None
-
-        result = {}
-        for _, row in df.iterrows():
-            strike = float(row["strike"])
-            iv = float(row.get("impliedVolatility", 0))
-            if not math.isnan(iv) and iv > 0:
-                result[strike] = iv
-
-        yfinance_cache[cache_key] = result if result else None
-        logger.debug(f"yfinance IV fetch: {ticker} {expiration} {option_type}: {len(result)} options with IV")
-        return yfinance_cache[cache_key]
-
-    except Exception as e:
-        logger.debug(f"yfinance fetch failed for {ticker} {expiration} {option_type}: {e}")
-        yfinance_cache[cache_key] = None
-        return None

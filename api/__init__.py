@@ -279,14 +279,6 @@ def _register_services():
 
     register_service("ivearnings", _create_iv_earnings_service)
 
-    def _create_watchlist_manager():
-        from api.services.config import get_config
-        from api.services.watchlist_manager import WatchlistManager
-
-        return WatchlistManager(config_provider=get_config())
-
-    register_service("watchlist", _create_watchlist_manager)
-
     def _create_wheel_runner():
         from flask import current_app
 

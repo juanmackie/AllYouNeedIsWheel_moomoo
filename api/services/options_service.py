@@ -177,24 +177,3 @@ class OptionsService:
     def _get_fallback_stock_price(self, portfolio_context, ticker):
         """Get fallback stock price (delegates to portfolio_context_helper)"""
         return self.portfolio_context_helper._get_fallback_stock_price(portfolio_context, ticker)
-
-    def _sanitize_result(self, result):
-        """Sanitize result to remove NaN values"""
-        if not result or not isinstance(result, dict):
-            return
-        import math
-
-        def sanitize_dict(d):
-            if not isinstance(d, dict):
-                return
-            for key, value in d.items():
-                if isinstance(value, float) and math.isnan(value):
-                    d[key] = 0
-                elif isinstance(value, dict):
-                    sanitize_dict(value)
-                elif isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict):
-                            sanitize_dict(item)
-
-        sanitize_dict(result)

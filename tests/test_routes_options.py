@@ -690,9 +690,9 @@ class TestLeakageAnalytics(unittest.TestCase):
 class TestWatchlistTickers(unittest.TestCase):
     """GET /api/options/watchlist-tickers"""
 
-    @patch("api.services.watchlist_manager.WatchlistManager")
+    @patch("api.routes.options.get_options_service")
     @patch("api.services.config.get_config")
-    def test_returns_effective_watchlist(self, mock_get_config, mock_wl_cls):
+    def test_returns_effective_watchlist(self, mock_get_config, mock_get_options_service):
         """Should return effective watchlist with mode."""
         mock_config = MagicMock()
         mock_config.get.side_effect = lambda k, d=None: {
@@ -704,7 +704,7 @@ class TestWatchlistTickers(unittest.TestCase):
 
         mock_wl = MagicMock()
         mock_wl.get_effective_watchlist.return_value = ["AAPL", "MSFT", "GOOGL"]
-        mock_wl_cls.return_value = mock_wl
+        mock_get_options_service.return_value.watchlist_manager = mock_wl
 
         app = _make_app()
         with app.test_client() as client:
@@ -718,13 +718,13 @@ class TestWatchlistTickers(unittest.TestCase):
         self.assertTrue(data["growth_mode_enabled"])
         mock_wl.get_effective_watchlist.assert_called_once_with()
 
-    @patch("api.services.watchlist_manager.WatchlistManager")
+    @patch("api.routes.options.get_options_service")
     @patch("api.services.config.get_config")
-    def test_fallback_on_exception(self, mock_get_config, mock_wl_cls):
+    def test_fallback_on_exception(self, mock_get_config, mock_get_options_service):
         """Should fall back to static config on exception."""
         mock_wl = MagicMock()
         mock_wl.get_effective_watchlist.side_effect = Exception("Boom")
-        mock_wl_cls.return_value = mock_wl
+        mock_get_options_service.return_value.watchlist_manager = mock_wl
 
         app = _make_app(connection_config={"host": "127.0.0.1", "port": 11111, "watchlist": ["AAPL"]})
         with app.test_client() as client:

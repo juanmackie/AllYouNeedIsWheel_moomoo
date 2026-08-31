@@ -180,7 +180,7 @@ def refresh_all_earnings():
             all_tickers.add(normalized)
 
     try:
-        wm = get_service("watchlist")
+        wm = get_service("options").watchlist_manager
         watchlist_tickers = [earnings_underlying_ticker(t.strip()) for t in wm.get_effective_watchlist() if t.strip()]
         all_tickers.update(t for t in watchlist_tickers if t)
     except Exception:

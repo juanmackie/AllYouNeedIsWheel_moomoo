@@ -59,10 +59,10 @@ class TestEarningsRoutes(unittest.TestCase):
                 portfolio = MagicMock()
                 portfolio.get_positions.return_value = [{"symbol": "AAPL"}]
                 return portfolio
-            if name == "watchlist":
-                watchlist = MagicMock()
-                watchlist.get_effective_watchlist.return_value = ["MSFT"]
-                return watchlist
+            if name == "options":
+                options = MagicMock()
+                options.watchlist_manager.get_effective_watchlist.return_value = ["MSFT"]
+                return options
             raise AssertionError(f"unexpected service: {name}")
 
         mock_get_service.side_effect = _service

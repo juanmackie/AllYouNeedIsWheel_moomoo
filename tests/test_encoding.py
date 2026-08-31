@@ -117,14 +117,6 @@ class TestFormatterModule(unittest.TestCase):
             "frontend/static/js/utils/formatters.js should exist for centralized formatting",
         )
 
-    def test_core_display_units_exists(self):
-        """Check that core/display_units.py exists (TODO 1.4)."""
-        base_dir = os.path.join(os.path.dirname(__file__), "..")
-        display_units_path = os.path.join(base_dir, "core", "display_units.py")
-        # This is a "should exist" check - don't fail if not yet created
-        if not os.path.exists(display_units_path):
-            self.skipTest("core/display_units.py not yet created (TODO 1.4)")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 """
 IV Tracking and Earnings Service
 Manages implied volatility history and earnings calendar data
-Uses Alpha Vantage -> optional enrichment -> yfinance provider chain
+Uses Alpha Vantage -> yfinance provider chain
 """
 
 import logging
@@ -196,18 +196,9 @@ class IVEarningsService:
         except Exception:
             return False, None
 
-    def _is_openbb_enabled(self) -> bool:
-        try:
-            from api.services.config import get_config
-
-            return bool(get_config().get("openbb_enabled", False))
-        except Exception:
-            return False
-
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
-        Fetch earnings date using provider chain:
-        Alpha Vantage -> optional enrichment -> yfinance.
+        Fetch earnings date using the Alpha Vantage -> yfinance provider chain.
         """
         clean_ticker = self._earnings_lookup_ticker(ticker)
 
@@ -231,38 +222,7 @@ class IVEarningsService:
             except Exception as e:
                 logger.warning(f"Alpha Vantage earnings lookup failed for {clean_ticker}: {e}")
 
-        # --- Provider 2: optional enrichment ---
-        if self._is_openbb_enabled():
-            try:
-                from openbb import obb
-
-                result = obb.equity.earnings.calendar(symbol=clean_ticker)
-                df = result.to_df() if hasattr(result, "to_df") else result
-                if df is not None and not df.empty:
-                    date_col = None
-                    for col in ["date", "report_date", "earning_date", "earnings_date"]:
-                        if col in df.columns:
-                            date_col = col
-                            break
-                    if date_col:
-                        earnings_date = str(df[date_col].iloc[0])[:10]
-                        if earnings_date:
-                            return {
-                                "success": True,
-                                "earnings_date": earnings_date,
-                                "time_of_day": None,
-                                "fiscal_date_ending": None,
-                                "estimate": None,
-                                "currency": None,
-                                "earnings_source": "optional_enrichment",
-                                "error": None,
-                            }
-            except Exception as e:
-                logger.warning(
-                    f"Optional enrichment earnings fetch failed for {clean_ticker}, falling back to yfinance: {e}"
-                )
-
-        # --- Provider 3: yfinance ---
+        # --- Provider 2: yfinance ---
         try:
             time.sleep(1)
             stock = get_yfinance_ticker(clean_ticker)
@@ -325,7 +285,7 @@ class IVEarningsService:
             "estimate": None,
             "currency": None,
             "earnings_source": None,
-            "error": "No data from Alpha Vantage, optional enrichment, or yfinance",
+            "error": "No data from Alpha Vantage or yfinance",
         }
 
     def update_earnings_data(self, ticker: str) -> bool:

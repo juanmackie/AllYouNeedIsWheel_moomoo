@@ -121,7 +121,6 @@ class TestIVEarningsService(unittest.TestCase):
         mock_ticker.info = {}
 
         with (
-            patch.object(self.service, "_is_openbb_enabled", return_value=False),
             patch("api.services.iv_earnings_service.get_yfinance_ticker", return_value=mock_ticker) as mock_get_ticker,
             patch("api.services.iv_earnings_service.time.sleep", return_value=None),
         ):
@@ -251,7 +250,7 @@ class TestAlphaVantageProvider(unittest.TestCase):
             mock_fetch.assert_called_once()
 
     def test_provider_priority_alpha_vantage_success_skips_fallbacks(self):
-        """Alpha Vantage success should skip OpenBB/yfinance."""
+        """Alpha Vantage success should skip yfinance."""
         from api.services.alpha_vantage_provider import AlphaVantageEarningsProvider
         from api.services.iv_earnings_service import IVEarningsService
 

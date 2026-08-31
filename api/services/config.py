@@ -32,13 +32,3 @@ def get_config():
     if _config_instance is None:
         _config_instance = BaseConfig()
     return _config_instance
-
-
-def reset_config():
-    """
-    Reset the config singleton (primarily for testing).
-
-    This allows tests to reload config with different values.
-    """
-    global _config_instance
-    _config_instance = None

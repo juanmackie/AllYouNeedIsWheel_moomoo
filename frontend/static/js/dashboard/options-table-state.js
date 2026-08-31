@@ -167,20 +167,14 @@ function loadExcludedTickers() {
     return [];
 }
 
-function excludePositionTicker(ticker) {
-    let excludedTickers = loadExcludedTickers();
+function removeTicker(ticker) {
+    const excludedTickers = loadExcludedTickers();
     if (!excludedTickers.includes(ticker)) {
         excludedTickers.push(ticker);
         localStorage.setItem('excludedPositionTickers', JSON.stringify(excludedTickers));
     }
-    if (state.tickersData[ticker]) {
-        delete state.tickersData[ticker];
-    }
+    delete state.tickersData[ticker];
     saveOtmSettings();
-}
-
-function removeTicker(ticker) {
-    excludePositionTicker(ticker);
 }
 
 export {
@@ -194,12 +188,10 @@ export {
     saveOtmSettings,
     loadOtmSettings,
     loadExcludedTickers,
-    excludePositionTicker,
     removeTicker,
     getSavedTabPreference,
     setSavedTabPreference,
     getDefaultOtm,
     getOtmBounds,
     normalizeOtmValue,
-    getDefaultOtm as getDefaultOtmValue,
 };

@@ -27,9 +27,8 @@
 - Keep thresholds, weights, and profile choices explicit and covered by regression tests.
 - Decision helpers for read-only panels should prefer plain-English blockers/rationale and preserve the ability to surface research-only outcomes.
 - Avoid import-time network calls, thread starts, or DB writes.
-- Reuse `ticker_utils`, `ttl_cache`, `rate_limiter`, and logging helpers instead of local one-off versions.
+- Reuse `ticker_utils`, `rate_limiter`, and logging helpers instead of local one-off versions.
 - Cross-layer composition (e.g. roll diagnostics needing registered services) is injected as a provider callable at factory time (`api/__init__.py` → `WheelRunner(roll_diagnostics_provider=...)`); never import `api` from `core`.
-- Greek calculations that need option-chain data should accept a `chain_fetcher` callable parameter to avoid importing `api` services at module level.
 
 ## Verification
 

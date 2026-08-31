@@ -266,35 +266,6 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   .ft-section { margin-top: 36px; }
 }
 
-/* ── 7. METRICS ──────────────────────────────────────────────── */
-.ft-metric-grid {
-  display: grid;
-  border-bottom: 1px solid var(--ft-rule-soft);
-}
-.ft-metric {
-  padding: 20px 24px 22px 0;
-  border-right: 1px solid var(--ft-rule-soft);
-}
-.ft-metric:last-child { border-right: none; }
-.ft-metric__label { padding-bottom: 8px; }
-.ft-metric__value {
-  font-family: var(--ft-font-display);
-  font-weight: 600;
-  font-size: clamp(1.6rem, 4vw, 2.2rem);
-  line-height: 0.95;
-  letter-spacing: -0.04em;
-  text-transform: uppercase;
-  color: var(--ft-ink);
-}
-.ft-metric__value--signal { color: var(--ft-signal); }
-.ft-metric__sub {
-  padding-top: 6px;
-  font-family: var(--ft-font-body);
-  font-size: 12px;
-  color: var(--ft-ink-mute);
-  line-height: 1.4;
-}
-
 /* ── 8. TABLES ───────────────────────────────────────────────── */
 .ft-table-wrap { width: 100%; overflow-x: auto; }
 .ft-table {
@@ -462,98 +433,6 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .btn-close::after { content: ""; }
 .btn-close:hover { color: var(--ft-down); }
 .btn-close:active { transform: scale(0.88); }
-
-/* ── 11. SCORE BARS (the 120% detail) ────────────────────────── */
-.ft-score-row {
-  display: grid;
-  grid-template-columns: 120px 36px 1fr 40px;
-  align-items: center;
-  gap: 14px;
-  padding: 5px 0;
-  font-family: var(--ft-font-mono);
-  font-size: 13px;
-}
-.ft-score-label, .ft-score-weight, .ft-score-value { white-space: nowrap; }
-.ft-score-label {
-  font-size: 11px; color: var(--ft-ink-mute);
-  text-transform: uppercase; letter-spacing: 0.1em;
-  font-weight: 600;
-}
-.ft-score-weight { font-size: 11px; color: var(--ft-ink-faint); text-align: right; }
-.ft-score-bar { display: flex; align-items: center; line-height: 1; }
-.ft-score-bar__fill { color: var(--ft-ink); font-size: 14px; letter-spacing: -1px; }
-.ft-score-bar__empty { color: var(--ft-rule-soft); font-size: 14px; letter-spacing: -1px; }
-.ft-score-value { font-size: 13px; font-weight: 600; text-align: right; }
-.ft-score-value--signal { color: var(--ft-signal); }
-.ft-score-value--warn { color: var(--ft-warn); }
-
-/* ── 12. PULL QUOTE / TOP SIGNAL HERO ────────────────────────── */
-.ft-hero {
-  display: grid;
-  border-top: 1px solid var(--ft-ink);
-  border-bottom: 1px solid var(--ft-ink);
-}
-.ft-hero__main { padding: 32px 24px 32px 0; border-right: 1px solid var(--ft-rule-soft); }
-.ft-hero__detail { padding: 28px 0 28px 32px; }
-.ft-hero__num {
-  font-family: var(--ft-font-display);
-  font-weight: 700;
-  font-size: 96px;
-  line-height: 0.95;
-  letter-spacing: -0.04em;
-  color: var(--ft-ink);
-  padding-top: 16px;
-}
-.ft-hero__num-sub {
-  font-size: 32px; color: var(--ft-ink-mute); font-weight: 600;
-}
-.ft-hero__num-label {
-  font-family: var(--ft-font-mono);
-  font-size: 11px; color: var(--ft-ink-mute);
-  text-transform: uppercase; letter-spacing: 0.12em;
-  padding-top: 8px;
-}
-.ft-hero__pair {
-  padding-top: 32px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-}
-.ft-hero__pair-val {
-  font-family: var(--ft-font-display);
-  font-size: 28px;
-  font-weight: 600;
-  padding-top: 6px;
-}
-.ft-hero__pair-val--signal { color: var(--ft-signal); }
-.ft-hero__pair-meta {
-  padding-top: 2px;
-  font-family: var(--ft-font-mono);
-  font-size: 11px; color: var(--ft-ink-mute);
-}
-.ft-hero__sub-grid {
-  display: grid; grid-template-columns: 1fr 1fr 1fr 1fr;
-  gap: 18px; padding-top: 4px;
-}
-.ft-hero__sub-cell-val {
-  font-family: var(--ft-font-mono);
-  font-weight: 600; font-size: 14px; padding-top: 6px;
-}
-.ft-hero__note {
-  padding-top: 20px;
-  font-family: var(--ft-font-body);
-  font-size: 13px;
-  color: var(--ft-ink-soft);
-  line-height: 1.55;
-  max-width: 540px;
-}
-@media (max-width: 900px) {
-  .ft-hero { grid-template-columns: 1fr; }
-  .ft-hero__main { border-right: none; border-bottom: 1px solid var(--ft-rule-soft); padding-right: 0; }
-  .ft-hero__detail { padding: 28px 0; }
-  .ft-hero__num { font-size: 72px; }
-  .ft-hero__sub-grid { grid-template-columns: 1fr 1fr; }
-}
 
 /* ── 13. RECOMMENDATION CARDS (top signals) ──────────────────── */
 .recommendation-stage__body { padding-top: 16px; min-width: 0; }
@@ -723,39 +602,6 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 #signal-tabs .signal-summary {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-/* ── 14. MACRO STRIP ─────────────────────────────────────────── */
-.ft-macro {
-  display: grid;
-  border-top: 1px solid var(--ft-ink);
-  border-bottom: 1px solid var(--ft-ink);
-}
-.ft-macro__cell {
-  padding: 20px 16px;
-  border-right: 1px solid var(--ft-rule-soft);
-}
-.ft-macro__cell:last-child { border-right: none; }
-.ft-macro__val {
-  padding-top: 8px;
-  font-family: var(--ft-font-display);
-  font-weight: 600;
-  font-size: 22px;
-  line-height: 1.1;
-  color: var(--ft-ink);
-}
-.ft-macro__val--signal { color: var(--ft-signal); }
-.ft-macro__val--warn { color: var(--ft-warn); }
-.ft-macro__caption {
-  padding-top: 12px;
-  font-family: var(--ft-font-mono);
-  font-size: 10px; color: var(--ft-ink-faint);
-  text-transform: uppercase; letter-spacing: 0.14em;
-}
-@media (max-width: 900px) {
-  .ft-macro { grid-template-columns: 1fr 1fr; }
-  .ft-macro__cell:nth-child(2n) { border-right: none; }
-  .ft-macro__cell:nth-child(-n+2) { border-bottom: 1px solid var(--ft-rule-soft); }
 }
 
 /* ── 15. ALERTS (Bootstrap-compat for JS) ───────────────────── */
@@ -1064,109 +910,6 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .content-container { display: contents; }
 hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
 
-/* ── 23. CATALYST + EARNINGS VOL CARDS (the JS templates clone) ─ */
-.catalyst-grid, .earnings-vol-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
-  margin-top: 16px;
-}
-.catalyst-card, .earnings-vol-card {
-  background: var(--ft-paper);
-  border: 1px solid var(--ft-rule-soft);
-  padding: 16px;
-  display: flex; flex-direction: column;
-  gap: 12px;
-  font-family: var(--ft-font-body);
-  font-size: 13px;
-}
-.catalyst-card__header, .earnings-vol-card__header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--ft-rule-soft);
-  gap: 8px;
-}
-.catalyst-card__ticker, .earnings-vol-card__ticker {
-  font-family: var(--ft-font-mono);
-  font-weight: 600;
-  font-size: 15px;
-  color: var(--ft-ink);
-}
-.catalyst-card__direction, .catalyst-card__signal,
-.earnings-vol-card__signal {
-  font-family: var(--ft-font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 2px 8px;
-  border: 1px solid var(--ft-rule-soft);
-}
-.catalyst-card__action {
-  padding: 8px 12px;
-  background: var(--ft-rule-softer);
-  font-size: 12px;
-  color: var(--ft-ink-soft);
-  border-left: 2px solid var(--ft-warn);
-}
-.catalyst-card__conflict-warning {
-  font-size: 12px; color: var(--ft-warn);
-  padding: 4px 0;
-}
-.catalyst-card__score, .earnings-vol-card__score {
-  display: flex; align-items: baseline; gap: 8px;
-}
-.catalyst-card__score-value, .earnings-vol-card__score-value {
-  font-family: var(--ft-font-display);
-  font-size: 32px; font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--ft-ink);
-}
-.catalyst-card__score-label, .earnings-vol-card__score-label {
-  font-family: var(--ft-font-mono);
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--ft-ink-mute);
-}
-.catalyst-card__metrics, .earnings-vol-card__metrics,
-.catalyst-card__extra, .earnings-vol-card__setup,
-.earnings-vol-card__plan {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px;
-  font-size: 12px;
-  border-top: 1px solid var(--ft-rule-soft);
-  padding-top: 8px;
-}
-.catalyst-card__metrics > div, .catalyst-card__extra > div,
-.earnings-vol-card__metrics > div, .earnings-vol-card__setup > div,
-.earnings-vol-card__plan > div {
-  display: flex; justify-content: space-between;
-  padding: 2px 0;
-}
-.catalyst-card__metrics > div span, .catalyst-card__extra-row > span,
-.earnings-vol-card__metrics > div span,
-.earnings-vol-card__setup-label, .earnings-vol-card__plan-label {
-  color: var(--ft-ink-mute);
-}
-.catalyst-card__metrics > div strong, .catalyst-card__extra-row > strong,
-.earnings-vol-card__metrics > div strong,
-.earnings-vol-card__setup-value, .earnings-vol-card__plan-value {
-  font-family: var(--ft-font-mono); font-weight: 600;
-}
-.catalyst-card__extra-row {
-  display: flex; justify-content: space-between;
-  padding: 2px 0;
-}
-.catalyst-card__rationale, .catalyst-card__blockers, .catalyst-card__social,
-.catalyst-card__overlay, .earnings-vol-card__notes {
-  font-size: 12px;
-  border-top: 1px solid var(--ft-rule-soft);
-  padding-top: 8px;
-}
-.catalyst-card__rationale, .catalyst-card__overlay { color: var(--ft-ink-mute); }
-.catalyst-card__blockers { color: var(--ft-down); }
-.catalyst-card__social { color: var(--ft-info); }
-.catalyst-card__conflict-warning { display: none; }
-.catalyst-card__conflict-warning.d-none { display: none; }
-.catalyst-card__social.d-none, .catalyst-card__overlay.d-none { display: none; }
-
 /* ── 24. INCOME-STAGE SUMMARY (weekly income footer) ───────── */
 .income-stage-summary__grid {
   display: grid;
@@ -1219,27 +962,11 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
 /* ── 27. TOP-RECS BUYING POWER INDICATOR ─────────────────── */
 #buying-power-indicator { margin-top: 8px; }
 
-/* ── 28. ROLLOVER-SPECIFIC (legacy classes JS touches) ────── */
-.rollover-section { margin-top: 32px; }
-.holdings-section { margin-top: 32px; }
-#options-approaching-table { margin-top: 8px; }
-.roll-btn, .roll-option-btn, .rollover-btn { }
-
 /* ── 29. OTM SELECTOR ROW (JS inserts into table) ─────────── */
 #otm-selector-row td {
   background: var(--ft-rule-softer);
   padding: 12px 16px;
 }
-
-/* ── 30. BREADCRUMB-LIKE BACK LINK (replaces sidebar nav) ─── */
-.ft-back-link {
-  font-family: var(--ft-font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ft-ink-mute);
-}
-.ft-back-link:hover { color: var(--ft-ink); text-decoration: none; }
 
 /* ── 31. FOOTER ────────────────────────────────────────────── */
 .app-footer { margin-top: 0; }
@@ -1258,9 +985,7 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
 .btn,
 .ft-masthead__nav-link,
 .btn-close,
-.recommendation-card,
-.catalyst-card,
-.earnings-vol-card {
+.recommendation-card {
   transition: background-color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1),
               color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1),
               border-color 0.25s cubic-bezier(0.22, 0.61, 0.36, 1),
@@ -1284,94 +1009,6 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
 .btn:active,
 .btn-close:active {
   transform: scale(0.96);
-}
-
-/* ── 33. CARD HIERARCHY ─────────────────────────────────────── */
-/* Desk ticket — primary signal (heavier, more prominent) */
-.recommendation-card--primary {
-  border: 2px solid var(--ft-ink);
-  background: var(--ft-paper);
-  box-shadow: 4px 4px 0 rgba(234,234,234,0.12);
-}
-
-/* Secondary — quieter signals */
-.recommendation-card--secondary {
-  border: 1px dashed var(--ft-rule-soft);
-  background: rgba(255,241,229,0.55);
-}
-
-/* Risk strip — warnings/blockers */
-.recommendation-card--risk {
-  border: 2px solid var(--ft-warn);
-  background: var(--ft-warn-soft);
-}
-
-/* ── 34. SCANNER TABLE IMPROVEMENTS ─────────────────────────── */
-/* Card-row mode for mobile */
-@media (max-width: 768px) {
-  .ft-table-wrap {
-    overflow-x: visible;
-  }
-  
-  .ft-table--card-mode thead {
-    display: none;
-  }
-  
-  .ft-table--card-mode tbody tr {
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--ft-rule-soft);
-    margin-bottom: 12px;
-    padding: 12px;
-    background: var(--ft-paper);
-  }
-  
-  .ft-table--card-mode tbody td {
-    display: flex;
-    justify-content: space-between;
-    padding: 6px 0;
-    border-bottom: 1px solid var(--ft-rule-softer);
-  }
-  
-  .ft-table--card-mode tbody td:last-child {
-    border-bottom: none;
-  }
-  
-  .ft-table--card-mode tbody td::before {
-    content: attr(data-label);
-    font-family: var(--ft-font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--ft-ink-mute);
-    margin-right: auto;
-  }
-}
-
-/* Sticky first column and action columns on desktop */
-@media (min-width: 769px) {
-  .ft-table--sticky-col {
-    position: relative;
-  }
-  
-  .ft-table--sticky-col thead th:first-child,
-  .ft-table--sticky-col tbody td:first-child {
-    position: sticky;
-    left: 0;
-    background: var(--ft-paper);
-    z-index: 2;
-    border-right: 1px solid var(--ft-rule-soft);
-  }
-  
-  .ft-table--sticky-col thead th:last-child,
-  .ft-table--sticky-col tbody td:last-child {
-    position: sticky;
-    right: 0;
-    background: var(--ft-paper);
-    z-index: 2;
-   ;
-    border-left: 1px solid var(--ft-rule-soft);
-  }
 }
 
 /* ── 35. INLINE STYLE REPLACEMENTS ─────────────────────────── */
