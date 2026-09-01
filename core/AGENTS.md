@@ -35,7 +35,7 @@
 - Scoring/decision changes: run `pytest tests/test_wheel_decision.py tests/test_score_regression.py`.
 - Connection changes: run `pytest tests/test_connection.py tests/test_import_side_effects.py`.
 - Cache/rate-limit changes: run the matching focused tests such as `tests/test_rate_limiter.py` or `tests/test_scan_ledger.py`.
-- Before significant edits: question requirements, delete dead weight, then simplify (V8.0 §2); compatibility needs concrete consumer evidence (V8.0 §4); structural readonly (`core/broker_protocol.py`) is non-negotiable (V8.0 §5). After edits, apply the brief changed/verified/assumptions/risks closeout (V8.0 §9) and note any DOX files intentionally unchanged.
+- Before significant edits: question requirements, delete dead weight, then simplify (V9.1 §2); compatibility needs concrete consumer evidence (V9.1 §5); structural readonly (`core/broker_protocol.py`) is non-negotiable (V9.1 §7). After edits, apply the brief changed/verified/assumptions/risks closeout (V9.1 §13) and note any DOX files intentionally unchanged.
 
 ## Child DOX Index
 

@@ -36,7 +36,7 @@
 - Service changes: run the matching `tests/test_*service*.py` or feature-specific tests.
 - If blueprint registration or service registry changes, run `pytest tests/test_import_side_effects.py tests/test_api_health.py`.
 - If secret-key or CORS configuration changes, run `pytest tests/test_api_config.py`.
-- Security: enforce controls by implementation, not guidance alone (V8.0 §5); readonly contract is structural; verify packages and APIs (V8.0 §3); apply the closeout format (V8.0 §9).
+- Security: enforce controls by implementation, not guidance alone (V9.1 §7); readonly contract is structural; verify packages and APIs (V9.1 §3); apply the closeout format (V9.1 §13).
 
 ## Child DOX Index
 
