@@ -74,6 +74,39 @@ describe('dashboard rendering safety', () => {
     expect(target.innerHTML).toContain('&lt;img src=x onerror=alert(1)&gt;');
     expect(target.innerHTML).not.toContain('<img src=x onerror=alert(1)>');
   });
+
+  it('escapes unknown watchlist origins before injecting badge HTML', async () => {
+    document.body.innerHTML = `
+      <div id="watchlist-tags"></div>
+      <div id="watchlist-summary"></div>
+      <div id="watchlist-infeasible"></div>
+    `;
+    fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        union: [{ ticker: 'AAPL', origins: ['<script>alert(1)</script>'] }],
+        sources: {},
+      }),
+    });
+
+    const { loadWatchlist } = await import('../../frontend/static/js/dashboard/watchlist-panel.js');
+    await loadWatchlist();
+
+    const tags = document.getElementById('watchlist-tags');
+    expect(tags.innerHTML).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(tags.innerHTML).not.toContain('<script>alert(1)</script>');
+  });
+
+  it('allowlists alert types before building alert classes', async () => {
+    document.body.innerHTML = '<main class="content-container"></main>';
+
+    const { showAlert } = await import('../../frontend/static/js/utils/alerts.js');
+    showAlert('Message', 'danger" onmouseover="alert(1)', 0);
+
+    const alert = document.querySelector('.alert');
+    expect(alert.className).toContain('alert-info');
+    expect(alert.className).not.toContain('onmouseover');
+  });
 });
 
 describe('options-table rendering safety', () => {

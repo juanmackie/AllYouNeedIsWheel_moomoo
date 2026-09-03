@@ -28,7 +28,7 @@
 - Keep dashboard JS modular by feature (`dashboard/`, `utils/`).
 - Use existing formatting/state helpers before adding new browser utilities.
 - Maintain responsive behavior for tables, cards, modals, and navigation.
-- Use `escapeHtml` from `utils/formatters.js` for any API-fed content injected into the DOM to prevent XSS. Dashboard modules (`dashboard-cash.js`, `dashboard-regime.js`, `state-model.js`, `top-recommendations.js`) must use it on text-bearing inserts.
+- Use `escapeHtml` from `utils/formatters.js` for any API-fed content injected into the DOM to prevent XSS. Dashboard modules that inject API-fed content (e.g. `dashboard-cash.js`, `weekly-income.js`, `growth-panel.js`, `account.js`, `state-model.js`, `top-recommendations.js`) must use it on text-bearing inserts.
 - Break cross-feature import cycles with lazy dynamic accessors (e.g. `getOptionsTableActions`) rather than direct static imports between feature modules.
 
 ## Verification

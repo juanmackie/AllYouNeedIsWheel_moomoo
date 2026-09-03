@@ -236,6 +236,8 @@ def migrate_database(db_path):
                         ("currency", "TEXT"),
                         ("earnings_source", "TEXT"),
                     ]:
+                        # Internal allowlist only: col/col_type come from the
+                        # hardcoded tuples above, never from user input.
                         if col not in earnings_cols:
                             logger.info("Running migration: Adding %s to earnings_calendar", col)
                             cursor.execute("ALTER TABLE earnings_calendar ADD COLUMN %s %s" % (col, col_type))
@@ -292,6 +294,7 @@ def migrate_database(db_path):
             if current_version < 3:
                 # Drop evaluator/calibrator tables — feature fully retired.
                 # Historical outcomes are no longer used for training.
+                # Internal allowlist only: table names are hardcoded below.
                 for table in (
                     "evaluator_signals",
                     "evaluator_feedback_bias",

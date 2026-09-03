@@ -690,7 +690,7 @@ export function updateProgressBanner(current, total, ticker, step, error) {
         if (error) {
             detailEl.innerHTML = `<span class="text-danger">${sanitize(ticker)}: ${sanitize(error)}</span>`;
         } else {
-            detailEl.textContent = `${sanitize(ticker)}: ${step}`;
+            detailEl.textContent = `${ticker}: ${step}`;
         }
     }
 }

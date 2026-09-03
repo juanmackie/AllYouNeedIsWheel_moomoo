@@ -9,7 +9,7 @@ let _watchlistData = null;
 function originBadge(origin) {
     const labels = { moomoo: 'Moomoo', app: 'App', config: 'Config' };
     const classes = { moomoo: 'bg-primary', app: 'bg-success', config: 'bg-secondary' };
-    return `<span class="badge ${classes[origin] || 'bg-secondary'}">${labels[origin] || origin}</span>`;
+    return `<span class="badge ${classes[origin] || 'bg-secondary'}">${escapeHtml(labels[origin] || origin)}</span>`;
 }
 
 export async function loadWatchlist() {

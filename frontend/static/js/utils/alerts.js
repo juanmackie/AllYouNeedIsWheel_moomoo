@@ -11,8 +11,10 @@ import { escapeHtml } from './formatters.js';
  * @param {number} duration - Time in milliseconds before alert disappears
  */
 function showAlert(message, type = 'info', duration = 5000) {
+    const allowedTypes = new Set(['success', 'info', 'warning', 'danger']);
+    const safeType = allowedTypes.has(type) ? type : 'info';
     const alertDiv = document.createElement('div');
-    alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+    alertDiv.className = `alert alert-${safeType} alert-dismissible fade show`;
     alertDiv.role = 'alert';
     alertDiv.innerHTML = `
         ${escapeHtml(message)}

@@ -38,7 +38,7 @@ jobs:
 
       - name: Dependency drift check (pyproject vs requirements.txt)
         run: |
-          uv run python - <<'PY'
+          @'
           import re, tomllib
           from pathlib import Path
           with open("pyproject.toml", "rb") as fh:
@@ -55,7 +55,7 @@ jobs:
           assert not missing, f"requirements.txt missing: {sorted(missing)}"
           assert not extra, f"requirements.txt has extras not in pyproject: {sorted(extra)}"
           print("dependency drift check: OK", len(py_deps), "deps aligned")
-          PY
+          '@ | uv run python -
 
       - name: Backend tests (locked env)
         run: uv run python scripts/ci_pytest.py tests/ -q
@@ -102,22 +102,21 @@ jobs:
 
       - name: Hygiene scan — no order-capable runtime surface
         run: |
-          $hits = Get-ChildItem -Recurse -File -Include *.py |
-            Where-Object { $_.FullName -notmatch '\\tests\\' } |
-            Select-String -Pattern 'place_order|modify_order|unlock_trade|cancel_order' -SimpleMatch:$false |
-            Select-Object -First 20
-          if ($hits) {
-            $hits | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
-            exit 1
-          }
-          Write-Host "hygiene scan: no order-capable runtime code found"
+          uv run pytest tests/test_no_execution_surface.py tests/test_query_only_broker.py -q
+          Write-Host "hygiene scan: no order-capable runtime surface found"
 
       - name: Hygiene scan — no tracked generated artifacts
         run: |
           $bad = git ls-files | Where-Object {
             $_ -match '(^|/)(node_modules|__pycache__|\.pytest_cache|\.ruff_cache|\.venv|logs?)/' -or
             $_ -match '\.(db|db-wal|db-shm|pyc|log)$' -or
-            $_ -match '(^|/)\.env$' -or
+            (($_ -match '(^|/)\.env($|\.)') -and ($_ -notmatch '(^|/)\.env\.example$')) -or
+            $_ -match '(^|/)(plan\.md|\.pi-subagents)(/|$)' -or
+            $_ -match '(^|/)\.claude(/|$)' -or
+            $_ -match '(^|/)\.pi(/|$)' -or
+            $_ -match '(^|/)settings\.local\.json$' -or
+            $_ -match '(^|/).*\.local\.md$' -or
+            $_ -match 'production-ready-vibe-coding-rules' -or
             $_ -match 'opend-skills'
           }
           if ($bad) { Write-Error "tracked artifacts:"; $bad | ForEach-Object { Write-Error $_ }; exit 1 }
