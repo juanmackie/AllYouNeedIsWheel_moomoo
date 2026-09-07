@@ -526,7 +526,6 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   color: var(--ft-ink); letter-spacing: 0;
 }
 .recommendation-card .signal-data-source,
-.recommendation-card .signal-overlay,
 .recommendation-card .recommendation-warnings {
   text-align: center; font-size: 12px; color: var(--ft-ink-mute);
   min-width: 0;
@@ -934,12 +933,7 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
   .income-stage-summary__grid { grid-template-columns: 1fr 1fr; }
 }
 
-/* ── 25. SIGNAL OVERLAY (top-recommendation context block) ─── */
-.signal-overlay {
-  text-align: center; font-size: 12px; color: var(--ft-ink-mute);
-  padding: 4px 0;
-}
-.signal-overlay.d-none { display: none; }
+/* ── 25. DATA SOURCE (top-recommendation context block) ─── */
 .signal-data-source { color: var(--ft-ink-faint); font-size: 11px; }
 
 /* ── 26. GROWTH MODE BANNER ───────────────────────────────── */

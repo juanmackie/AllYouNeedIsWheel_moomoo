@@ -30,7 +30,10 @@ def get_run_state():
     """Return the latest refresh attempt and the latest completed snapshot."""
     db = _get_db()
     attempt = db.get_latest_attempt() if db is not None else None
-    snapshot = db.get_latest_snapshot() if db is not None else None
+    from api.services.config import get_current_identity
+
+    identity_env, identity_account = get_current_identity()
+    snapshot = db.get_latest_snapshot(env=identity_env, account_id=identity_account) if db is not None else None
     return jsonify({"attempt": attempt, "snapshot": recompute_effective_snapshot(snapshot)})
 
 

@@ -100,6 +100,12 @@ function renderPace(payload, series) {
     // Server-declared target multiple (active preset); falls back to the
     // project-wide 5x goal.
     const targetMultiple = Number(payload?.target_multiple) || 5;
+    // S04: render every target label from the server objective, including
+    // initial/empty states.
+    const headingEl = document.getElementById('growth-heading');
+    const etaLabelEl = document.getElementById('growth-eta-label');
+    if (headingEl) headingEl.textContent = `Path to ${targetMultiple}x`;
+    if (etaLabelEl) etaLabelEl.textContent = `ETA to ${targetMultiple}x`;
     const latest = series && series.length ? series[series.length - 1] : null;
 
     if (!latest) {
@@ -113,9 +119,13 @@ function renderPace(payload, series) {
     }
 
     const currentNav = Number(latest.net_liquidation) || 0;
-    const targetNav = currentNav * targetMultiple;
+    // C07/S04: render the server's durable target and status — never recompute a
+    // moving target from current NAV on the client.
+    const serverPace0 = payload?.pace || {};
+    const targetNav = Number(serverPace0.target_nav);
+    const reached = Boolean(serverPace0.reached);
     if (navEl) navEl.textContent = formatCurrency(currentNav);
-    if (targetEl) targetEl.textContent = formatCurrency(targetNav);
+    if (targetEl) targetEl.textContent = Number.isFinite(targetNav) ? formatCurrency(targetNav) : '—';
     const targetLabel = document.getElementById('growth-target-label');
     if (targetLabel) targetLabel.textContent = `${targetMultiple}x`;
 
@@ -125,6 +135,7 @@ function renderPace(payload, series) {
     const progressPct = Number(serverPace?.progress_pct) || 0;
     const pace = serverPace && serverPace.annualized_pace !== null ? Number(serverPace.annualized_pace) : null;
     const etaDays = serverPace && serverPace.eta_days !== null ? Number(serverPace.eta_days) : null;
+    const statusReached = Boolean(serverPace?.reached);
 
     const progressEl = document.getElementById('growth-progress');
     const barEl = document.getElementById('growth-progress-bar');
@@ -149,6 +160,8 @@ function renderPace(payload, series) {
     const etaEl = document.getElementById('growth-eta');
     if (etaDays === null) {
         etaEl.textContent = '—';
+    } else if (statusReached) {
+        etaEl.textContent = 'Reached';
     } else if (etaDays > 365.25 * 40) {
         etaEl.textContent = '>40y';
     } else {
@@ -158,7 +171,10 @@ function renderPace(payload, series) {
     }
 
     if (badge) {
-        if (pace === null) {
+        if (statusReached) {
+            badge.textContent = 'TARGET REACHED';
+            badge.className = 'badge bg-success';
+        } else if (pace === null) {
             badge.textContent = 'COLLECTING DATA';
             badge.className = 'badge bg-secondary';
         } else if (pace > 0) {

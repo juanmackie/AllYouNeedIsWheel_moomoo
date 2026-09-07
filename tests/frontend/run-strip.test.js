@@ -68,7 +68,7 @@ describe('run-strip freshness rendering', () => {
     expect(els['run-coverage'].textContent).toBe('coverage 27/27');
   });
 
-  it('renders the oldest valid quote age against the freshness window', async () => {
+  it('renders the UTC fetch time and data age against the freshness window', async () => {
     const els = setupDOM();
     const now = Date.now();
     stubFetch({
@@ -91,8 +91,83 @@ describe('run-strip freshness rendering', () => {
     const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
     await loadRunStrip();
 
-    expect(els['run-freshness'].textContent).toContain('quote age');
+    expect(els['run-freshness'].textContent).toContain('UTC fetch');
     expect(els['run-freshness'].textContent).toContain('(max 300s)');
     expect(els['run-freshness'].textContent).not.toContain('NaN');
+  });
+
+  it('keeps the FAILED badge visible while retaining the last-good snapshot', async () => {
+    const els = setupDOM();
+    stubFetch({
+      attempt: { state: 'failed', error: 'OpenD disconnected' },
+      snapshot: {
+        tradeable: false,
+        effective_status: 'stale',
+        run: {
+          env: 'REAL',
+          market_state: 'open',
+          status: 'stale',
+          published_at: new Date(Date.now() - 60_000).toISOString(),
+          coverage_scanned: 27,
+          coverage_total: 27,
+          quote_fetched_at: { AAPL: new Date(Date.now() - 30_000).toISOString() },
+          max_tradeable_age_sec: 300,
+        },
+      },
+    });
+
+    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    await loadRunStrip();
+
+    expect(els['run-status'].textContent).toBe('FAILED');
+    expect(els['run-status'].className).toContain('bg-danger');
+    expect(els['run-freshness'].textContent).toContain('UTC fetch');
+    expect(els['run-freshness'].textContent).toContain('(max 300s)');
+  });
+
+  it('surfaces a communication failure instead of returning silently', async () => {
+    const els = setupDOM();
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === '/api/run') return { ok: false, status: 503, json: async () => ({}) };
+      if (url === '/api/settings') return { ok: true, json: async () => ({ active: 'balanced', presets: {} }) };
+      return { ok: false, json: async () => ({}) };
+    }));
+
+    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    await loadRunStrip();
+
+    expect(els['run-status'].textContent).toBe('COMM ERROR');
+    expect(els['run-coverage'].textContent).toBe('cannot reach run API');
+  });
+
+  it('reports stale broker data with a recent fetch as old data, not quote age', async () => {
+    const els = setupDOM();
+    const now = Date.now();
+    stubFetch({
+      attempt: null,
+      snapshot: {
+        tradeable: false,
+        effective_status: 'stale',
+        run: {
+          env: 'REAL',
+          market_state: 'open',
+          status: 'stale',
+          published_at: new Date(now).toISOString(),
+          coverage_scanned: 27,
+          coverage_total: 27,
+          // Quote was fetched long ago -> large data age, but it is fetch/data
+          // age, never labeled as broker quote age.
+          quote_fetched_at: { AAPL: new Date(now - 3600_000).toISOString() },
+          max_tradeable_age_sec: 300,
+        },
+      },
+    });
+
+    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    await loadRunStrip();
+
+    expect(els['run-freshness'].textContent).toContain('UTC fetch');
+    expect(els['run-freshness'].textContent).toMatch(/data \d+s old/);
+    expect(els['run-freshness'].textContent).not.toContain('quote age');
   });
 });

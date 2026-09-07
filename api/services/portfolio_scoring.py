@@ -10,6 +10,7 @@ from datetime import datetime
 from core.logging_config import get_logger
 from core.position_utils import parse_moomoo_symbol, parse_position_qty
 from core.ticker_utils import earnings_underlying_ticker
+from core.utils import market_now
 
 logger = get_logger("api.services.portfolio_scoring", "api")
 
@@ -72,7 +73,9 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
 
     try:
         exp_date = datetime.strptime(expiration, "%Y%m%d").date()
-        dte = (exp_date - datetime.now().date()).days
+        # Position DTE must use the US market clock, not the Windows host date
+        # (Brisbane can be a calendar day ahead of the US session). (C13)
+        dte = (exp_date - market_now().date()).days
     except (ValueError, TypeError):
         dte = 0
 
@@ -91,6 +94,9 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
         "delta": float(pos.get("delta", 0) or 0),
         "theta": float(pos.get("theta", 0) or 0),
         "implied_volatility": float(pos.get("implied_volatility", 0) or 0),
+        # Entry credit per contract (average cost) -- required by the exit
+        # playbook to decide profit-taking / roll / close (C02).
+        "avg_cost": float(pos.get("avg_cost", 0) or 0),
     }
 
     iv = float(pos.get("implied_volatility", 0) or 0)
@@ -108,6 +114,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
         iv_rank=iv_rank,
         iv_status_str=iv_status,
         earnings_adjustment=earnings_adj,
+        earnings_info=iv_earnings_service.get_earnings_info(ticker),
     )
 
     return decision

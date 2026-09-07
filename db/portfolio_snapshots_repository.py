@@ -13,6 +13,23 @@ from .sqlite_pool import pooled_connection
 logger = logging.getLogger("db.portfolio_snapshots")
 
 
+def _identity_where(env, account_id):
+    """Scope snapshot reads by environment/account (C04). Empty account_id rows
+    are legacy/unidentifiable and are quarantined from active-account history.
+    Returns (where_sql, params); callers prepend 'WHERE 1=1'."""
+    clauses = []
+    params = []
+    if env:
+        clauses.append("env = ?")
+        params.append(env)
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if clauses:
+        return " AND " + " AND ".join(clauses), params
+    return "", params
+
+
 class PortfolioSnapshotsRepository:
     def __init__(self, db_path):
         self.db_path = db_path
@@ -54,9 +71,10 @@ class PortfolioSnapshotsRepository:
             logger.error("Error saving portfolio snapshot: %s", exc)
             return False
 
-    def get_latest_portfolio_snapshot(self) -> dict | None:
-        """Most recent snapshot by captured_at, or None."""
+    def get_latest_portfolio_snapshot(self, env=None, account_id=None) -> dict | None:
+        """Most recent snapshot for the given (env, account), or any when omitted."""
         try:
+            where, params = _identity_where(env, account_id)
             with pooled_connection(self.db_path, row_factory=None) as conn:
                 row = conn.execute(
                     """
@@ -64,21 +82,33 @@ class PortfolioSnapshotsRepository:
                            net_liquidation, cash_available, cash_reserved_for_csp,
                            cash_available_for_csp, broker_buying_power, positions_json
                     FROM portfolio_snapshots
-                    ORDER BY datetime(captured_at) DESC, id DESC
-                    LIMIT 1
+                    WHERE 1=1
                     """
+                    + where
+                    + " ORDER BY datetime(captured_at) DESC, id DESC LIMIT 1",
+                    params,
                 ).fetchone()
             return self._row_to_dict(row)
         except Exception as exc:
             logger.error("Error loading latest portfolio snapshot: %s", exc)
             return None
 
-    def get_portfolio_history(self, limit: int = 180) -> list[dict]:
-        """Snapshot series oldest-first (chart-friendly), newest last."""
+    def get_portfolio_history(self, limit: int = 180, env=None, account_id=None, unbounded: bool = False) -> list[dict]:
+        """Snapshot series oldest-first (chart-friendly), newest last, scoped to
+        an (env, account) identity (C04); any identity when omitted.
+
+        ``unbounded=True`` ignores ``limit`` and returns the complete account
+        history. Growth-pace callers use it so the durable baseline (the true
+        first snapshot) never shifts with the chart's ``limit`` parameter (C07).
+        """
         try:
-            limit = min(max(int(limit if limit is not None else 180), 0), 1000)
-            if limit == 0:
-                return []
+            if not unbounded:
+                limit = min(max(int(limit if limit is not None else 180), 0), 1000)
+                if limit == 0:
+                    return []
+            where, params = _identity_where(env, account_id)
+            tail = "" if unbounded else " LIMIT ?"
+            query_params = params if unbounded else params + [limit]
             with pooled_connection(self.db_path, row_factory=None) as conn:
                 rows = conn.execute(
                     """
@@ -86,10 +116,12 @@ class PortfolioSnapshotsRepository:
                            net_liquidation, cash_available, cash_reserved_for_csp,
                            cash_available_for_csp, broker_buying_power, positions_json
                     FROM portfolio_snapshots
-                    ORDER BY datetime(captured_at) DESC, id DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
+                    WHERE 1=1
+                    """
+                    + where
+                    + " ORDER BY datetime(captured_at) DESC, id DESC"
+                    + tail,
+                    query_params,
                 ).fetchall()
             snapshots = [self._row_to_dict(row) for row in rows]
             snapshots.reverse()

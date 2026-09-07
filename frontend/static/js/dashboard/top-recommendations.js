@@ -94,40 +94,6 @@ function addClassTokens(el, className) {
     className.split(/\s+/).filter(Boolean).forEach(cls => el.classList.add(cls));
 }
 
-function getOverlayBadgeInfo(rec) {
-    const overlay = rec.signal_overlay || {};
-    const fit = (rec.signal_overlay_fit || overlay.verdict || 'unknown').toLowerCase();
-    if (fit === 'unknown') return null;
-
-    const classes = {
-        supporting: 'bg-success',
-        confirming: 'bg-success',
-        neutral: 'bg-info',
-        caution: 'bg-warning text-dark',
-        conflict: 'bg-danger',
-    };
-    const labels = {
-        supporting: 'Overlay supports',
-        confirming: 'Overlay confirms',
-        neutral: 'Overlay neutral',
-        caution: 'Overlay caution',
-        conflict: 'Overlay conflict',
-    };
-    const summaryParts = [];
-    if (overlay.summary) summaryParts.push(overlay.summary);
-    if (overlay.capital?.summary) summaryParts.push(`capital: ${overlay.capital.summary}`);
-    if (overlay.technical?.summary) summaryParts.push(`technical: ${overlay.technical.summary}`);
-    if (overlay.derivatives?.summary) summaryParts.push(`derivatives: ${overlay.derivatives.summary}`);
-    const warningParts = overlay.warnings || rec.signal_overlay_warnings || [];
-
-    return {
-        class: classes[fit] || 'bg-secondary',
-        label: labels[fit] || 'Overlay',
-        summary: summaryParts.slice(0, 2).join(' • '),
-        title: warningParts.length > 0 ? warningParts.join(' • ') : summaryParts.join(' • '),
-    };
-}
-
 /**
  * Get data source display string and class
  * @param {Object} rec - Recommendation data
@@ -274,8 +240,37 @@ function buildTicketText(rec, { staged = false } = {}) {
     return lines.filter(Boolean).join('\n');
 }
 
+/**
+ * Current copy eligibility for a candidate, recomputed at the point of use.
+ * Live copy requires current complete coverage + fresh broker evidence
+ * (signalsData.tradeable). Staged copy is allowed only for the explicitly
+ * supported closed-market workflow on a run that had complete coverage
+ * (persisted status "ready"). Partial, stale, or in-session runs with no fresh
+ * evidence are review-only -- they can never produce a live or staged ticket.
+ */
+function copyEligibility(rec) {
+    const runTradeable = Boolean(signalsData?.tradeable);
+    const candidateEligible = Boolean(rec && rec.copy_eligible);
+    const quantityReady = Number(rec && rec.recommended_contracts || 0) > 0;
+    const marketClosed = signalsData?.run?.market_state === 'closed';
+    const persistedReady = signalsData?.run?.status === 'ready';
+    let canCopy = false;
+    let staged = false;
+    if (candidateEligible && quantityReady) {
+        if (runTradeable) {
+            canCopy = true;      // live copy: complete coverage + fresh evidence
+        } else if (marketClosed && persistedReady) {
+            canCopy = true;      // staged copy: supported closed-market workflow
+            staged = true;
+        }
+    }
+    return { canCopy, staged };
+}
+
 async function copyTicket(rec, btn) {
-    const staged = !Boolean(signalsData?.tradeable);
+    // Revalidate against the current run/candidate before writing the clipboard (C03).
+    const { canCopy, staged } = copyEligibility(rec);
+    if (!canCopy) return;
     const text = buildTicketText(rec, { staged });
     const original = btn.innerHTML;
     try {
@@ -421,18 +416,6 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     const freshnessClass = sourceInfo.freshnessClass || 'text-muted';
     const freshnessHtml = sourceInfo.freshness ? `<span class="badge bg-light text-dark border ${freshnessClass ? 'ms-1' : ''}" title="Data freshness">${escapeHtml(sourceInfo.freshness)}</span>` : '';
     sourceEl.innerHTML = `<i class="bi ${sourceInfo.icon}"></i> ${sourceBadges}${freshnessHtml}`;
-    
-    const overlayEl = clone.querySelector('.signal-overlay');
-    const overlayBadge = overlayEl?.querySelector('.signal-overlay__badge');
-    const overlaySummary = overlayEl?.querySelector('.signal-overlay__summary');
-    const overlayInfo = getOverlayBadgeInfo(rec);
-    if (overlayEl && overlayBadge && overlaySummary && overlayInfo) {
-        overlayEl.classList.remove('d-none');
-        overlayBadge.textContent = overlayInfo.label;
-        addClassTokens(overlayBadge, overlayInfo.class);
-        overlaySummary.textContent = overlayInfo.summary || 'Multi-dimensional signal overlay';
-        overlayEl.title = overlayInfo.title || overlaySummary.textContent;
-    }
 
     // Warnings
     const warningsEl = clone.querySelector('.recommendation-warnings');
@@ -477,15 +460,13 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     const copyBtn = clone.querySelector('.copy-ticket-btn');
     if (copyBtn) {
         const runTradeable = Boolean(signalsData?.tradeable);
-        const candidateEligible = Boolean(rec.copy_eligible);
-        const quantityReady = Number(rec.recommended_contracts || 0) > 0;
-        // Copy is allowed for any copy-eligible candidate regardless of market state.
-        // When the run is not live-tradeable (US market closed / stale quote) the ticket is
-        // staged for placement at US open, with the premium labelled as the last broker quote.
-        const canCopy = candidateEligible && quantityReady;
+        // Copy eligibility is recomputed at the point of use (C03): live copy needs
+        // current complete coverage + fresh broker evidence; staging is allowed only
+        // for the supported closed-market workflow on a complete-coverage run.
+        const { canCopy, staged } = copyEligibility(rec);
         copyBtn.disabled = !canCopy;
         if (canCopy) {
-            if (runTradeable) {
+            if (!staged) {
                 copyBtn.title = 'Copy a manual ticket draft (live broker quote)';
                 copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy ticket';
             } else {

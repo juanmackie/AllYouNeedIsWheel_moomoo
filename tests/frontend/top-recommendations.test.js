@@ -580,6 +580,8 @@ describe('top-recommendations source badges', () => {
     fetchRunState.mockResolvedValue({
       success: true,
       tradeable: false,
+      status: 'ready',
+      run: { market_state: 'closed', status: 'ready' },
       signals: [{
         rank: 1, ticker: 'TSLA', option_type: 'PUT', strike: 200, expiration: '20240315', dte: 21,
         copy_eligible: true, recommended_contracts: 2,
@@ -613,3 +615,97 @@ describe('top-recommendations source badges', () => {
     vi.unstubAllGlobals();
   });
 
+
+describe('C03 copy eligibility at the point of use', () => {
+  const candidate = {
+    rank: 1, ticker: 'MSFT', option_type: 'PUT', strike: 300, expiration: '20240315', dte: 21,
+    copy_eligible: true, recommended_contracts: 1,
+    bid: 2.50, ask: 3.00, mid_price: 2.75, premium_per_contract: 275.0,
+    max_contracts: 1, cash_required: 30000.0, chain_source: 'broker',
+    signal_type: 'csp', profile_type: 'monthly',
+    wheel_decision: { confidence_score: 100 },
+  };
+
+  async function renderWith(envelope) {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
+    );
+    fetchRunState.mockResolvedValue(envelope);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+    return { writeText };
+  }
+
+  it('blocks any copy when the live run is partial (open session)', async () => {
+    const { writeText } = await renderWith({
+      success: true,
+      tradeable: false,
+      status: 'partial',
+      run: { market_state: 'open', status: 'partial', coverage_scanned: 2, coverage_total: 5 },
+      signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
+    });
+    const btn = document.querySelector('.copy-ticket-btn');
+    expect(btn).toBeTruthy();
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toContain('Review only');
+    btn.click();
+    expect(writeText).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('blocks staging when the run is stale during an open market', async () => {
+    const { writeText } = await renderWith({
+      success: true,
+      tradeable: false,
+      status: 'stale',
+      run: { market_state: 'open', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
+      signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
+    });
+    const btn = document.querySelector('.copy-ticket-btn');
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toContain('Review only');
+    btn.click();
+    expect(writeText).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('allows a staged ticket only for closed-market complete coverage', async () => {
+    const { writeText } = await renderWith({
+      success: true,
+      tradeable: false,
+      status: 'ready',
+      run: { market_state: 'closed', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
+      signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
+    });
+    const btn = document.querySelector('.copy-ticket-btn');
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toContain('Stage ticket');
+    btn.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0]).toContain('STAGED FOR US MARKET OPEN');
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the live copy path for a tradeable run', async () => {
+    const { writeText } = await renderWith({
+      success: true,
+      tradeable: true,
+      status: 'ready',
+      run: { market_state: 'open', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
+      signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
+    });
+    const btn = document.querySelector('.copy-ticket-btn');
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toContain('Copy ticket');
+    btn.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0]).not.toContain('STAGED FOR US MARKET OPEN');
+    vi.unstubAllGlobals();
+  });
+});

@@ -62,14 +62,16 @@ class TestCoreImport(unittest.TestCase):
         self.assertTrue(callable(_clamp))
         self.assertTrue(callable(_score_proximity))
 
-    def test_import_core_greeks_imports_scipy_not_moomoo(self):
-        """core.greeks imports scipy but should not import moomoo at top level."""
+    def test_import_core_greeks_uses_stdlib_normaldist_not_moomoo(self):
+        """core.greeks imports stdlib NormalDist (no scipy) and must not import
+        moomoo at top level."""
         # This test verifies that the module can be imported
         # The lazy loading of moomoo should prevent side effects
         with patch("core.greeks.compute_bs_greeks", side_effect=NotImplementedError):
             from core import greeks
 
             self.assertTrue(hasattr(greeks, "compute_bs_greeks"))
+            self.assertTrue(hasattr(greeks, "_STANDARD_NORMAL"))
 
 
 class TestAPIImport(unittest.TestCase):

@@ -62,6 +62,8 @@ class TestInferTradeEvents(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event_type"], "exit")
         self.assertEqual(events[0]["ticker"], "TSLA")
+        # C05: inference never observes fill prices -> pnl is unknown (None).
+        self.assertIsNone(events[0]["pnl"])
 
     def test_same_underlying_move_is_roll(self):
         prev = _snap([_opt("TSLA", "20260904", "PUT", 300), _opt("TSLA", "20261002", "PUT", 280)])
@@ -105,6 +107,152 @@ class TestInferTradeEvents(unittest.TestCase):
         prev = _snap([_opt("SPY", "20260904", "CALL", 600, qty=2)])
         curr = _snap([])
         self.assertEqual(infer_trade_events(prev, curr), [])
+
+    def test_mismatched_quantity_not_rolled(self):
+        """C14: same underlying+type but different contract counts is not a roll
+        without fills — it is an exit plus a fresh entry (ambiguous), not a
+        confirmed strike/expiry move."""
+        prev = _snap([_opt("AAPL", "20260918", "PUT", 200, qty=-2)])
+        curr = _snap([_opt("AAPL", "20261016", "PUT", 230, qty=-1)])
+        events = infer_trade_events(prev, curr)
+        types = sorted(e["event_type"] for e in events)
+        self.assertEqual(types, ["entry", "exit"])
+        # Both legs exact: no stragglers, no roll tagged.
+        self.assertNotIn("roll", types)
+        for e in events:
+            if e["event_type"] == "exit":
+                self.assertEqual(e["ticker"], "AAPL")
+
+    def test_independent_stock_purchase_is_not_assignment(self):
+        """C14: a vanished short put with extra share growth beyond its own lot
+        (an independent buy on top) must not be labelled a confirmed assignment."""
+        # 1 contract put implied 100 shares, but shares grew by 200 -> not an
+        # exact lot, so it stays an exit rather than fabricating an assignment.
+        prev = _snap([_opt("INTC", "20260821", "PUT", 30), _stk("INTC", 100)])
+        curr = _snap([_stk("INTC", 300)])
+        events = infer_trade_events(prev, curr)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "exit")
+
+
+class TestBuilderToInferenceIntegration(unittest.TestCase):
+    """C06: builder-produced snapshots (broker-shaped option codes) must power
+    inference correctly. Options carry a distinct `underlying` parsed from the
+    code; rolls group by underlying/type and assignment matches the underlying
+    share book instead of treating the full option code as the symbol."""
+
+    def _snap(self, positions_raw, run_id="r1", captured_at="2026-08-22T15:00:00+00:00"):
+        from core.portfolio_snapshot import build_portfolio_snapshot
+
+        return build_portfolio_snapshot(
+            {"account_value": 25_000.0, "positions": positions_raw},
+            run_id=run_id,
+            env="SIMULATE",
+            opaque_account="acc",
+            captured_at=captured_at,
+        )
+
+    def test_roll_across_broker_option_codes(self):
+        # Same underlying TSLA, PUT 300 -> PUT 280 across two expiries. The two
+        # option codes share underlying=TSLA, so inference pairs them as a roll
+        # instead of an exit plus a fresh entry.
+        prev = self._snap(
+            {
+                "US.TSLA260904P00300000": {
+                    "symbol": "US.TSLA260904P00300000",
+                    "security_type": "OPT",
+                    "position": -1,
+                    "option_type": "PUT",
+                    "strike": 300,
+                    "expiration": "20260904",
+                    "market_price": 2.0,
+                },
+            }
+        )
+        curr = self._snap(
+            {
+                "US.TSLA260916P00280000": {
+                    "symbol": "US.TSLA260916P00280000",
+                    "security_type": "OPT",
+                    "position": -1,
+                    "option_type": "PUT",
+                    "strike": 280,
+                    "expiration": "20260916",
+                    "market_price": 1.8,
+                },
+            },
+            run_id="r2",
+        )
+        self.assertEqual(prev["positions"][0]["symbol"], "TSLA260904P00300000")
+        self.assertEqual(prev["positions"][0]["underlying"], "TSLA")
+
+        events = infer_trade_events(prev, curr)
+        self.assertEqual(len(events), 1, events)
+        self.assertEqual(events[0]["event_type"], "roll")
+        self.assertEqual(events[0]["ticker"], "TSLA")
+        self.assertEqual(events[0]["from_strike"], 300.0)
+        self.assertEqual(events[0]["strike"], 280.0)
+
+    def test_assignment_matches_underlying_share_growth(self):
+        # Short put INTC disappears; INTC share count grows. Option `symbol` is
+        # the full code (INTC260821P00300000) but `underlying` is INTC, which
+        # must match the INTC stock book.
+        prev = self._snap(
+            {
+                "US.INTC260821P00300000": {
+                    "symbol": "US.INTC260821P00300000",
+                    "security_type": "OPT",
+                    "position": -1,
+                    "option_type": "PUT",
+                    "strike": 30,
+                    "expiration": "20260821",
+                    "market_price": 0.5,
+                },
+                "US.INTC": {"symbol": "US.INTC", "security_type": "STK", "position": 0},
+            }
+        )
+        curr = self._snap(
+            {
+                "US.INTC": {"symbol": "US.INTC", "security_type": "STK", "position": 100},
+            },
+            run_id="r2",
+        )
+        events = infer_trade_events(prev, curr)
+        self.assertEqual(len(events), 1, events)
+        self.assertEqual(events[0]["event_type"], "assignment")
+        self.assertEqual(events[0]["ticker"], "INTC")
+
+    def test_distinct_types_on_same_underlying_not_rolled(self):
+        # CALL disappears, PUT appears on the same underlying: not a roll.
+        prev = self._snap(
+            {
+                "US.AAPL260918C00250000": {
+                    "symbol": "US.AAPL260918C00250000",
+                    "security_type": "OPT",
+                    "position": -1,
+                    "option_type": "CALL",
+                    "strike": 250,
+                    "expiration": "20260918",
+                    "market_price": 3.0,
+                },
+            }
+        )
+        curr = self._snap(
+            {
+                "US.AAPL260916P00230000": {
+                    "symbol": "US.AAPL260916P00230000",
+                    "security_type": "OPT",
+                    "position": -1,
+                    "option_type": "PUT",
+                    "strike": 230,
+                    "expiration": "20260916",
+                    "market_price": 2.0,
+                },
+            },
+            run_id="r2",
+        )
+        types = sorted(e["event_type"] for e in infer_trade_events(prev, curr))
+        self.assertEqual(types, ["entry", "exit"])
 
 
 if __name__ == "__main__":

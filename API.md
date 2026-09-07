@@ -1,9 +1,16 @@
 # API Reference — All You Need Is Wheel (as built 2026-08-02)
 
-Single-user loopback app; all endpoints are read-only queries except
-`POST /api/settings/preset` (persist the selected preset) and
-`POST /api/run/refresh` (start one bounded background refresh). There is no
-order, unlock, or trading-password endpoint.
+Single-user loopback app. Read-only queries are the default; the state-changing
+endpoints are signals-only (nothing places, modifies, or cancels an order) and
+cover run control, settings, the app-managed watchlist, and earnings-gate
+metadata:
+
+- `POST /api/run/refresh` — start one bounded background refresh
+- `POST /api/settings/preset` — persist the selected preset
+- `POST /api/watchlist` / `DELETE /api/watchlist/<symbol>` — add/remove an app-managed symbol
+- `POST /api/earnings/refresh` / `POST /api/earnings/update/<ticker>` — update earnings-gate metadata
+
+There is no order, unlock, or trading-password endpoint.
 
 ## Endpoints
 
@@ -32,6 +39,7 @@ order, unlock, or trading-password endpoint.
 - `GET /api/portfolio/` — portfolio summary (broker truth)
 - `GET /api/portfolio/positions?type=STK|OPT`
 - `GET /api/portfolio/weekly-income`
+- `GET /api/portfolio/history` — persisted portfolio snapshot history (one per completed run) plus 5x growth pace
 - `GET /api/portfolio/roll-pressure` — roll/hold/close diagnostics for option positions
 - `GET /api/portfolio/alerts`
 

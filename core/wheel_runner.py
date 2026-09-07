@@ -58,15 +58,24 @@ def resolve_account(conn, config: dict) -> str:
         real_accounts = [a for a in accounts if a.get("trd_env") == TrdEnv.REAL]
         matched = [a for a in real_accounts if a.get("acc_id") == configured]
         if not matched:
-            available = ", ".join(a.get("acc_id", "?") for a in real_accounts) or "none"
-            raise ValueError(f"Configured account_id {configured!r} not found among REAL accounts ({available}).")
+            # S02: never enumerate raw available account ids in peristed/public errors.
+            raise ValueError(
+                f"REAL account resolution failed: configured account not found among "
+                f"{len(real_accounts)} available REAL account(s). Configure MOOMOO_ACCOUNT_ID "
+                f"to an available account."
+            )
         return configured
 
     if configured:
         sim_accounts = [a for a in accounts if a.get("trd_env") == TrdEnv.SIMULATE]
         if any(a.get("acc_id") == configured for a in sim_accounts):
             return configured
-        raise ValueError(f"Configured account_id {configured!r} not found among SIMULATE accounts.")
+        # S02: do not echo the configured id or enumerate available ones.
+        raise ValueError(
+            f"SIMULATE account resolution failed: configured account not found among "
+            f"{len(sim_accounts)} available SIMULATE account(s). Configure account_id to an "
+            f"available SIMULATE account."
+        )
 
     sim_accounts = [a for a in accounts if a.get("trd_env") == TrdEnv.SIMULATE]
     if len(sim_accounts) != 1:
@@ -328,7 +337,9 @@ class WheelRunner:
             from core.portfolio_snapshot import build_portfolio_snapshot
             from core.position_diff import infer_trade_events
 
-            previous = self._db.get_latest_portfolio_snapshot()
+            # C04: the previous (baseline) book is scoped to this run's
+            # environment and opaque account — never another account's book.
+            previous = self._db.get_latest_portfolio_snapshot(env=env, account_id=opaque_account)
             snapshot = build_portfolio_snapshot(
                 portfolio_context=portfolio_context,
                 run_id=run_id,
@@ -336,14 +347,17 @@ class WheelRunner:
                 opaque_account=opaque_account,
                 captured_at=captured_at or utc_now_iso(),
             )
-            if not self._db.save_portfolio_snapshot(snapshot):
-                logger.warning("Portfolio snapshot not persisted for run %s", run_id)
-                return
-
             events = infer_trade_events(previous, snapshot)
             for event in events:
                 event.setdefault("details", {})["run_id"] = run_id
-                self._db.save_trade_event(event)
+                # C05: inference never knows fill prices — provenance is
+                # "inferred" and pnl stays NULL (unknown), never fabricated.
+                event["provenance"] = "inferred"
+            # C12: snapshot baseline plus its event batch commit atomically, so a
+            # missing transition is never silently lost between writes.
+            if not self._db.save_portfolio_transition(snapshot, events):
+                logger.warning("Portfolio state not persisted for run %s", run_id)
+                return
             if events:
                 logger.info("Inferred %d trade event(s) from position diff (run %s)", len(events), run_id)
         except Exception as exc:

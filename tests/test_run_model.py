@@ -87,6 +87,38 @@ class TestAccountResolution(unittest.TestCase):
         conn = self._conn([self._acc("P1", "SIMULATE")])
         self.assertEqual(resolve_account(conn, {"portfolio_env": "SIMULATE", "account_id": ""}), "P1")
 
+    # S02: account-resolution errors must never leak raw account ids into
+    # persisted/public error strings (the runner persists str(exc) to /api/run).
+    def _assert_redacted(self, msg):
+        for raw in ("ACC1", "ACC2", "ACC9", "P1", "P2"):
+            self.assertNotIn(raw, msg, f"raw account id {raw!r} leaked into error")
+
+    def test_real_mismatch_error_is_redacted(self):
+        conn = self._conn([self._acc("ACC1", "REAL"), self._acc("ACC2", "REAL")])
+        with self.assertRaises(ValueError) as ctx:
+            resolve_account(conn, {"portfolio_env": "REAL", "account_id": "ACC9"})
+        self._assert_redacted(str(ctx.exception))
+        self.assertIn("2 available REAL account", str(ctx.exception))
+
+    def test_real_missing_configured_error_is_redacted(self):
+        conn = self._conn([self._acc("ACC1", "REAL")])
+        with self.assertRaises(ValueError) as ctx:
+            resolve_account(conn, {"portfolio_env": "REAL", "account_id": ""})
+        self.assertNotIn("ACC1", str(ctx.exception))
+
+    def test_simulate_configured_mismatch_error_is_redacted(self):
+        conn = self._conn([self._acc("P1", "SIMULATE")])
+        with self.assertRaises(ValueError) as ctx:
+            resolve_account(conn, {"portfolio_env": "SIMULATE", "account_id": "P9"})
+        self._assert_redacted(str(ctx.exception))
+        self.assertIn("1 available SIMULATE account", str(ctx.exception))
+
+    def test_simulate_ambiguous_error_is_redacted(self):
+        conn = self._conn([self._acc("P1", "SIMULATE"), self._acc("P2", "SIMULATE")])
+        with self.assertRaises(ValueError) as ctx:
+            resolve_account(conn, {"portfolio_env": "SIMULATE", "account_id": ""})
+        self._assert_redacted(str(ctx.exception))
+
 
 class TestSnapshotTradeability(unittest.TestCase):
     def test_ready_fresh_complete_is_tradeable(self):

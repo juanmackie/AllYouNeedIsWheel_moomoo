@@ -54,11 +54,24 @@ def _stock_qty_map(positions: list[dict]) -> dict[str, int]:
     return result
 
 
+def _underlying_of(pos: dict) -> str:
+    """Prefer the distinct underlying identity (C06), falling back to `symbol`.
+
+    Builder-produced OPT positions carry an explicit `underlying` (parsed from
+    the option code) while `symbol` holds the full option code; legacy/idealized
+    payloads set `symbol` to the underlying directly.
+    """
+    underlying = str(pos.get("underlying", "") or "")
+    if underlying:
+        return underlying
+    return str(pos.get("symbol", "") or "")
+
+
 def _base_event(event_type: str, pos: dict, timestamp: str) -> dict:
     return {
         "timestamp": timestamp,
         "event_type": event_type,
-        "ticker": str(pos.get("symbol", "") or ""),
+        "ticker": _underlying_of(pos),
         "option_type": str(pos.get("option_type", "") or "").upper(),
         "strike": _safe_float(pos.get("strike")),
         "expiration": str(pos.get("expiration", "") or ""),
@@ -68,7 +81,9 @@ def _base_event(event_type: str, pos: dict, timestamp: str) -> dict:
         "to_expiration": "",
         "premium_in": 0.0,
         "premium_out": 0.0,
-        "pnl": 0.0,
+        # C05: inference never observes fill prices, so an inferred outcome's
+        # pnl is unknown (NULL) — never a fabricated 0.0 break-even.
+        "pnl": None,
         "leakage": 0.0,
         "reason": "",
         "details": {"source": "position_diff"},
@@ -90,7 +105,7 @@ def infer_trade_events(previous: dict | None, current: dict | None) -> list[dict
     curr_stocks = _stock_qty_map(current.get("positions") or [])
 
     def _group_key(pos: dict) -> tuple[str, str]:
-        return (str(pos.get("symbol", "") or ""), str(pos.get("option_type", "") or "").upper())
+        return (_underlying_of(pos), str(pos.get("option_type", "") or "").upper())
 
     disappeared = sorted(set(prev_opts) - set(curr_opts))
     appeared = sorted(set(curr_opts) - set(prev_opts))
@@ -109,33 +124,62 @@ def infer_trade_events(previous: dict | None, current: dict | None) -> list[dict
     assigned_symbols: set[str] = set()
 
     for group in sorted(set(disappeared_by_group) & set(appeared_by_group)):
-        for old_key, new_key in zip(disappeared_by_group[group], appeared_by_group[group]):
-            old_pos, new_pos = prev_opts[old_key], curr_opts[new_key]
+        # A roll moves the same number of contracts across strike/expiry. Only
+        # pair legs whose contract counts match; mismatched quantities are
+        # separate closes/buys and stay as exit/entry (ambiguous without fills).
+        for old_key in disappeared_by_group[group]:
+            if old_key in matched_disappeared:
+                continue
+            old_pos = prev_opts[old_key]
+            old_qty = abs(int(old_pos.get("qty", 0) or 0))
+            new_key = None
+            for candidate in appeared_by_group[group]:
+                if candidate in matched_appeared:
+                    continue
+                if abs(int(curr_opts[candidate].get("qty", 0) or 0)) == old_qty:
+                    new_key = candidate
+                    break
+            if new_key is None:
+                continue  # no compatible leg -> stays a separate close/buy
+            new_pos = curr_opts[new_key]
             event = _base_event("roll", new_pos, timestamp)
             event["from_strike"] = _safe_float(old_pos.get("strike"))
             event["from_expiration"] = str(old_pos.get("expiration", "") or "")
             event["strike"] = _safe_float(new_pos.get("strike"))
             event["expiration"] = str(new_pos.get("expiration", "") or "")
             event["reason"] = f"Rolled {event['option_type']} {group[0]} {old_key} -> {new_key}"
+            event["details"]["contracts"] = old_qty
             events.append(event)
             matched_disappeared.add(old_key)
             matched_appeared.add(new_key)
 
     # Remaining disappeared legs: exits — unless a short put vanished while its
-    # underlying share count grew, which is an assignment.
+    # underlying share count grew by a clean contract lot, which is an
+    # assignment. A vanished put of N contracts implies N*100 shares; any other
+    # share increase (independent buys, partials) is left as an exit to avoid
+    # fabricating an assignment from unrelated activity (C14).
     for key in disappeared:
         if key in matched_disappeared:
             continue
         old_pos = prev_opts[key]
-        symbol = str(old_pos.get("symbol", "") or "")
+        symbol = _underlying_of(old_pos)
         is_short_put = str(old_pos.get("option_type", "") or "").upper() == "PUT"
-        share_growth = curr_stocks.get(symbol, 0) > prev_stocks.get(symbol, 0)
-        if is_short_put and share_growth:
+        contracts = abs(int(old_pos.get("qty", 0) or 0))
+        share_growth = curr_stocks.get(symbol, 0) - prev_stocks.get(symbol, 0)
+        compatible_assignment = (
+            is_short_put
+            and contracts > 0
+            and share_growth > 0
+            and share_growth % 100 == 0
+            and share_growth == 100 * contracts
+        )
+        if compatible_assignment:
             event = _base_event("assignment", old_pos, timestamp)
             event["reason"] = (
                 f"Short PUT {key} vanished while {symbol} shares grew "
                 f"{prev_stocks.get(symbol, 0)} -> {curr_stocks.get(symbol, 0)}"
             )
+            event["details"]["contracts"] = contracts
             assigned_symbols.add(symbol)
         else:
             event = _base_event("exit", old_pos, timestamp)

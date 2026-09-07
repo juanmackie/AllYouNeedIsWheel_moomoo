@@ -15,11 +15,13 @@ Services are lazily initialized after app creation to prevent circular import is
 import os
 import secrets
 import sqlite3
+import threading
 import time
 import uuid
 from datetime import datetime
+from urllib.parse import urlsplit
 
-from flask import Flask, current_app, g, request
+from flask import Flask, current_app, g, jsonify, request
 
 from core.context_factory import probe_opend_status
 from core.logging_config import get_logger
@@ -28,10 +30,84 @@ from core.logging_config import get_logger
 logger = get_logger("ayniwheel.api", "api")
 
 # Service registry for lazy initialization
-# Maps service name -> factory function that creates the service
+# Maps service name -> factory function that creates the service. The registry is
+# process-global by design: factories are pure constructors shared across apps.
 _service_registry = {}
-# Maps service name -> singleton instance
-_service_instances = {}
+# Serializes lazy construction so concurrent first access builds each service once.
+_service_construction_lock = threading.Lock()
+# Fallback instance store used when no Flask app context is active (tests/scripts).
+# Inside a request context, instances live on current_app.extensions (per-app), so
+# two apps built with different configs (e.g. distinct test databases) never share
+# a service instantiated under another app's context.
+_SERVICE_EXT_KEY = "ayniwheel_service_instances"
+_service_instances_fallback = {}
+
+
+# --- Loopback HTTP trust boundary (S01) ---
+# Single-user loopback app. The server binds to 127.0.0.1, but the HTTP layer must
+# also reject cross-origin requests and invalid Host headers so a page served from
+# an untrusted site cannot drive state-changing routes (same-origin-policy-defying
+# form POSTs / DNS-rebinding style Host tricks).
+_STATE_CHANGING_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def _loopback_hostname(host: str) -> bool:
+    """True when a bare host (no port) is a loopback address."""
+    host = (host or "").strip().lower()
+    if not host:
+        return False
+    if host in ("localhost", "::1", "::ffff:127.0.0.1"):
+        return True
+    if host.startswith("127.") and host.count(".") == 3:
+        try:
+            return all(0 <= int(octet) <= 255 for octet in host.split("."))
+        except ValueError:
+            return False
+    return False
+
+
+def _loopback_netloc(netloc: str) -> bool:
+    """True when a Host header / Origin netloc (possibly with port) is loopback."""
+    netloc = (netloc or "").strip()
+    if not netloc:
+        return False
+    if netloc.startswith("["):
+        host = netloc.split("]", 1)[0].lstrip("[")
+    else:
+        host = netloc.rsplit(":", 1)[0]
+    return _loopback_hostname(host)
+
+
+def is_loopback_host(host_header: str) -> bool:
+    """Validate a raw Host header value (e.g. ``127.0.0.1:8000``)."""
+    return _loopback_netloc(host_header)
+
+
+def is_loopback_origin(origin_header: str) -> bool:
+    """Validate an Origin header: http(s) and a loopback authority only."""
+    origin = (origin_header or "").strip()
+    if not origin:
+        return False
+    try:
+        parts = urlsplit(origin)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    if parts.username or parts.password:
+        return False
+    return _loopback_netloc(parts.netloc)
+
+
+def _trust_boundary_denied(reason: str):
+    logger.warning("Rejected request outside loopback trust boundary: %s", reason)
+    payload = {
+        "success": False,
+        "error": "Request rejected: connection must originate from a loopback origin.",
+        "error_code": "loopback_trust_boundary",
+        "reason": reason,
+    }
+    return (jsonify(payload), 403)
 
 
 def _resolve_secret_key(config=None):
@@ -72,6 +148,15 @@ def register_service(name, factory):
     logger.debug(f"Registered service factory: {name}")
 
 
+def _get_service_store():
+    """Return the app-scoped instance dict, falling back to a module store when no
+    Flask app context is active (e.g. clear_service_cache() invoked from a script)."""
+    try:
+        return current_app.extensions.setdefault(_SERVICE_EXT_KEY, {})
+    except RuntimeError:
+        return _service_instances_fallback
+
+
 def get_service(name):
     """
     Get or create a registered service.
@@ -89,21 +174,25 @@ def get_service(name):
         logger.error(f"Unknown service requested: {name}")
         raise ValueError(f"Unknown service: {name}")
 
-    # Return cached instance if exists
-    if name in _service_instances:
-        return _service_instances[name]
-
-    # Create new instance
-    factory = _service_registry[name]
-    instance = factory()
-    _service_instances[name] = instance
+    store = _get_service_store()
+    # Serialize lazy construction so concurrent first access builds each service once.
+    with _service_construction_lock:
+        if name in store:
+            return store[name]
+        instance = _service_registry[name]()
+        store[name] = instance
     logger.debug(f"Created service instance: {name}")
     return instance
 
 
 def clear_service_cache():
-    """Clear all service instances (useful for testing)."""
-    _service_instances.clear()
+    """Clear service instances (useful for testing). Works inside or outside a
+    request context: clears the active app's store and the fallback store."""
+    try:
+        current_app.extensions.pop(_SERVICE_EXT_KEY, None)
+    except RuntimeError:
+        pass
+    _service_instances_fallback.clear()
 
 
 def create_app(config=None):
@@ -173,6 +262,21 @@ def create_app(config=None):
 
     app.register_blueprint(ledger.bp)
     logger.info("Registered API blueprints")
+
+    @app.before_request
+    def enforce_loopback_trust_boundary():
+        # S01: reject invalid Host headers and cross-origin state-changing requests.
+        # Healthy loopback requests (browser same-origin fetches, curl, Python clients)
+        # carry a loopback Host; cross-origin browser requests carry a non-loopback
+        # Origin on state-changing methods. Requests with no Origin header (non-browser
+        # local clients) are preserved.
+        if not is_loopback_host(request.host):
+            return _trust_boundary_denied("invalid_host")
+        if request.method in _STATE_CHANGING_METHODS:
+            origin = request.headers.get("Origin")
+            if origin and not is_loopback_origin(origin):
+                return _trust_boundary_denied("disallowed_origin")
+        return None
 
     @app.before_request
     def log_request_start():

@@ -36,6 +36,13 @@ Free-tier OpenD API rate limits. The fix is scoping scans to your watchlist (not
 
 ## Ranking Axis
 
+> **Stale claim.** This section's “absolute premium velocity is primary” is NOT
+> what the app implements. The authoritative ordering is **quality/event tier
+> first, then capital velocity, then premium velocity as tie-break** — see
+> `api/services/recommendation_ranking.py::rank_key` and SCORING.md.
+> The ranking contract conflict is tracked in review item S03 pending
+> product-owner resolution; do not treat this paragraph as a spec.
+
 Primary sort: **premium velocity** (premium / days to expiration). Higher return per day = better rank. This replaces the existing multi-factor scoring as the dominant ranking signal.
 
 ## Data Scope

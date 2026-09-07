@@ -4,7 +4,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def create_tables(conn):
@@ -117,6 +117,9 @@ def create_tables(conn):
             pnl REAL,
             leakage REAL,
             reason TEXT,
+            env TEXT NOT NULL DEFAULT '',
+            account_id TEXT NOT NULL DEFAULT '',
+            provenance TEXT NOT NULL DEFAULT 'verified',
             details TEXT
         )
     """)
@@ -429,6 +432,30 @@ def migrate_database(db_path):
                     cursor.execute(f"DROP TABLE IF EXISTS {table}")
                 logger.info("Migration: Dropped retired tables recommendations, playbook_hypotheses")
                 cursor.execute("PRAGMA user_version = 8")
+                conn.commit()
+
+            if current_version < 9:
+                # C04/C05: scope the journal by account/environment and mark
+                # outcome provenance. Existing rows are unidentifiable legacy
+                # events -> default account_id '' (quarantined from the active
+                # account) and provenance 'verified' (unknown outcomes are
+                # expressed via NULL pnl, which inference already writes).
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trade_events'")
+                if cursor.fetchone():
+                    cursor.execute("PRAGMA table_info(trade_events)")
+                    existing_cols = {row[1] for row in cursor.fetchall()}
+                    for col, col_type in [
+                        ("env", "TEXT NOT NULL DEFAULT ''"),
+                        ("account_id", "TEXT NOT NULL DEFAULT ''"),
+                        ("provenance", "TEXT NOT NULL DEFAULT 'verified'"),
+                    ]:
+                        # Internal allowlist only: col/col_type come from the
+                        # hardcoded tuples above, never from user input.
+                        if col not in existing_cols:
+                            logger.info("Migration: Adding %s to trade_events", col)
+                            cursor.execute("ALTER TABLE trade_events ADD COLUMN %s %s" % (col, col_type))
+                    logger.info("Migration: Added env/account_id/provenance to trade_events")
+                cursor.execute("PRAGMA user_version = 9")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

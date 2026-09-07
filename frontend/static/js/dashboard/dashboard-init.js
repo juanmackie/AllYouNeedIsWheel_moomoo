@@ -10,6 +10,9 @@ import { updateCashReserveStatus } from './dashboard-cash.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
 import { initWatchlistPanel } from './watchlist-panel.js';
 import { initRunStrip } from './run-strip.js';
+import { startRunWatcher, onRunAdopted } from './run-notifier.js';
+import { renderGrowthPanel } from './growth-panel.js';
+import { renderWeeklyIncome } from './weekly-income.js';
 
 let signalPanelsInitialized = false;
 
@@ -71,15 +74,32 @@ export async function initializeDashboard() {
             cashReserveToggle.addEventListener('change', (e) => toggleCashReserve(e.target.checked));
         }
 
-
-        const refreshAllBtn = document.getElementById('refresh-all-btn');
-        if (refreshAllBtn && !refreshAllBtn.dataset.bound) {
-            refreshAllBtn.dataset.bound = 'true';
-            refreshAllBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                initializeDashboard();
-            });
+        // C10: when a manual refresh completes, every affected panel adopts the
+        // newly published run through the single bounded run-state poll. The
+        // refresh POST itself is issued once by run-strip's #run-refresh-btn;
+        // here we merely observe the run_id change and re-render read-only.
+        // (Never trigger another /api/run/refresh from this viewer.)
+        const runRefreshBtn = document.getElementById('run-refresh-btn');
+        if (runRefreshBtn && !runRefreshBtn.dataset.viewerBound) {
+            runRefreshBtn.dataset.viewerBound = 'true';
+            runRefreshBtn.addEventListener('click', () => startRunWatcher());
         }
+        onRunAdopted(async () => {
+            try {
+                await Promise.all([
+                    loadPortfolioData(),
+                    loadPositionsCommandPanel(),
+                    initializeTopRecommendations(false),
+                ]);
+            } catch (error) { console.error('C10 adopt error:', error); }
+            try {
+                initWatchlistPanel();
+                updateCashReserveStatus();
+                updateIdleCashPanel();
+                renderGrowthPanel();
+                renderWeeklyIncome();
+            } catch (error) { console.error('C10 adopt secondary error:', error); }
+        });
     } catch (error) {
         console.error('Dashboard initialization error:', error);
     }
@@ -106,13 +126,9 @@ async function initializeSignalPanels() {
 
     import('./growth-panel.js').then(mod => {
         mod.renderGrowthPanel();
-        const growthSection = document.getElementById('growth-panel');
-        if (growthSection && !growthSection.dataset.bound) {
-            growthSection.dataset.bound = 'true';
-            growthSection.addEventListener('click', (e) => {
-                if (e.target.closest('#refresh-all-btn')) mod.renderGrowthPanel();
-            });
-        }
+        // C10: the growth panel adopts newly completed runs through the single
+        // run-state notifier (see onRunAdopted above), not a `#refresh-all-btn`
+        // template emission (no template emits one). No extra click binding here.
     }).catch(err => {
         console.error('Failed to load growth panel:', err);
     });
@@ -197,7 +213,7 @@ export async function loadPositionsCommandPanel() {
             const pressure = pos.roll_pressure || 0;
             const isItm = (pos.otm_pct || 0) < 0;
             const deepItm = isItm && Math.abs(pos.otm_pct) > 15;
-            const daysToEarnings = (pos.wheel_decision && pos.wheel_decision.days_to_earnings) || null;
+            const daysToEarnings = (pos.wheel_decision && pos.wheel_decision.days_to_earnings) ?? null;
 
             // Live P&L for a short leg: entry credit (avg_cost) vs current mark.
             const qty = Math.abs(Number(pos.position || 0)) || 0;
@@ -205,7 +221,9 @@ export async function loadPositionsCommandPanel() {
             const mark = Number(pos.mid_price || 0) || 0;
             let pnlPct = null;
             let pnlDollar = null;
-            if (entryCredit > 0) {
+            // A valid current mark is required to report live P&L: an unknown/zero
+            // mark must not be presented as +100% max profit. (C09)
+            if (entryCredit > 0 && mark > 0) {
                 pnlPct = ((entryCredit - mark) / entryCredit) * 100;
                 pnlDollar = (entryCredit - mark) * 100 * qty;
             }

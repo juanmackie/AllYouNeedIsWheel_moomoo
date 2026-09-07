@@ -167,7 +167,10 @@ def get_portfolio_history():
         except (TypeError, ValueError):
             return error_response("Invalid limit — must be an integer", status_code=400)
 
-        history = db.get_portfolio_history(limit=limit)
+        from api.services.config import get_current_identity
+
+        identity_env, identity_account = get_current_identity()
+        history = db.get_portfolio_history(limit=limit, env=identity_env, account_id=identity_account)
         from core.growth_mode import growth_pace
         from core.presets import WHEEL_PRESETS, get_preset
 
@@ -179,6 +182,12 @@ def get_portfolio_history():
             target_multiple = float(get_preset(key).target_account_multiple or 5.0)
         except Exception:
             pass
+
+        # C07: the durable baseline is the true first snapshot of the account's
+        # full history, independent of the chart ``limit``. The chart series stays
+        # limited to ``limit`` points, but pace is derived from the unbounded
+        # history so the goal never shifts as the account accumulates snapshots.
+        pace_history = db.get_portfolio_history(unbounded=True, env=identity_env, account_id=identity_account)
 
         # Chart-ready series plus the full snapshot payloads.
         series = [
@@ -196,7 +205,7 @@ def get_portfolio_history():
             "count": len(history),
             "series": series,
             "snapshots": history,
-            "pace": growth_pace(history, target_multiple=target_multiple),
+            "pace": growth_pace(pace_history, target_multiple=target_multiple),
             "target_multiple": target_multiple,
         }
         return jsonify(attach_source_policy(payload, build_account_source_policy("portfolio_history"))), 200

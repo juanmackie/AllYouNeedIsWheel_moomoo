@@ -32,3 +32,18 @@ def get_config():
     if _config_instance is None:
         _config_instance = BaseConfig()
     return _config_instance
+
+
+def get_current_identity():
+    """Return the (env, opaque_account_id) identity for the current runtime.
+
+    Used to scope history/journal reads to this environment and account (C04).
+    The opaque id is derived exactly as wheel_runner does so reads and writes
+    agree on the same book.
+    """
+    from core.wheel_runner import opaque_account_id
+
+    cfg = get_config()
+    env = str(cfg.get("portfolio_env", "SIMULATE")).strip().upper()
+    account = str(cfg.get("account_id", "") or "").strip()
+    return env, opaque_account_id(account)

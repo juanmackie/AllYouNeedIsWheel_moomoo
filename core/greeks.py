@@ -1,21 +1,24 @@
 """
 Black-Scholes Greeks calculator for options.
 
-Computes delta, gamma, theta, vega, and implied volatility using scipy.
+Computes delta, gamma, theta, vega, and implied volatility using the standard
+normal distribution from the stdlib (statistics.NormalDist).
 Falls back to yfinance for implied volatility when other sources return 0.
 """
 
 import logging
 import math
 from datetime import date, datetime
-
-from scipy.stats import norm
+from statistics import NormalDist
 
 from core.connection_constants import _normalize_iv
 
 logger = logging.getLogger(__name__)
 
 RISK_FREE_RATE = 0.05  # Approximate current risk-free rate
+
+# Standard normal (mu=0, sigma=1) for CDF/PDF — replaces scipy.stats.norm.
+_STANDARD_NORMAL = NormalDist()
 
 
 def compute_bs_greeks(
@@ -52,8 +55,8 @@ def compute_bs_greeks(
     d2 = d1 - sigma * sqrt_T
 
     # Common components
-    nd1 = norm.pdf(d1)  # Standard normal PDF at d1
-    Nd1 = norm.cdf(d1)  # Standard normal CDF at d1
+    nd1 = _STANDARD_NORMAL.pdf(d1)  # Standard normal PDF at d1
+    Nd1 = _STANDARD_NORMAL.cdf(d1)  # Standard normal CDF at d1
 
     # Delta
     if option_type == "CALL":
@@ -69,9 +72,9 @@ def compute_bs_greeks(
 
     # Theta (per calendar day, i.e. divide by 365)
     if option_type == "CALL":
-        theta_per_year = -(S * nd1 * sigma) / (2.0 * sqrt_T) - r * K * math.exp(-r * T) * norm.cdf(d2)
+        theta_per_year = -(S * nd1 * sigma) / (2.0 * sqrt_T) - r * K * math.exp(-r * T) * _STANDARD_NORMAL.cdf(d2)
     else:
-        theta_per_year = -(S * nd1 * sigma) / (2.0 * sqrt_T) + r * K * math.exp(-r * T) * norm.cdf(-d2)
+        theta_per_year = -(S * nd1 * sigma) / (2.0 * sqrt_T) + r * K * math.exp(-r * T) * _STANDARD_NORMAL.cdf(-d2)
     theta_per_day = theta_per_year / 365.0
 
     return delta, gamma, theta_per_day, vega

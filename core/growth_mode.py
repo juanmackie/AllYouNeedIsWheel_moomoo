@@ -12,6 +12,12 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
+# Minimum observation window (in days) before we annualize a growth ratio.
+# Annualizing a 1-minute or even 1-day move blows up to nonsense (or overflows)
+# even when the direction is real; below this we report "insufficient" rather
+# than a fabricated annualized pace (C08).
+MIN_OBSERVATION_DAYS = 1.0
+
 # ---------------------------------------------------------------------------
 # Growth-related helpers
 # ---------------------------------------------------------------------------
@@ -25,16 +31,20 @@ def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
     ``captured_at`` and ``net_liquidation``.
 
     Returns a dict with:
-        current_nav, target_nav, first_captured_at, last_captured_at,
-        elapsed_days, progress_pct (0-100 toward the multiple from the first
-        snapshot), annualized_pace (decimal), eta_days, required_premium_per_day,
-        on_track (bool|None — None when pace cannot be computed yet).
+        current_nav, baseline_nav, target_nav (baseline * multiple), reached,
+        status ("no_data" | "insufficient" | "declining" | "progressing" |
+        "reached"), first_captured_at, last_captured_at, elapsed_days,
+        progress_pct (0-100 from baseline toward target), annualized_pace
+        (decimal), eta_days, required_premium_per_day, on_track (bool|None).
     """
     snaps = [s for s in (history or []) if isinstance(s, dict)]
     if not snaps:
         return {
             "current_nav": 0.0,
+            "baseline_nav": 0.0,
             "target_nav": 0.0,
+            "reached": False,
+            "status": "no_data",
             "elapsed_days": 0.0,
             "progress_pct": 0.0,
             "annualized_pace": None,
@@ -43,10 +53,15 @@ def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
             "on_track": None,
         }
 
+    # C07: the first snapshot in the account's history is the durable baseline.
+    # Every goal metric derives from it, so progress, target, and pace agree
+    # instead of the target moving as NAV grows.
     first, last = snaps[0], snaps[-1]
     first_nav = float(first.get("net_liquidation", 0) or 0)
+    baseline_nav = first_nav
     current_nav = float(last.get("net_liquidation", 0) or 0)
-    target_nav = current_nav * target_multiple
+    target_nav = baseline_nav * target_multiple
+    reached = baseline_nav > 0 and current_nav >= target_nav
 
     elapsed_days = 0.0
     try:
@@ -56,33 +71,62 @@ def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
     except (TypeError, ValueError):
         elapsed_days = 0.0
 
+    # Progress is the share of the baseline->target gap already realized.
     progress_pct = 0.0
+    if target_nav > baseline_nav:
+        progress_pct = (current_nav - baseline_nav) / (target_nav - baseline_nav) * 100.0
+    progress_pct = max(0.0, min(progress_pct, 100.0))
+
+    # C08: annualize only over an adequate observation window, with finite-safe
+    # math, and reject nonfinite inputs/results. Distinguish "not enough data"
+    # from an observed decline.
     annualized = None
     eta_days = None
-    if first_nav > 0 and current_nav > first_nav and elapsed_days > 0:
-        progress_pct = ((current_nav / first_nav - 1) / (target_multiple - 1)) * 100.0
+    status = "insufficient"
+    if reached:
+        status = "reached"
+        eta_days = 0.0
+    elif baseline_nav > 0 and elapsed_days >= MIN_OBSERVATION_DAYS:
+        ratio = current_nav / baseline_nav
         years = elapsed_days / 365.25
-        if years > 0:
-            annualized = (current_nav / first_nav) ** (1.0 / years) - 1.0
-            if annualized > 0:
-                years_needed = math.log(target_nav / current_nav) / math.log1p(annualized)
-                if math.isfinite(years_needed) and years_needed > 0:
-                    eta_days = years_needed * 365.25
+        if ratio > 0 and years > 0 and math.isfinite(ratio):
+            try:
+                annualized = math.exp(math.log(ratio) / years) - 1.0
+            except (OverflowError, ValueError):
+                annualized = None
+            if annualized is not None and not math.isfinite(annualized):
+                annualized = None
+            if annualized is not None and annualized > 0:
+                status = "progressing"
+                growth = math.log1p(annualized)
+                if growth > 0 and current_nav > 0 and target_nav > current_nav:
+                    years_needed = math.log(target_nav / current_nav) / growth
+                    if math.isfinite(years_needed) and years_needed > 0:
+                        eta_days = years_needed * 365.25
+            elif annualized is not None:
+                # Flat (0) or declining (<0) — an observed shortfall, not a lack
+                # of data.
+                status = "declining"
 
-    # Required pace: premium per day needed to compound the remaining gap
-    # over the ETA implied by current pace (or None when unknown).
+    # Required pace: premium per day needed to compound the remaining gap over
+    # the ETA implied by current pace (0 once reached; None when unknown).
     required_premium_per_day = None
-    if eta_days and eta_days > 0:
+    if reached:
+        required_premium_per_day = 0.0
+    elif eta_days and eta_days > 0 and target_nav > current_nav:
         required_premium_per_day = round((target_nav - current_nav) / eta_days, 2)
 
     on_track = None if annualized is None else annualized > 0
     return {
         "current_nav": round(current_nav, 2),
+        "baseline_nav": round(baseline_nav, 2),
         "target_nav": round(target_nav, 2),
+        "reached": reached,
+        "status": status,
         "first_captured_at": first.get("captured_at", ""),
         "last_captured_at": last.get("captured_at", ""),
         "elapsed_days": round(elapsed_days, 2),
-        "progress_pct": round(max(0.0, min(progress_pct, 100.0)), 2),
+        "progress_pct": round(progress_pct, 2),
         "annualized_pace": None if annualized is None else round(annualized, 6),
         "eta_days": None if eta_days is None else round(eta_days, 1),
         "required_premium_per_day": required_premium_per_day,

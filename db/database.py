@@ -4,7 +4,6 @@ Database module for SQLite logging of trades
 
 import json
 import logging
-from contextlib import contextmanager
 from pathlib import Path
 
 from .earnings_repository import EarningsRepository
@@ -65,25 +64,6 @@ class OptionsDatabase:
             type(self._trade_events).__name__,
             type(self._option_chains).__name__,
         )
-
-    @contextmanager
-    def transaction(self):
-        """Context manager for atomic multi-step database operations.
-
-        Usage:
-            with db.transaction():
-                db.save_iv_data(...)
-                db.save_earnings_date(...)
-        """
-        with pooled_connection(self.db_path) as conn:
-            try:
-                yield conn
-                conn.commit()
-                logger.debug("DB transaction committed")
-            except Exception:
-                conn.rollback()
-                logger.warning("DB transaction rolled back", exc_info=True)
-                raise
 
     def prune_retained_data(self, retention_days=None):
         """Delete expired operational history while preserving current state.
@@ -204,8 +184,8 @@ class OptionsDatabase:
             conn.commit()
         return run.run_id
 
-    def get_latest_snapshot(self, env=None):
-        """Return the most recently published snapshot dict for env (or any)."""
+    def get_latest_snapshot(self, env=None, account_id=None):
+        """Return the most recently published snapshot dict for env + account (or any)."""
         import json as _json
 
         sql = "SELECT snapshot_json FROM run_metadata"
@@ -213,6 +193,9 @@ class OptionsDatabase:
         if env:
             sql += " WHERE env = ?"
             params.append(env)
+            if account_id:
+                sql += " AND account_id = ?"
+                params.append(account_id)
         sql += " ORDER BY published_at DESC, generated_at DESC LIMIT 1"
         with pooled_connection(self.db_path) as conn:
             row = conn.execute(sql, params).fetchone()
@@ -337,22 +320,97 @@ class OptionsDatabase:
     def save_trade_event(self, event_data):
         self._trade_events.save_trade_event(event_data)
 
-    def get_trade_events(self, ticker=None, event_type=None, limit=100):
-        return self._trade_events.get_trade_events(ticker=ticker, event_type=event_type, limit=limit)
+    def get_trade_events(self, ticker=None, event_type=None, limit=100, env=None, account_id=None):
+        return self._trade_events.get_trade_events(
+            ticker=ticker, event_type=event_type, limit=limit, env=env, account_id=account_id
+        )
 
-    def get_trade_analytics(self):
-        return self._trade_events.get_trade_analytics()
+    def get_trade_analytics(self, env=None, account_id=None):
+        return self._trade_events.get_trade_analytics(env=env, account_id=account_id)
 
     # --- Portfolio Snapshots ---
 
     def save_portfolio_snapshot(self, snapshot: dict) -> bool:
         return self._portfolio_snapshots.save_portfolio_snapshot(snapshot)
 
-    def get_latest_portfolio_snapshot(self):
-        return self._portfolio_snapshots.get_latest_portfolio_snapshot()
+    def get_latest_portfolio_snapshot(self, env=None, account_id=None):
+        return self._portfolio_snapshots.get_latest_portfolio_snapshot(env=env, account_id=account_id)
 
-    def get_portfolio_history(self, limit: int = 180):
-        return self._portfolio_snapshots.get_portfolio_history(limit=limit)
+    def get_portfolio_history(self, limit: int = 180, env=None, account_id=None):
+        return self._portfolio_snapshots.get_portfolio_history(limit=limit, env=env, account_id=account_id)
+
+    def save_portfolio_transition(self, snapshot: dict, events: list[dict]) -> bool:
+        """Persist a portfolio baseline plus its inferred event batch in one atomic
+        transaction (C12). On any failure everything rolls back so a retry can
+        reconstruct the transition without duplication or loss."""
+        try:
+            positions = snapshot.get("positions", [])
+            positions_json = json.dumps(positions) if isinstance(positions, list) else "[]"
+            with pooled_connection(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO portfolio_snapshots (
+                        run_id, captured_at, env, account_id,
+                        net_liquidation, cash_available, cash_reserved_for_csp,
+                        cash_available_for_csp, broker_buying_power, positions_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(snapshot.get("run_id", "") or ""),
+                        str(snapshot.get("captured_at", "") or ""),
+                        str(snapshot.get("env", "") or ""),
+                        str(snapshot.get("account_id", "") or ""),
+                        float(snapshot.get("net_liquidation", 0) or 0),
+                        float(snapshot.get("cash_available", 0) or 0),
+                        float(snapshot.get("cash_reserved_for_csp", 0) or 0),
+                        float(snapshot.get("cash_available_for_csp", 0) or 0),
+                        float(snapshot.get("broker_buying_power", 0) or 0),
+                        positions_json,
+                    ),
+                )
+                for event in events:
+                    pnl = event.get("pnl")
+                    if pnl is not None:
+                        pnl = float(pnl)
+                    details = event.get("details", {})
+                    if isinstance(details, dict):
+                        details = json.dumps(details)
+                    conn.execute(
+                        """
+                        INSERT INTO trade_events (
+                            timestamp, event_type, ticker, option_type, strike, expiration,
+                            from_strike, from_expiration, to_strike, to_expiration,
+                            premium_in, premium_out, pnl, leakage, reason,
+                            env, account_id, provenance, details
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(event.get("timestamp", "") or ""),
+                            event.get("event_type", ""),
+                            event.get("ticker", ""),
+                            event.get("option_type", ""),
+                            float(event.get("strike", 0) or 0),
+                            event.get("expiration", ""),
+                            float(event.get("from_strike", 0) or 0),
+                            event.get("from_expiration", ""),
+                            float(event.get("to_strike", 0) or 0),
+                            event.get("to_expiration", ""),
+                            float(event.get("premium_in", 0) or 0),
+                            float(event.get("premium_out", 0) or 0),
+                            pnl,
+                            float(event.get("leakage", 0) or 0),
+                            event.get("reason", ""),
+                            str(snapshot.get("env", "") or ""),
+                            str(snapshot.get("account_id", "") or ""),
+                            event.get("provenance", "inferred") or "inferred",
+                            details,
+                        ),
+                    )
+                conn.commit()
+                return True
+        except Exception as exc:
+            logger.error("Error persisting portfolio transition: %s", exc)
+            return False
 
     # --- Option Chain Snapshots ---
 

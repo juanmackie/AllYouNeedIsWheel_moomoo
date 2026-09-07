@@ -643,7 +643,9 @@ class TestTradeLifecycle(unittest.TestCase):
                 "/api/options/analytics/lifecycle", query_string={"ticker": "AAPL", "event_type": "roll", "limit": "50"}
             )
 
-        mock_db.get_trade_events.assert_called_once_with(ticker="AAPL", event_type="roll", limit=50)
+        mock_db.get_trade_events.assert_called_once_with(
+            ticker="AAPL", event_type="roll", limit=50, env="SIMULATE", account_id=""
+        )
 
 
 # ---------------------------------------------------------------------------

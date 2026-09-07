@@ -84,6 +84,55 @@ have open short options on receives at most ONE new pick (not the standard
 cap), and each candidate carries `existing_exposure_contracts` for display.
 The browser displays the backend fields and performs no ranking or premium math.
 
+### Authoritative order of precedence (as-implemented)
+
+The single authoritative sort is `api/services/recommendation_ranking.py::rank_key`.
+It is QUALITY/EVENT TIER-FIRST — the tiers gate the shortlist before any return
+metric is compared:
+
+```text
+1. quality tier   (qualified before marginal)
+2. event tier     (event_safe / event_not_applicable before earnings_before_expiry \
+                   before event_unknown)
+3. capital velocity (executable return on deployed capital / day)
+4. premium velocity (executable-bid premium / day) — tie-break
+5. canonical ticker, then expiration, then strike
+```
+
+This preserves the deployed tier-first behavior. The root `AGENTS.md` wording
+(capital-return “primary axis”; secondary scoring never outranks it) and
+`docs/intent/application-purpose.md` (absolute premium velocity primary) are
+NOT what the code implements and are flagged for product-owner resolution
+(review S03). When the owner resolves it, change `rank_key` **and** this section
+and the root `AGENTS.md` rule together; never change ranking policy silently in
+cleanup. Until then the table above is the contract.
+
+### State / action table
+
+The run-state and copy (manual ticket) contract in one table. “Copy” always
+means a read-only clipboard draft — no order is ever placed by the app.
+
+| Run state | market_state | Copy? | Ticket meaning |
+|-----------|--------------|-------|----------------|
+| `ready` + tradeable (fresh, complete) | open | Yes | live explicit limit draft on the current broker quote |
+| `ready` + tradeable (fresh, complete) | closed | Yes | staged for US market open; premium labelled last broker quote, “verify live quote at open” note |
+| `ready` but not tradeable (coverage incomplete or quotes stale while open) | open | No | review-only; blocked by missing/stale quote gate |
+| `planning` (preflight infeasible / persisted broker snapshot fallback) | any | No | review-only; verify then re-refresh — do not stage |
+| `partial` or `stale` | any | No | review-only; missing/stale evidence or cross-market |
+| any state with yfinance fallback | any | No | review-only (non-Moomoo provenance) |
+| any state, insufficient capacity | any | No | review-only (zero capacity → zero recommended contracts) |
+| any state, research-only mode | any | No | signals only |
+
+This table is the as-implemented `copyEligibility` gate (`top-recommendations.js`),
+presented with `run_model.ACTIONABLE_STATES = ("ready",)`: only a `ready` run
+can copy — staged only when the market is closed. The older prose elsewhere in
+this file that described a `planning` run producing a staged ticket is stale and
+disagrees with that gate; the table above is authoritative until the product
+owner resolves it.
+
+Each allowed ticket surfaces event risk (`earnings_before_expiry`, unknown
+event) as a warning in the clipboard text — never silently dropped.
+
 ## Capital-aware sizing on every pick
 
 CSP capacity is computed from true available cash after reserved short-put

@@ -53,12 +53,12 @@ class TestOptionsDatabase(unittest.TestCase):
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 8)
+        self.assertEqual(cursor.fetchone()[0], 9)
 
         evaluator_tables = {t for t in actual_tables if t.startswith("evaluator_")}
         self.assertEqual(evaluator_tables, set(), f"Evaluator tables should be dropped: {evaluator_tables}")
 
-        # Retired 2026-08 consolidation tables must not exist at schema v8.
+        # Retired 2026-08 consolidation tables must not exist at schema v9.
         self.assertNotIn("recommendations", actual_tables)
         self.assertNotIn("playbook_hypotheses", actual_tables)
 
@@ -840,6 +840,211 @@ class TestTradeEventsRepositoryDirect(unittest.TestCase):
         self.assertEqual(analytics["total_exits"], 2)
         self.assertEqual(analytics["wins"], 1)
         self.assertEqual(analytics["win_rate"], 50.0)
+
+    def test_get_trade_analytics_excludes_unknown_outcomes(self):
+        """C05: pnl=None (inferred/unknown) exits never enter the win-rate
+        denominator and are reported separately; break-even counts as a
+        measured non-win."""
+        self.repo.save_trade_event(
+            {
+                "event_type": "exit",
+                "ticker": "AAPL",
+                "option_type": "PUT",
+                "strike": 150.0,
+                "expiration": "20240419",
+                "pnl": 50.0,
+            }
+        )
+        self.repo.save_trade_event(
+            {
+                "event_type": "exit",
+                "ticker": "AAPL",
+                "option_type": "PUT",
+                "strike": 150.0,
+                "expiration": "20240419",
+                "pnl": -20.0,
+            }
+        )
+        self.repo.save_trade_event(
+            {
+                "event_type": "exit",
+                "ticker": "AAPL",
+                "option_type": "PUT",
+                "strike": 150.0,
+                "expiration": "20240419",
+                "pnl": 0.0,
+            }
+        )
+        self.repo.save_trade_event(
+            # no pnl -> unknown/inferred outcome
+            {"event_type": "exit", "ticker": "AAPL", "option_type": "PUT", "strike": 150.0, "expiration": "20240419"}
+        )
+        analytics = self.repo.get_trade_analytics()
+        self.assertEqual(analytics["total_exits"], 4)
+        self.assertEqual(analytics["measured_exits"], 3)
+        self.assertEqual(analytics["unknown_exits"], 1)
+        self.assertEqual(analytics["wins"], 1)
+        self.assertEqual(analytics["win_rate"], round(1 / 3 * 100, 1))
+
+
+class TestTradeEventsAccountScoping(unittest.TestCase):
+    """C04: journal analytics/events are scoped by (env, opaque account) and
+    legacy rows with no account identity are quarantined from active reads."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "test_te_acct.db")
+        conn = sqlite3.connect(self.db_path)
+        create_tables(conn)
+        conn.close()
+        self.repo = TradeEventsRepository(self.db_path)
+
+    def tearDown(self):
+        close_connection_pool(self.db_path)
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def test_analytics_scoped_by_environment_and_account(self):
+        self.repo.save_trade_event(
+            {
+                "event_type": "exit",
+                "ticker": "AAPL",
+                "option_type": "PUT",
+                "strike": 150,
+                "expiration": "20240419",
+                "pnl": 50.0,
+                "env": "REAL",
+                "account_id": "acctA",
+            }
+        )
+        self.repo.save_trade_event(
+            {
+                "event_type": "exit",
+                "ticker": "TSLA",
+                "option_type": "PUT",
+                "strike": 200,
+                "expiration": "20240419",
+                "pnl": 10.0,
+                "env": "REAL",
+                "account_id": "acctB",
+            }
+        )
+        self.repo.save_trade_event(
+            {
+                "event_type": "exit",
+                "ticker": "NVDA",
+                "option_type": "PUT",
+                "strike": 100,
+                "expiration": "20240419",
+                "pnl": 5.0,
+                "env": "SIMULATE",
+                "account_id": "acctA",
+            }
+        )
+        a = self.repo.get_trade_analytics(env="REAL", account_id="acctA")
+        self.assertEqual(a["total_exits"], 1)
+        self.assertEqual(a["per_symbol"][0]["ticker"], "AAPL")
+        b = self.repo.get_trade_analytics(env="REAL", account_id="acctB")
+        self.assertEqual(b["total_exits"], 1)
+        self.assertEqual(b["per_symbol"][0]["ticker"], "TSLA")
+        sim = self.repo.get_trade_analytics(env="SIMULATE", account_id="acctA")
+        self.assertEqual(sim["total_exits"], 1)
+        self.assertEqual(sim["per_symbol"][0]["ticker"], "NVDA")
+        # Switching identity must not leak another account's exits.
+        all_repo = self.repo.get_trade_analytics()
+        self.assertEqual(all_repo["total_exits"], 3)
+
+    def test_legacy_events_quarantined(self):
+        self.repo.save_trade_event(
+            {
+                "event_type": "exit",
+                "ticker": "LEGACY",
+                "option_type": "PUT",
+                "strike": 150,
+                "expiration": "20240419",
+                "pnl": 99.0,
+            }
+        )
+        active = self.repo.get_trade_analytics(env="REAL", account_id="acctA")
+        self.assertEqual(active["total_exits"], 0)
+        unfiltered = self.repo.get_trade_analytics()
+        self.assertEqual(unfiltered["total_exits"], 1)
+
+
+class TestPortfolioTransitionAtomic(unittest.TestCase):
+    """C12: the snapshot baseline plus its event batch commit atomically."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "test_transition.db")
+        self.db = OptionsDatabase(self.db_path)
+
+    def tearDown(self):
+        self.db.close()
+        close_connection_pool(self.db_path)
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def _snapshot(self, run_id, nav=1000.0):
+        return {
+            "run_id": run_id,
+            "captured_at": "2026-09-06T10:00:00",
+            "env": "REAL",
+            "account_id": "acct1",
+            "net_liquidation": nav,
+            "cash_available": nav,
+            "cash_reserved_for_csp": 0,
+            "cash_available_for_csp": nav,
+            "broker_buying_power": nav,
+            "positions": [],
+        }
+
+    def test_transition_commits_snapshot_and_events(self):
+        ok = self.db.save_portfolio_transition(
+            self._snapshot("r1"),
+            [
+                {
+                    "event_type": "entry",
+                    "ticker": "AAPL",
+                    "option_type": "PUT",
+                    "strike": 150,
+                    "expiration": "20240419",
+                    "premium_in": 250.0,
+                }
+            ],
+        )
+        self.assertTrue(ok)
+        self.assertIsNotNone(self.db.get_latest_portfolio_snapshot(env="REAL", account_id="acct1"))
+        events = self.db.get_trade_events(env="REAL", account_id="acct1")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "entry")
+
+    def test_transition_failure_rolls_back_everything(self):
+        # Second event has a non-numeric strike -> the whole batch must roll back.
+        ok = self.db.save_portfolio_transition(
+            self._snapshot("r2"),
+            [
+                {
+                    "event_type": "entry",
+                    "ticker": "AAPL",
+                    "option_type": "PUT",
+                    "strike": 150,
+                    "expiration": "20240419",
+                },
+                {
+                    "event_type": "exit",
+                    "ticker": "TSLA",
+                    "option_type": "PUT",
+                    "strike": "not-a-number",
+                    "expiration": "20240419",
+                },
+            ],
+        )
+        self.assertFalse(ok)
+        self.assertIsNone(self.db.get_latest_portfolio_snapshot(env="REAL", account_id="acct1"))
+        self.assertEqual(len(self.db.get_trade_events(env="REAL", account_id="acct1")), 0)
 
 
 if __name__ == "__main__":

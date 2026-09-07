@@ -13,7 +13,20 @@ growth-pace tracking, and position-diff trade-event inference.
 
 from __future__ import annotations
 
+import re
+
 from core.position_utils import parse_moomoo_symbol, parse_position_qty
+
+# Option-code shape produced by Moomoo after stripping the "US." prefix, e.g.
+# TSLA260904P00300000 -> underlying TSLA, expiry 260904, right P, strike 300.
+_OPTION_CODE_RE = re.compile(r"^(?P<under>[A-Z]+)(?P<expiry>\d{6})(?P<right>[CP])(?P<strike>\d+)$")
+
+
+def _option_underlying(code: str) -> str:
+    """Extract the underlying ticker from a Moomoo/OCC-style option code."""
+    match = _OPTION_CODE_RE.match(str(code or "").strip())
+    return match.group("under") if match else ""
+
 
 # Fields copied from each stock position into positions_json.
 _STOCK_FIELDS = ("market_price", "avg_cost", "cost_price", "market_val")
@@ -56,6 +69,10 @@ def _serialize_position(raw_symbol: str, pos: dict) -> dict | None:
     # Canonical contract key for options: SYMBOL yyyymmdd C/P strike.
     if security_type == "OPT":
         entry["contract_key"] = f"{symbol} {entry['expiration']} {entry['option_type'][:1] or '?'}{entry['strike']}"
+        # Distinct underlying identity so position-diff inference can group a
+        # roll across two option codes and detect assignment against the
+        # underlying share book (C06). symbol preserves the full option code.
+        entry["underlying"] = _option_underlying(symbol)
     return entry
 
 

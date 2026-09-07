@@ -769,6 +769,219 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertTrue(result[0].get("_skip_diagnostic"))
         self.assertEqual(result[0].get("reason_code"), "no_cash_fit")
 
+    def test_c01_cache_holds_raw_evidence_and_rescores_on_cash_change(self):
+        """C01: the watchlist cache stores raw broker evidence, never scored
+        decisions. Re-running with a different cash level must recompute
+        qualification instead of reusing a stale scored candidate, without
+        refetching the underlying chain.
+        """
+        engine = self._import_engine()
+        moomoo = pytest.importorskip("moomoo")
+        future_exp = (datetime.now() + timedelta(days=35)).strftime("%Y%m%d")
+
+        chain_fetch_count = {"n": 0}
+
+        class FakeConnection:
+            def is_connected(self):
+                return True
+
+            def get_cached_stock_price(self, ticker):
+                return None  # force the live-price path
+
+            def get_stock_price(self, ticker):
+                return 100.0
+
+            def get_option_expiration_dates(self, ticker):
+                return moomoo.RET_OK, pd.DataFrame({"expiration_date": [future_exp]})
+
+            def get_option_chain(self, ticker, exp_str, right, target_strike=None):
+                chain_fetch_count["n"] += 1
+                # One affordable OTM PUT at strike 90 (cost $9000) on a $100 name.
+                return {
+                    "options": [
+                        {
+                            "strike": 90.0,
+                            "expiration": exp_str,
+                            "option_type": "PUT",
+                            "dte": 35,
+                            "bid": 1.5,
+                            "ask": 1.6,
+                            "last": 1.55,
+                            "open_interest": 300,
+                            "volume": 200,
+                            "delta": -0.18,
+                            "gamma": 0.02,
+                            "theta": -0.03,
+                            "vega": 0.04,
+                        }
+                    ]
+                }
+
+        engine._connection_provider = MagicMock()
+        engine._connection_provider._ensure_connection.return_value = FakeConnection()
+        engine._watchlist_provider = MagicMock()
+        engine._watchlist_provider.get_screening_profile.return_value = {}
+
+        fake_decision = MagicMock()
+        fake_decision.hard_blockers = []
+        fake_decision.contract_score = 75.0
+        fake_decision.max_contracts = 1
+        fake_decision.recommended_contracts = 1
+        fake_decision.strike = 90.0
+        fake_decision.expiration = future_exp
+        fake_decision.dte = 35
+        fake_decision.mid_price = 1.55
+        fake_decision.premium_per_contract = 155.0
+        fake_decision.bid_premium_per_contract = 150.0
+        fake_decision.premium_velocity_per_day = 4.43
+        fake_decision.capital_velocity_per_day = 0.00046
+        fake_decision.bid = 1.5
+        fake_decision.ask = 1.6
+        fake_decision.annualized_return = 0.5
+        fake_decision.iv_adjusted_return = 0.4
+        fake_decision.otm_pct = 10.0
+        fake_decision.delta = -0.18
+        fake_decision.implied_volatility = 0.3
+        fake_decision.open_interest = 300
+        fake_decision.volume = 200
+        fake_decision.iv_rank = 0.6
+        fake_decision.iv_status = "normal"
+        fake_decision.iv_env_adjustment = 0
+        fake_decision.profile_type = "monthly"
+        fake_decision.earnings_date = None
+        fake_decision.earnings_relative = None
+        fake_decision.warnings = []
+
+        engine._score_csp_contract = MagicMock(return_value=fake_decision)
+
+        rich_context = dict(self.mock_portfolio_context, cash_available_for_csp=10000.0)
+        thin_context = dict(self.mock_portfolio_context, cash_available_for_csp=8000.0)
+
+        with patch("api.services.recommendations.is_market_open", return_value=True):
+            rich_result = engine._fetch_watchlist_csp_moomoo("AAPL", rich_context)
+            thin_result = engine._fetch_watchlist_csp_moomoo("AAPL", thin_context)
+
+        # At $10k the $9000 strike is affordable -> a scored candidate is returned.
+        self.assertTrue(rich_result and any(r.get("ticker") == "AAPL" for r in rich_result))
+        self.assertTrue(any(r.get("strike") == 90.0 for r in rich_result))
+
+        # The cache must hold RAW evidence, not scored candidates.
+        cached = engine._yfinance_cache.get(("AAPL",))
+        self.assertIsNotNone(cached)
+        payload = cached["data"]
+        self.assertIn("chains", payload)
+        self.assertIn("stock_price", payload)
+        self.assertNotIn("wheel_decision", payload)
+
+        # At $8k the $9000 strike is no longer affordable -> the re-qualified
+        # outcome is a skip diagnostic, never the stale $10k scored candidate.
+        self.assertTrue(thin_result and any(r.get("reason_code") == "no_cash_fit" for r in thin_result))
+        self.assertFalse(any(r.get("ticker") == "AAPL" and r.get("strike") == 90.0 for r in thin_result))
+
+        # The chain was fetched only once: the second call reused cached raw
+        # evidence and recomputed the decision against the new cash level.
+        self.assertEqual(chain_fetch_count["n"], 1)
+
+    def test_c01_preset_switch_rescores_cached_evidence(self):
+        """C01: switching the active preset must recompute the scored decision
+        from cached raw evidence rather than reuse a stale decision produced
+        under the previous preset.
+        """
+        engine = self._import_engine()
+        moomoo = pytest.importorskip("moomoo")
+        future_exp = (datetime.now() + timedelta(days=35)).strftime("%Y%m%d")
+
+        class FakeConnection:
+            def is_connected(self):
+                return True
+
+            def get_cached_stock_price(self, ticker):
+                return None
+
+            def get_stock_price(self, ticker):
+                return 100.0
+
+            def get_option_expiration_dates(self, ticker):
+                return moomoo.RET_OK, pd.DataFrame({"expiration_date": [future_exp]})
+
+            def get_option_chain(self, ticker, exp_str, right, target_strike=None):
+                return {
+                    "options": [
+                        {
+                            "strike": 90.0,
+                            "expiration": exp_str,
+                            "option_type": "PUT",
+                            "dte": 35,
+                            "bid": 1.5,
+                            "ask": 1.6,
+                            "last": 1.55,
+                            "open_interest": 300,
+                            "volume": 200,
+                            "delta": -0.18,
+                            "gamma": 0.02,
+                            "theta": -0.03,
+                            "vega": 0.04,
+                        }
+                    ]
+                }
+
+        engine._connection_provider = MagicMock()
+        engine._connection_provider._ensure_connection.return_value = FakeConnection()
+        engine._watchlist_provider = MagicMock()
+        engine._watchlist_provider.get_screening_profile.return_value = {}
+
+        context = dict(self.mock_portfolio_context, cash_available_for_csp=10000.0)
+
+        def make_decision(ticker, contract, stock_price, dte, portfolio_context, research_only_mode=False):
+            d = MagicMock()
+            d.hard_blockers = []
+            target_delta = float(engine._preset_profile.get("csp_target_delta", 0.30) or 0.30)
+            d.max_contracts = 3 if target_delta >= 0.35 else 1
+            d.recommended_contracts = d.max_contracts
+            d.contract_score = 75.0
+            d.strike = 90.0
+            d.expiration = future_exp
+            d.dte = 35
+            d.mid_price = 1.55
+            d.premium_per_contract = 155.0
+            d.bid_premium_per_contract = 150.0
+            d.premium_velocity_per_day = 4.43
+            d.capital_velocity_per_day = 0.00046
+            d.bid = 1.5
+            d.ask = 1.6
+            d.annualized_return = 0.5
+            d.iv_adjusted_return = 0.4
+            d.otm_pct = 10.0
+            d.delta = -0.18
+            d.implied_volatility = 0.3
+            d.open_interest = 300
+            d.volume = 200
+            d.iv_rank = 0.6
+            d.iv_status = "normal"
+            d.iv_env_adjustment = 0
+            d.profile_type = "monthly"
+            d.earnings_date = None
+            d.earnings_relative = None
+            d.warnings = []
+            return d
+
+        engine._score_csp_contract = MagicMock(side_effect=make_decision)
+
+        with patch("api.services.recommendations.is_market_open", return_value=True):
+            engine.set_active_preset("balanced")  # csp_target_delta 0.30
+            before = engine._fetch_watchlist_csp_moomoo("AAPL", context)
+            self.assertEqual(before[0]["recommended_contracts"], 1)
+            cached = engine._yfinance_cache.get(("AAPL",))
+            self.assertIsNotNone(cached)
+            self.assertIn("chains", cached["data"])
+
+            engine.set_active_preset("aggressive")  # csp_target_delta 0.35
+            after = engine._fetch_watchlist_csp_moomoo("AAPL", context)
+            self.assertEqual(after[0]["recommended_contracts"], 3)
+            self.assertEqual(engine._yfinance_cache.get(("AAPL",))["data"], cached["data"])
+
+        self.assertNotEqual(before[0]["recommended_contracts"], after[0]["recommended_contracts"])
+
     def _import_engine(self):
         from api.services.recommendations import RecommendationEngine
 

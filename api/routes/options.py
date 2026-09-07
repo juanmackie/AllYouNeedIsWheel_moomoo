@@ -392,10 +392,11 @@ def get_trade_lifecycle():
     logger.info("GET /analytics/lifecycle request received")
 
     try:
-        from api.services.config import get_config
+        from api.services.config import get_config, get_current_identity
         from db.database import OptionsDatabase
 
         db = OptionsDatabase(get_config().get("db_path"))
+        identity_env, identity_account = get_current_identity()
 
         ticker = request.args.get("ticker")
         event_type = request.args.get("event_type")
@@ -405,8 +406,14 @@ def get_trade_lifecycle():
             return error_response("limit must be an integer", status_code=400)
         limit = min(max(limit, 0), 1000)  # negative LIMIT means unlimited in SQLite
 
-        events = db.get_trade_events(ticker=ticker, event_type=event_type, limit=limit)
-        analytics = db.get_trade_analytics()
+        events = db.get_trade_events(
+            ticker=ticker,
+            event_type=event_type,
+            limit=limit,
+            env=identity_env,
+            account_id=identity_account,
+        )
+        analytics = db.get_trade_analytics(env=identity_env, account_id=identity_account)
 
         return success_response(
             {
@@ -426,11 +433,12 @@ def get_leakage_analytics():
     logger.info("GET /analytics/leakage request received")
 
     try:
-        from api.services.config import get_config
+        from api.services.config import get_config, get_current_identity
         from db.database import OptionsDatabase
 
         db = OptionsDatabase(get_config().get("db_path"))
-        analytics = db.get_trade_analytics()
+        identity_env, identity_account = get_current_identity()
+        analytics = db.get_trade_analytics(env=identity_env, account_id=identity_account)
 
         return success_response(
             {

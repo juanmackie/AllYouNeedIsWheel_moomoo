@@ -131,6 +131,34 @@ class TestPortfolioSnapshotsRepository(unittest.TestCase):
         self.assertEqual(len(self.repo.get_portfolio_history(limit=3)), 3)
         self.assertEqual(self.repo.get_portfolio_history(limit=0), [])
 
+    def test_unbounded_ignores_limit(self):
+        """C07: growth-pace baseline must be computed from the full history,
+        never truncated by the chart limit."""
+        for i in range(5):
+            self.repo.save_portfolio_snapshot(self._snap(f"r{i}", f"2026-08-2{i}T15:00:00"))
+        self.assertEqual(len(self.repo.get_portfolio_history(limit=2)), 2)
+        full = self.repo.get_portfolio_history(unbounded=True)
+        self.assertEqual(len(full), 5)
+        self.assertEqual(full[0]["run_id"], "r0")  # true oldest baseline
+        self.assertEqual(full[-1]["run_id"], "r4")
+
+    def test_get_portfolio_history_scoped_by_identity(self):
+        """C04: history/latest read only the requested (env, account) book,
+        never another account's snapshots."""
+        base = self._snap("r1", "2026-08-20T15:00:00", nav=1000.0)
+        other = self._snap("r2", "2026-08-20T15:00:00", nav=2000.0)
+        other["env"] = "REAL"
+        other["account_id"] = "hashB"
+        self.assertTrue(self.repo.save_portfolio_snapshot(base))
+        self.assertTrue(self.repo.save_portfolio_snapshot(other))
+
+        h = self.repo.get_portfolio_history(env="SIMULATE", account_id="hash1")
+        self.assertEqual([s["net_liquidation"] for s in h], [1000.0])
+        h_other = self.repo.get_portfolio_history(env="REAL", account_id="hashB")
+        self.assertEqual([s["net_liquidation"] for s in h_other], [2000.0])
+        latest = self.repo.get_latest_portfolio_snapshot(env="SIMULATE", account_id="hash1")
+        self.assertEqual(latest["net_liquidation"], 1000.0)
+
     def test_migration_sets_user_version_7(self):
         conn = sqlite3.connect(self.db_path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
