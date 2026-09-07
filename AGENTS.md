@@ -2,7 +2,7 @@
 
 DOX is installed here as an `AGENTS.md` hierarchy. These files are binding work contracts for AI agents working in this repository.
 
-The repository operating standard is `C:\Users\juanm\Documents\GitHub\Vibe Coding Rules V9.1.md`; read it in full before substantive work.
+The repository operating standard is `C:\Users\juanm\Documents\GitHub\Vibe Coding Rules 10.md`; read it in full before substantive work.
 
 ## Core Contract
 
@@ -12,8 +12,8 @@ The repository operating standard is `C:\Users\juanm\Documents\GitHub\Vibe Codin
 - If docs conflict, the closer `AGENTS.md` controls local work details, but no child doc may weaken project-wide rules.
 - After meaningful changes, update the closest owning `AGENTS.md` when purpose, ownership, contracts, workflows, verification, or durable structure changed.
 - Keep DOX docs concise and operational. Document stable contracts, not diary entries.
-- Security: this repo is structurally read-only (`core/broker_protocol.py`). Security controls must be enforced by implementation, not guidance alone (V9.1 §7). For auth/payment/trust-boundary changes, state that human security review is required. Never commit secrets, `.env` files, `plan.md`, `.pi-subagents/`, or any `production-ready-vibe-coding-rules*.md`.
-- Version control / destructive actions: never push, deploy, publish, merge, or perform destructive actions (reset, clean, drop data) without explicit authorization (V9.1 §10). Before destructive work, explain impact and prefer reversible methods. Preserve unrelated user changes.
+- Security: this repo is structurally read-only (`core/broker_protocol.py`). Security controls must be enforced by implementation, not guidance alone (V10 §6). For auth/payment/trust-boundary changes, state that human security review is required. Never commit secrets, `.env` files, `plan.md`, `.pi-subagents/`, or any `production-ready-vibe-coding-rules*.md`.
+- Version control / destructive actions: never push, deploy, publish, merge, or perform destructive actions (reset, clean, drop data) without explicit authorization (V10 §1). Before destructive work, explain impact and prefer reversible methods. Preserve unrelated user changes.
 
 ## Purpose
 
@@ -56,7 +56,7 @@ AllYouNeedIsWheel scans your watchlist for the top 3 cash-secured put and covere
 - Prefer deterministic pure helpers for scoring, risk, and formatting logic so tests can exercise them without broker connectivity.
 - Preserve Windows local-run ergonomics because the app is designed around OpenD on Windows.
 
-## Verification / Closeout (per V9.1 §8, §13)
+## Verification / Closeout (per V10 §5, §9)
 Before closing any significant edit:
 1. **Changed:** brief list of added/changed/deleted.
 2. **Verified:** exact checks run and results (e.g., `pytest tests/test_no_execution_surface.py` passed; `npm test` passed; ruff check clean).
