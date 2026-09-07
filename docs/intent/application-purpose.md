@@ -36,14 +36,16 @@ Free-tier OpenD API rate limits. The fix is scoping scans to your watchlist (not
 
 ## Ranking Axis
 
-> **Stale claim.** This section's “absolute premium velocity is primary” is NOT
-> what the app implements. The authoritative ordering is **quality/event tier
-> first, then capital velocity, then premium velocity as tie-break** — see
-> `api/services/recommendation_ranking.py::rank_key` and SCORING.md.
-> The ranking contract conflict is tracked in review item S03 pending
-> product-owner resolution; do not treat this paragraph as a spec.
-
-Primary sort: **premium velocity** (premium / days to expiration). Higher return per day = better rank. This replaces the existing multi-factor scoring as the dominant ranking signal.
+Primary sort: **executable return on deployed capital per day**
+(`capital_velocity_per_day`): bid premium / (strike × 100 × DTE) for CSPs;
+bid premium / (stock price × 100 × DTE) for covered calls. Higher return per
+dollar of deployed capital per day = better rank. Per-contract executable-bid
+premium velocity breaks ties; remaining ties resolve on canonical ticker,
+expiration, strike, option type. Quality/event tiers are visible risk
+information and never influence ordering; midpoint and composite score never
+influence ordering. See `api/services/recommendation_ranking.py::rank_key` and
+SCORING.md “Authoritative order of precedence” (owner decision, S03 ranking
+half resolved).
 
 ## Data Scope
 

@@ -46,10 +46,10 @@ manual copy-to-ticket suggestions for your broker UI.
   source list — it never silently truncates and claims a global top three.
 - Each hard-gate-passing candidate is classified as `qualified` or `marginal`,
   then receives an event tier (`event_safe`, `event_not_applicable`,
-  `earnings_before_expiry`, or `event_unknown`). Ordering is quality tier,
-  event tier, executable annualized return on deployed capital, then executable
-  bid premium velocity as a tie-break, then stable ticker/expiry/strike keys.
-  Composite score cannot override that order.
+  `earnings_before_expiry`, or `event_unknown`) as visible risk information.
+  Ordering is executable return on deployed capital per day, then executable
+  bid premium per day as a tie-break, then stable ticker/expiry/strike/option-type
+  keys. Tiers, midpoint, and composite score never influence that order.
 - Moomoo `update_time` is preserved verbatim and interpreted in
   `America/New_York`; UTC fetch time is carried separately. Missing/invalid/
   stale broker time blocks actionable candidates while the market is open.
@@ -100,8 +100,9 @@ Key pieces:
 - `core/broker_protocol.py` — the query-only surface; forbidden SDK members
   are enforced by tests and an AST/repository scan.
 - `api/services/recommendations.py` — complete watchlist CSP/CC lanes,
-  true-cash/share reservation gates, explicit quality/event tiers, and
-  deterministic executable-bid premium-velocity ranking.
+  true-cash/share reservation gates, explicit quality/event tiers (display-only
+  risk info), and deterministic executable return on deployed capital ranking
+  with executable-bid premium velocity as the tie-break.
 - `api/routes/` — `run`, `settings`, `watchlist`, `options`, `portfolio`,
   `roll_pressure`, `alerts`, `earnings`, `ledger`, `source_policy`.
 

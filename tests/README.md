@@ -51,9 +51,9 @@ npm test -- tests/frontend/top-recommendations.test.js
 5. Compare each card's executable bid, bid premium velocity, midpoint
    **limit target—not guaranteed**, DTE, spread, OI/volume, cycle/annualized
    yield, source, broker timestamp, and UTC fetch time against Moomoo.
-6. Confirm ordering is qualified quality tier, event tier, descending executable
-   capital return per deployed dollar per day, then bid premium velocity and
-   ticker/expiry/strike; composite score cannot reorder cards.
+6. Confirm ordering is descending executable capital return per deployed dollar
+   per day, then bid premium velocity and ticker/expiry/strike/option-type;
+   quality/event tiers, midpoint, and composite score cannot reorder cards.
 7. Confirm any copy_eligible card (qualified or marginal, Moomoo-sourced, positive
    `recommended_contracts`) can copy. When the run is live-tradeable the ticket is an
    explicit limit draft on the current quote; when US markets are closed or the quote

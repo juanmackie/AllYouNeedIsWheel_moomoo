@@ -439,10 +439,10 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         warningsEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> No warnings</span>';
     }
 
-    // Missing-risk penalty: unknown earnings/risk metadata ranks below known-risk.
+    // Display-only risk note; tiers are informational and no longer affect ranking.
     const riskBadge = clone.querySelector('.missing-risk-badge');
-    if (riskBadge && rec.days_to_earnings == null && !rec.earnings_date) {
-        riskBadge.textContent = 'unknown earnings/risk metadata — ranked below known-risk candidates';
+    if (riskBadge && eventTier === 'event_unknown') {
+        riskBadge.textContent = 'Earnings unknown — verify before placing';
         riskBadge.classList.remove('d-none');
     }
 

@@ -66,17 +66,20 @@ capital-velocity result.
 
 ## Deterministic ordering
 
-The backend sorts candidates by:
+After hard gates, the backend sorts candidates by:
 
 ```text
-quality tier
-→ event tier
-→ descending executable return on deployed capital
-→ descending executable-bid premium velocity (tie-break)
+descending executable return on deployed capital per day
+→ descending executable-bid premium velocity per day (tie-break)
 → canonical ticker
 → expiration
 → strike
+→ option type
 ```
+
+Quality and event tiers are carried as display-only risk information (visible
+labels/warnings on the surfaced signal); they never gate or reorder the
+shortlist. The midpoint and composite score are never part of the sort key.
 
 The existing underlying-diversity safeguard is applied after this ordering,
 extended with a portfolio-aware concentration guard: an underlying you already
@@ -87,25 +90,22 @@ The browser displays the backend fields and performs no ranking or premium math.
 ### Authoritative order of precedence (as-implemented)
 
 The single authoritative sort is `api/services/recommendation_ranking.py::rank_key`.
-It is QUALITY/EVENT TIER-FIRST — the tiers gate the shortlist before any return
-metric is compared:
+After hard gates it orders purely by capital return:
 
 ```text
-1. quality tier   (qualified before marginal)
-2. event tier     (event_safe / event_not_applicable before earnings_before_expiry \
-                   before event_unknown)
-3. capital velocity (executable return on deployed capital / day)
-4. premium velocity (executable-bid premium / day) — tie-break
-5. canonical ticker, then expiration, then strike
+1. capital velocity — executable return on deployed capital / day
+   (capital_velocity_per_day: bid premium / (strike × 100 × DTE) for CSPs;
+    bid premium / (stock_price × 100 × DTE) for covered calls)
+2. premium velocity — executable-bid premium / day (tie-break only)
+3. canonical ticker, then expiration, then strike, then option type
 ```
 
-This preserves the deployed tier-first behavior. The root `AGENTS.md` wording
-(capital-return “primary axis”; secondary scoring never outranks it) and
-`docs/intent/application-purpose.md` (absolute premium velocity primary) are
-NOT what the code implements and are flagged for product-owner resolution
-(review S03). When the owner resolves it, change `rank_key` **and** this section
-and the root `AGENTS.md` rule together; never change ranking policy silently in
-cleanup. Until then the table above is the contract.
+Quality/event tiers are display-only risk information and never gate or
+influence ordering. The midpoint and composite score are intentionally absent
+from the key: they may qualify or explain a candidate, never break a velocity
+tie. The ranking decision is RESOLVED (owner decision: capital return primary,
+as implemented in `rank_key`); the separate S03 actionability / state-table
+question remains open.
 
 ### State / action table
 

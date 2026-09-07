@@ -80,6 +80,7 @@ function setupDOM() {
         <span class="signal-data-source"></span>
         <button type="button" class="btn btn-sm copy-ticket-btn">Copy ticket</button>
         <span class="recommendation-warnings"></span>
+        <div class="missing-risk-badge small text-warning fw-semibold d-none"></div>
         <span class="otm-pct"></span>
         <span class="delta-value"></span>
         <span class="iv-rank"></span>
@@ -394,6 +395,122 @@ describe('top-recommendations unknown IV status', () => {
     expect(cards[0].querySelector('.cc-details')?.classList.contains('d-none')).toBe(true);
     expect(cards[0].querySelector('.score-drivers')?.classList.contains('d-none')).toBe(true);
     expect(cards[0].querySelector('.hard-blockers')?.classList.contains('d-none')).toBe(true);
+  });
+});
+
+describe('top-recommendations missing-risk badge (display-only event tier)', () => {
+  let cleanup;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDOM();
+  });
+
+  afterEach(() => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  async function renderCard(signal) {
+    const { initializeTopRecommendations, cleanupTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
+    );
+    fetchRunState.mockResolvedValue({
+      success: true,
+      count: 1,
+      signals: [signal],
+      generated_at: '2026-05-24T12:00:00',
+    });
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+    return document.querySelector('.missing-risk-badge');
+  }
+
+  it('shows "Earnings unknown — verify before placing" when event tier is event_unknown', async () => {
+    const riskBadge = await renderCard({
+      ticker: 'TEST',
+      option_type: 'PUT',
+      strike: 95.0,
+      expiration: '20260515',
+      dte: 21,
+      bid: 2.0,
+      ask: 2.10,
+      mid_price: 2.05,
+      annualized_return: 50.0,
+      score: 65.0,
+      event_tier: 'event_unknown',
+    });
+    expect(riskBadge).toBeTruthy();
+    expect(riskBadge.textContent).toBe('Earnings unknown — verify before placing');
+    expect(riskBadge.classList.contains('d-none')).toBe(false);
+    // No ranking claim anywhere.
+    expect(riskBadge.textContent).not.toMatch(/rank/i);
+  });
+
+  it('shows no badge text for event_safe', async () => {
+    const riskBadge = await renderCard({
+      ticker: 'TEST',
+      option_type: 'PUT',
+      strike: 95.0,
+      expiration: '20260515',
+      dte: 21,
+      bid: 2.0,
+      ask: 2.10,
+      mid_price: 2.05,
+      annualized_return: 50.0,
+      score: 65.0,
+      event_tier: 'event_safe',
+    });
+    expect(riskBadge).toBeTruthy();
+    expect(riskBadge.textContent).toBe('');
+    expect(riskBadge.classList.contains('d-none')).toBe(true);
+  });
+
+  it('shows no badge text for earnings_before_expiry', async () => {
+    const riskBadge = await renderCard({
+      ticker: 'TEST',
+      option_type: 'PUT',
+      strike: 95.0,
+      expiration: '20260515',
+      dte: 21,
+      bid: 2.0,
+      ask: 2.10,
+      mid_price: 2.05,
+      annualized_return: 50.0,
+      score: 65.0,
+      event_tier: 'earnings_before_expiry',
+    });
+    expect(riskBadge).toBeTruthy();
+    expect(riskBadge.textContent).toBe('');
+    expect(riskBadge.classList.contains('d-none')).toBe(true);
+  });
+
+  it('shows no badge text when tier comes via wheel_decision as a known tier', async () => {
+    const riskBadge = await renderCard({
+      ticker: 'TEST',
+      option_type: 'PUT',
+      strike: 95.0,
+      expiration: '20260515',
+      dte: 21,
+      bid: 2.0,
+      ask: 2.10,
+      mid_price: 2.05,
+      annualized_return: 50.0,
+      score: 65.0,
+      wheel_decision: { event_tier: 'earnings_before_expiry' },
+    });
+    expect(riskBadge).toBeTruthy();
+    expect(riskBadge.textContent).toBe('');
+    expect(riskBadge.classList.contains('d-none')).toBe(true);
   });
 });
 

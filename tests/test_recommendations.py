@@ -3,6 +3,7 @@ Tests for api/services/recommendations.py — RecommendationEngine class
 """
 
 import os
+import random
 import sys
 import unittest
 from datetime import datetime, timedelta
@@ -11,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from api.services.recommendation_ranking import format_recommendation
+from api.services.recommendation_ranking import format_recommendation, rank_candidates
 from api.services.recommendations import RecommendationEngine
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -156,53 +157,59 @@ class TestRecommendationEngine(unittest.TestCase):
         called_tickers = [call[0][0] for call in mock_fetch.call_args_list]
         self.assertEqual(called_tickers, tickers)
 
-    def test_get_top_recommendations_ranks_by_premium_velocity(self):
+    def test_get_top_recommendations_ranks_by_capital_return(self):
+        """Capital return per dollar per day is the primary sort; tiers never gate."""
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA", "BBB"]
         engine = self._import_engine()
 
-        faster_daily = {
+        # AAA is MARGINAL but earns more per secured dollar per day
+        # (bid 1.10 / strike 50 / 20 DTE) than qualified BBB
+        # (bid 2.00 / strike 200 / 10 DTE), and also decays faster per day.
+        higher_capital_return = {
             "ticker": "AAA",
-            "stock_price": 200.0,
+            "stock_price": 50.0,
             "option_type": "PUT",
-            "strike": 200.0,
+            "strike": 50.0,
             "expiration": "20240315",
-            "dte": 10,
-            "mid_price": 1.00,
+            "dte": 20,
+            "mid_price": 1.05,
             "premium_per_contract": 110.0,
             "bid": 1.10,
-            "ask": 1.05,
-            "annualized_return": 18.25,
+            "ask": 1.20,
+            "annualized_return": 40.15,
             "iv_adjusted_return": 30.0,
             "otm_pct": 5.0,
             "delta": -0.20,
             "implied_volatility": 0.30,
             "open_interest": 500,
             "volume": 100,
-            "score": 80.0,
+            "score": 60.0,
+            "quality_tier": "marginal",
             "profile_type": "monthly",
             "research_only": False,
             "warnings": [],
-            "wheel_decision": {"contract_score": 80.0, "confidence_score": 100},
+            "wheel_decision": {"contract_score": 60.0, "confidence_score": 100},
         }
-        slower_daily = {
+        lower_capital_return = {
             "ticker": "BBB",
-            "stock_price": 50.0,
+            "stock_price": 200.0,
             "option_type": "PUT",
-            "strike": 50.0,
+            "strike": 200.0,
             "expiration": "20240315",
-            "dte": 20,
-            "mid_price": 1.20,
-            "premium_per_contract": 120.0,
-            "bid": 1.15,
-            "ask": 1.25,
-            "annualized_return": 43.80,
-            "iv_adjusted_return": 45.0,
+            "dte": 10,
+            "mid_price": 2.05,
+            "premium_per_contract": 200.0,
+            "bid": 2.00,
+            "ask": 2.10,
+            "annualized_return": 18.25,
+            "iv_adjusted_return": 25.0,
             "otm_pct": 5.0,
             "delta": -0.20,
             "implied_volatility": 0.30,
             "open_interest": 500,
             "volume": 100,
             "score": 90.0,
+            "quality_tier": "qualified",
             "profile_type": "monthly",
             "research_only": False,
             "warnings": [],
@@ -210,19 +217,83 @@ class TestRecommendationEngine(unittest.TestCase):
         }
 
         with (
-            patch.object(engine, "_fetch_watchlist_ticker_csp", side_effect=[[faster_daily], [slower_daily]]),
+            patch.object(
+                engine,
+                "_fetch_watchlist_ticker_csp",
+                side_effect=[[lower_capital_return], [higher_capital_return]],
+            ),
             patch("api.services.recommendations.is_market_open", return_value=True),
         ):
             result = engine.get_top_recommendations(limit=5)
 
         self.assertGreater(len(result["signals"]), 1)
-        self.assertEqual(result["signals"][0]["ticker"], "BBB")
+        self.assertEqual(result["signals"][0]["ticker"], "AAA")
         ranked = {signal["ticker"]: signal for signal in result["signals"]}
-        self.assertLess(ranked["AAA"]["annualized_return"], ranked["BBB"]["annualized_return"])
-        self.assertGreater(
+        self.assertGreater(ranked["AAA"]["annualized_return"], ranked["BBB"]["annualized_return"])
+        # AAA's per-contract premium velocity is LOWER (5.5 vs 20/day): the
+        # capital-return axis alone decides, exactly as the contract requires.
+        self.assertLess(
             ranked["AAA"]["premium_per_contract"] / ranked["AAA"]["dte"],
             ranked["BBB"]["premium_per_contract"] / ranked["BBB"]["dte"],
         )
+
+    def test_shortlist_and_deployment_derive_from_rank_candidates(self):
+        """Combined, lane, and remaining-cash deployment order all derive from rank_candidates."""
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["HIGH", "MID", "LOW", "LOW2"]
+        self.mock_portfolio_context["cash_available_for_csp"] = 200000.0
+        self.mock_portfolio_context["positions"] = {}  # keep the CC lane out of the combined signals
+        engine = self._import_engine()
+
+        def csp(ticker, strike, bid, dte, quality_tier):
+            return {
+                "ticker": ticker,
+                "stock_price": strike,
+                "option_type": "PUT",
+                "strike": strike,
+                "expiration": "20240315",
+                "dte": dte,
+                "mid_price": bid + 0.05,
+                "premium_per_contract": bid * 100,
+                "bid": bid,
+                "ask": bid + 0.10,
+                "otm_pct": 5.0,
+                "delta": -0.20,
+                "implied_volatility": 0.30,
+                "open_interest": 500,
+                "volume": 100,
+                "score": 70.0,
+                "quality_tier": quality_tier,
+                "cash_required": strike * 100,
+                "recommended_contracts": 1,
+                "max_contracts": 1,
+                "profile_type": "monthly",
+                "research_only": False,
+                "warnings": [],
+                "wheel_decision": {"contract_score": 70.0, "confidence_score": 100},
+            }
+
+        # HIGH is marginal but has the best capital return; LOW2 has the worst.
+        high = csp("HIGH", 50.0, 1.10, 20, "marginal")   # 0.0011/day
+        mid = csp("MID", 100.0, 1.20, 20, "qualified")   # 0.0006/day
+        low = csp("LOW", 300.0, 1.50, 30, "qualified")   # 0.0005/day
+        low2 = csp("LOW2", 400.0, 2.00, 30, "qualified")  # 0.0005/day — lower absolute bid ratio
+        low2["bid"] = 1.60
+        low2["premium_per_contract"] = 160.0  # bigger absolute premium, worse per-dollar return
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", side_effect=[[high], [mid], [low], [low2]]),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations(limit=2)
+
+        # Combined lane: marginal-but-highest-return candidate reaches the top.
+        self.assertGreaterEqual(len(result["signals"]), 2)
+        self.assertEqual(result["signals"][0]["ticker"], "HIGH")
+        # Remaining-cash deployment plan follows the same ranked order.
+        deployment = result["deployment_plan"]["signals"]
+        self.assertGreaterEqual(len(deployment), 2)
+        self.assertEqual(deployment[0]["ticker"], "LOW")
+        self.assertEqual(deployment[1]["ticker"], "LOW2")
 
     def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
@@ -2278,7 +2349,7 @@ if __name__ == "__main__":
 
 
 class TestRiskTierRanking(unittest.TestCase):
-    """Unknown optional risk metadata ranks below known-risk candidates."""
+    """Event risk is display-only information; capital return owns ordering."""
 
     def setUp(self):
         self.mock_connection_provider = MagicMock()
@@ -2319,9 +2390,8 @@ class TestRiskTierRanking(unittest.TestCase):
             self.mock_cash_calculator,
         )
 
-    def test_unknown_earnings_metadata_ranks_below_known_risk(self):
+    def test_event_risk_is_display_only_in_ranking(self):
         engine = self._import_engine()
-        # Unknown-risk candidate has HIGHER premium velocity.
         unknown_risk = {
             "ticker": "AAA",
             "stock_price": 100.0,
@@ -2333,7 +2403,6 @@ class TestRiskTierRanking(unittest.TestCase):
             "premium_per_contract": 110.0,
             "bid": 1.10,
             "ask": 1.05,
-            "annualized_return": 18.0,
             "iv_adjusted_return": 50.0,
             "otm_pct": 10.0,
             "delta": -0.25,
@@ -2347,7 +2416,8 @@ class TestRiskTierRanking(unittest.TestCase):
             # earnings metadata missing -> unknown
         }
         known_risk = dict(unknown_risk)
-        known_risk["premium_per_contract"] = 50.0  # bid velocity 5 < 11
+        known_risk["premium_per_contract"] = 50.0
+        known_risk["bid"] = 0.50
         known_risk["earnings_date"] = "2026-07-15"
         known_risk["days_to_earnings"] = 12
 
@@ -2356,11 +2426,76 @@ class TestRiskTierRanking(unittest.TestCase):
 
         signals = result.get("signals", [])
         self.assertGreaterEqual(len(signals), 1)
-        # The known-risk candidate must rank first despite lower velocity.
-        self.assertEqual(signals[0]["premium_per_contract"], 50.0)
-        self.assertEqual(signals[0]["days_to_earnings"], 12)
+        # The higher-capital-return candidate ranks first regardless of its
+        # unknown event risk; event tiers are surfaced, never gating.
+        self.assertEqual(signals[0]["premium_per_contract"], 110.0)
         if len(signals) > 1:
-            self.assertEqual(signals[1]["premium_per_contract"], 110.0)
+            self.assertEqual(signals[1]["premium_per_contract"], 50.0)
+            self.assertEqual(signals[1]["days_to_earnings"], 12)
+
+
+class TestCapitalReturnRankKey(unittest.TestCase):
+    """Pure rank_candidates regressions for the capital-return-first contract."""
+
+    @staticmethod
+    def _candidate(ticker, capital_velocity, premium_velocity=None, **extra):
+        c = {
+            "ticker": ticker,
+            "option_type": "PUT",
+            "quality_tier": "qualified",
+            "event_tier": "event_safe",
+            "capital_velocity_per_day": capital_velocity,
+        }
+        if premium_velocity is not None:
+            c["premium_velocity_per_day"] = premium_velocity
+        c.update(extra)
+        return c
+
+    def test_marginal_outranks_qualified_on_capital_return(self):
+        high_return_marginal = self._candidate("AAA", 0.002, 5.0, quality_tier="marginal")
+        low_return_qualified = self._candidate("BBB", 0.0005, 20.0, quality_tier="qualified")
+        ranked = rank_candidates([low_return_qualified, high_return_marginal])
+        self.assertEqual(ranked[0]["ticker"], "AAA")
+
+    def test_event_unknown_outranks_event_safe_on_capital_return(self):
+        high_return_unknown = self._candidate("AAA", 0.002, 5.0, event_tier="event_unknown")
+        low_return_safe = self._candidate("BBB", 0.0005, 20.0, event_tier="event_safe")
+        ranked = rank_candidates([low_return_safe, high_return_unknown])
+        self.assertEqual(ranked[0]["ticker"], "AAA")
+
+    def test_capital_return_beats_absolute_premium(self):
+        bigger_premium_worse_rate = self._candidate("BIG", 0.0004, 20.0, premium_per_contract=600.0)
+        smaller_premium_better_rate = self._candidate("BEST", 0.002, 10.0, premium_per_contract=100.0)
+        ranked = rank_candidates([bigger_premium_worse_rate, smaller_premium_better_rate])
+        self.assertEqual(ranked[0]["ticker"], "BEST")
+
+    def test_premium_velocity_breaks_capital_return_tie(self):
+        equal_capital_a = self._candidate("AAA", 0.001, 10.0)
+        equal_capital_b = self._candidate("BBB", 0.001, 5.0)
+        ranked = rank_candidates([equal_capital_b, equal_capital_a])
+        self.assertEqual(ranked[0]["ticker"], "AAA")
+
+    def test_shuffled_input_produces_identical_ranking(self):
+        candidates = [
+            self._candidate("CCC", 0.0012, 9.0, quality_tier="marginal"),
+            self._candidate("AAA", 0.002, 5.0, event_tier="event_unknown"),
+            self._candidate("BBB", 0.002, 7.0),
+            self._candidate("DDD", 0.0005, 30.0, event_tier="earnings_before_expiry"),
+            self._candidate("EEE", 0.0008, 15.0),
+        ]
+        expected = [c["ticker"] for c in rank_candidates(candidates)]
+        for seed in range(10):
+            shuffled = list(candidates)
+            random.Random(seed).shuffle(shuffled)
+            self.assertEqual([c["ticker"] for c in rank_candidates(shuffled)], expected)
+
+    def test_option_type_breaks_full_tie(self):
+        base = dict(capital_velocity=0.001, premium_velocity=10.0)
+        put = self._candidate("AAA", **base, option_type="PUT")
+        call = self._candidate("AAA", **base, option_type="CALL")
+        ranked = rank_candidates([call, put])
+        # Ascending canonical option type: CALL before PUT.
+        self.assertEqual([c["option_type"] for c in ranked], ["CALL", "PUT"])
 
 
 if __name__ == "__main__":

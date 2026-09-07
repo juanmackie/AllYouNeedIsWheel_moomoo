@@ -1,3 +1,21 @@
+## 2026-09-07 — Capital-return-first ranking (owner decision)
+
+- Ranking policy changed to capital-return-first across the combined shortlist,
+  the CSP lane, the covered-call lane, and the remaining-cash deployment order:
+  after hard gates, order is descending executable return on deployed capital
+  per day (`capital_velocity_per_day`: bid premium / (strike × 100 × DTE) for
+  CSPs; bid premium / (stock price × 100 × DTE) for covered calls), then
+  executable-bid premium per day as the sole tie-break, then canonical ticker,
+  expiration, strike, option type.
+- Quality/event tiers are now display-only risk information and never gate or
+  influence ordering; midpoint and composite score never influence ordering.
+  This resolves the ranking half of review item S03 (owner decision); the
+  actionability/state-table half remains open.
+- `SCORING_VERSION` bumped to `3.0-capital-return`. Applied to new run/scan
+  records only; historical snapshots keep their recorded version.
+- Dashboard shows “Earnings unknown — verify before placing” only for
+  `event_unknown` signals, with no ranking-penalty claim attached.
+
 ## 2026-08-30 — Australia out-of-hours scan alignment
 
 - Closed-market scans now include watchlist CSPs instead of skipping the primary

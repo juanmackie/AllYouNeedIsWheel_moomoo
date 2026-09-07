@@ -1,9 +1,13 @@
 """Deterministic candidate ranking for the backend shortlist.
 
-Ordering contract (SCORING.md): quality tier → event tier → descending
-executable-bid premium velocity → canonical ticker/expiration/strike.
-The composite score is intentionally absent from this key: it may
-qualify/explain a candidate, never break a velocity tie.
+Ordering contract (SCORING.md): descending capital return per dollar of
+capital per day (`rank_capital_velocity`) is the ONLY ranking priority after
+hard gates; executable-bid premium velocity (`rank_velocity`) is the sole
+tie-break; remaining ties resolve on canonical ticker (upper), expiration,
+strike, then option type (upper). Quality/event tiers are display-only risk
+information and never influence ordering. The composite score and midpoint
+are intentionally absent from this key: they may qualify/explain a candidate,
+never break a velocity tie.
 
 Pure helpers extracted from RecommendationEngine (F-S1).
 """
@@ -11,14 +15,6 @@ Pure helpers extracted from RecommendationEngine (F-S1).
 from __future__ import annotations
 
 from core.scoring_factors import capital_velocity_per_day, premium_velocity_per_day
-
-QUALITY_ORDER = {"qualified": 0, "marginal": 1}
-EVENT_ORDER = {
-    "event_safe": 0,
-    "event_not_applicable": 0,
-    "earnings_before_expiry": 1,
-    "event_unknown": 2,
-}
 
 
 def candidate_field(candidate: dict, field: str, default=None):
@@ -73,24 +69,13 @@ def rank_capital_velocity(candidate: dict) -> float:
 
 
 def rank_key(candidate: dict):
-    quality = str(candidate_field(candidate, "quality_tier") or "qualified").lower()
-    event = str(candidate_field(candidate, "event_tier") or "").lower()
-    if not event:
-        # Compatibility for old mocked payloads only; real decisions always
-        # serialize an explicit event tier.
-        event = (
-            "event_safe"
-            if (candidate.get("earnings_date") or candidate.get("days_to_earnings") is not None)
-            else "event_unknown"
-        )
     return (
-        QUALITY_ORDER.get(quality, 1),
-        EVENT_ORDER.get(event, EVENT_ORDER["event_unknown"]),
         -rank_capital_velocity(candidate),
         -rank_velocity(candidate),
         str(candidate.get("ticker", "")).upper(),
         str(candidate.get("expiration", "")),
         float(candidate.get("strike", 0) or 0),
+        str(candidate_field(candidate, "option_type", "")).upper(),
     )
 
 
