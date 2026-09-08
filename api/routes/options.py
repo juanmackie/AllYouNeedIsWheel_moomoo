@@ -36,6 +36,13 @@ def get_options_service():
     return api.get_service("options")
 
 
+def get_outcome_service():
+    """Get the registered outcome service singleton (lazy registry)."""
+    import api
+
+    return api.get_service("outcome")
+
+
 @bp.route("/connection-status", methods=["GET"])
 def connection_status():
     """
@@ -454,5 +461,88 @@ def get_leakage_analytics():
         )
     except Exception as e:
         logger.error(f"Error fetching leakage analytics: {str(e)}")
+        logger.error(traceback.format_exc())
+        return error_response(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Analytics: broker-verified outcomes
+# ---------------------------------------------------------------------------
+
+
+@bp.route("/analytics/outcomes", methods=["GET"])
+def get_outcome_analytics():
+    logger.info("GET /analytics/outcomes request received")
+
+    try:
+        from api.services.config import get_current_identity
+
+        identity_env, identity_account = get_current_identity()
+
+        ticker = request.args.get("ticker")
+        if ticker:
+            valid_tickers, invalid_tickers = normalize_ticker_list(ticker)
+            if invalid_tickers or not valid_tickers:
+                return error_response(f"Invalid ticker: {ticker}", status_code=400)
+            ticker = valid_tickers[0]
+        preset = request.args.get("preset")
+        event_tier = request.args.get("event_tier")
+        dte_bucket = request.args.get("dte_bucket")
+        try:
+            limit = int(request.args.get("limit", 500))
+        except (TypeError, ValueError):
+            return error_response("limit must be an integer", status_code=400)
+        limit = min(max(limit, 1), 2000)
+
+        service = get_outcome_service()
+        payload = service.get_outcome_summary(
+            env=identity_env,
+            account_id=identity_account,
+            ticker=ticker,
+            preset=preset,
+            event_tier=event_tier,
+            dte_bucket=dte_bucket,
+            snapshot_limit=limit,
+        )
+        return success_response(payload)
+    except Exception as e:
+        logger.error(f"Error fetching outcome analytics: {str(e)}")
+        logger.error(traceback.format_exc())
+        return error_response(str(e))
+
+
+@bp.route("/analytics/outcomes/ingest", methods=["POST"])
+def ingest_outcome_evidence():
+    """Ingest broker fills/fees/cash flows (query-only) for outcome tracking."""
+    logger.info("POST /analytics/outcomes/ingest request received")
+
+    try:
+        unavailable_response = _ensure_opend_available()
+        if unavailable_response:
+            return unavailable_response
+        allowed, retry_after = enforce_route_rate_limit(
+            "outcomes-ingest", request.remote_addr or "local", max_requests=6, window_seconds=60
+        )
+        if not allowed:
+            return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
+
+        try:
+            days = int(request.args.get("days", 90))
+        except (TypeError, ValueError):
+            return error_response("days must be an integer", status_code=400)
+        days = min(max(days, 1), 90)  # SDK caps each history window at 90 days
+        try:
+            cash_flow_days = int(request.args.get("cash_flow_days", 7))
+        except (TypeError, ValueError):
+            return error_response("cash_flow_days must be an integer", status_code=400)
+        cash_flow_days = min(max(cash_flow_days, 0), 30)
+
+        service = get_outcome_service()
+        result = service.ingest_broker_evidence(days=days, cash_flow_days=cash_flow_days)
+        if not result.get("ok"):
+            return error_response(result.get("error") or "Outcome ingestion failed", status_code=502, **{"broker_result": result})
+        return success_response(result)
+    except Exception as e:
+        logger.error(f"Error ingesting outcome evidence: {str(e)}")
         logger.error(traceback.format_exc())
         return error_response(str(e))

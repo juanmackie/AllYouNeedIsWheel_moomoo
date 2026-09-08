@@ -14,6 +14,7 @@
 - `api/routes/portfolio.py::get_portfolio_history` serves persisted per-run portfolio snapshots plus growth-pace math from `core.growth_mode.growth_pace` (target multiple from the active preset); it reads local SQLite only and does not gate on live OpenD. Pace is computed from the **full unbounded history** (an extra `unbounded=True` repository read), so it is independent of the chart `limit` and snapshot retention — the headline 5x goal never shifts just because the chart window narrows.
 - `api/routes/roll_pressure.py` enriches each open position with the exit-playbook verdict (`exit_verdict`, `exit_reasons`) and Moomoo entry credit (`avg_cost`) for P&L display.
 - `api/services/recommendations.py` attaches `entry_context` (intraday entry-window advice), applies the portfolio-aware concentration guard (`existing_exposure_contracts`), ranks capital-normalized returns with per-contract velocity as tie-break, and exposes the remaining-cash deployment plan.
+- `api/services/outcome_service.py` + `api/routes/options.py::/analytics/outcomes` close the signal→outcome loop: quoted vs. filled credit, net-of-fee results, capital-days, and owner efficiency over ingested broker fills, always reported with sample size / coverage % / unknown counts (see `api/services/AGENTS.md`).
 
 ## Local Contracts
 

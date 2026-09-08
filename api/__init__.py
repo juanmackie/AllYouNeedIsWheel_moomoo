@@ -398,3 +398,20 @@ def _register_services():
         )
 
     register_service("wheel_runner", _create_wheel_runner)
+
+    def _create_outcome_service():
+        from api.services.config import get_config
+        from api.services.outcome_service import OutcomeService
+        from db.database import OptionsDatabase
+
+        db = OptionsDatabase(get_config().get("db_path"))
+
+        def _connected_broker_connection():
+            options = get_service("options")
+            if options is None:
+                return None
+            return options._ensure_connection()
+
+        return OutcomeService(db, connection_provider=_connected_broker_connection)
+
+    register_service("outcome", _create_outcome_service)

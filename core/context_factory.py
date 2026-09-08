@@ -31,6 +31,15 @@ class QueryOnlyTradeContext:
     def position_list_query(self, *args, **kwargs):
         return self._context.position_list_query(*args, **kwargs)
 
+    def history_deal_list_query(self, *args, **kwargs):
+        return self._context.history_deal_list_query(*args, **kwargs)
+
+    def order_fee_query(self, *args, **kwargs):
+        return self._context.order_fee_query(*args, **kwargs)
+
+    def get_acc_cash_flow(self, *args, **kwargs):
+        return self._context.get_acc_cash_flow(*args, **kwargs)
+
     def close(self):
         return self._context.close()
 

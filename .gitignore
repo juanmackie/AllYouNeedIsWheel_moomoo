@@ -39,6 +39,7 @@ node_modules/
 # Agent / tool caches
 .qwen/
 _tmp/
+.tmp-outcome-loop/
 
 # Connection config (may contain secrets)
 connection.json

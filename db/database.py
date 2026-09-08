@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from .earnings_repository import EarningsRepository
+from .fills_repository import CashFlowRepository, FillsRepository
 from .iv_repository import IVRepository
 from .option_chain_repository import OptionChainRepository
 from .portfolio_snapshots_repository import PortfolioSnapshotsRepository
@@ -28,6 +29,8 @@ DEFAULT_RETENTION_DAYS = {
     "refresh_attempts": ("created_at", 365),
     "portfolio_snapshots": ("captured_at", 365),
     "trade_events": ("timestamp", 365),
+    "option_fills": ("captured_at", 365),
+    "account_cash_flows": ("clearing_date", 365),
     "scan_ledger": ("timestamp", 365),
     "iv_history": ("timestamp", 45),
 }
@@ -52,6 +55,8 @@ class OptionsDatabase:
         self._iv = IVRepository(self.db_path)
         self._earnings = EarningsRepository(self.db_path)
         self._trade_events = TradeEventsRepository(self.db_path)
+        self._fills = FillsRepository(self.db_path)
+        self._cash_flows = CashFlowRepository(self.db_path)
         self._option_chains = OptionChainRepository(self.db_path)
         self._portfolio_snapshots = PortfolioSnapshotsRepository(self.db_path)
 
@@ -205,6 +210,35 @@ class OptionsDatabase:
             return _json.loads(row[0])
         except (TypeError, ValueError):
             return None
+
+    def get_run_snapshots(self, env=None, account_id=None, limit=500):
+        """Return published run snapshot dicts, newest first (outcome history).
+
+        Read-only view over ``run_metadata``; rows are immutable (publish-once)
+        so this never relabels historical recommendations.
+        """
+        import json as _json
+
+        sql = "SELECT snapshot_json FROM run_metadata"
+        params: list = []
+        if env:
+            sql += " WHERE env = ?"
+            params.append(env)
+            if account_id:
+                sql += " AND account_id = ?"
+                params.append(account_id)
+        sql += " ORDER BY published_at DESC, generated_at DESC LIMIT ?"
+        params.append(int(limit))
+        snapshots = []
+        with pooled_connection(self.db_path) as conn:
+            for (raw,) in conn.execute(sql, params).fetchall():
+                try:
+                    parsed = _json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(parsed, dict):
+                    snapshots.append(parsed)
+        return snapshots
 
     def save_refresh_attempt(self, attempt):
         """Persist a RefreshAttempt row."""
@@ -411,6 +445,50 @@ class OptionsDatabase:
         except Exception as exc:
             logger.error("Error persisting portfolio transition: %s", exc)
             return False
+
+    # --- Broker Fills + Account Cash Flows (outcome attribution) ---
+
+    def save_fills(self, fill_rows) -> int:
+        return self._fills.save_fills(fill_rows)
+
+    def get_fills(
+        self,
+        env=None,
+        account_id=None,
+        ticker=None,
+        contract_key=None,
+        security_type=None,
+        order_id=None,
+        start=None,
+        end=None,
+        limit=5000,
+    ):
+        return self._fills.get_fills(
+            env=env,
+            account_id=account_id,
+            ticker=ticker,
+            contract_key=contract_key,
+            security_type=security_type,
+            order_id=order_id,
+            start=start,
+            end=end,
+            limit=limit,
+        )
+
+    def get_latest_fill_captured_at(self, env=None, account_id=None):
+        return self._fills.get_latest_fill_captured_at(env=env, account_id=account_id)
+
+    def update_fill_fees(self, fee_by_fill_id) -> int:
+        return self._fills.update_fill_fees(fee_by_fill_id)
+
+    def get_order_ids_missing_fees(self, env=None, account_id=None):
+        return self._fills.get_order_ids_missing_fees(env=env, account_id=account_id)
+
+    def save_cash_flows(self, flow_rows) -> int:
+        return self._cash_flows.save_cash_flows(flow_rows)
+
+    def get_cash_flows(self, env=None, account_id=None, start=None, end=None, limit=5000):
+        return self._cash_flows.get_cash_flows(env=env, account_id=account_id, start=start, end=end, limit=limit)
 
     # --- Option Chain Snapshots ---
 

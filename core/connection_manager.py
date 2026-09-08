@@ -955,6 +955,110 @@ class MoomooConnection:
             logger.debug(traceback.format_exc())
             return None
 
+    def resolve_portfolio_identity(self):
+        """Return (env_label, opaque_account_id) for account-scoped persistence.
+
+        The opaque id is derived by ``core.wheel_runner.opaque_account_id`` —
+        the single place account identities are hashed for storage (C04).
+        Query-only; raises the same errors as the underlying resolution when
+        the configured REAL account is unavailable.
+        """
+        from core.wheel_runner import opaque_account_id
+
+        trd_env, account_id = self._resolve_portfolio_account()
+        return _env_name(trd_env), opaque_account_id(str(account_id or ""))
+
+    def get_history_deals(self, start="", end=""):
+        """Query historical fills (executions) for the resolved account.
+
+        Read-only deal query (``history_deal_list_query``). The SDK caps each
+        call to a 90-day window. Returns a list of raw row dicts, or None on
+        failure (``last_error`` carries the reason). No fees are included —
+        fees require ``get_order_fees`` keyed by order id.
+        """
+        if not self.is_connected() and not self.connect():
+            return None
+        try:
+            self._rate_limiter.check_rate_limit()
+            trd_env, account_id = self._resolve_portfolio_account()
+            ret, data = self.trd_ctx.history_deal_list_query(
+                start=start, end=end, trd_env=trd_env, acc_id=self._account_id_arg(account_id)
+            )
+            if ret != RET_OK:
+                self.last_error = self._format_trade_error("history deal query", data, trd_env, account_id)
+                logger.error(self.last_error)
+                return None
+            return [] if data.empty else data.to_dict("records")
+        except Exception as e:
+            self.last_error = f"Error querying history deals: {e}"
+            logger.error(self.last_error)
+            logger.debug(traceback.format_exc())
+            return None
+
+    def get_order_fees(self, order_ids):
+        """Query fees for specific order ids (``order_fee_query``).
+
+        Read-only; fees are ID-driven only (no date-range fee report).
+        Returns [{order_id, fee_amount, fee_details}], or None on failure.
+        """
+        ids = [str(oid) for oid in (order_ids or []) if str(oid or "").strip()]
+        if not ids:
+            return []
+        if not self.is_connected() and not self.connect():
+            return None
+        try:
+            self._rate_limiter.check_rate_limit()
+            trd_env, account_id = self._resolve_portfolio_account()
+            ret, data = self.trd_ctx.order_fee_query(
+                order_id_list=ids, trd_env=trd_env, acc_id=self._account_id_arg(account_id)
+            )
+            if ret != RET_OK:
+                self.last_error = self._format_trade_error("order fee query", data, trd_env, account_id)
+                logger.error(self.last_error)
+                return None
+            if data.empty:
+                return []
+            rows = data.to_dict("records")
+            for row in rows:
+                row["fee_amount"] = _safe_float(row.get("fee_amount"), 0.0)
+            return rows
+        except Exception as e:
+            self.last_error = f"Error querying order fees: {e}"
+            logger.error(self.last_error)
+            logger.debug(traceback.format_exc())
+            return None
+
+    def get_cash_flow(self, clearing_date):
+        """Query one clearing date's cash movements (``get_acc_cash_flow``).
+
+        Read-only. Securities accounts are keyed by a single ``clearing_date``
+        per call (date-range bounds are crypto-only in the SDK). Returns rows
+        [{cashflow_id, clearing_date, currency, cashflow_type,
+        cashflow_direction, cashflow_amount, cashflow_remark}], or None on
+        failure. ``cashflow_type`` is a raw server string passthrough.
+        """
+        clearing_date = str(clearing_date or "").strip()
+        if not clearing_date:
+            return []
+        if not self.is_connected() and not self.connect():
+            return None
+        try:
+            self._rate_limiter.check_rate_limit()
+            trd_env, account_id = self._resolve_portfolio_account()
+            ret, data = self.trd_ctx.get_acc_cash_flow(
+                clearing_date=clearing_date, trd_env=trd_env, acc_id=self._account_id_arg(account_id)
+            )
+            if ret != RET_OK:
+                self.last_error = self._format_trade_error("cash flow query", data, trd_env, account_id)
+                logger.error(self.last_error)
+                return None
+            return [] if data.empty else data.to_dict("records")
+        except Exception as e:
+            self.last_error = f"Error querying cash flow: {e}"
+            logger.error(self.last_error)
+            logger.debug(traceback.format_exc())
+            return None
+
     def get_user_security_group(self, group_type=None):
         try:
             self._rate_limiter.check_rate_limit()

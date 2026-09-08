@@ -34,6 +34,8 @@ There is no order, unlock, or trading-password endpoint.
 ### Options / research
 - `GET /api/options/otm`, `/api/options/expirations`, `/api/options/stock-price`,
   `/api/options/cash-status`, `/api/options/analytics/lifecycle` — broker-only research views. Shortlist cards are served only by `/api/run`; there is no parallel recommendation cache endpoint.
+- `GET /api/options/analytics/outcomes` — broker-verified outcome journal (local SQLite; no OpenD gate). Joins published recommendation signals to ingested option fills: quoted vs. filled credit, slippage, net-of-fee outcomes (unknown fees ⇒ unknown outcome), capital-days, owner $/day, and groups by preset / DTE bucket / ticker / event tier (display-only). Filter params: `ticker`, `preset`, `event_tier`, `dte_bucket`, `limit`.
+- `POST /api/options/analytics/outcomes/ingest?days=90&cash_flow_days=7` — query-only pull of broker fills, order fees, and cash movements from OpenD (OpenD-gated, 6/min, `days` capped at the SDK 90-day window). Ingestion only ever reads; nothing is placed, modified, or cancelled.
 
 ### Portfolio / positions
 - `GET /api/portfolio/` — portfolio summary (broker truth)

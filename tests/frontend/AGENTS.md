@@ -22,6 +22,7 @@
 - Prefer focused module tests over broad brittle DOM snapshots.
 - Add regression tests for any bug that could hide, mis-rank, or mislabel a signal.
 - `dashboard-safety.test.js` verifies that API-fed content is rendered through `escapeHtml` instead of raw `innerHTML` assignment.
+- `outcome-panel.test.js` covers the outcome panel rendering (totals/groups/records, empty + error states, XSS escaping of contract/strategy/group text, expandable supporting-fills drill-down, and the read-only ingest trigger).
 
 ## Verification
 

@@ -1,0 +1,77 @@
+<section class="app-section outcome-section" id="outcome-panel">
+    <div class="app-section__header">
+        <div>
+            <span class="app-section__eyebrow">Outcomes</span>
+            <h2>Broker-verified outcomes</h2>
+            <p>Quoted vs filled credit, net of fees, capital deployed per day — reconciled against your own OpenD fill history. Read-only; never affects ranking.</p>
+        </div>
+        <div class="app-section__actions">
+            <button id="outcome-ingest-btn" class="ft-btn ft-btn--ghost" type="button"
+                    title="Pull option fill + fee history from OpenD (query-only) into the outcome log, then refresh.">
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Pull broker fills
+            </button>
+        </div>
+    </div>
+
+    <div id="outcome-state"></div>
+
+    <div id="outcome-totals" class="outcome-totals-grid" role="group" aria-label="Outcome totals"></div>
+
+    <div id="outcome-groups">
+        <div class="outcome-group">
+            <h3 class="outcome-group__title">By preset</h3>
+            <div class="ft-table-wrap"><table class="ft-table">
+                <thead><tr><th>Preset</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <tbody id="outcome-group-preset"></tbody>
+            </table></div>
+        </div>
+        <div class="outcome-group">
+            <h3 class="outcome-group__title">By DTE bucket</h3>
+            <div class="ft-table-wrap"><table class="ft-table">
+                <thead><tr><th>Bucket</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <tbody id="outcome-group-dte"></tbody>
+            </table></div>
+        </div>
+        <div class="outcome-group">
+            <h3 class="outcome-group__title">By ticker</h3>
+            <div class="ft-table-wrap"><table class="ft-table">
+                <thead><tr><th>Ticker</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <tbody id="outcome-group-ticker"></tbody>
+            </table></div>
+        </div>
+        <div class="outcome-group">
+            <h3 class="outcome-group__title">By event tier</h3>
+            <div class="ft-table-wrap"><table class="ft-table">
+                <thead><tr><th>Tier</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <tbody id="outcome-group-event"></tbody>
+            </table></div>
+        </div>
+    </div>
+
+    <div class="outcome-drill">
+        <div class="outcome-drill__header">
+            <h3 class="outcome-drill__title">Contracts <span id="outcome-records-count" class="outcome-drill__count"></span></h3>
+            <p class="outcome-drill__hint">Click a row to view the supporting fill transactions.</p>
+        </div>
+        <div class="ft-table-wrap">
+            <table class="ft-table">
+                <thead>
+                    <tr>
+                        <th>Contract</th>
+                        <th>Strategy</th>
+                        <th>Status</th>
+                        <th class="ft-th-right">Quoted</th>
+                        <th class="ft-th-right">Filled</th>
+                        <th class="ft-th-right">Slippage</th>
+                        <th class="ft-th-right">Net P&amp;L</th>
+                        <th class="ft-th-right">Capital-days</th>
+                        <th class="ft-th-right">$/day</th>
+                        <th class="ft-th-right">Fills</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="outcome-records"></tbody>
+            </table>
+        </div>
+    </div>
+</section>

@@ -4,7 +4,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def create_tables(conn):
@@ -208,6 +208,72 @@ def create_tables(conn):
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_captured_at
         ON portfolio_snapshots(captured_at)
+    """)
+
+    # ── Broker option/stock fills (schema v10, outcome attribution) ────────
+    # Verified executions from OpenD deal queries. fill_id (broker deal id)
+    # is the idempotency key; env/account_id scope rows to one account (C04).
+    # fees is NULL until the order-level fee query resolves it — unknown fees
+    # are distinct from zero fees.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS option_fills (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            fill_id      TEXT NOT NULL UNIQUE,
+            order_id     TEXT NOT NULL DEFAULT '',
+            run_id       TEXT NOT NULL DEFAULT '',
+            captured_at  TEXT NOT NULL,
+            ingested_at  TEXT NOT NULL,
+            env          TEXT NOT NULL DEFAULT '',
+            account_id   TEXT NOT NULL DEFAULT '',
+            ticker       TEXT NOT NULL,
+            security_type TEXT NOT NULL DEFAULT '',
+            contract_key TEXT NOT NULL DEFAULT '',
+            option_type  TEXT NOT NULL DEFAULT '',
+            strike       REAL,
+            expiration   TEXT NOT NULL DEFAULT '',
+            side         TEXT NOT NULL DEFAULT '',
+            qty          REAL NOT NULL DEFAULT 0,
+            price        REAL NOT NULL DEFAULT 0,
+            fees         REAL,
+            raw_json     TEXT NOT NULL DEFAULT '{}',
+            created_at   TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_fills_account_time
+        ON option_fills(env, account_id, captured_at)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_fills_contract_time
+        ON option_fills(ticker, contract_key, captured_at)
+    """)
+
+    # ── Account cash flows (schema v10) — deposits/withdrawals etc. ────────
+    # Persisted separately so trading-profit attribution can exclude capital
+    # movements by construction (they never enter the P&L arithmetic).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS account_cash_flows (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            cashflow_id    TEXT NOT NULL UNIQUE,
+            clearing_date  TEXT NOT NULL,
+            settlement_date TEXT NOT NULL DEFAULT '',
+            currency       TEXT NOT NULL DEFAULT '',
+            direction      TEXT NOT NULL DEFAULT '',
+            flow_type      TEXT NOT NULL DEFAULT '',
+            amount         REAL NOT NULL DEFAULT 0,
+            remark         TEXT NOT NULL DEFAULT '',
+            env            TEXT NOT NULL DEFAULT '',
+            account_id     TEXT NOT NULL DEFAULT '',
+            raw_json       TEXT NOT NULL DEFAULT '{}',
+            created_at     TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_account_cash_flows_account_date
+        ON account_cash_flows(env, account_id, clearing_date)
     """)
 
 
@@ -456,6 +522,64 @@ def migrate_database(db_path):
                             cursor.execute("ALTER TABLE trade_events ADD COLUMN %s %s" % (col, col_type))
                     logger.info("Migration: Added env/account_id/provenance to trade_events")
                 cursor.execute("PRAGMA user_version = 9")
+                conn.commit()
+
+            if current_version < 10:
+                # Broker-verified outcome measurement: verified fills keyed by
+                # broker deal id (idempotent re-ingest) and account-scoped cash
+                # flows. Additive only; no existing table is altered.
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS option_fills (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fill_id      TEXT NOT NULL UNIQUE,
+                        order_id     TEXT NOT NULL DEFAULT '',
+                        run_id       TEXT NOT NULL DEFAULT '',
+                        captured_at  TEXT NOT NULL,
+                        ingested_at  TEXT NOT NULL,
+                        env          TEXT NOT NULL DEFAULT '',
+                        account_id   TEXT NOT NULL DEFAULT '',
+                        ticker       TEXT NOT NULL,
+                        security_type TEXT NOT NULL DEFAULT '',
+                        contract_key TEXT NOT NULL DEFAULT '',
+                        option_type  TEXT NOT NULL DEFAULT '',
+                        strike       REAL,
+                        expiration   TEXT NOT NULL DEFAULT '',
+                        side         TEXT NOT NULL DEFAULT '',
+                        qty          REAL NOT NULL DEFAULT 0,
+                        price        REAL NOT NULL DEFAULT 0,
+                        fees         REAL,
+                        raw_json     TEXT NOT NULL DEFAULT '{}',
+                        created_at   TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_option_fills_account_time ON option_fills(env, account_id, captured_at)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_option_fills_contract_time ON option_fills(ticker, contract_key, captured_at)"
+                )
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS account_cash_flows (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        cashflow_id    TEXT NOT NULL UNIQUE,
+                        clearing_date  TEXT NOT NULL,
+                        settlement_date TEXT NOT NULL DEFAULT '',
+                        currency       TEXT NOT NULL DEFAULT '',
+                        direction      TEXT NOT NULL DEFAULT '',
+                        flow_type      TEXT NOT NULL DEFAULT '',
+                        amount         REAL NOT NULL DEFAULT 0,
+                        remark         TEXT NOT NULL DEFAULT '',
+                        env            TEXT NOT NULL DEFAULT '',
+                        account_id     TEXT NOT NULL DEFAULT '',
+                        raw_json       TEXT NOT NULL DEFAULT '{}',
+                        created_at     TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_account_cash_flows_account_date ON account_cash_flows(env, account_id, clearing_date)"
+                )
+                logger.info("Migration: Created option_fills and account_cash_flows tables for outcome attribution")
+                cursor.execute("PRAGMA user_version = 10")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

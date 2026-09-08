@@ -15,7 +15,7 @@
 
 ## Ownership
 
-- `dashboard/` owns all dashboard widgets: run strip (`run-strip.js`, `api-run.js`), options table (`options-table-*.js`), top recommendations (`top-recommendations.js`), position monitor + account panels (`account.js`, `weekly-income.js`, `dashboard-cash.js`), growth panel (`growth-panel.js`), and watchlist panel (`watchlist-panel.js`).
+- `dashboard/` owns all dashboard widgets: run strip (`run-strip.js`, `api-run.js`), options table (`options-table-*.js`), top recommendations (`top-recommendations.js`), position monitor + account panels (`account.js`, `weekly-income.js`, `dashboard-cash.js`), growth & outcome panels (`growth-panel.js`, `outcome-panel.js`), and watchlist panel (`watchlist-panel.js`).
 - `utils/` owns shared formatting (`formatters.js` exports `escapeHtml`), alerts, sparklines, and state helpers.
 
 ## Local Contracts
@@ -24,6 +24,7 @@
 - Keep calculations that affect displayed signal decisions aligned with backend services and tests.
 - Prefer service-vetted executable-bid fields (`annualized_return`, `capital_velocity_per_day`, `bid_premium_per_contract`, `premium_velocity_per_day`) for signal display. Midpoint is a separately labelled, non-guaranteed limit target; do not recompute backend ranking in the browser.
 - Preserve loading, empty, error, and stale states for networked widgets.
+- Outcome panel reads `/api/options/analytics/outcomes` (local SQLite, no OpenD gate) and renders it through `escapeHtml`; the only broker action is the explicit `Pull broker fills` button (query-only `POST /api/options/analytics/outcomes/ingest`).
 - Empty states for signal panels should surface the dominant blockers or scan diagnostics when the payload provides them.
 - Do not add hidden trading execution calls from UI controls.
 

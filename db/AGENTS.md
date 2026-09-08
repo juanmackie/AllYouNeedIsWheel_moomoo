@@ -8,10 +8,12 @@
 
 ## Ownership
 
-- `schema.py` owns `SCHEMA_VERSION`, table creation, and migrations.
+- `schema.py` owns `SCHEMA_VERSION`, table creation, and migrations. Schema v10 added `option_fills` and `account_cash_flows` (additive, idempotent).
 - `database.py` owns the higher-level database facade.
 - Repository modules own focused persistence behavior for their table/domain.
 - `portfolio_snapshots_repository.py` owns one-snapshot-per-run equity history (`portfolio_snapshots`, schema v7); rows join to `run_metadata` via `run_id` and feed `/api/portfolio/history` plus position-diff trade-event inference.
+- `fills_repository.py` owns broker-verified outcome evidence (`option_fills`, `account_cash_flows`, schema v10): fills are keyed by the broker deal id (`fill_id UNIQUE`) for idempotent re-ingest, cash flows by `cashflow_id`; all rows are scoped by `env`/`account_id` via the shared `_identity_where` convention. `fees` is NULL until the order-level fee query resolves it — unknown fees are distinct from zero fees.
+- `database.py::get_run_snapshots` is the read-only outcome-history view over `run_metadata` (newest first, identity-scoped); run snapshots are publish-once immutable, so historical recommendations are never relabeled.
 - `sqlite_pool.py` owns pooled connection behavior.
 
 ## Local Contracts
@@ -31,6 +33,7 @@
 ## Verification
 
 - Run `pytest tests/test_database.py` for schema, migration, or repository changes.
+- For the fills/cash-flow repositories, run `pytest tests/test_fills_repository.py`.
 - Run feature tests that depend on the changed repository.
 - For scan ledger persistence, run `pytest tests/test_scan_ledger.py`.
 

@@ -65,7 +65,15 @@ npm test -- tests/frontend/top-recommendations.test.js
    before/at the US open; verify the live quote before placing it in Moomoo.
 8. Confirm true available cash minus reserved short-put collateral controls CSP
    affordability; margin buying power is display-only.
-9. Confirm no UI or API path places, unlocks, cancels, or modifies an order.
+9. Confirm the Outcomes panel (below the growth panel) renders from local SQLite
+   without an OpenD gate: totals (sample size, coverage %, measured/unknown/pending
+   counts, net outcome, capital-days, owner $/day, avg slippage), the four
+   per-preset/DTE/ticker/event-tier summary grids, and the contract drill-down where
+   each quoted-vs-filled row expands to its supporting fill transactions. `Pull
+   broker fills` is the only write path and is query-only (rate-limited, `502` on
+   broker failure); with no fills the panel shows empty states, never fabricated
+   outcomes.
+10. Confirm no UI or API path places, unlocks, cancels, or modifies an order.
 
 If OpenD is unavailable, record the blocked manual-smoke result rather than
 substituting simulated production portfolio or quote data.

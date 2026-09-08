@@ -51,6 +51,9 @@ QUERY_SDK_MEMBERS: tuple[str, ...] = (
     "get_option_chain",
     "accinfo_query",
     "position_list_query",
+    "history_deal_list_query",
+    "order_fee_query",
+    "get_acc_cash_flow",
     "get_user_security_group",
     "get_user_security",
     "query_subscription",
@@ -84,6 +87,12 @@ class BrokerQuerySurface(Protocol):
     ) -> Any: ...
 
     def get_portfolio(self) -> dict[str, Any] | None: ...
+
+    def get_history_deals(self, start="", end="") -> list[dict[str, Any]] | None: ...
+
+    def get_order_fees(self, order_ids) -> list[dict[str, Any]] | None: ...
+
+    def get_cash_flow(self, clearing_date: str) -> list[dict[str, Any]] | None: ...
 
     def get_user_security_group(self, group_type=None) -> Any: ...
 

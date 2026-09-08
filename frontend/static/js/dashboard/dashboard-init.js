@@ -12,6 +12,7 @@ import { initWatchlistPanel } from './watchlist-panel.js';
 import { initRunStrip } from './run-strip.js';
 import { startRunWatcher, onRunAdopted } from './run-notifier.js';
 import { renderGrowthPanel } from './growth-panel.js';
+import { renderOutcomePanel } from './outcome-panel.js';
 import { renderWeeklyIncome } from './weekly-income.js';
 
 let signalPanelsInitialized = false;
@@ -97,6 +98,7 @@ export async function initializeDashboard() {
                 updateCashReserveStatus();
                 updateIdleCashPanel();
                 renderGrowthPanel();
+                renderOutcomePanel();
                 renderWeeklyIncome();
             } catch (error) { console.error('C10 adopt secondary error:', error); }
         });
@@ -131,6 +133,14 @@ async function initializeSignalPanels() {
         // template emission (no template emits one). No extra click binding here.
     }).catch(err => {
         console.error('Failed to load growth panel:', err);
+    });
+
+    import('./outcome-panel.js').then(mod => {
+        mod.renderOutcomePanel();
+        // Same C10 adoption path as the growth panel — the outcome view
+        // re-renders on a newly adopted run; no template emits a refresh button.
+    }).catch(err => {
+        console.error('Failed to load outcome panel:', err);
     });
 
     import('./options-table.js').then(mod => {

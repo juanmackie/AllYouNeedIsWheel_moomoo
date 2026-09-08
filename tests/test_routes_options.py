@@ -881,6 +881,105 @@ class TestCashStatusCSPFields(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Analytics: outcomes (broker-verified)
+# ---------------------------------------------------------------------------
+
+
+class TestOutcomeAnalytics(unittest.TestCase):
+    """GET/POST /api/options/analytics/outcomes*"""
+
+    def setUp(self):
+        _RATE_LIMIT_BUCKETS.clear()
+
+    @patch("api.routes.options.get_outcome_service")
+    @patch("api.services.config.get_current_identity")
+    def test_returns_outcome_summary(self, mock_identity, mock_get_svc):
+        """Should return the outcome summary payload from the service."""
+        mock_identity.return_value = ("REAL", "opaque-1")
+        mock_service = MagicMock()
+        mock_service.get_outcome_summary.return_value = {
+            "totals": {"sample_size": 1, "coverage_pct": 100.0, "unknown_count": 0},
+            "groups": {},
+            "outcomes": [],
+            "count": 0,
+        }
+        mock_get_svc.return_value = mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get("/api/options/analytics/outcomes")
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data["success"])
+        self.assertIn("totals", data)
+        mock_service.get_outcome_summary.assert_called_once()
+        kwargs = mock_service.get_outcome_summary.call_args.kwargs
+        self.assertEqual(kwargs["env"], "REAL")
+        self.assertEqual(kwargs["account_id"], "opaque-1")
+
+    @patch("api.routes.options.get_outcome_service")
+    @patch("api.services.config.get_current_identity")
+    def test_forwards_filters_and_validates_limit(self, mock_identity, mock_get_svc):
+        """Should forward drill-down filters and reject non-integer limits."""
+        mock_identity.return_value = ("SIMULATE", "")
+        mock_service = MagicMock()
+        mock_service.get_outcome_summary.return_value = {"totals": {}, "outcomes": [], "count": 0}
+        mock_get_svc.return_value = mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get(
+                "/api/options/analytics/outcomes",
+                query_string={"ticker": "AAPL", "preset": "balanced", "event_tier": "earnings_week", "dte_bucket": "0-7", "limit": "25"},
+            )
+            self.assertEqual(resp.status_code, 200)
+            kwargs = mock_service.get_outcome_summary.call_args.kwargs
+            self.assertEqual(kwargs["ticker"], "AAPL")
+            self.assertEqual(kwargs["snapshot_limit"], 25)
+
+            resp = client.get("/api/options/analytics/outcomes", query_string={"limit": "abc"})
+            self.assertEqual(resp.status_code, 400)
+
+    @patch("api.routes.options.get_outcome_service")
+    @patch("api.routes.utils.probe_opend_status")
+    def test_ingest_gates_on_opend(self, mock_probe, mock_get_svc):
+        """POST ingest should refuse without OpenD and pass days clamps."""
+        mock_probe.return_value = {"status": "unreachable"}
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.post("/api/options/analytics/outcomes/ingest")
+        self.assertEqual(resp.status_code, 503)
+
+        mock_probe.return_value = {"status": "connected"}
+        mock_service = MagicMock()
+        mock_service.ingest_broker_evidence.return_value = {"ok": True, "fills": {"ok": True}, "cash_flows": {"ok": True, "ingested": 0}}
+        mock_get_svc.return_value = mock_service
+        with app.test_client() as client:
+            resp = client.post("/api/options/analytics/outcomes/ingest?days=500&cash_flow_days=99")
+            data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data["success"])
+        self.assertEqual(mock_service.ingest_broker_evidence.call_args.kwargs["days"], 90)
+        self.assertEqual(mock_service.ingest_broker_evidence.call_args.kwargs["cash_flow_days"], 30)
+
+    @patch("api.routes.options.get_outcome_service")
+    @patch("api.routes.utils.probe_opend_status")
+    def test_ingest_reports_broker_failure(self, mock_probe, mock_get_svc):
+        """POST ingest should surface broker failure as 502."""
+        mock_probe.return_value = {"status": "connected"}
+        mock_service = MagicMock()
+        mock_service.ingest_broker_evidence.return_value = {"ok": False, "error": "history deal query failed"}
+        mock_get_svc.return_value = mock_service
+
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.post("/api/options/analytics/outcomes/ingest")
+        self.assertEqual(resp.status_code, 502)
+
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 

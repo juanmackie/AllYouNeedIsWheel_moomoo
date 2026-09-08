@@ -14,7 +14,9 @@ manual copy-to-ticket suggestions for your broker UI.
 1. Start OpenD and log in, then launch the app.
 2. Open the dashboard: operational strip (env, read-only, market state, run
    status, coverage, quote freshness) → portfolio summary → growth panel
-   (path to 5x: equity curve, pace, ETA) → watchlist union → top-three CSP
+   (path to 5x: equity curve, pace, ETA) → outcomes panel (broker-verified
+   signal results: quoted vs. filled credit, slippage, net-of-fee outcomes,
+   owner $/day) → watchlist union → top-three CSP
    picks with contract sizing and entry-timing advice → position monitor
    (open short options with exit-playbook verdicts) → covered-call/roll
    actions → diagnostics.

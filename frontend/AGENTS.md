@@ -10,7 +10,7 @@
 
 - `templates/` owns server-rendered page and partial structure.
 - `static/js/` owns browser behavior, API calls, state handling, rendering helpers, and UI events.
-- Growth cockpit UI: `templates/partials/dashboard/growth_panel.html` + `static/js/dashboard/growth-panel.js` (equity curve, pace, ETA, journal stats from `/api/portfolio/history` and `/api/options/analytics/lifecycle`); `templates/partials/dashboard/position_monitor.html` + the position table in `dashboard-init.js` (open short options with exit-playbook verdicts, live P&L, delta, earnings, roll pressure).
+- Growth cockpit UI: `templates/partials/dashboard/growth_panel.html` + `static/js/dashboard/growth-panel.js` (equity curve, pace, ETA, journal stats from `/api/portfolio/history` and `/api/options/analytics/lifecycle`); `templates/partials/dashboard/outcome_panel.html` + `static/js/dashboard/outcome-panel.js` (broker-verified outcomes from `/api/options/analytics/outcomes`: quoted-vs-filled credit, net outcome after fees, capital-days, per-preset/DTE/ticker/event-tier summaries with sample size/coverage/unknown counts, and expandable supporting-fill drill-down; read-only ingest trigger via `POST /api/options/analytics/outcomes/ingest`); `templates/partials/dashboard/position_monitor.html` + the position table in `dashboard-init.js` (open short options with exit-playbook verdicts, live P&L, delta, earnings, roll pressure).
 - `static/css/` owns visual styling and responsive layout.
 - `static/img/` owns static visual assets.
 
@@ -28,7 +28,7 @@
 - Keep dashboard JS modular by feature (`dashboard/`, `utils/`).
 - Use existing formatting/state helpers before adding new browser utilities.
 - Maintain responsive behavior for tables, cards, modals, and navigation.
-- Use `escapeHtml` from `utils/formatters.js` for any API-fed content injected into the DOM to prevent XSS. Dashboard modules that inject API-fed content (e.g. `dashboard-cash.js`, `weekly-income.js`, `growth-panel.js`, `account.js`, `state-model.js`, `top-recommendations.js`) must use it on text-bearing inserts.
+- Use `escapeHtml` from `utils/formatters.js` for any API-fed content injected into the DOM to prevent XSS. Dashboard modules that inject API-fed content (e.g. `dashboard-cash.js`, `weekly-income.js`, `growth-panel.js`, `outcome-panel.js`, `account.js`, `state-model.js`, `top-recommendations.js`) must use it on text-bearing inserts.
 - Break cross-feature import cycles with lazy dynamic accessors (e.g. `getOptionsTableActions`) rather than direct static imports between feature modules.
 
 ## Verification

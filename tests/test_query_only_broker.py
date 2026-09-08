@@ -86,6 +86,25 @@ def _build_fake_contexts():
         "get_acc_list": lambda: (RET_OK, acc_df),
         "accinfo_query": lambda **kw: (RET_OK, acc_info_df),
         "position_list_query": lambda **kw: (RET_OK, _empty_df()),
+        "history_deal_list_query": lambda **kw: (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": "US.AAPL260918P00150000",
+                        "deal_id": "D1",
+                        "order_id": "O1",
+                        "qty": 1,
+                        "price": 1.2,
+                        "trd_side": "SELL",
+                        "create_time": "2026-08-01 14:30:00",
+                        "status": "OK",
+                    }
+                ]
+            ),
+        ),
+        "order_fee_query": lambda **kw: (RET_OK, pd.DataFrame([{"order_id": "O1", "fee_amount": 1.5, "fee_details": []}])),
+        "get_acc_cash_flow": lambda **kw: (RET_OK, _empty_df()),
         "close": lambda: None,
     }
     return GuardedFakeContext("quote_ctx", quote_methods), GuardedFakeContext("trd_ctx", trade_methods)
@@ -161,6 +180,20 @@ class TestQueryOnlySurface(unittest.TestCase):
         self.assertIsNotNone(portfolio)
         self.assertEqual(portfolio["account_id"], "ACC1")
         conn.get_user_security_group()
+
+        # Deal/fee/cash-flow queries are part of the query surface too.
+        deals = conn.get_history_deals(start="2026-08-01")
+        self.assertIsNotNone(deals)
+        self.assertEqual(deals[0]["deal_id"], "D1")
+        fees = conn.get_order_fees(["O1"])
+        self.assertIsNotNone(fees)
+        self.assertEqual(fees[0]["fee_amount"], 1.5)
+        self.assertEqual(conn.get_cash_flow("2026-08-01"), [])
+        env_label, opaque = conn.resolve_portfolio_identity()
+        self.assertEqual(env_label, "SIMULATE")
+        # Opaque account id: 12-char hash, never the raw broker account id.
+        self.assertEqual(len(opaque), 12)
+        self.assertNotIn("ACC1", opaque)
 
         forbidden_touched = [
             name for name in FORBIDDEN_SDK_MEMBERS if name in self.quote_fake.accessed or name in self.trd_fake.accessed

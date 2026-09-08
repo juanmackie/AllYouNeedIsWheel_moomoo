@@ -18,6 +18,7 @@
 - Keep source-policy metadata visible for endpoints that combine Moomoo, watchlist, or optional third-party data.
 - Do not add routes that imply autonomous order execution.
 - `/api/run` and `/api/run/refresh` are the sole dashboard shortlist workflow. `GET /api/run` returns the immutable last snapshot plus a read-time effective `tradeable`/`stale` view; refresh is serialized and never overwrites the last good snapshot.
+- `GET /api/options/analytics/outcomes` serves broker-verified outcome summaries (totals + groups by preset/DTE bucket/ticker/event tier, each with sample size, coverage %, unknown count, and per-outcome fill drill-down) from local SQLite only — it never gates on live OpenD. `POST /api/options/analytics/outcomes/ingest` is the only broker-backed endpoint of the pair: it gates on the shared OpenD probe, rate-limits tightly (6/min; days ≤ 90 per the SDK history window), and only triggers query-only ingestion.
 
 ## Work Guidance
 

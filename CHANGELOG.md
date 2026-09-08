@@ -1,3 +1,20 @@
+## 2026-09-08 — Broker-verified outcomes panel (schema v10)
+
+- New **Outcomes** panel in the dashboard journal area (read-only): joins published
+  recommendation signals to ingested broker option fills and shows quoted vs. filled
+  credit, slippage, net-of-fee outcomes, capital-days, and owner $/day, grouped by
+  preset, DTE bucket, ticker, and event tier (display-only — ordering untouched).
+- **Pull broker fills** button performs a query-only OpenD pull (`POST
+  /api/options/analytics/outcomes/ingest`, OpenD-gated, 6/min) of fills, order fees,
+  and cash movements; `GET /api/options/analytics/outcomes` serves the journal from
+  local SQLite with no OpenD gate.
+- Evidence integrity rules: unknown fees ⇒ unknown outcome (never zero); signals
+  without fills stay pending; fills without a stored signal are surfaced as unmatched,
+  never given a fabricated quote; deposits/withdrawals are persisted separately and
+  never enter trading-profit math.
+- New schema v10 tables `option_fills` and `account_cash_flows` (additive, idempotent
+  migration; 365-day retention).
+
 ## 2026-09-07 — Capital-return-first ranking (owner decision)
 
 - Ranking policy changed to capital-return-first across the combined shortlist,
