@@ -30,7 +30,7 @@ def _signal(ticker="AAPL", expiration="20260220", option_type="PUT", strike=70.0
         "expiration": expiration,
         "strike": strike,
         "dte": 30,
-        "bid_premium_per_contract": 1.10,
+        "bid_premium_per_contract": 110.0,  # dollars-per-contract (quote · 100)
         "event_tier": "earnings_week",
         "quality_tier": "A",
         "stock_price": 80.0,
@@ -40,7 +40,19 @@ def _signal(ticker="AAPL", expiration="20260220", option_type="PUT", strike=70.0
     return base
 
 
-def _fill(ticker="AAPL", expiration="20260220", option_type="PUT", strike=70.0, side="SELL", qty=1, price=1.05, fees=0.0, captured_at="2026-01-05T14:30:00", **extra):
+def _fill(
+    ticker="AAPL",
+    expiration="20260220",
+    option_type="PUT",
+    strike=70.0,
+    side="SELL",
+    qty=1,
+    price=1.05,
+    fees=0.0,
+    captured_at="2026-01-05T14:30:00",
+    **extra,
+):
+    """Broker fill fixture: ``price`` is PER-SHARE (e.g. 1.05 → $105/contract)."""
     row = {
         "fill_id": f"deal-{side}-{captured_at}-{price}",
         "order_id": "ord-1",
@@ -73,7 +85,9 @@ NOW = datetime(2026, 2, 20, 15, 0, 0)
 
 class TestIdentities(unittest.TestCase):
     def test_signal_identity_normalizes_strike_and_expiration(self):
-        self.assertEqual(signal_identity(_signal(strike=70, expiration="2026-02-20")), ("AAPL", "20260220", "PUT", 70.0))
+        self.assertEqual(
+            signal_identity(_signal(strike=70, expiration="2026-02-20")), ("AAPL", "20260220", "PUT", 70.0)
+        )
 
     def test_signal_identity_rejects_incomplete(self):
         self.assertIsNone(signal_identity({"ticker": "AAPL"}))
@@ -85,9 +99,15 @@ class TestIdentities(unittest.TestCase):
         self.assertEqual(fill_identity(_fill()), ("AAPL", "20260220", "PUT", 70.0))
 
     def test_quoted_credit_fallback_chain(self):
-        self.assertEqual(quoted_credit_per_contract(_signal()), 1.10)
-        self.assertEqual(quoted_credit_per_contract(_signal(bid_premium_per_contract=None, limit_target_per_contract=0.95)), 0.95)
-        self.assertIsNone(quoted_credit_per_contract(_signal(bid_premium_per_contract=None, limit_target_per_contract=None, premium_per_contract=None)))
+        self.assertEqual(quoted_credit_per_contract(_signal()), 110.0)
+        self.assertEqual(
+            quoted_credit_per_contract(_signal(bid_premium_per_contract=None, limit_target_per_contract=95.0)), 95.0
+        )
+        self.assertIsNone(
+            quoted_credit_per_contract(
+                _signal(bid_premium_per_contract=None, limit_target_per_contract=None, premium_per_contract=None)
+            )
+        )
 
 
 class TestDteBucket(unittest.TestCase):
@@ -105,23 +125,67 @@ class TestBuildOutcomeRecords(unittest.TestCase):
         records = build_outcome_records(
             [_snapshot([_signal()])],
             [
-                _fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00"),
-                _fill(side="BUY", price=0.30, fees=1.0, captured_at="2026-02-05T14:30:00"),
+                _fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00"),  # $105/contract
+                _fill(side="BUY", price=0.30, fees=1.0, captured_at="2026-02-05T14:30:00"),  # $30/contract buyback
             ],
             now=NOW,
         )
         self.assertEqual(len(records), 1)
         rec = records[0]
         self.assertEqual(rec["outcome_status"], "measured")
-        # net = (1.05 - 0.30) * 100 - 2.0 fees
+        # net = (105 - 30) - 2.0 fees, realized option-leg dollars.
         self.assertAlmostEqual(rec["net_pnl"], 73.0)
-        self.assertAlmostEqual(rec["filled_credit_per_contract"], 1.05)
-        self.assertAlmostEqual(rec["quoted_credit_per_contract"], 1.10)
-        self.assertAlmostEqual(rec["slippage_per_contract"], -0.05)
-        self.assertAlmostEqual(rec["slippage_dollars"], -5.0)
+        self.assertEqual(rec["pnl_scope"], "option_leg")
+        # Broker fill prices are per-share; credits are dollars-per-contract.
+        self.assertAlmostEqual(rec["filled_credit_per_contract"], 105.0)
+        self.assertAlmostEqual(rec["quoted_credit_per_contract"], 110.0)
+        self.assertAlmostEqual(rec["slippage_per_contract"], -5.0)
+        self.assertAlmostEqual(rec["slippage_dollars"], -500.0)
         self.assertAlmostEqual(rec["fees_total"], 2.0)
+        self.assertAlmostEqual(rec["gross_premium_pnl"], 75.0)
+        self.assertAlmostEqual(rec["unrealized_premium_dollars"], 0.0)
+        self.assertEqual(rec["attribution"], "inferred")
         self.assertFalse(rec["open"])
         self.assertEqual(len(rec["fills"]), 2)
+        self.assertAlmostEqual(rec["fills"][0]["price_per_contract"], 105.0)
+
+    def test_equal_quote_and_fill_credit_zero_slippage(self):
+        """A $200 quoted contract credit filled at $2/share is $200, NEVER a
+        -$198 slippage — units are converted once (per-share → per-contract)."""
+        records = build_outcome_records(
+            [_snapshot([_signal(bid_premium_per_contract=200.0)])],
+            [
+                _fill(side="SELL", price=2.00, fees=1.0, captured_at="2026-01-05T14:30:00"),
+                _fill(side="BUY", price=1.50, fees=1.0, captured_at="2026-02-05T14:30:00"),
+            ],
+            now=NOW,
+        )
+        rec = records[0]
+        self.assertAlmostEqual(rec["filled_credit_per_contract"], 200.0)
+        self.assertAlmostEqual(rec["quoted_credit_per_contract"], 200.0)
+        self.assertAlmostEqual(rec["slippage_per_contract"], 0.0)
+        self.assertAlmostEqual(rec["slippage_dollars"], 0.0)
+        # Realized: (200 - 150) - 2 fees.
+        self.assertAlmostEqual(rec["net_pnl"], 48.0)
+        self.assertEqual(rec["outcome_status"], "measured")
+
+    def test_open_premium_is_unrealized_context_not_realized_profit(self):
+        """An unclosed short option must NOT report its collected premium as
+        realized net profit: net_pnl stays None; the premium is unrealized
+        context shown separately."""
+        records = build_outcome_records(
+            [_snapshot([_signal()])],
+            [_fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=NOW,
+        )
+        rec = records[0]
+        self.assertEqual(rec["outcome_status"], "open")
+        self.assertIsNone(rec["net_pnl"])
+        self.assertIsNone(rec["gross_premium_pnl"])
+        self.assertIsNone(rec["owner_efficiency"])
+        self.assertTrue(rec["open"])
+        self.assertAlmostEqual(rec["collected_premium_dollars"], 105.0)
+        self.assertAlmostEqual(rec["unrealized_premium_dollars"], 105.0)
 
     def test_unknown_fees_never_become_zero(self):
         records = build_outcome_records(
@@ -133,7 +197,10 @@ class TestBuildOutcomeRecords(unittest.TestCase):
         self.assertEqual(rec["outcome_status"], "unknown")
         self.assertIsNone(rec["net_pnl"])
         self.assertTrue(rec["fees_known"] is False)
-        self.assertAlmostEqual(rec["gross_premium_pnl"], 105.0)
+        # Nothing realized (fully open + unknown fees) ⇒ no gross P&L at all;
+        # the collected credit is unrealized context only.
+        self.assertIsNone(rec["gross_premium_pnl"])
+        self.assertAlmostEqual(rec["unrealized_premium_dollars"], 105.0)
 
     def test_pending_when_no_fills(self):
         records = build_outcome_records([_snapshot([_signal()])], [], now=NOW)
@@ -148,15 +215,27 @@ class TestBuildOutcomeRecords(unittest.TestCase):
         )
         rec = records[0]
         self.assertTrue(rec["open"])
+        self.assertEqual(rec["outcome_status"], "open")
+        self.assertIsNone(rec["net_pnl"])  # open premium is not realized profit
         # Jan 5 14:30 → Feb 20 15:00 = 46 days + 0.5h; capital = strike*100 = 7000
         expected_days = 7000 * 46.0208333333
         self.assertAlmostEqual(rec["capital_days"], expected_days, places=2)
-        self.assertAlmostEqual(rec["owner_efficiency"], 104.0 / expected_days)
+        self.assertIsNone(rec["owner_efficiency"])
+        self.assertAlmostEqual(rec["unrealized_premium_dollars"], 105.0)
 
     def test_covered_call_capital_uses_signal_stock_price(self):
         records = build_outcome_records(
             [_snapshot([_signal(option_type="CALL", strike=85.0, signal_type="covered_call")])],
-            [_fill(option_type="CALL", strike=85.0, side="SELL", price=1.00, fees=1.0, captured_at="2026-02-19T14:30:00")],
+            [
+                _fill(
+                    option_type="CALL",
+                    strike=85.0,
+                    side="SELL",
+                    price=1.00,
+                    fees=1.0,
+                    captured_at="2026-02-19T14:30:00",
+                )
+            ],
             now=NOW,
         )
         rec = records[0]
@@ -165,7 +244,16 @@ class TestBuildOutcomeRecords(unittest.TestCase):
     def test_covered_call_without_stock_price_has_unknown_capital(self):
         records = build_outcome_records(
             [_snapshot([_signal(option_type="CALL", strike=85.0, stock_price=None)])],
-            [_fill(option_type="CALL", strike=85.0, side="SELL", price=1.00, fees=1.0, captured_at="2026-02-19T14:30:00")],
+            [
+                _fill(
+                    option_type="CALL",
+                    strike=85.0,
+                    side="SELL",
+                    price=1.00,
+                    fees=1.0,
+                    captured_at="2026-02-19T14:30:00",
+                )
+            ],
             now=NOW,
         )
         self.assertIsNone(records[0]["capital_days"])
@@ -187,27 +275,85 @@ class TestBuildOutcomeRecords(unittest.TestCase):
         expected = 7000 * 15 + 7000 * 46.0208333333
         self.assertAlmostEqual(rec["capital_days"], expected, places=2)
 
-    def test_earliest_signal_wins_for_quote(self):
+    def test_earliest_qualifying_signal_wins_for_quote_and_is_inferred(self):
         snaps = [
-            _snapshot([_signal(bid_premium_per_contract=0.90)], generated_at="2026-01-10T15:00:00", run_id="run-2"),
-            _snapshot([_signal(bid_premium_per_contract=1.10)], generated_at="2026-01-02T15:00:00", run_id="run-1"),
+            _snapshot([_signal(bid_premium_per_contract=90.0)], generated_at="2026-01-10T15:00:00", run_id="run-2"),
+            _snapshot([_signal(bid_premium_per_contract=110.0)], generated_at="2026-01-02T15:00:00", run_id="run-1"),
         ]
-        records = build_outcome_records(snaps, [_fill(side="SELL", price=1.05, fees=1.0)], now=NOW)
+        records = build_outcome_records(
+            snaps, [_fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")], now=NOW
+        )
         self.assertEqual(len(records), 1)
-        self.assertAlmostEqual(records[0]["quoted_credit_per_contract"], 1.10)
+        # Only run-1 (2026-01-02) PRECEDES the first fill (2026-01-05); the
+        # later run-2 cannot explain it. Temporal match ⇒ inferred, not direct.
+        self.assertEqual(records[0]["attribution"], "inferred")
+        self.assertAlmostEqual(records[0]["quoted_credit_per_contract"], 110.0)
         self.assertEqual(records[0]["run_id"], "run-1")
 
-    def test_unmatched_fills_reported_without_fabricated_quote(self):
-        records = build_outcome_records([], [_fill(ticker="MSFT", strike=300.0, expiration="20260320")], now=NOW)
+    def test_recommendation_after_first_fill_cannot_explain_it(self):
+        """A recommendation generated AFTER the first fill must not be
+        attributed to that earlier fill run (no ex-post attribution)."""
+        records = build_outcome_records(
+            [_snapshot([_signal()], generated_at="2026-01-10T15:00:00", run_id="run-late")],
+            [_fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=NOW,
+        )
         self.assertEqual(len(records), 1)
         rec = records[0]
+        self.assertEqual(rec["attribution"], "unattributed")
         self.assertEqual(rec["signal_type"], "unmatched")
-        # No stored signal ⇒ no quoted credit; the fill's own net result is
-        # still measurable but never given a fabricated quote.
         self.assertIsNone(rec["quoted_credit_per_contract"])
         self.assertIsNone(rec["slippage_per_contract"])
-        self.assertEqual(rec["outcome_status"], "measured")
-        self.assertAlmostEqual(rec["net_pnl"], 1.05 * 100)
+        self.assertIsNone(rec["slippage_dollars"])
+
+    def test_ambiguous_recommendations_are_unattributed(self):
+        """Two recommendations that both precede the first fill are ambiguous:
+        no single rec can be credited, so the run is unattributed evidence."""
+        records = build_outcome_records(
+            [
+                _snapshot([_signal(bid_premium_per_contract=90.0)], generated_at="2026-01-01T15:00:00", run_id="run-a"),
+                _snapshot(
+                    [_signal(bid_premium_per_contract=100.0)], generated_at="2026-01-03T15:00:00", run_id="run-b"
+                ),
+            ],
+            [_fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=NOW,
+        )
+        self.assertEqual(len(records), 1)
+        rec = records[0]
+        self.assertEqual(rec["attribution"], "unattributed")
+        self.assertEqual(rec["signal_type"], "unmatched")
+        self.assertIsNone(rec["quoted_credit_per_contract"])
+        self.assertTrue(rec["open"])
+
+    def test_unparseable_timestamps_never_attribute(self):
+        """When the first fill or the recommendation timestamp cannot be
+        parsed, precedence can never be confirmed ⇒ unattributed (never guess)."""
+        records = build_outcome_records(
+            [_snapshot([_signal()], generated_at="not-a-date", run_id="run-x")],
+            [_fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=NOW,
+        )
+        self.assertEqual(records[0]["attribution"], "unattributed")
+
+    def test_pending_without_fills_keeps_earliest_candidate(self):
+        """A pending signal (no fills yet) keeps its earliest candidate — there
+        is no fill run to disambiguate, so nothing is claimed about fills."""
+        records = build_outcome_records(
+            [
+                _snapshot([_signal(bid_premium_per_contract=90.0)], generated_at="2026-01-01T15:00:00", run_id="run-a"),
+                _snapshot(
+                    [_signal(bid_premium_per_contract=110.0)], generated_at="2026-01-03T15:00:00", run_id="run-b"
+                ),
+            ],
+            [],
+            now=NOW,
+        )
+        self.assertEqual(len(records), 1)
+        rec = records[0]
+        self.assertEqual(rec["outcome_status"], "pending")
+        self.assertEqual(rec["run_id"], "run-a")
+        self.assertAlmostEqual(rec["quoted_credit_per_contract"], 90.0)
 
     def test_event_tier_carried_display_only(self):
         records = build_outcome_records([_snapshot([_signal()])], [_fill(side="SELL", price=1.05, fees=0.0)], now=NOW)
@@ -222,9 +368,9 @@ class TestAggregateGroup(unittest.TestCase):
             "net_pnl": 100.0,
             "capital_days": 7000.0,
             "open": False,
-            "quoted_credit_per_contract": 1.10,
-            "filled_credit_per_contract": 1.05,
-            "slippage_per_contract": -0.05,
+            "quoted_credit_per_contract": 110.0,
+            "filled_credit_per_contract": 105.0,
+            "slippage_per_contract": -5.0,
             "fees_known": True,
             "fees_total": 1.0,
             "ticker": "AAPL",
@@ -242,9 +388,11 @@ class TestAggregateGroup(unittest.TestCase):
         self.assertEqual(agg["unknown_count"], 1)
         self.assertEqual(agg["pending_count"], 1)
         self.assertAlmostEqual(agg["net_dollars"], 100.0)
-        self.assertAlmostEqual(agg["owner_efficiency"], 100.0 / 7000.0)
-        self.assertAlmostEqual(agg["quoted_credit_avg_per_contract"], 1.10)
-        self.assertAlmostEqual(agg["filled_credit_avg_per_contract"], 1.05)
+        # capital-days denominator includes the evidenced-but-unrealized record:
+        # efficiency must not be flattered by dropping open positions' capital.
+        self.assertAlmostEqual(agg["owner_efficiency"], 100.0 / 14000.0)
+        self.assertAlmostEqual(agg["quoted_credit_avg_per_contract"], 110.0)
+        self.assertAlmostEqual(agg["filled_credit_avg_per_contract"], 105.0)
         self.assertEqual(agg["fees_unknown_count"], 1)
 
     def test_empty_group_has_zero_coverage(self):

@@ -103,7 +103,10 @@ def _build_fake_contexts():
                 ]
             ),
         ),
-        "order_fee_query": lambda **kw: (RET_OK, pd.DataFrame([{"order_id": "O1", "fee_amount": 1.5, "fee_details": []}])),
+        "order_fee_query": lambda **kw: (
+            RET_OK,
+            pd.DataFrame([{"order_id": "O1", "fee_amount": 1.5, "fee_details": []}]),
+        ),
         "get_acc_cash_flow": lambda **kw: (RET_OK, _empty_df()),
         "close": lambda: None,
     }

@@ -103,9 +103,11 @@ After hard gates it orders purely by capital return:
 Quality/event tiers are display-only risk information and never gate or
 influence ordering. The midpoint and composite score are intentionally absent
 from the key: they may qualify or explain a candidate, never break a velocity
-tie. The ranking decision is RESOLVED (owner decision: capital return primary,
-as implemented in `rank_key`); the separate S03 actionability / state-table
-question remains open.
+tie. Review item S03 is RESOLVED on both halves: the ranking decision (owner
+decision: capital return primary, as implemented in `rank_key`) and the
+actionability/state-table half (implemented as the read-time session/coverage
+resolution in `core/run_model.py` plus the copy revalidation endpoint
+`/api/run/copy-check` described below).
 
 ### State / action table
 
@@ -117,18 +119,23 @@ means a read-only clipboard draft — no order is ever placed by the app.
 | `ready` + tradeable (fresh, complete) | open | Yes | live explicit limit draft on the current broker quote |
 | `ready` + tradeable (fresh, complete) | closed | Yes | staged for US market open; premium labelled last broker quote, “verify live quote at open” note |
 | `ready` but not tradeable (coverage incomplete or quotes stale while open) | open | No | review-only; blocked by missing/stale quote gate |
+| session unknown (no broker quote evidence in the run) | any | No | review-only; cannot even confirm the market session |
+| holiday-shortened (scheduled-open by wall clock but quotes not fresh) | open-expected | No live | live blocked; staged only after a successful copy-time OpenD confirmation |
 | `planning` (preflight infeasible / persisted broker snapshot fallback) | any | No | review-only; verify then re-refresh — do not stage |
 | `partial` or `stale` | any | No | review-only; missing/stale evidence or cross-market |
 | any state with yfinance fallback | any | No | review-only (non-Moomoo provenance) |
 | any state, insufficient capacity | any | No | review-only (zero capacity → zero recommended contracts) |
 | any state, research-only mode | any | No | signals only |
 
-This table is the as-implemented `copyEligibility` gate (`top-recommendations.js`),
-presented with `run_model.ACTIONABLE_STATES = ("ready",)`: only a `ready` run
-can copy — staged only when the market is closed. The older prose elsewhere in
-this file that described a `planning` run producing a staged ticket is stale and
-disagrees with that gate; the table above is authoritative until the product
-owner resolves it.
+This table is the implemented read-time copy gate. `core/run_model.py`
+classifies the session (`open` / `closed` / `holiday_shortened` / `unknown`)
+and coverage truth (`complete` / `partial` / `planning_quota` / `unknown`) on
+every read, `compute_signal_eligibility` labels each signal `live` / `staged` /
+`review_only`, and `api/routes/run.py::evaluate_copy_check` revalidates against
+the current snapshot plus live OpenD evidence immediately before any clipboard
+write — a run that changed between load and click requires a second click, and
+a stale/persisted-fallback run can never stage. Only a `ready` run can copy,
+and staging happens only when the market is closed (`SESSION_STAGED_STATES`).
 
 Each allowed ticket surfaces event risk (`earnings_before_expiry`, unknown
 event) as a warning in the clipboard text — never silently dropped.

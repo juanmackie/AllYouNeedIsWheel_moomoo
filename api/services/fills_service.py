@@ -189,10 +189,7 @@ class FillsService:
         if total_weight <= 0:
             share = float(fee_total) / len(fills)
             return {fill["fill_id"]: share for fill in fills}
-        return {
-            fill["fill_id"]: float(fee_total) * weight / total_weight
-            for fill, weight in zip(fills, weights)
-        }
+        return {fill["fill_id"]: float(fee_total) * weight / total_weight for fill, weight in zip(fills, weights)}
 
     def ingest_cash_flows(self, clearing_dates) -> dict:
         """Ingest cash movements for explicit clearing dates (securities

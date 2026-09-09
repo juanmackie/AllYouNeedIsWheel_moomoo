@@ -540,7 +540,9 @@ def ingest_outcome_evidence():
         service = get_outcome_service()
         result = service.ingest_broker_evidence(days=days, cash_flow_days=cash_flow_days)
         if not result.get("ok"):
-            return error_response(result.get("error") or "Outcome ingestion failed", status_code=502, **{"broker_result": result})
+            return error_response(
+                result.get("error") or "Outcome ingestion failed", status_code=502, **{"broker_result": result}
+            )
         return success_response(result)
     except Exception as e:
         logger.error(f"Error ingesting outcome evidence: {str(e)}")

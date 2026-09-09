@@ -38,7 +38,7 @@ def _signal(**extra):
         "expiration": "20260220",
         "strike": 70.0,
         "dte": 30,
-        "bid_premium_per_contract": 1.10,
+        "bid_premium_per_contract": 110.0,
         "stock_price": 80.0,
         "event_tier": "earnings_week",
         "quality_tier": "A",
@@ -194,19 +194,20 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         summary = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
 
         self.assertEqual(summary["totals"]["sample_size"], 2)  # AAPL signal + MSFT unmatched
-        # Delivered contract: any fill-backed contract with resolved fees is
-        # measured (open positions included, flagged open=True, capital-days
-        # accruing to now) — never dropped or folded into pending.
-        self.assertEqual(summary["totals"]["measured_count"], 2)
-        self.assertEqual(summary["totals"]["unknown_count"], 0)
-        self.assertAlmostEqual(summary["totals"]["net_dollars"], 152.0)  # AAPL 73.0 + MSFT open 79.0
+        # Any fill-backed contract is evidenced; only closed (realized) legs
+        # count as measured. Open obligations report net=None and land in
+        # unknown_count — collected premium is unrealized context, never profit.
+        self.assertEqual(summary["totals"]["measured_count"], 1)
+        self.assertEqual(summary["totals"]["unknown_count"], 1)
+        self.assertAlmostEqual(summary["totals"]["net_dollars"], 73.0)  # only realized AAPL leg
 
         aapl = next(r for r in summary["outcomes"] if r["ticker"] == "AAPL")
         self.assertEqual(aapl["outcome_status"], "measured")
+        self.assertEqual(aapl["attribution"], "inferred")
         self.assertAlmostEqual(aapl["net_pnl"], 73.0)
-        self.assertAlmostEqual(aapl["quoted_credit_per_contract"], 1.10)
-        self.assertAlmostEqual(aapl["filled_credit_per_contract"], 1.05)
-        self.assertAlmostEqual(aapl["slippage_per_contract"], -0.05)
+        self.assertAlmostEqual(aapl["quoted_credit_per_contract"], 110.0)
+        self.assertAlmostEqual(aapl["filled_credit_per_contract"], 105.0)  # 1.05/share × 100
+        self.assertAlmostEqual(aapl["slippage_per_contract"], -5.0)
         # CSP capital-days: strike×100 = 7000 held 31 days (closed tranche).
         self.assertAlmostEqual(aapl["capital_days"], 7000.0 * 31)
         self.assertAlmostEqual(aapl["owner_efficiency"], 73.0 / (7000.0 * 31))
@@ -215,10 +216,14 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
 
         msft = next(r for r in summary["outcomes"] if r["ticker"] == "MSFT")
         self.assertEqual(msft["signal_type"], "unmatched")
+        self.assertEqual(msft["attribution"], "unattributed")
         self.assertIsNone(msft["quoted_credit_per_contract"])
-        self.assertEqual(msft["outcome_status"], "measured")  # premium − fees, position still open
+        self.assertEqual(msft["outcome_status"], "open")  # open short: premium is unrealized
         self.assertTrue(msft["open"])
-        self.assertAlmostEqual(msft["net_pnl"], 79.0)  # 0.80*100 − 1.0 fee
+        self.assertIsNone(msft["net_pnl"])
+        self.assertIsNone(msft["gross_premium_pnl"])
+        self.assertAlmostEqual(msft["unrealized_premium_dollars"], 80.0)  # 0.80/share × 100, qty 1
+        self.assertAlmostEqual(msft["collected_premium_dollars"], 80.0)
 
         # Identity scoping: a different account sees nothing.
         other = OutcomeService(self.db).get_outcome_summary("REAL", opaque_account_id("other"))
@@ -315,8 +320,8 @@ class TestRouteIntegration(TestIngestToAttributionToSummary):
             self.assertIn("totals", payload)  # dict payloads merge into the body
             data = payload
             self.assertEqual(data["totals"]["sample_size"], 2)
-            self.assertEqual(data["totals"]["measured_count"], 2)
-            self.assertAlmostEqual(data["totals"]["net_dollars"], 152.0)
+            self.assertEqual(data["totals"]["measured_count"], 1)
+            self.assertAlmostEqual(data["totals"]["net_dollars"], 73.0)
 
             # Drill-down by ticker reaches the service through the route.
             resp = client.get("/api/options/analytics/outcomes?ticker=MSFT")

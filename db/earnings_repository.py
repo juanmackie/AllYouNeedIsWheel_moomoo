@@ -108,12 +108,12 @@ class EarningsRepository:
             logger.error(f"Error getting earnings date for {ticker}: {str(e)}")
             return None
 
-    def get_pending_earnings(self, days_threshold=7):
+    def get_pending_earnings(self, days_threshold=7, as_of=None):
         try:
             with pooled_connection(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                today = datetime.now().date()
+                today = as_of if as_of is not None else datetime.now().date()
                 future_date = (today + timedelta(days=days_threshold)).strftime("%Y-%m-%d")
                 today_str = today.strftime("%Y-%m-%d")
 

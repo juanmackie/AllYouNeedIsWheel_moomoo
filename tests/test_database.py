@@ -539,8 +539,9 @@ class TestEarningsRepository(unittest.TestCase):
         result = self.db.mark_earnings_error("NONEXIST", "No data")
         self.assertFalse(result)
 
-    @unittest.skip("earnings threshold date-sensitive (2026-05-15 vs today)")
     def test_get_pending_earnings_returns_richer_fields(self):
+        # Fixed-clock variant: window computed against an explicit as-of date so
+        # this stays deterministic regardless of the calendar date tests run on.
         self.db.save_earnings_date(
             "AAPL",
             "2026-05-15",
@@ -550,13 +551,16 @@ class TestEarningsRepository(unittest.TestCase):
             currency="USD",
             earnings_source="Alpha Vantage",
         )
-        pending = self.db.get_pending_earnings(days_threshold=30)
+        pending = self.db.get_pending_earnings(days_threshold=30, as_of=datetime(2026, 4, 30).date())
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0]["time_of_day"], "post-market")
         self.assertEqual(pending[0]["estimate"], 2.35)
         self.assertEqual(pending[0]["currency"], "USD")
         self.assertEqual(pending[0]["earnings_source"], "Alpha Vantage")
         self.assertEqual(pending[0]["fiscal_date_ending"], "2026-04-30")
+        # Out-of-window date (as-of + threshold reached) must not be reported as pending.
+        pending_stale = self.db.get_pending_earnings(days_threshold=30, as_of=datetime(2026, 5, 20).date())
+        self.assertEqual(len(pending_stale), 0)
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -273,9 +273,9 @@ class TestRecommendationEngine(unittest.TestCase):
             }
 
         # HIGH is marginal but has the best capital return; LOW2 has the worst.
-        high = csp("HIGH", 50.0, 1.10, 20, "marginal")   # 0.0011/day
-        mid = csp("MID", 100.0, 1.20, 20, "qualified")   # 0.0006/day
-        low = csp("LOW", 300.0, 1.50, 30, "qualified")   # 0.0005/day
+        high = csp("HIGH", 50.0, 1.10, 20, "marginal")  # 0.0011/day
+        mid = csp("MID", 100.0, 1.20, 20, "qualified")  # 0.0006/day
+        low = csp("LOW", 300.0, 1.50, 30, "qualified")  # 0.0005/day
         low2 = csp("LOW2", 400.0, 2.00, 30, "qualified")  # 0.0005/day — lower absolute bid ratio
         low2["bid"] = 1.60
         low2["premium_per_contract"] = 160.0  # bigger absolute premium, worse per-dollar return

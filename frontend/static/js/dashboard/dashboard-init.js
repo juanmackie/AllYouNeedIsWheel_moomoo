@@ -3,17 +3,18 @@
  * Split from dashboard.js (F042)
  */
 import { loadPortfolioData } from './account.js';
-import { initializeTopRecommendations, isBackendGenerating } from './top-recommendations.js';
+import { initializeTopRecommendations, loadTopRecommendations, isBackendGenerating } from './top-recommendations.js';
 import { formatCurrency, escapeHtml } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
-import { initWatchlistPanel } from './watchlist-panel.js';
-import { initRunStrip } from './run-strip.js';
-import { startRunWatcher, onRunAdopted } from './run-notifier.js';
+import { initWatchlistPanel, loadWatchlist } from './watchlist-panel.js';
+import { initRunStrip, loadRunStrip } from './run-strip.js';
+import { startRunStatePoll, ensureRunStatePoll, onRunPublished } from './run-notifier.js';
 import { renderGrowthPanel } from './growth-panel.js';
 import { renderOutcomePanel } from './outcome-panel.js';
 import { renderWeeklyIncome } from './weekly-income.js';
+import { state as optionsTableState } from './options-table-state.js';
 
 let signalPanelsInitialized = false;
 
@@ -45,6 +46,9 @@ export async function initializeDashboard() {
             await loadPortfolioData();
         initWatchlistPanel();
         initRunStrip();
+            // Initial operational-strip render (also fetches the active preset
+            // label once per session). The shared poll keeps it fresh after.
+            await loadRunStrip();
             await updateCashReserveStatus();
         } catch (error) { console.error('Wave 1 error:', error); }
         hideWaveLoading('wave1');
@@ -75,36 +79,61 @@ export async function initializeDashboard() {
             cashReserveToggle.addEventListener('change', (e) => toggleCashReserve(e.target.checked));
         }
 
-        // C10: when a manual refresh completes, every affected panel adopts the
-        // newly published run through the single bounded run-state poll. The
-        // refresh POST itself is issued once by run-strip's #run-refresh-btn;
-        // here we merely observe the run_id change and re-render read-only.
-        // (Never trigger another /api/run/refresh from this viewer.)
+        // P1b: one shared 5s run-state poll drives the whole screen. Started at
+        // page load with an immediate first fetch, it detects every newly
+        // published run (including first-ever runs and completions before its
+        // first tick) and fans out explicit reloads to every panel. The poll
+        // only reads /api/run; the viewer never POSTs /api/run/refresh, so a
+        // publish never rolls into another broker scan.
+        onRunPublished(reloadAllPanelsAfterPublish);
+        startRunStatePoll();
+        // A manual refresh click restarts the poll if it stopped in the
+        // fresh-install idle state (no run yet, no active attempt).
         const runRefreshBtn = document.getElementById('run-refresh-btn');
         if (runRefreshBtn && !runRefreshBtn.dataset.viewerBound) {
             runRefreshBtn.dataset.viewerBound = 'true';
-            runRefreshBtn.addEventListener('click', () => startRunWatcher());
+            runRefreshBtn.addEventListener('click', () => ensureRunStatePoll());
         }
-        onRunAdopted(async () => {
-            try {
-                await Promise.all([
-                    loadPortfolioData(),
-                    loadPositionsCommandPanel(),
-                    initializeTopRecommendations(false),
-                ]);
-            } catch (error) { console.error('C10 adopt error:', error); }
-            try {
-                initWatchlistPanel();
-                updateCashReserveStatus();
-                updateIdleCashPanel();
-                renderGrowthPanel();
-                renderOutcomePanel();
-                renderWeeklyIncome();
-            } catch (error) { console.error('C10 adopt secondary error:', error); }
-        });
     } catch (error) {
         console.error('Dashboard initialization error:', error);
     }
+}
+
+/**
+ * P1b publish fan-out: a newly published immutable run causes an explicit
+ * reload of every rendered panel via read-only fetches. Each reload runs in its
+ * own promise so one panel's failure cannot blank the rest of the screen, and
+ * nothing here POSTs /api/run/refresh (a publish never re-triggers a scan).
+ */
+async function reloadAllPanelsAfterPublish() {
+    const reloads = [
+        () => loadRunStrip(),
+        () => loadPortfolioData(),
+        () => loadPositionsCommandPanel(),
+        () => loadTopRecommendations(false),
+        () => loadWatchlist(),
+        () => updateCashReserveStatus(),
+        () => updateIdleCashPanel(),
+        () => renderGrowthPanel(),
+        () => renderOutcomePanel(),
+        () => renderWeeklyIncome(),
+    ];
+    // The options table performs a heavy read-only chain scan; reload it on a
+    // publish only when it has actually been loaded, never for an unopened panel.
+    if (optionsScannerLoaded()) {
+        reloads.push(() => import('./options-table.js').then((mod) => mod.loadTickers()));
+    }
+    await Promise.all(
+        reloads.map((reload) =>
+            Promise.resolve().then(reload).catch((err) => {
+                console.error('Panel reload failed after publish:', err);
+            })
+        )
+    );
+}
+
+function optionsScannerLoaded() {
+    return Object.keys(optionsTableState.tickersData || {}).length > 0;
 }
 
 /**
@@ -128,9 +157,10 @@ async function initializeSignalPanels() {
 
     import('./growth-panel.js').then(mod => {
         mod.renderGrowthPanel();
-        // C10: the growth panel adopts newly completed runs through the single
-        // run-state notifier (see onRunAdopted above), not a `#refresh-all-btn`
-        // template emission (no template emits one). No extra click binding here.
+        // P1b: the growth panel adopts newly completed runs through the single
+        // shared run-state poll (see onRunPublished/reloadAllPanelsAfterPublish
+        // above), not a `#refresh-all-btn` template emission (no template emits
+        // one). No extra click binding here.
     }).catch(err => {
         console.error('Failed to load growth panel:', err);
     });

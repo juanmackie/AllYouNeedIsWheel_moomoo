@@ -82,16 +82,13 @@ class ReadOnlyBrokerFacade:
             raise AttributeError(name)
         if name in FORBIDDEN_SDK_MEMBERS:
             raise RuntimeError(
-                f"BLOCKED: {name} is a forbidden SDK member "
-                "(mirrors core/broker_protocol.py). Probe is read-only."
+                f"BLOCKED: {name} is a forbidden SDK member (mirrors core/broker_protocol.py). Probe is read-only."
             )
         if name == "close":
             self.used_members.append(name)
             return self._ctx.close
         if name not in ALLOWED_QUERY_MEMBERS:
-            raise AttributeError(
-                f"{name} is not in the allowlist of this read-only probe."
-            )
+            raise AttributeError(f"{name} is not in the allowlist of this read-only probe.")
         impl = getattr(self._ctx, name)
 
         def guarded(*args, **kwargs):
@@ -134,7 +131,14 @@ class Probe:
             "today_fills": {"ok": None, "rows": None, "note": ""},
             "open_orders": {"ok": None, "rows": None, "note": ""},
             "fees": {"ok": None, "queried_order_ids": 0, "rows_with_fee": 0, "sample": [], "note": ""},
-            "cash_flow": {"ok": None, "rows": None, "distinct_types": {}, "min_clearing_date": None, "max_clearing_date": None, "note": ""},
+            "cash_flow": {
+                "ok": None,
+                "rows": None,
+                "distinct_types": {},
+                "min_clearing_date": None,
+                "max_clearing_date": None,
+                "note": "",
+            },
             "positions": {"ok": None, "rows": None, "columns": [], "option_positions": []},
             "accinfo": {"ok": None, "note": ""},
             "currency_evidence": {},
@@ -204,9 +208,7 @@ class Probe:
             cfg_id = self.cfg["account_id"]
             match = next((a for a in accounts if a["acc_id"] == cfg_id), None) if cfg_id else None
             if cfg_id and not match:
-                self.finding["account"]["note"] = (
-                    f"configured account_id {cfg_id!r} NOT found in OpenD account list."
-                )
+                self.finding["account"]["note"] = f"configured account_id {cfg_id!r} NOT found in OpenD account list."
                 return
             acc = match or (accounts[0] if accounts else None)
             if acc:
@@ -314,7 +316,13 @@ class Probe:
             sampled = order_ids[:max_ids]
             ret, data = self.trd.order_fee_query(order_id_list=sampled, trd_env=trd_env, acc_id=acc_id)
             if not self._ok(ret) or getattr(data, "empty", True):
-                self.finding["fees"] = {"ok": False, "note": f"ret={ret} {data}", "queried_order_ids": len(sampled), "rows_with_fee": 0, "sample": []}
+                self.finding["fees"] = {
+                    "ok": False,
+                    "note": f"ret={ret} {data}",
+                    "queried_order_ids": len(sampled),
+                    "rows_with_fee": 0,
+                    "sample": [],
+                }
                 return
             rows = data.to_dict("records")
             with_fee = [r for r in rows if str(r.get("fee_amount", "0")).strip() not in ("", "0", "0.0", "0.00")]
@@ -326,7 +334,13 @@ class Probe:
                 "note": "order_fee_query is ID-driven only; sampled first orders",
             }
         except Exception as exc:  # noqa: BLE001
-            self.finding["fees"] = {"ok": False, "note": f"raised: {exc}", "queried_order_ids": 0, "rows_with_fee": 0, "sample": []}
+            self.finding["fees"] = {
+                "ok": False,
+                "note": f"raised: {exc}",
+                "queried_order_ids": 0,
+                "rows_with_fee": 0,
+                "sample": [],
+            }
 
     def probe_cash_flow(self, max_days=30):
         trd_env, acc_id = self._resolve_trd()
@@ -356,7 +370,9 @@ class Probe:
                 day = (today - dt.timedelta(days=back)).isoformat()
                 tries += 1
                 ret, data = self.trd.get_acc_cash_flow(
-                    clearing_date=day, trd_env=trd_env, acc_id=acc_id,
+                    clearing_date=day,
+                    trd_env=trd_env,
+                    acc_id=acc_id,
                     cashflow_direction=CashFlowDirection.NONE,
                 )
                 if not self._ok(ret) or getattr(data, "empty", True):
@@ -406,7 +422,9 @@ class Probe:
                 code = str(r.get("code", ""))
                 meta = _parse_option_code_metadata(code) if code else None
                 if meta:
-                    opts.append({"code": code, "decoded": meta, "qty": r.get("qty"), "position_side": r.get("position_side")})
+                    opts.append(
+                        {"code": code, "decoded": meta, "qty": r.get("qty"), "position_side": r.get("position_side")}
+                    )
                 else:
                     undecodable.append(code)
             self.finding["positions"] = {
@@ -470,7 +488,7 @@ class Probe:
         if th.get("ok"):
             parts.append(f"fills={th.get('rows')}")
         else:
-            parts.append(f"fills=UNREACHABLE({th.get('note','')})")
+            parts.append(f"fills=UNREACHABLE({th.get('note', '')})")
         oh = f["order_history"]
         if oh.get("ok"):
             parts.append(f"orders={oh.get('rows')}")
@@ -634,9 +652,7 @@ def main():
     probe.finding["_host"] = cfg["host"]
     probe.finding["_port"] = cfg["port"]
     probe.run()
-    probe.finding["_used_members"] = sorted(
-        set(getattr(getattr(probe, "trd", None), "used_members", []))
-    )
+    probe.finding["_used_members"] = sorted(set(getattr(getattr(probe, "trd", None), "used_members", [])))
     md = render(probe.finding)
 
     os.makedirs(os.path.dirname(PROBE_OUT), exist_ok=True)

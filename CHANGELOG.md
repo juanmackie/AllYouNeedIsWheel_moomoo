@@ -1,3 +1,27 @@
+## 2026-09-09 — Read-time copy revalidation (live/staged/review_only)
+
+- Copy is no longer trusted from a stale page state: immediately before any
+  clipboard write, the app revalidates against the current run through
+  `GET /api/run/copy-check` — session classification (`open` / `closed` /
+  `holiday_shortened` / `unknown`, derived on every read), coverage truth
+  (`complete` / `partial` / `planning_quota`), quote freshness, and candidate
+  eligibility — and returns `live`, `staged`, or `review_only` with a visible
+  reason. A run that changed between page load and click requires a second
+  click; incomplete-coverage, persisted-broker-fallback, unknown-session, and
+  holiday-stale runs can never copy live.
+- Dashboard now polls one shared `/api/run` state view every 5s that drives
+  every panel and watches run identity, so the screen stays current across the
+  whole workflow and adopts long (>60s) scans that previously fell silent.
+- Outcomes panel refinements: broker fill prices are converted per-share →
+  per-contract exactly once (a $2/share fill is $200 of contract credit, never
+  reported as -$198 slippage); fills without a matching stored signal are
+  surfaced as `unattributed` instead of fabricated links; each supporting fill
+  has a per-contract drill-down; unknown fees remain unknown outcomes, never
+  zero.
+- `start_local.ps1` treats any reachable `/health` (healthy *or* degraded) as
+  an already-running app, so the launcher no longer starts a duplicate instance
+  when OpenD is disconnected — the dashboard surfaces the dependency warning.
+
 ## 2026-09-08 — Broker-verified outcomes panel (schema v10)
 
 - New **Outcomes** panel in the dashboard journal area (read-only): joins published

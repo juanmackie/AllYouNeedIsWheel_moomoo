@@ -9,6 +9,7 @@ import unittest
 from datetime import datetime
 
 from core.outcome_attribution import (
+    broker_price_to_contract_credit,
     capital_base_cc,
     capital_base_csp,
     capital_days_from_lots,
@@ -24,6 +25,18 @@ from core.outcome_attribution import (
     share_leg_pnl,
     slippage_dollars,
 )
+
+
+class TestUnitConversion(unittest.TestCase):
+    def test_broker_price_to_contract_credit_converts_per_share_to_per_contract(self):
+        # A $2/share fill is a $200/contract credit; a $1.05 fill is $105.
+        self.assertAlmostEqual(broker_price_to_contract_credit(2.0), 200.0)
+        self.assertAlmostEqual(broker_price_to_contract_credit(1.05), 105.0)
+        self.assertAlmostEqual(broker_price_to_contract_credit(0.45), 45.0)
+
+    def test_broker_price_to_contract_credit_handles_missing(self):
+        self.assertAlmostEqual(broker_price_to_contract_credit(None), 0.0)
+        self.assertAlmostEqual(broker_price_to_contract_credit(0.0), 0.0)
 
 
 class TestMoneyMath(unittest.TestCase):
@@ -63,9 +76,7 @@ class TestSlippage(unittest.TestCase):
 
 class TestCombinedOutcome(unittest.TestCase):
     def test_option_only_measured(self):
-        result = combined_outcome(
-            {"premium_in": 500.0, "premium_out": 150.0, "fees": 2.0}, None
-        )
+        result = combined_outcome({"premium_in": 500.0, "premium_out": 150.0, "fees": 2.0}, None)
         self.assertEqual(result["status"], "measured")
         self.assertAlmostEqual(result["net_pnl"], 348.0)
 
@@ -90,9 +101,7 @@ class TestCombinedOutcome(unittest.TestCase):
         self.assertEqual(combined_outcome(None, None)["status"], "unknown")
 
     def test_option_leg_pnl_can_be_negative_and_still_measured(self):
-        result = combined_outcome(
-            {"premium_in": 100.0, "premium_out": 350.0, "fees": 1.0}, None
-        )
+        result = combined_outcome({"premium_in": 100.0, "premium_out": 350.0, "fees": 1.0}, None)
         self.assertEqual(result["status"], "measured")
         self.assertAlmostEqual(result["net_pnl"], -251.0)
 
@@ -131,28 +140,20 @@ class TestCapitalDays(unittest.TestCase):
     def test_assignment_continues_capital_without_reset(self):
         # A put assigned on day 10 does not reset the clock: the lot keeps
         # accruing the same capital base until shares finally close on day 20.
-        continuous = capital_days_from_lots(
-            [("2026-01-01T00:00:00", "2026-01-21T00:00:00", 1)], 15000.0
-        )
+        continuous = capital_days_from_lots([("2026-01-01T00:00:00", "2026-01-21T00:00:00", 1)], 15000.0)
         self.assertAlmostEqual(continuous, 15000.0 * 20)
 
     def test_open_lot_without_as_of_contributes_zero(self):
         # Unknown horizon is never fabricated against "now".
-        days_value = capital_days_from_lots(
-            [("2026-01-01T00:00:00", None, 1)], 15000.0, as_of=None
-        )
+        days_value = capital_days_from_lots([("2026-01-01T00:00:00", None, 1)], 15000.0, as_of=None)
         self.assertEqual(days_value, 0.0)
 
     def test_unknown_entry_timestamp_contributes_zero(self):
-        days_value = capital_days_from_lots(
-            [("", "2026-01-11T00:00:00", 1)], 15000.0, as_of="2026-01-11T00:00:00"
-        )
+        days_value = capital_days_from_lots([("", "2026-01-11T00:00:00", 1)], 15000.0, as_of="2026-01-11T00:00:00")
         self.assertEqual(days_value, 0.0)
 
     def test_zero_capital_base_yields_zero(self):
-        days_value = capital_days_from_lots(
-            [("2026-01-01T00:00:00", "2026-01-11T00:00:00", 1)], 0.0
-        )
+        days_value = capital_days_from_lots([("2026-01-01T00:00:00", "2026-01-11T00:00:00", 1)], 0.0)
         self.assertEqual(days_value, 0.0)
 
 

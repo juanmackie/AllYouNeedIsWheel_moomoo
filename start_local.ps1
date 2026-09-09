@@ -34,7 +34,10 @@ function Wait-ForHealthEndpoint {
     while ((Get-Date) -lt $deadline) {
         try {
             $response = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec 3
-            if ($response.status -eq 'healthy') {
+            # Any reachable /health with a status field means the app is up:
+            # "healthy" (DB + OpenD OK) or "degraded" (e.g. OpenD down) both
+            # mean a process is already serving. Do not start a duplicate.
+            if ($response.status) {
                 return $true
             }
         } catch {
@@ -136,7 +139,10 @@ $appUrl = 'http://127.0.0.1:8000/'
 $appIsRunning = $false
 try {
     $healthResponse = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 3
-    $appIsRunning = $healthResponse.status -eq 'healthy'
+    # A reachable /health with a status field counts as running whether it
+    # reports "healthy" or "degraded" (e.g. OpenD disconnected); the app
+    # itself surfaces the dependency warning on the dashboard.
+    $appIsRunning = -not [string]::IsNullOrEmpty($healthResponse.status)
 } catch {
     $appIsRunning = $false
 }

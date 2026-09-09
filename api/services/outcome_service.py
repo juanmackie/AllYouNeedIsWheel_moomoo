@@ -5,11 +5,32 @@ published run snapshots (recommendation signals) into owner-facing outcome
 aggregates:
 
 - quoted (recommended) credit vs. filled credit, and the slippage between them;
-- net results after fees (unknown fees ⇒ unknown outcome, never zero);
+- option-leg net results after fees (unknown fees ⇒ unknown outcome, never zero);
 - capital-days and net P&L / capital-day (owner efficiency) via the pure
   ``core.outcome_attribution`` helpers;
 - groups by preset, DTE bucket, ticker, and event tier (display-only tiers —
   they never gate or reorder anything).
+
+Field semantics (all money is option-leg, dollars-per-contract unless stated):
+
+- Units: ``quoted_credit_per_contract``/``filled_credit_per_contract`` and
+  ``slippage_per_contract`` are dollars-per-contract. Broker fill prices are
+  per-share and are converted exactly once in ``_fill_credit_per_contract``
+  (via ``core.outcome_attribution.broker_price_to_contract_credit``), so a $200
+  quoted contract credit filled at $2/share is $200 of credit, never -$198.
+- Realization: ``net_pnl``/``gross_premium_pnl`` are REALIZED option-leg
+  results only. A position with any unclosed short obligation contributes its
+  collected premium as ``unrealized_premium_dollars`` context (and
+  ``collected_premium_dollars``), never into ``net_pnl``.
+- Unsupported legs stay unknown (never 0, never fabricated): expiration
+  payoff, assignment, share-basis (underlying) P&L, and open-position
+  mark-to-market losses. ``pnl_scope="option_leg"`` marks every supported
+  result so the panel can label it.
+- Attribution: a fill run is tied to a recommendation only when that
+  recommendation's timestamp precedes the first fill (``attribution=
+  "inferred"``). Ambiguous (multiple candidate recommendations) or
+  fill-before-any-recommendation runs are ``attribution="unattributed"`` and
+  surfaced as matched evidence only, like the existing unmatched path.
 
 Every aggregate exposes sample size, coverage %, and unknown-outcome count,
 and every outcome record carries the supporting fill transactions for
@@ -28,13 +49,13 @@ from collections import deque
 from datetime import datetime, timedelta
 
 from core.outcome_attribution import (
-    CONTRACT_MULTIPLIER,
+    broker_price_to_contract_credit,
     capital_base_cc,
     capital_base_csp,
     capital_days_from_lots,
-    combined_outcome,
     owner_efficiency,
     owner_summary,
+    parse_timestamp,
     slippage_dollars,
 )
 
@@ -165,12 +186,16 @@ def _fifo_lots(entry_fills, close_fills):
     """
     entries = deque(
         (str(fill.get("captured_at", "") or ""), float(fill.get("qty", 0) or 0))
-        for fill in sorted(entry_fills, key=lambda f: (str(f.get("captured_at", "") or ""), str(f.get("fill_id", "") or "")))
+        for fill in sorted(
+            entry_fills, key=lambda f: (str(f.get("captured_at", "") or ""), str(f.get("fill_id", "") or ""))
+        )
         if float(fill.get("qty", 0) or 0) > 0
     )
     lots = []
     closed_qty = 0.0
-    for close in sorted(close_fills, key=lambda f: (str(f.get("captured_at", "") or ""), str(f.get("fill_id", "") or ""))):
+    for close in sorted(
+        close_fills, key=lambda f: (str(f.get("captured_at", "") or ""), str(f.get("fill_id", "") or ""))
+    ):
         remaining = float(close.get("qty", 0) or 0)
         exit_ts = str(close.get("captured_at", "") or "")
         if not exit_ts:
@@ -191,7 +216,13 @@ def _fifo_lots(entry_fills, close_fills):
 
 
 def _fill_transaction(fill) -> dict:
-    """Drill-down view of one supporting fill."""
+    """Drill-down view of one supporting fill.
+
+    ``price`` stays the raw broker per-share price (fidelity);
+    ``price_per_contract`` is the standardized dollars-per-contract conversion
+    (the same single conversion used for every credit figure) so the drill-down
+    renders in the panel's per-contract unit.
+    """
     return {
         "fill_id": fill.get("fill_id", ""),
         "order_id": fill.get("order_id", ""),
@@ -199,23 +230,117 @@ def _fill_transaction(fill) -> dict:
         "side": fill.get("side", ""),
         "qty": fill.get("qty", 0),
         "price": fill.get("price", 0),
+        "price_per_contract": _fill_credit_per_contract(fill),
         "fees": fill.get("fees"),
         "security_type": fill.get("security_type", ""),
     }
 
 
+def _fill_credit_per_contract(fill):
+    """Dollars-per-contract credit of one option fill.
+
+    THE single per-share → per-contract conversion for ingested broker fill
+    prices. Every downstream credit/slippage/premium figure derives from this
+    exact function so units can never mix — a $200 quoted contract credit
+    filled at $2/share is $200, never a -$198 slippage.
+    """
+    return broker_price_to_contract_credit(fill.get("price"))
+
+
+def _sort_fills(fills):
+    """Chronological fill order (stable by captured_at, then fill_id)."""
+    return sorted(fills, key=lambda f: (str(f.get("captured_at", "") or ""), str(f.get("fill_id", "") or "")))
+
+
+def _realization_split(entry_fills, close_fills, closed_qty):
+    """Split option-leg premiums and fees into realized vs. unrealized dollars.
+
+    Entries are matched FIFO to closes (same ordering as ``_fifo_lots``): the
+    first ``closed_qty`` contracts sold are realized (their entry credit is
+    realized premium-in); the remainder stay open obligations whose collected
+    premium is unrealized context and never enters realized P&L. On partial
+    closes an entry fill's fee is split proportionally to the consumed qty;
+    all buyback fees are realized (buybacks only ever close realized tranches).
+
+    Returns (realized_premium_in, realized_premium_out, realized_fees,
+    unrealized_premium) in dollars.
+    """
+    realized_in = 0.0
+    realized_fees = 0.0
+    unrealized = 0.0
+    remaining = closed_qty
+
+    for fill in _sort_fills(entry_fills):
+        qty = float(fill.get("qty", 0) or 0)
+        if qty <= 0:
+            continue
+        credit = _fill_credit_per_contract(fill)
+        fee = float(fill.get("fees") or 0.0)
+        if remaining > 0:
+            take = min(remaining, qty)
+            realized_in += credit * take
+            realized_fees += fee * (take / qty)
+            remaining -= take
+            qty -= take
+        if qty > 0:
+            unrealized += credit * qty
+
+    realized_out = sum(_fill_credit_per_contract(f) * float(f.get("qty", 0) or 0) for f in _sort_fills(close_fills))
+    realized_fees += sum(float(f.get("fees") or 0.0) for f in _sort_fills(close_fills))
+    return realized_in, realized_out, realized_fees, unrealized
+
+
+def _recommendation_precedes_first_fill(candidate, first_fill_timestamp) -> bool:
+    """True only when the recommendation's timestamp strictly precedes the
+    first fill of the run. Unparseable timestamps can never confirm precedence
+    (never attribute on a guess)."""
+    generated = parse_timestamp(candidate.get("generated_at"))
+    first = parse_timestamp(first_fill_timestamp)
+    if generated is None or first is None:
+        return False
+    return generated < first
+
+
+def _select_candidate(candidates, fills) -> tuple[dict | None, str]:
+    """Pick the recommendation that may explain a fill run, or None.
+
+    Returns (selected_meta, attribution) where attribution is:
+    - "inferred": exactly one candidate whose timestamp precedes the first
+      fill (a temporal match — labelled inferred, not direct evidence);
+    - "unattributed": no fills (pending keeps its candidate with empty
+      attribution), no candidates, several candidates that could explain the
+      run (ambiguous), or every candidate comes after / at the first fill
+      (fills precede any recommendation). Unattributed runs are surfaced as
+      matched evidence only, exactly like the unmatched path.
+    """
+    if not candidates:
+        return None, "unattributed"
+    if not fills:
+        return min(candidates, key=lambda c: str(c.get("generated_at", "") or "")), ""
+    first_ts = min((str(f.get("captured_at", "") or "") for f in fills), default="")
+    qualifiers = [c for c in candidates if _recommendation_precedes_first_fill(c, first_ts)]
+    if len(qualifiers) == 1:
+        return qualifiers[0], "inferred"
+    return None, "unattributed"
+
+
 def build_outcome_records(run_snapshots, option_fills, now=None) -> list[dict]:
     """Join recommendation signals to option fills and attribute outcomes.
 
-    ``run_snapshots``: published snapshot dicts (any order; deduped to the
-    earliest recommendation per contract identity). ``option_fills``: fill
-    rows for the same identity scope. ``now``: as-of for open-lot capital
-    days. Returns one record per unique signal identity.
+    ``run_snapshots``: published snapshot dicts (any order; recommendations
+    kept at full cardinality per identity so attribution can detect
+    ambiguity). ``option_fills``: fill rows for the same identity scope.
+    ``now``: as-of for open-lot capital days. Returns one record per unique
+    contract identity — the signal identity when a recommendation can be
+    attributed, otherwise an unattributed evidence record for orphan fills
+    (never dropped).
     """
     now = now or datetime.now()
 
-    # Earliest recommendation per identity, across signals + pick lists.
-    signals_by_identity: dict[tuple, dict] = {}
+    # All candidate recommendations per identity (across signals + pick
+    # lists), kept at full cardinality — never deduped early — because
+    # attribution must detect ambiguity (multiple recs before the first fill).
+    signals_by_identity: dict[tuple, list] = {}
     snapshots = sorted(
         [s for s in run_snapshots if isinstance(s, dict)],
         key=lambda s: str((s.get("run") or {}).get("generated_at", "") or ""),
@@ -232,14 +357,16 @@ def build_outcome_records(run_snapshots, option_fills, now=None) -> list[dict]:
                 candidates.extend(item for item in value if isinstance(item, dict))
         for signal in candidates:
             identity = signal_identity(signal)
-            if identity is None or identity in signals_by_identity:
+            if identity is None:
                 continue
-            signals_by_identity[identity] = {
-                "signal": signal,
-                "preset_key": preset_key,
-                "generated_at": generated_at,
-                "run_id": run_id,
-            }
+            signals_by_identity.setdefault(identity, []).append(
+                {
+                    "signal": signal,
+                    "preset_key": preset_key,
+                    "generated_at": generated_at,
+                    "run_id": run_id,
+                }
+            )
 
     # Option fills grouped by contract identity.
     fills_by_identity: dict[tuple, list] = {}
@@ -250,29 +377,32 @@ def build_outcome_records(run_snapshots, option_fills, now=None) -> list[dict]:
         fills_by_identity.setdefault(identity, []).append(fill)
 
     records = []
-    for identity, meta in signals_by_identity.items():
-        signal = meta["signal"]
+    for identity, candidates in list(signals_by_identity.items()):
         ticker, expiration, option_type, strike = identity
         fills = fills_by_identity.pop(identity, [])
-        record = _build_record(signal, meta, ticker, expiration, option_type, strike, fills, now)
+        meta, attribution = _select_candidate(candidates, fills)
+        if attribution != "unattributed" and meta is not None:
+            record = _build_record(meta["signal"], meta, ticker, expiration, option_type, strike, fills, now)
+            record["attribution"] = attribution
+        else:
+            # Orphan/unattributed fills are still real transactions: surfaced
+            # as matched evidence only, never silently dropped, never given a
+            # fabricated quoted price or a recommendation identity.
+            empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
+            record = _build_record(None, empty_meta, ticker, expiration, option_type, strike, fills, now)
+            record["signal_type"] = "unmatched"
+            record["attribution"] = "unattributed"
         records.append(record)
 
-    # Fills with no matching stored signal are still real transactions; they
-    # are surfaced as unmatched evidence, never silently dropped and never
+    # Fills with no stored signal at all are still real transactions; they are
+    # surfaced as unattributed evidence, never silently dropped and never
     # given a fabricated quoted price.
     for identity, fills in fills_by_identity.items():
         ticker, expiration, option_type, strike = identity
-        record = _build_record(
-            None,
-            {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""},
-            ticker,
-            expiration,
-            option_type,
-            strike,
-            fills,
-            now,
-        )
+        empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
+        record = _build_record(None, empty_meta, ticker, expiration, option_type, strike, fills, now)
         record["signal_type"] = "unmatched"
+        record["attribution"] = "unattributed"
         records.append(record)
 
     records.sort(key=lambda r: (str(r.get("first_recommended_at", "") or ""), r["identity"]))
@@ -283,51 +413,67 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
     quoted = quoted_credit_per_contract(signal) if signal is not None else None
     dte = signal.get("dte") if signal is not None else None
 
-    entry_fills = [f for f in fills if str(f.get("side", "")).upper() == "SELL"]
-    close_fills = [f for f in fills if str(f.get("side", "")).upper() == "BUY"]
+    entry_fills = [f for f in fills if str(f.get("side", "") or "").upper() == "SELL"]
+    close_fills = [f for f in fills if str(f.get("side", "") or "").upper() == "BUY"]
 
     contracts_sold = sum(float(f.get("qty", 0) or 0) for f in entry_fills)
     contracts_bought = sum(float(f.get("qty", 0) or 0) for f in close_fills)
 
-    filled_credit = None
+    lots, open_contracts, closed_qty = _fifo_lots(entry_fills, close_fills)
+
+    # All option-leg money derives from the single per-share → per-contract
+    # conversion in ``_fill_credit_per_contract``; never mix units again.
+    filled_credit_per_contract = None
+    collected_premium_dollars = 0.0
     if contracts_sold > 0:
-        sell_value = sum(float(f.get("price", 0) or 0) * float(f.get("qty", 0) or 0) for f in entry_fills)
-        filled_credit = sell_value / contracts_sold
+        collected_premium_dollars = sum(
+            _fill_credit_per_contract(f) * float(f.get("qty", 0) or 0) for f in _sort_fills(entry_fills)
+        )
+        filled_credit_per_contract = collected_premium_dollars / contracts_sold
+
+    realized_premium_in, realized_premium_out, realized_fees, unrealized_premium_dollars = _realization_split(
+        entry_fills, close_fills, closed_qty
+    )
+
+    slippage_per_contract = None
+    slippage_dollars_total = None
+    if filled_credit_per_contract is not None and quoted is not None:
+        # Both operands are dollars-per-contract, so slippage_dollars is exact.
+        slippage_per_contract = filled_credit_per_contract - quoted
+        slippage_dollars_total = slippage_dollars(filled_credit_per_contract, quoted, contracts_sold, "SELL")
 
     fees_known = bool(fills) and all(f.get("fees") is not None for f in fills)
     fees_total = sum(float(f.get("fees", 0) or 0) for f in fills) if fees_known else None
 
-    sell_value_total = sum(float(f.get("price", 0) or 0) * float(f.get("qty", 0) or 0) for f in entry_fills)
-    buy_value_total = sum(float(f.get("price", 0) or 0) * float(f.get("qty", 0) or 0) for f in close_fills)
-    gross_option_pnl = (sell_value_total - buy_value_total) * CONTRACT_MULTIPLIER if fills else None
-
-    slippage_per_contract = None
-    slippage_dollars_total = None
-    if filled_credit is not None and quoted is not None:
-        slippage_per_contract = filled_credit - quoted
-        slippage_dollars_total = slippage_dollars(filled_credit, quoted, contracts_sold, "SELL")
-
     capital_per = _capital_per_contract(signal, option_type, strike) if signal is not None else None
     capital_days = None
-    open_contracts = 0.0
     if fills:
-        lots, open_contracts, _closed = _fifo_lots(entry_fills, close_fills)
         if capital_per is not None:
             capital_days = capital_days_from_lots(lots, capital_per, as_of=now)
 
+    # Realized option-leg outcome (never fabricated):
+    #  - no fills                     → pending (signal awaits evidence)
+    #  - unknown fees                 → unknown (unknown ≠ zero)
+    #  - orphan fills (no realizable  → unknown
+    #    entry, e.g. assignment buyback movement)
+    #  - fully open short obligation  → open; net stays None — the collected
+    #    premium is unrealized context, never realized profit
+    #  - partially closed             → open with the realized tranche's net
+    #  - fully closed                 → measured (realized)
+    gross_premium_pnl = None
+    net_pnl = None
     if not fills:
         status = "pending"
-        net_pnl = None
     elif not fees_known:
-        status = "unknown"  # fees unresolved: unknown ≠ zero, never fabricate
-        net_pnl = None
+        status = "unknown"
+    elif closed_qty <= 0 and open_contracts <= 0:
+        status = "unknown"
+    elif closed_qty <= 0:
+        status = "open"  # open obligation: premium collected is unrealized context
     else:
-        outcome = combined_outcome(
-            {"premium_in": sell_value_total * CONTRACT_MULTIPLIER, "premium_out": buy_value_total * CONTRACT_MULTIPLIER, "fees": fees_total or 0.0},
-            None,
-        )
-        status = outcome["status"]
-        net_pnl = outcome["net_pnl"]
+        gross_premium_pnl = realized_premium_in - realized_premium_out
+        net_pnl = gross_premium_pnl - realized_fees
+        status = "open" if open_contracts > 0 else "measured"
 
     return {
         "identity": "|".join([ticker, expiration, option_type, f"{strike:g}"]),
@@ -344,7 +490,7 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
         "first_recommended_at": meta.get("generated_at", ""),
         "run_id": meta.get("run_id", ""),
         "quoted_credit_per_contract": quoted,
-        "filled_credit_per_contract": filled_credit,
+        "filled_credit_per_contract": filled_credit_per_contract,
         "contracts_sold": contracts_sold,
         "contracts_bought_back": contracts_bought,
         "open_contracts": open_contracts,
@@ -352,12 +498,16 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
         "slippage_dollars": slippage_dollars_total,
         "fees_known": fees_known,
         "fees_total": fees_total,
-        "gross_premium_pnl": gross_option_pnl,
-        "net_pnl": net_pnl,
+        "gross_premium_pnl": gross_premium_pnl,  # realized option-leg gross (before fees)
+        "net_pnl": net_pnl,  # realized option-leg net (after fees); None while unclosed/unknown
         "outcome_status": status,
+        "pnl_scope": "option_leg" if fills else None,  # supported scope only; share/expiration/assignment stay unknown
+        "collected_premium_dollars": collected_premium_dollars,
+        "unrealized_premium_dollars": unrealized_premium_dollars,
         "capital_days": capital_days,
         "owner_efficiency": owner_efficiency(net_pnl, capital_days) if net_pnl is not None else None,
         "open": bool(fills) and open_contracts > 0,
+        "attribution": "",  # set by build_outcome_records
         "fills": [_fill_transaction(f) for f in sorted(fills, key=lambda f: str(f.get("captured_at", "") or ""))],
     }
 
@@ -373,16 +523,26 @@ def aggregate_group(records) -> dict:
     """Aggregate outcome records with mandatory evidence metadata.
 
     Every aggregate exposes sample_size, coverage_pct (share of the sample
-    with fill evidence), and unknown_count (matched-but-unmeasurable) so a
-    number is never read without its evidence quality.
+    with fill evidence), and unknown_count so a number is never read without
+    its evidence quality.
+
+    Counts follow realization:
+    - ``measured_count`` = records with any REALIZED net P&L (closed or
+      partially closed option legs);
+    - ``unknown_count`` = records with fill evidence but nothing realized
+      (fully open obligations, or unresolved fees);
+    - ``pending_count`` = signals still waiting for fill evidence.
     """
     records = [r for r in records if isinstance(r, dict)]
     sample_size = len(records)
-    matched = [r for r in records if r.get("outcome_status") in ("measured", "unknown")]
-    measured = [r for r in records if r.get("outcome_status") == "measured"]
-    unknown = [r for r in records if r.get("outcome_status") == "unknown"]
+    evidenced = [r for r in records if r.get("outcome_status") in ("measured", "open", "unknown")]
+    realized = [r for r in records if r.get("net_pnl") is not None]
+    unknown = [r for r in records if r.get("outcome_status") in ("open", "unknown") and r.get("net_pnl") is None]
     pending = [r for r in records if r.get("outcome_status") == "pending"]
 
+    # The summary walks every evidenced record: net_dollars sums only realized
+    # (non-None) pnl while capital-days includes open positions' deployed
+    # capital — the denominator must not flatter results by dropping open run.
     owner = owner_summary(
         [
             {
@@ -390,28 +550,28 @@ def aggregate_group(records) -> dict:
                 "capital_days": r.get("capital_days"),
                 "open": bool(r.get("open")),
             }
-            for r in measured
+            for r in evidenced
         ]
     )
 
-    fees_known_sum = sum(r.get("fees_total") or 0.0 for r in matched if r.get("fees_known"))
-    fees_unknown_count = sum(1 for r in matched if not r.get("fees_known"))
+    fees_known_sum = sum(r.get("fees_total") or 0.0 for r in evidenced if r.get("fees_known"))
+    fees_unknown_count = sum(1 for r in evidenced if not r.get("fees_known"))
 
     return {
         "sample_size": sample_size,
-        "matched_count": len(matched),
+        "matched_count": len(evidenced),
         "pending_count": len(pending),
-        "measured_count": len(measured),
+        "measured_count": len(realized),
         "unknown_count": len(unknown),
-        "coverage_pct": round(len(matched) * 100.0 / sample_size, 1) if sample_size else 0.0,
+        "coverage_pct": round(len(evidenced) * 100.0 / sample_size, 1) if sample_size else 0.0,
         "net_dollars": owner["net_dollars"],
         "capital_days": owner["capital_days"],
         "owner_efficiency": owner["owner_efficiency"],
         "open_losses": owner["open_losses"],
         "drawdown": owner["drawdown"],
         "quoted_credit_avg_per_contract": _mean([r.get("quoted_credit_per_contract") for r in records]),
-        "filled_credit_avg_per_contract": _mean([r.get("filled_credit_per_contract") for r in matched]),
-        "avg_slippage_per_contract": _mean([r.get("slippage_per_contract") for r in matched]),
+        "filled_credit_avg_per_contract": _mean([r.get("filled_credit_per_contract") for r in evidenced]),
+        "avg_slippage_per_contract": _mean([r.get("slippage_per_contract") for r in evidenced]),
         "fees_total_known": fees_known_sum,
         "fees_unknown_count": fees_unknown_count,
     }
@@ -516,7 +676,9 @@ class OutcomeService:
         )
         snapshots = self._db.get_run_snapshots(env=env, account_id=account_id, limit=max(1, int(snapshot_limit)))
         records = build_outcome_records(snapshots, fills)
-        records = filter_records(records, ticker=ticker, preset=preset, event_tier=event_tier, dte_bucket_filter=dte_bucket)
+        records = filter_records(
+            records, ticker=ticker, preset=preset, event_tier=event_tier, dte_bucket_filter=dte_bucket
+        )
 
         event_order = sorted({str(r.get("event_tier", "")) for r in records} - {_UNTIERED})
         event_order.append(_UNTIERED)

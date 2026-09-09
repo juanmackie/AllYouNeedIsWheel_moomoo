@@ -47,7 +47,14 @@ AllYouNeedIsWheel scans the user's Moomoo watchlist for the top 3 cash-secured p
 
 ## Known gaps
 
-- The ranking half of review item S03 is RESOLVED (owner decision); the actionability/state-table half remains open.
+- Review item S03 is now RESOLVED on both halves: the ranking half by owner
+decision (capital-return-first ordering in `api/services/recommendation_ranking.py`),
+and the actionability/state-table half by implementation (read-time
+session/coverage resolution in `core/run_model.py`, live/staged/review_only
+signal modes, and copy revalidation at `api/routes/run.py::evaluate_copy_check`,
+matched by the state/action table in `SCORING.md`). No code-level gap remains
+open; the only unexercised surface is the owner-run live Windows/OpenD
+acceptance runbook (`plans/live-measure-and-tune.md`).
 
 ## Child contracts
 

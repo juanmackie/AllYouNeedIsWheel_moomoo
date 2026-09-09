@@ -2,7 +2,7 @@
  * Top Recommendations Module
  * Displays the highest-scoring option opportunities with auto-refresh
  */
-import { fetchRunState, refreshRun } from './api-run.js';
+import { fetchRunState, refreshRun, revalidateCopy } from './api-run.js';
 import { initPresetSelector } from './preset-selector.js';
 import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
@@ -241,50 +241,134 @@ function buildTicketText(rec, { staged = false } = {}) {
 }
 
 /**
- * Current copy eligibility for a candidate, recomputed at the point of use.
- * Live copy requires current complete coverage + fresh broker evidence
- * (signalsData.tradeable). Staged copy is allowed only for the explicitly
- * supported closed-market workflow on a run that had complete coverage
- * (persisted status "ready"). Partial, stale, or in-session runs with no fresh
- * evidence are review-only -- they can never produce a live or staged ticket.
+ * Copy eligibility for a candidate, derived from the backend-computed
+ * eligibility object attached to every signal at read time.
+ *   live  -> copy now (market session open, complete coverage, fresh broker quotes)
+ *   staged-> stage for next market open (market closed; re-validated against
+ *            OpenD immediately before the clipboard write)
+ *   review_only -> never copyable; reasons are surfaced on the disabled button
  */
 function copyEligibility(rec) {
-    const runTradeable = Boolean(signalsData?.tradeable);
-    const candidateEligible = Boolean(rec && rec.copy_eligible);
-    const quantityReady = Number(rec && rec.recommended_contracts || 0) > 0;
-    const marketClosed = signalsData?.run?.market_state === 'closed';
-    const persistedReady = signalsData?.run?.status === 'ready';
-    let canCopy = false;
-    let staged = false;
-    if (candidateEligible && quantityReady) {
-        if (runTradeable) {
-            canCopy = true;      // live copy: complete coverage + fresh evidence
-        } else if (marketClosed && persistedReady) {
-            canCopy = true;      // staged copy: supported closed-market workflow
-            staged = true;
-        }
-    }
-    return { canCopy, staged };
+    const el = (rec && rec.eligibility) || {};
+    const mode = (el.mode === 'live' || el.mode === 'staged') ? el.mode : 'review_only';
+    const reasons = Array.isArray(el.reasons) && el.reasons.length
+        ? el.reasons.slice()
+        : ['candidate is not copy eligible'];
+    const canCopy = mode === 'live' || mode === 'staged';
+    return { canCopy, mode, reasons, staged: mode === 'staged' };
+}
+
+function contractFingerprint(rec) {
+    const exp = String((rec && rec.expiration) || '').replace(/-/g, '');
+    const strike = Number(rec && rec.strike);
+    if (!rec || !rec.ticker || !rec.option_type || !exp || !Number.isFinite(strike)) return '';
+    return [String(rec.ticker).toUpperCase(), String(rec.option_type).toUpperCase(), exp, strike.toFixed(2)].join('|');
+}
+
+function setButtonBusy(btn, label) {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> ${label}`;
+}
+
+function setButtonBlocked(btn, reasons, kind = 'blocked') {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.classList.add(kind === 'error' ? 'btn-danger' : 'btn-warning');
+    btn.classList.remove('btn-success', kind === 'error' ? 'btn-warning' : 'btn-danger');
+    btn.innerHTML = kind === 'error'
+        ? '<i class="bi bi-exclamation-triangle"></i> Not copied'
+        : '<i class="bi bi-eye"></i> Review only';
+    btn.title = ((reasons || []).filter(Boolean).join(' · ') || 'not copy eligible');
 }
 
 async function copyTicket(rec, btn) {
-    // Revalidate against the current run/candidate before writing the clipboard (C03).
-    const { canCopy, staged } = copyEligibility(rec);
+    // Revalidate against the CURRENT run/candidate before writing the clipboard
+    // (P1a C03): a fresh read-only GET awaited right before the write. A run
+    // change, re-ranked/replaced contract, review_only outcome, fetch failure,
+    // or a market open/close transition all abort the copy (never silently
+    // copying a different value) and require a second click after a refresh.
+    const { canCopy, mode: intent, staged } = copyEligibility(rec);
     if (!canCopy) return;
-    const text = buildTicketText(rec, { staged });
+
+    const displayedRunId = (signalsData && signalsData.run && signalsData.run.run_id) || '';
     const original = btn.innerHTML;
+
+    setButtonBusy(btn, 'Checking…');
+
+    let reval;
+    try {
+        reval = await revalidateCopy({
+            run_id: displayedRunId,
+            ticker: rec.ticker,
+            option_type: rec.option_type,
+            expiration: rec.expiration,
+            strike: rec.strike,
+        });
+    } catch (err) {
+        console.error('Copy revalidation failed:', err);
+        setButtonBlocked(btn, ['revalidation request failed — verify and retry'], 'error');
+        return; // never write to clipboard
+    }
+
+    const currentRunId = (reval && reval.run_id) || '';
+    if (reval && reval.matched_run === false) {
+        // The run changed under the click: never copy, refresh the card, second click.
+        setButtonBlocked(btn, ['run changed — review and click again'], 'error');
+        loadTopRecommendations(false);
+        return;
+    }
+    if (displayedRunId && currentRunId && displayedRunId !== currentRunId) {
+        // Redundant safety net for the same transition above.
+        setButtonBlocked(btn, ['run changed — review and click again'], 'error');
+        loadTopRecommendations(false);
+        return;
+    }
+
+    if (!reval || reval.ok === false) {
+        setButtonBlocked(btn, (reval && reval.reasons) || ['copy check failed'], 'error');
+        return;
+    }
+    if (reval.mode === 'review_only') {
+        setButtonBlocked(btn, reval.reasons || ['not copy eligible'], 'blocked');
+        return; // write nothing
+    }
+
+    if (reval.matched_contract === false) {
+        // The contract left the shortlist (re-ranked or replaced).
+        setButtonBlocked(btn, ['contract changed — review and click again'], 'error');
+        loadTopRecommendations(false);
+        return;
+    }
+    if (reval.mode !== intent) {
+        // Market open/close transition between page load and the click.
+        setButtonBlocked(
+            btn,
+            [`market ${reval.mode === 'staged' ? 'closed' : 'opened'} since page load — review and click again`],
+            'error'
+        );
+        loadTopRecommendations(false);
+        return;
+    }
+
+    // Copy the CURRENT contract + mode from the revalidated response.
+    const current = (reval.contract && Object.keys(reval.contract).length) ? reval.contract : rec;
+    const text = buildTicketText({ ...rec, ...current }, { staged: reval.mode === 'staged' });
     try {
         await navigator.clipboard.writeText(text);
+        btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-check-circle"></i> Copied';
         btn.classList.add('btn-success');
     } catch (err) {
         console.error('Clipboard failed:', err);
+        btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-x-circle"></i> Copy failed';
         btn.classList.add('btn-danger');
     }
     setTimeout(() => {
         btn.innerHTML = original;
-        btn.classList.remove('btn-success', 'btn-danger');
+        btn.disabled = !canCopy;
+        btn.classList.remove('btn-success', 'btn-danger', 'btn-warning');
     }, 2000);
 }
 
@@ -459,22 +543,20 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     // Copy-to-ticket (explicit; clipboard success/failure feedback)
     const copyBtn = clone.querySelector('.copy-ticket-btn');
     if (copyBtn) {
-        const runTradeable = Boolean(signalsData?.tradeable);
-        // Copy eligibility is recomputed at the point of use (C03): live copy needs
-        // current complete coverage + fresh broker evidence; staging is allowed only
-        // for the supported closed-market workflow on a complete-coverage run.
-        const { canCopy, staged } = copyEligibility(rec);
+        // Copy eligibility is backend-computed per response and reflects mode
+        // + reasons. Buttons are disabled for review_only with reasons visible.
+        const { canCopy, staged, reasons } = copyEligibility(rec);
         copyBtn.disabled = !canCopy;
         if (canCopy) {
-            if (!staged) {
+            if (staged) {
+                copyBtn.title = 'Stage ticket — US market closed; re-validated against OpenD before copy';
+                copyBtn.innerHTML = '<i class="bi bi-clock"></i> Stage ticket';
+            } else {
                 copyBtn.title = 'Copy a manual ticket draft (live broker quote)';
                 copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy ticket';
-            } else {
-                copyBtn.title = 'Copy a staged limit ticket — US market closed; verify live quote at open';
-                copyBtn.innerHTML = '<i class="bi bi-clock"></i> Stage ticket';
             }
         } else {
-            copyBtn.title = 'Review only: candidate is not copy eligible';
+            copyBtn.title = 'Review only: ' + reasons.join(' · ');
             copyBtn.innerHTML = '<i class="bi bi-eye"></i> Review only';
         }
         copyBtn.addEventListener('click', () => {

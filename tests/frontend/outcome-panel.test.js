@@ -193,6 +193,33 @@ describe('outcome-panel rendering', () => {
     expect(totals).toContain('Capital-days');
   });
 
+  it('shows em dash (never $0.00) for open/unknown net P&L, slippage and $/day', async () => {
+    const payload = samplePayload();
+    const open = payload.outcomes[1];
+    open.outcome_status = 'open';
+    open.open = true;
+    open.open_contracts = 1;
+    open.contracts_sold = 1;
+    open.filled_credit_per_contract = 2.0;
+    open.net_pnl = null;
+    open.slippage_per_contract = null;
+    mockFetchOnce(payload);
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+
+    const rows = document.getElementById('outcome-records').querySelectorAll('.outcome-record-row');
+    const cells = [...rows[1].querySelectorAll('td')].map((td) => td.textContent.trim());
+    expect(cells.join('|')).toContain('open');
+    expect(cells[5]).toBe('—'); // slippage unknown, not $0.00
+    expect(cells[6]).toBe('—'); // net P&L unknown while the obligation is open
+    expect(cells[8]).toBe('—'); // $/day unknown, not $0.00
+
+    // Group with null net_dollars must render an em dash, not $0.00.
+    const tickerRows = document.getElementById('outcome-group-ticker').querySelectorAll('tr');
+    expect(tickerRows[1].textContent).not.toContain('$0.00');
+  });
+
+
   it('renders per-group summaries with sample size and coverage', async () => {
     mockFetchOnce(samplePayload());
     const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');

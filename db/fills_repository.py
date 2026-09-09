@@ -205,10 +205,7 @@ class FillsRepository:
         """Return distinct order ids whose fee allocation is still unknown."""
         try:
             with pooled_connection(self.db_path) as conn:
-                query = (
-                    "SELECT DISTINCT order_id FROM option_fills "
-                    "WHERE order_id != '' AND fees IS NULL"
-                )
+                query = "SELECT DISTINCT order_id FROM option_fills WHERE order_id != '' AND fees IS NULL"
                 params = []
                 where, identity_params = _identity_where(env, account_id)
                 query += where

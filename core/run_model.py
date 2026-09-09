@@ -11,7 +11,11 @@ Completed snapshot states:
 - planning: preflight infeasible or market-closed preview; read-only
 - stale:    last successful snapshot aged beyond the freshness window
 
-Only ``ready`` permits copy-to-ticket actions.
+Copy eligibility is computed at read time (never persisted) into per-response
+mode: ``live`` (market session open + complete coverage + fresh per-symbol
+broker quotes), ``staged`` (market session closed + complete coverage; the
+last-session evidence is re-fetched directly from OpenD at copy time), or
+``review_only`` (everything else). Staging never silently reuses cached data.
 """
 
 from __future__ import annotations
@@ -21,7 +25,34 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from core.utils import market_now
+
 ACTIONABLE_STATES = ("ready",)
+
+# Read-time session states computed from cached broker evidence + the US
+# Eastern market clock. ``holiday_shortened`` means the wall clock says the
+# session should be open but cached broker quotes are not fresh (holiday,
+# shortened day, or a stale run) — live is blocked and staged is allowed only
+# after the copy-time OpenD fetch confirms the broker is not trading now.
+SESSION_OPEN = "open"
+SESSION_CLOSED = "closed"
+SESSION_HOLIDAY_SHORTENED = "holiday_shortened"
+SESSION_UNKNOWN = "unknown"
+SESSION_STAGED_STATES = (SESSION_CLOSED, SESSION_HOLIDAY_SHORTENED)
+
+# Copy mode values attached to each signal at read time.
+MODE_LIVE = "live"
+MODE_STAGED = "staged"
+MODE_REVIEW_ONLY = "review_only"
+
+
+def _scheduled_market_open(now_et: datetime) -> bool:
+    """US session by wall clock (Mon-Fri 9:30-16:00 ET); holidays not modeled."""
+    if now_et.weekday() >= 5:
+        return False
+    open_dt = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_dt = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    return open_dt <= now_et <= close_dt
 
 
 def _fresh_quote_map(quote_fetched_at: dict, max_age_sec: int, now: datetime) -> tuple[bool, list[str]]:
@@ -42,7 +73,155 @@ def _fresh_quote_map(quote_fetched_at: dict, max_age_sec: int, now: datetime) ->
     return not stale_symbols, stale_symbols
 
 
-def recompute_effective_snapshot(snapshot: dict | None, now: datetime | None = None) -> dict | None:
+def resolve_session_context(run: dict | None, now_et: datetime | None = None) -> tuple[str, list[str]]:
+    """Read-time US market session context from cached broker evidence.
+
+    Returns ``(state, reasons)`` with state one of ``open`` / ``closed`` /
+    ``holiday_shortened`` / ``unknown``. ``unknown`` (no broker quote evidence
+    at all) demotes both live and staged to review_only. ``holiday_shortened``
+    is scheduled-open-by-clock but stale evidence: live is blocked there and
+    staged remains eligible only for the copy-time OpenD confirmation.
+    """
+    run = run or {}
+    evidence = {str(k): str(v) for k, v in (run.get("quote_fetched_at") or {}).items() if v}
+    if not evidence:
+        return SESSION_UNKNOWN, ["no broker session evidence to confirm the session"]
+    now_et = now_et or market_now()
+    if not _scheduled_market_open(now_et):
+        return SESSION_CLOSED, []
+    fresh, _ = _fresh_quote_map(
+        evidence,
+        int(run.get("max_tradeable_age_sec", 300) or 300),
+        now_et.astimezone(timezone.utc),
+    )
+    if fresh:
+        return SESSION_OPEN, []
+    return SESSION_HOLIDAY_SHORTENED, [
+        "scheduled market hours not confirmed by fresh broker quotes (holiday, shortened day, or stale run)"
+    ]
+
+
+def resolve_coverage_truth(run: dict | None, session_state: str) -> tuple[str, list[str]]:
+    """Classify run coverage: complete / partial / planning_quota / unknown.
+
+    ``status`` alone cannot separate a closed-market complete run (stageable)
+    from a quota-truncated planning run (review_only), so coverage truth is
+    derived from the coverage counters.
+    """
+    run = run or {}
+    scanned = int(run.get("coverage_scanned", 0) or 0)
+    total = int(run.get("coverage_total", 0) or 0)
+    complete = bool(run.get("coverage_complete", False) or (total > 0 and scanned >= total))
+    if total <= 0:
+        return "unknown", ["no coverage record in this run"]
+    if complete:
+        return "complete", []
+    if run.get("status") == "planning":
+        return "planning_quota", [
+            "planning/limited run — coverage incomplete (quota or preview) so nothing can be staged"
+        ]
+    return "partial", [f"partial coverage ({scanned}/{total} symbols) — copy blocked"]
+
+
+def compute_signal_eligibility(
+    candidate: dict | None,
+    *,
+    session_state: str,
+    coverage_truth: str,
+    quotes_fresh: bool,
+    coverage_reasons: list[str] | None = None,
+    session_reasons: list[str] | None = None,
+) -> tuple[str, list[str]]:
+    """Pure per-candidate mode decision (display truth, no broker I/O).
+
+    Returns ``(mode, reasons)``. Staged here is display-only intent; the
+    authoritative last-session OpenD evidence is revalidated at copy time.
+    """
+    candidate = candidate or {}
+    reasons: list[str] = []
+    if not bool(candidate.get("copy_eligible")):
+        reasons.append("candidate is not copy eligible")
+    if int(candidate.get("recommended_contracts", 0) or 0) <= 0:
+        reasons.append("no recommended contract quantity")
+    if reasons:
+        return MODE_REVIEW_ONLY, reasons
+
+    if session_state == SESSION_UNKNOWN:
+        reasons.extend(session_reasons or ["no broker session evidence"])
+        return MODE_REVIEW_ONLY, reasons
+
+    if session_state == SESSION_OPEN:
+        if coverage_truth != "complete":
+            return MODE_REVIEW_ONLY, list(coverage_reasons or ["coverage incomplete"])
+        if not quotes_fresh:
+            return MODE_REVIEW_ONLY, ["broker quote evidence is stale"]
+        return MODE_LIVE, []
+
+    # Market closed (evening/weekend/holiday): staged needs complete coverage
+    # plus broker evidence that came from a live last session (not a persisted
+    # fallback snapshot). The copy-time OpenD fetch re-verifies this.
+    if coverage_truth != "complete":
+        return MODE_REVIEW_ONLY, list(coverage_reasons or ["coverage incomplete — cannot stage"])
+    source = str(candidate.get("chain_source") or candidate.get("data_source") or "").strip().lower()
+    if source == "persisted-broker" or source == "persisted":
+        reasons.append("evidence is a persisted broker fallback — staging blocked")
+        return MODE_REVIEW_ONLY, reasons
+    return MODE_STAGED, list(session_reasons or [])
+
+
+def _max_tradeable_age_sec(run: dict) -> int:
+    try:
+        return max(0, int(run.get("max_tradeable_age_sec", 300) or 300))
+    except (TypeError, ValueError):
+        return 300
+
+
+def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: datetime | None = None) -> dict:
+    """Attach read-time eligibility to a snapshot view (never persisted).
+
+    Adds ``view["eligibility"]`` (session context + coverage truth + freshness)
+    and a per-signal ``eligibility = {"mode", "reasons"}`` dict.
+    """
+    run = view.get("run") or {}
+    if not run:
+        return view
+    now_utc = now_utc or datetime.now(timezone.utc)
+    session_state, session_reasons = resolve_session_context(run, now_et)
+    coverage_truth, coverage_reasons = resolve_coverage_truth(run, session_state)
+    fresh, stale_symbols = _fresh_quote_map(
+        run.get("quote_fetched_at") or {},
+        _max_tradeable_age_sec(run),
+        now_utc,
+    )
+    view["eligibility"] = {
+        "run_id": run.get("run_id", ""),
+        "session": {"state": session_state, "reasons": session_reasons},
+        "coverage": {
+            "truth": coverage_truth,
+            "scanned": int(run.get("coverage_scanned", 0) or 0),
+            "total": int(run.get("coverage_total", 0) or 0),
+            "reasons": coverage_reasons,
+        },
+        "quote_freshness": {"fresh": bool(fresh), "stale_symbols": stale_symbols},
+    }
+    for candidate in view.get("signals") or []:
+        if not isinstance(candidate, dict):
+            continue
+        mode, reasons = compute_signal_eligibility(
+            candidate,
+            session_state=session_state,
+            coverage_truth=coverage_truth,
+            quotes_fresh=fresh,
+            coverage_reasons=coverage_reasons,
+            session_reasons=session_reasons,
+        )
+        candidate["eligibility"] = {"mode": mode, "reasons": reasons}
+    return view
+
+
+def recompute_effective_snapshot(
+    snapshot: dict | None, now: datetime | None = None, now_et: datetime | None = None
+) -> dict | None:
     """Return a read-only effective view without changing persisted history."""
     if not isinstance(snapshot, dict):
         return snapshot
@@ -65,6 +244,7 @@ def recompute_effective_snapshot(snapshot: dict | None, now: datetime | None = N
     view["tradeable"] = base_tradeable
     view["effective_status"] = "stale" if run.get("status") == "ready" and not base_tradeable else run.get("status")
     view["effective_stale_symbols"] = stale_symbols
+    build_eligibility_view(view, now, now_et)
     return view
 
 

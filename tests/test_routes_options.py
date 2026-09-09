@@ -931,7 +931,13 @@ class TestOutcomeAnalytics(unittest.TestCase):
         with app.test_client() as client:
             resp = client.get(
                 "/api/options/analytics/outcomes",
-                query_string={"ticker": "AAPL", "preset": "balanced", "event_tier": "earnings_week", "dte_bucket": "0-7", "limit": "25"},
+                query_string={
+                    "ticker": "AAPL",
+                    "preset": "balanced",
+                    "event_tier": "earnings_week",
+                    "dte_bucket": "0-7",
+                    "limit": "25",
+                },
             )
             self.assertEqual(resp.status_code, 200)
             kwargs = mock_service.get_outcome_summary.call_args.kwargs
@@ -954,7 +960,11 @@ class TestOutcomeAnalytics(unittest.TestCase):
 
         mock_probe.return_value = {"status": "connected"}
         mock_service = MagicMock()
-        mock_service.ingest_broker_evidence.return_value = {"ok": True, "fills": {"ok": True}, "cash_flows": {"ok": True, "ingested": 0}}
+        mock_service.ingest_broker_evidence.return_value = {
+            "ok": True,
+            "fills": {"ok": True},
+            "cash_flows": {"ok": True, "ingested": 0},
+        }
         mock_get_svc.return_value = mock_service
         with app.test_client() as client:
             resp = client.post("/api/options/analytics/outcomes/ingest?days=500&cash_flow_days=99")

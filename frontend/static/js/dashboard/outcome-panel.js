@@ -44,6 +44,11 @@ function _money(value) {
   return Number.isFinite(n) ? formatCurrency(n) : '—';
 }
 
+/** null/undefined/'' mean "unknown" → NaN, so the UI shows an em dash, never $0.00. */
+function _optNum(value) {
+  return value == null || value === '' ? NaN : Number(value);
+}
+
 /** Signed currency with explicit +/−, for deltas like slippage / net P&L. */
 function _signedMoney(value) {
   const n = Number(value);
@@ -95,14 +100,15 @@ function renderTotals(totals) {
     return;
   }
   const coverage = Number(totals.coverage_pct);
-  const efficiency = Number(totals.owner_efficiency);
-  const avgSlippage = Number(totals.avg_slippage_per_contract);
+  const efficiency = _optNum(totals.owner_efficiency);
+  const avgSlippage = _optNum(totals.avg_slippage_per_contract);
+  const netDollars = _optNum(totals.net_dollars);
   el.innerHTML = [
     metricCell('Signals (sample)', String(_count(totals.sample_size))),
     metricCell('Coverage', Number.isFinite(coverage) ? `${coverage.toFixed(1)}%` : '—'),
     metricCell('Measured / Unknown', `${_count(totals.measured_count)} / ${_count(totals.unknown_count)}`),
     metricCell('Pending', String(_count(totals.pending_count))),
-    metricCell('Net outcome', _signedMoney(totals.net_dollars), Number(totals.net_dollars) < 0 ? 'ft-td-down' : 'ft-td-signal'),
+    metricCell('Net outcome', _signedMoney(netDollars), netDollars < 0 ? 'ft-td-down' : 'ft-td-signal'),
     metricCell('Capital-days', String(Math.round(_count(totals.capital_days)))),
     metricCell('Owner $/day', Number.isFinite(efficiency) ? `$${efficiency.toFixed(2)}` : '—'),
     metricCell('Avg slippage', Number.isFinite(avgSlippage) ? _signedMoney(avgSlippage) : '—'),
@@ -110,15 +116,16 @@ function renderTotals(totals) {
 }
 
 function groupRow(group) {
-  const efficiency = Number(group.owner_efficiency);
+  const efficiency = _optNum(group.owner_efficiency);
   const coverage = Number(group.coverage_pct);
+  const netDollars = _optNum(group.net_dollars);
   return `<tr>
     <td class="ft-td-bold">${escapeHtml(String(group.key || '—'))}</td>
     <td class="ft-td-right">${String(_count(group.sample_size))}</td>
     <td class="ft-td-right">${String(_count(group.measured_count))}
       <span class="ft-td-soft">/${_count(group.unknown_count)}</span></td>
     <td class="ft-td-right">${Number.isFinite(coverage) ? `${coverage.toFixed(1)}%` : '—'}</td>
-    <td class="ft-td-right ${Number(group.net_dollars) < 0 ? 'ft-td-down' : ''}">${_signedMoney(group.net_dollars)}</td>
+    <td class="ft-td-right ${netDollars < 0 ? 'ft-td-down' : ''}">${_signedMoney(netDollars)}</td>
     <td class="ft-td-right">${String(Math.round(_count(group.capital_days)))}</td>
     <td class="ft-td-right">${Number.isFinite(efficiency) ? `$${efficiency.toFixed(2)}` : '—'}</td>
   </tr>`;
@@ -161,9 +168,9 @@ function fillRow(fill) {
 
 function recordRow(record) {
   const fills = Array.isArray(record.fills) ? record.fills : [];
-  const net = Number(record.net_pnl);
-  const efficiency = Number(record.owner_efficiency);
-  const slippage = Number(record.slippage_per_contract);
+  const net = _optNum(record.net_pnl);
+  const efficiency = _optNum(record.owner_efficiency);
+  const slippage = _optNum(record.slippage_per_contract);
   const status = String(record.outcome_status || 'pending');
   const rows = [`<tr class="outcome-record-row" data-expandable="true" tabindex="0" aria-expanded="false">
     <td class="ft-td-bold">${_contractLabel(record)}</td>

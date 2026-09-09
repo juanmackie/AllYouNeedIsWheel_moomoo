@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../../frontend/static/js/dashboard/api-run.js', () => ({
   fetchRunState: vi.fn(),
   refreshRun: vi.fn(),
+  revalidateCopy: vi.fn(),
 }));
 
 vi.mock('../../frontend/static/js/utils/state-model.js', () => ({
@@ -639,13 +640,14 @@ describe('top-recommendations source badges', () => {
     const { initializeTopRecommendations } = await import(
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
-    const { fetchRunState } = await import(
+    const { fetchRunState, revalidateCopy } = await import(
       '../../frontend/static/js/dashboard/api-run.js'
     );
 
     fetchRunState.mockResolvedValue({
       success: true,
       tradeable: true,
+      run: { run_id: 'ad-hoc-live', market_state: 'open', status: 'ready' },
       signals: [{
         rank: 1, ticker: 'AAPL', option_type: 'PUT', strike: 140, expiration: '20240315', dte: 21,
         copy_eligible: true, recommended_contracts: 1,
@@ -653,9 +655,14 @@ describe('top-recommendations source badges', () => {
         max_contracts: 1, cash_required: 14000.0, chain_source: 'broker',
         signal_type: 'csp', profile_type: 'monthly',
         wheel_decision: { confidence_score: 100 },
+        eligibility: { mode: 'live', reasons: [] },
       }],
       count: 1,
       generated_at: '2026-05-24T12:00:00',
+    });
+    revalidateCopy.mockResolvedValue({
+      ok: true, matched_run: true, matched_contract: true, mode: 'live',
+      run_id: 'ad-hoc-live', reasons: [], verified_at: '2026-05-24T12:00:01',
     });
 
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -690,7 +697,7 @@ describe('top-recommendations source badges', () => {
     const { initializeTopRecommendations } = await import(
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
-    const { fetchRunState } = await import(
+    const { fetchRunState, revalidateCopy } = await import(
       '../../frontend/static/js/dashboard/api-run.js'
     );
 
@@ -698,7 +705,7 @@ describe('top-recommendations source badges', () => {
       success: true,
       tradeable: false,
       status: 'ready',
-      run: { market_state: 'closed', status: 'ready' },
+      run: { run_id: 'ad-hoc-staged', market_state: 'closed', status: 'ready' },
       signals: [{
         rank: 1, ticker: 'TSLA', option_type: 'PUT', strike: 200, expiration: '20240315', dte: 21,
         copy_eligible: true, recommended_contracts: 2,
@@ -706,9 +713,14 @@ describe('top-recommendations source badges', () => {
         max_contracts: 2, cash_required: 20000.0, chain_source: 'broker',
         signal_type: 'csp', profile_type: 'monthly', event_tier: 'event_unknown',
         wheel_decision: { confidence_score: 100 },
+        eligibility: { mode: 'staged', reasons: [] },
       }],
       count: 1,
       generated_at: '2026-05-24T12:00:00',
+    });
+    revalidateCopy.mockResolvedValue({
+      ok: true, matched_run: true, matched_contract: true, mode: 'staged',
+      run_id: 'ad-hoc-staged', reasons: [], verified_at: '2026-05-24T12:00:01',
     });
 
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -741,16 +753,30 @@ describe('C03 copy eligibility at the point of use', () => {
     max_contracts: 1, cash_required: 30000.0, chain_source: 'broker',
     signal_type: 'csp', profile_type: 'monthly',
     wheel_decision: { confidence_score: 100 },
+    eligibility: { mode: 'live', reasons: [] },
   };
 
-  async function renderWith(envelope) {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  async function renderWith(envelope, reval) {
+    setupDOM();
     const { initializeTopRecommendations } = await import(
       '../../frontend/static/js/dashboard/top-recommendations.js'
     );
-    const { fetchRunState } = await import(
+    const { fetchRunState, revalidateCopy } = await import(
       '../../frontend/static/js/dashboard/api-run.js'
     );
     fetchRunState.mockResolvedValue(envelope);
+    revalidateCopy.mockResolvedValue(
+      reval ?? {
+        ok: true, matched_run: true, matched_contract: true,
+        mode: envelope.signals[0].eligibility.mode,
+        run_id: envelope.run.run_id, reasons: [], verified_at: '2026-05-24T12:00:01',
+      }
+    );
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     await initializeTopRecommendations();
@@ -764,8 +790,9 @@ describe('C03 copy eligibility at the point of use', () => {
       success: true,
       tradeable: false,
       status: 'partial',
-      run: { market_state: 'open', status: 'partial', coverage_scanned: 2, coverage_total: 5 },
-      signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
+      run: { run_id: 'c03-run', market_state: 'open', status: 'partial', coverage_scanned: 2, coverage_total: 5 },
+      signals: [{ ...candidate, eligibility: { mode: 'review_only', reasons: ['partial watchlist coverage — complete-universe needs coverage_scanned == coverage_total'] } }],
+      count: 1, generated_at: '2026-05-24T12:00:00',
     });
     const btn = document.querySelector('.copy-ticket-btn');
     expect(btn).toBeTruthy();
@@ -781,8 +808,9 @@ describe('C03 copy eligibility at the point of use', () => {
       success: true,
       tradeable: false,
       status: 'stale',
-      run: { market_state: 'open', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
-      signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
+      run: { run_id: 'c03-run', market_state: 'open', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
+      signals: [{ ...candidate, copy_eligible: true, eligibility: { mode: 'review_only', reasons: ['stale broker quote timestamps while the session is open'] } }],
+      count: 1, generated_at: '2026-05-24T12:00:00',
     });
     const btn = document.querySelector('.copy-ticket-btn');
     expect(btn.disabled).toBe(true);
@@ -797,8 +825,9 @@ describe('C03 copy eligibility at the point of use', () => {
       success: true,
       tradeable: false,
       status: 'ready',
-      run: { market_state: 'closed', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
-      signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
+      run: { run_id: 'c03-run', market_state: 'closed', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
+      signals: [{ ...candidate, eligibility: { mode: 'staged', reasons: [] } }],
+      count: 1, generated_at: '2026-05-24T12:00:00',
     });
     const btn = document.querySelector('.copy-ticket-btn');
     expect(btn.disabled).toBe(false);
@@ -814,7 +843,7 @@ describe('C03 copy eligibility at the point of use', () => {
       success: true,
       tradeable: true,
       status: 'ready',
-      run: { market_state: 'open', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
+      run: { run_id: 'c03-run', market_state: 'open', status: 'ready', coverage_scanned: 5, coverage_total: 5 },
       signals: [candidate], count: 1, generated_at: '2026-05-24T12:00:00',
     });
     const btn = document.querySelector('.copy-ticket-btn');
@@ -823,6 +852,118 @@ describe('C03 copy eligibility at the point of use', () => {
     btn.click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0][0]).not.toContain('STAGED FOR US MARKET OPEN');
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('P1a revalidate-then-copy', () => {
+  const candidate = {
+    rank: 1, ticker: 'MSFT', option_type: 'PUT', strike: 300, expiration: '20240315', dte: 21,
+    copy_eligible: true, recommended_contracts: 1,
+    bid: 2.50, ask: 3.00, mid_price: 2.75, premium_per_contract: 275.0,
+    max_contracts: 1, cash_required: 30000.0, chain_source: 'broker',
+    signal_type: 'csp', profile_type: 'monthly',
+    wheel_decision: { confidence_score: 100 },
+    eligibility: { mode: 'live', reasons: [] },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  const baseRun = { run_id: 'c03-run', market_state: 'open', status: 'ready', coverage_scanned: 5, coverage_total: 5 };
+
+  async function renderWith(signal, reval, revalCalls = null) {
+    setupDOM();
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState, revalidateCopy } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
+    );
+    fetchRunState.mockResolvedValue({
+      success: true, tradeable: true, status: 'ready',
+      run: baseRun, signals: [signal], count: 1, generated_at: '2026-05-24T12:00:00',
+    });
+    if (revalCalls) {
+      revalidateCopy.mockImplementation(revalCalls);
+    } else {
+      revalidateCopy.mockResolvedValue(reval);
+    }
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+    return { writeText, revalidateCopy, fetchRunState };
+  }
+
+  it('aborts the copy and refreshes when the run changed under the click', async () => {
+    const { writeText, revalidateCopy, fetchRunState } = await renderWith(
+      candidate,
+      {
+        ok: true, matched_run: false, matched_contract: true,
+        mode: 'live', run_id: 'new-run', reasons: [], verified_at: '2026-05-24T12:00:01',
+      }
+    );
+    const btn = document.querySelector('.copy-ticket-btn');
+    btn.click();
+    await vi.waitFor(() => expect(revalidateCopy).toHaveBeenCalledTimes(1));
+    expect(writeText).not.toHaveBeenCalled();
+    // refresh re-fetches the run and requires a second click
+    await vi.waitFor(() => expect(fetchRunState.mock.calls.length).toBeGreaterThan(1));
+    vi.unstubAllGlobals();
+  });
+
+  it('writes nothing when the revalidated outcome is review_only', async () => {
+    const { writeText, revalidateCopy, fetchRunState } = await renderWith(
+      candidate,
+      {
+        ok: true, matched_run: true, matched_contract: true,
+        mode: 'review_only', run_id: 'c03-run',
+        reasons: ['staged evidence must be re-checked against OpenD at copy time'], verified_at: '2026-05-24T12:00:01',
+      }
+    );
+    const btn = document.querySelector('.copy-ticket-btn');
+    btn.click();
+    await vi.waitFor(() => expect(revalidateCopy).toHaveBeenCalledTimes(1));
+    expect(writeText).not.toHaveBeenCalled();
+    expect(fetchRunState.mock.calls.length).toBe(1); // no auto-refresh after review_only
+    await vi.waitFor(() => expect(btn.textContent).toContain('Review only'));
+    vi.unstubAllGlobals();
+  });
+
+  it('writes nothing when the revalidation fetch itself fails', async () => {
+    const { writeText, revalidateCopy, fetchRunState } = await renderWith(
+      candidate,
+      { ok: true, matched_run: true, matched_contract: true, mode: 'live', run_id: 'c03-run', reasons: [] },
+      () => Promise.reject(new Error('network down'))
+    );
+    const btn = document.querySelector('.copy-ticket-btn');
+    btn.click();
+    await vi.waitFor(() => expect(revalidateCopy).toHaveBeenCalledTimes(1));
+    expect(writeText).not.toHaveBeenCalled();
+    expect(fetchRunState.mock.calls.length).toBe(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('aborts and refreshes on a market close/open transition since page load', async () => {
+    // The card rendered when the market was closed (intent staged); the
+    // read-time revalidation now reports the market is open (mode live).
+    const { writeText, revalidateCopy, fetchRunState } = await renderWith(
+      { ...candidate, eligibility: { mode: 'staged', reasons: [] } },
+      {
+        ok: true, matched_run: true, matched_contract: true,
+        mode: 'live', run_id: 'c03-run', reasons: [], verified_at: '2026-05-24T12:00:01',
+      }
+    );
+    const btn = document.querySelector('.copy-ticket-btn');
+    expect(btn.textContent).toContain('Stage ticket');
+    btn.click();
+    await vi.waitFor(() => expect(revalidateCopy).toHaveBeenCalledTimes(1));
+    expect(writeText).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(fetchRunState.mock.calls.length).toBeGreaterThan(1));
     vi.unstubAllGlobals();
   });
 });

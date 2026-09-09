@@ -5,6 +5,10 @@ fills (deals, fees, share movements) into owner-facing outcome numbers:
 
 - net P&L per recommendation = option premium P&L + underlying share P&L − fees
 - slippage/leakage of a fill against the quoted premium that produced the signal
+- units: recommendation quotes are stored dollars-per-contract while broker
+  fill prices arrive per-share; ``broker_price_to_contract_credit`` (×100) is the
+  one conversion point so a $200 quoted contract credit filled at $2/share is
+  $200, never a −$198 slippage.
 - capital-days accounting (the denominator of the owner-efficiency metric)
 - owner summary: net dollars, net P&L / capital-day, open losses, drawdown
 
@@ -89,6 +93,18 @@ def parse_timestamp(value) -> "datetime | None":
 
 
 # ── Fill money math ──────────────────────────────────────────────────────
+
+
+def broker_price_to_contract_credit(price_per_share: float) -> float:
+    """Convert a broker per-share option price to dollars-per-contract (×100).
+
+    Recommendation quotes are stored dollars-per-contract; broker fill prices
+    come through OpenD per-share. This is the single conversion point: every
+    downstream credit/slippage figure derives from it so units can never mix
+    (a $200 quoted contract credit filled at $2/share is $200, not a -$198
+    slippage). Missing/NaN prices convert to 0.0 (never fabricated upward).
+    """
+    return _to_float(price_per_share) * CONTRACT_MULTIPLIER
 
 
 def gross_premium_dollars(price_per_contract: float, qty: float, multiplier: int = CONTRACT_MULTIPLIER) -> float:

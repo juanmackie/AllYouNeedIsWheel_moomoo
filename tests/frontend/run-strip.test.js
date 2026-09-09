@@ -91,7 +91,10 @@ describe('run-strip freshness rendering', () => {
     const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
     await loadRunStrip();
 
-    expect(els['run-freshness'].textContent).toContain('UTC fetch');
+    // Actual broker/market fetch timestamp rendered in UTC (not local "now").
+    const expectedUtc = new Date(now - 10_000).toISOString().slice(11, 19);
+    expect(els['run-freshness'].textContent).toContain(`fetch ${expectedUtc}Z`);
+    expect(els['run-freshness'].textContent).toContain('· data');
     expect(els['run-freshness'].textContent).toContain('(max 300s)');
     expect(els['run-freshness'].textContent).not.toContain('NaN');
   });
@@ -121,7 +124,7 @@ describe('run-strip freshness rendering', () => {
 
     expect(els['run-status'].textContent).toBe('FAILED');
     expect(els['run-status'].className).toContain('bg-danger');
-    expect(els['run-freshness'].textContent).toContain('UTC fetch');
+    expect(els['run-freshness'].textContent).toMatch(/fetch \d{2}:\d{2}:\d{2}Z/);
     expect(els['run-freshness'].textContent).toContain('(max 300s)');
   });
 
@@ -166,8 +169,23 @@ describe('run-strip freshness rendering', () => {
     const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
     await loadRunStrip();
 
-    expect(els['run-freshness'].textContent).toContain('UTC fetch');
-    expect(els['run-freshness'].textContent).toMatch(/data \d+s old/);
+    expect(els['run-freshness'].textContent).toContain('fetch');
+    expect(els['run-freshness'].textContent).toMatch(/· data \d+s old/);
     expect(els['run-freshness'].textContent).not.toContain('quote age');
+  });
+
+  it('surfaces a thrown network exception as COMM ERROR without losing last-good results', async () => {
+    const els = setupDOM();
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      if (url === '/api/run') return Promise.reject(new TypeError('network down'));
+      if (url === '/api/settings') return Promise.resolve({ ok: true, json: async () => ({ active: 'balanced', presets: {} }) });
+      return Promise.resolve({ ok: false, json: async () => ({}) });
+    }));
+
+    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    await loadRunStrip();
+
+    expect(els['run-status'].textContent).toBe('COMM ERROR');
+    expect(els['run-coverage'].textContent).toBe('cannot reach run API');
   });
 });

@@ -340,8 +340,8 @@ class OptionsDatabase:
     def get_earnings_date(self, ticker):
         return self._earnings.get_earnings_date(ticker)
 
-    def get_pending_earnings(self, days_threshold=7):
-        return self._earnings.get_pending_earnings(days_threshold=days_threshold)
+    def get_pending_earnings(self, days_threshold=7, as_of=None):
+        return self._earnings.get_pending_earnings(days_threshold=days_threshold, as_of=as_of)
 
     def mark_earnings_error(self, ticker, error_message, earnings_source=None):
         return self._earnings.mark_earnings_error(ticker, error_message=error_message, earnings_source=earnings_source)

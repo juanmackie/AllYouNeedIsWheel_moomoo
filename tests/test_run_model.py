@@ -6,13 +6,17 @@ failed-refresh preservation, and snapshot persistence.
 """
 
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from core.run_model import (
     RefreshAttempt,
     RunMetadata,
     WheelRunSnapshot,
+    compute_signal_eligibility,
     recompute_effective_snapshot,
+    resolve_coverage_truth,
+    resolve_session_context,
     utc_now_iso,
 )
 from core.wheel_runner import WheelRunner, opaque_account_id, resolve_account
@@ -249,6 +253,164 @@ class TestAttemptModel(unittest.TestCase):
         d = a.to_dict()
         self.assertEqual(d["state"], "queued")
         self.assertEqual(d["progress"], 0.0)
+
+
+class TestReadTimeEligibility(unittest.TestCase):
+    """P1a: backend-computed read-time session context, coverage truth, and
+    per-candidate copy mode. All pure and deterministic (no broker I/O)."""
+
+    def setUp(self):
+        from zoneinfo import ZoneInfo
+
+        self.et = ZoneInfo("America/New_York")
+        self.monday_10am_et = datetime(2026, 5, 25, 10, 0, tzinfo=self.et)  # scheduled open
+        self.saturday_10am_et = datetime(2026, 5, 23, 10, 0, tzinfo=self.et)  # weekend -> closed
+        self.now_utc = self.monday_10am_et.astimezone(timezone.utc)
+
+    def _run(self, **overrides):
+        run = {
+            "run_id": "run-check-1",
+            "market_state": "open",
+            "status": "ready",
+            "errors": [],
+            "coverage_scanned": 2,
+            "coverage_total": 2,
+            "coverage_complete": True,
+            "quote_fetched_at": {
+                "AAPL": (self.now_utc - timedelta(seconds=30)).isoformat(),
+                "TSLA": (self.now_utc - timedelta(seconds=40)).isoformat(),
+            },
+            "max_tradeable_age_sec": 300,
+        }
+        run.update(overrides)
+        return run
+
+    def _signal(self, **overrides):
+        sig = {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "expiration": "20260619",
+            "strike": 140.0,
+            "recommended_contracts": 1,
+            "copy_eligible": True,
+            "chain_source": "broker",
+        }
+        sig.update(overrides)
+        return sig
+
+    def test_no_evidence_is_unknown_session(self):
+        state, reasons = resolve_session_context(self._run(quote_fetched_at={}), self.monday_10am_et)
+        self.assertEqual(state, "unknown")
+        self.assertTrue(reasons)
+
+    def test_scheduled_open_and_fresh_is_open(self):
+        self.assertEqual(resolve_session_context(self._run(), self.monday_10am_et)[0], "open")
+
+    def test_scheduled_open_but_stale_is_holiday_shortened(self):
+        stale = {"AAPL": (self.now_utc - timedelta(hours=3)).isoformat()}
+        self.assertEqual(
+            resolve_session_context(self._run(quote_fetched_at=stale), self.monday_10am_et)[0], "holiday_shortened"
+        )
+
+    def test_weekend_is_closed(self):
+        state = resolve_session_context(self._run(), self.saturday_10am_et)[0]
+        self.assertEqual(state, "closed")
+
+    def test_coverage_truth_classification(self):
+        self.assertEqual(resolve_coverage_truth(self._run(), "closed")[0], "complete")
+        partial, reasons = resolve_coverage_truth(
+            self._run(coverage_scanned=1, coverage_total=3, coverage_complete=False), "open"
+        )
+        self.assertEqual(partial, "partial")
+        self.assertTrue(reasons)
+        self.assertEqual(
+            resolve_coverage_truth(
+                self._run(status="planning", coverage_scanned=0, coverage_total=5, coverage_complete=False), "closed"
+            )[0],
+            "planning_quota",
+        )
+        self.assertEqual(
+            resolve_coverage_truth(self._run(coverage_total=0, coverage_complete=False), "open")[0], "unknown"
+        )
+
+    def _elig(self, session_state, coverage_truth="complete", quotes_fresh=True, **sig_overrides):
+        return compute_signal_eligibility(
+            self._signal(**sig_overrides),
+            session_state=session_state,
+            coverage_truth=coverage_truth,
+            quotes_fresh=quotes_fresh,
+            coverage_reasons=["coverage incomplete"],
+            session_reasons=["no evidence"],
+        )
+
+    def test_live_intraday(self):
+        mode, reasons = self._elig("open")
+        self.assertEqual(mode, "live")
+        self.assertEqual(reasons, [])
+
+    def test_open_with_stale_quotes_is_review_only(self):
+        mode, reasons = self._elig("open", quotes_fresh=False)
+        self.assertEqual(mode, "review_only")
+        self.assertTrue(any("stale" in r for r in reasons))
+
+    def test_open_with_partial_coverage_is_review_only(self):
+        self.assertEqual(self._elig("open", coverage_truth="partial")[0], "review_only")
+
+    def test_closed_with_complete_coverage_is_staged(self):
+        mode, _ = self._elig("closed")
+        self.assertEqual(mode, "staged")
+
+    def test_closed_with_quota_truncated_planning_is_review_only(self):
+        # quota-truncated planning must demote to review_only even though the
+        # market is closed (coverage truth distinguishes it from stageable).
+        mode, reasons = self._elig("closed", coverage_truth="planning_quota")
+        self.assertEqual(mode, "review_only")
+        self.assertTrue(any("coverage" in r for r in reasons))
+
+    def test_closed_with_persisted_fallback_source_is_review_only(self):
+        mode, reasons = self._elig("closed", chain_source="persisted-broker")
+        self.assertEqual(mode, "review_only")
+        self.assertTrue(any("persisted" in r for r in reasons))
+
+    def test_unknown_session_demotes_both_live_and_staged(self):
+        self.assertEqual(self._elig("unknown")[0], "review_only")
+        self.assertEqual(self._elig("unknown")[0], "review_only")
+
+    def test_candidate_not_copy_eligible_is_review_only(self):
+        mode, reasons = self._elig("open", copy_eligible=False)
+        self.assertEqual(mode, "review_only")
+        self.assertTrue(any("copy eligible" in r for r in reasons))
+
+    def test_no_recommended_quantity_is_review_only(self):
+        self.assertEqual(self._elig("open", recommended_contracts=0)[0], "review_only")
+
+    def test_build_eligibility_view_attaches_and_does_not_mutate_persisted(self):
+        snapshot = {
+            "run": self._run(),
+            "tradeable": True,
+            "signals": [self._signal(), self._signal(ticker="TSLA", copy_eligible=False)],
+        }
+        import copy as _copy
+
+        persisted = _copy.deepcopy(snapshot)
+        view = recompute_effective_snapshot(snapshot, self.now_utc, self.monday_10am_et)
+        self.assertEqual(view["eligibility"]["session"]["state"], "open")
+        self.assertEqual(view["eligibility"]["coverage"]["truth"], "complete")
+        self.assertEqual(view["signals"][0]["eligibility"]["mode"], "live")
+        self.assertEqual(view["signals"][1]["eligibility"]["mode"], "review_only")
+        # persisted snapshot untouched
+        self.assertEqual(persisted["signals"][0], snapshot["signals"][0])
+        self.assertNotIn("eligibility", snapshot["signals"][0])
+
+    def test_build_eligibility_view_closed_session_styles_candidate_staged(self):
+        snapshot = {
+            "run": self._run(status="planning", market_state="closed"),
+            "tradeable": False,
+            "signals": [self._signal()],
+        }
+        view = recompute_effective_snapshot(snapshot, self.now_utc, self.saturday_10am_et)
+        self.assertEqual(view["eligibility"]["session"]["state"], "closed")
+        self.assertEqual(view["signals"][0]["eligibility"]["mode"], "staged")
 
 
 if __name__ == "__main__":
