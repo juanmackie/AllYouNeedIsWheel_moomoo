@@ -365,31 +365,47 @@ def get_cash_status():
 @bp.route("/watchlist-tickers", methods=["GET"])
 def get_watchlist_tickers():
     """
-    Get the canonical merged watchlist union used by CSP recommendations.
+    Get the active CSP scan universe: the signed-in OpenD session's Moomoo
+    watchlist group (US-listed securities only). Legacy config/app additions
+    are archived and never exposed here as Moomoo symbols.
+
+    On a broken/missing/empty group or a connection failure the payload carries
+    a distinct status + explanation with an empty ticker list — never a config
+    watchlist substituted in place of Moomoo data.
     """
     try:
-        from api.services.config import get_config
-
-        config = get_config()
         manager = get_options_service().watchlist_manager
-        effective_tickers = manager.get_effective_watchlist()
-        return success_response(
-            {
-                "tickers": effective_tickers,
-                "count": len(effective_tickers),
-                "mode": config.get("watchlist_mode", "static"),
-                "growth_mode_enabled": True,
-            }
-        )
-    except Exception as e:
-        logger.warning(f"Failed to get effective watchlist, falling back to static: {e}")
-        config = current_app.config.get("connection_config", {})
-        tickers = config.get("watchlist", [])
+        scan_universe = manager.get_scan_universe()
+        tickers = [str(t) for t in (scan_universe.get("tickers") or []) if str(t).strip()]
         return success_response(
             {
                 "tickers": tickers,
                 "count": len(tickers),
-                "mode": "static_fallback",
+                "mode": "moomoo_group",
+                "growth_mode_enabled": True,
+                "group": {
+                    "name": scan_universe.get("group_name", ""),
+                    "status": scan_universe.get("status", "ok"),
+                    "explanation": scan_universe.get("explanation", ""),
+                    "groups_available": scan_universe.get("groups_available", []),
+                },
+                "unsupported": scan_universe.get("unsupported", []),
+            }
+        )
+    except Exception as e:
+        logger.warning(f"Failed to read the Moomoo watchlist group: {e}")
+        return success_response(
+            {
+                "tickers": [],
+                "count": 0,
+                "mode": "moomoo_group",
+                "group": {
+                    "name": "",
+                    "status": "connection_failed",
+                    "explanation": f"Moomoo watchlist read failed: {e}",
+                    "groups_available": [],
+                },
+                "unsupported": [],
             }
         )
 

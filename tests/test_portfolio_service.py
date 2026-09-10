@@ -329,6 +329,49 @@ class TestPortfolioServicePositions(unittest.TestCase):
         self.assertEqual(result["open_short_contracts_count"], 3)
         self.assertEqual(result["open_short_total_income"], 850.0)
 
+    def test_get_weekly_option_income_missing_avg_cost_is_null_not_zero(self):
+        """Unavailable avg-cost quotes render as null (em-dash), never a
+        fabricated zero income in the table or the totals."""
+        today = datetime.now()
+        days_until_friday = (4 - today.weekday()) % 7
+        this_friday = today + timedelta(days=days_until_friday)
+        expiry_str = this_friday.strftime("%Y%m%d")
+
+        self.svc.get_positions = Mock(
+            return_value=[
+                {
+                    "symbol": "US.AAPL" + expiry_str + "P00150000",
+                    "position": -2,
+                    "security_type": "OPT",
+                    "option_type": "PUT",
+                    "expiration": expiry_str,
+                    "strike": 150,
+                    # avg_cost omitted -> unavailable
+                    "market_price": 0.5,
+                },
+                {
+                    "symbol": "US.TSLA" + expiry_str + "C00200000",
+                    "position": -1,
+                    "security_type": "OPT",
+                    "option_type": "CALL",
+                    "expiration": expiry_str,
+                    "strike": 200,
+                    "avg_cost": 2.5,
+                    "market_price": 0.4,
+                },
+            ]
+        )
+
+        result = self.svc.get_weekly_option_income()
+        self.assertEqual(result["positions_count"], 2)
+        aapl = [p for p in result["positions"] if "AAPL" in p["symbol"]][0]
+        self.assertIsNone(aapl["avg_cost"])
+        self.assertIsNone(aapl["income"])  # null, not 0
+        # Only the known TSLA income counts toward totals.
+        self.assertEqual(result["total_income"], 250.0)
+        self.assertEqual(result["open_short_total_income"], 250.0)
+        self.assertEqual(result["open_short_contracts_count"], 3)
+
     def test_get_weekly_option_income_long_only_returns_zeroes(self):
         self.svc.get_positions = Mock(
             return_value=[

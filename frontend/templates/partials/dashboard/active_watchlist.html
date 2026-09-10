@@ -1,0 +1,18 @@
+{# Page foot — ACTIVE WATCHLIST payload.
+   Rendered by dashboard/active-watchlist.js::renderActiveWatchlist(snapshot) from
+   the persisted snapshot's active_watchlist (group, per-ticker scan status,
+   unsupported symbols, holdings checked for covered calls). Mirrors the run
+   strip's design system so the foot reads as part of the operational strip.
+#}
+<section class="ft-section mt-5 mb-4" id="active-watchlist-foot">
+  <div class="ft-section__head">
+    <div class="ft-section__head-left">
+      <span class="ft-section__num">FOOT &middot; ACTIVE WATCHLIST</span>
+      <h2 class="ft-section__title">Scan provenance</h2>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <span id="active-watchlist-sync" class="badge bg-secondary">no sync yet</span>
+    </div>
+  </div>
+  <div id="active-watchlist-render" class="small text-muted">Waiting for a run snapshot…</div>
+</section>

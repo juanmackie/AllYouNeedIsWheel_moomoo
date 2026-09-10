@@ -30,7 +30,7 @@ test('evening: complete closed-market run stages a copy ticket', async ({ page }
     await page.goto('/');
 
     await expect(page.locator('#run-status')).toContainText('PLANNING');
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
 
     const btn = cards.first().locator('.copy-ticket-btn');
@@ -53,7 +53,7 @@ test('evening: planning run with partial scan coverage → review-only with visi
 
     await expect(page.locator('#run-status')).toContainText('PLANNING');
     await expect(page.locator('#run-coverage')).toContainText('coverage 1/2');
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
 
     const btn = cards.first().locator('.copy-ticket-btn');
@@ -68,7 +68,7 @@ test('evening: persisted-broker fallback evidence → review-only (nothing copie
     await page.goto('/');
 
     await expect(page.locator('#run-status')).toContainText('PLANNING');
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
 
     const btn = cards.first().locator('.copy-ticket-btn');

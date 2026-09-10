@@ -187,6 +187,7 @@ export async function refreshAllOptions(optionType) {
                 // Portfolio ticker — include unless explicitly excluded
                 return !excludedTickers.includes(ticker);
             });
+        }
 
         for (let i = 0; i < tickersToRefresh.length; i++) {
             const ticker = tickersToRefresh[i];

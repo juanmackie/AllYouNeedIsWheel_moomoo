@@ -554,28 +554,52 @@ async function updateEarningsStatus() {
 
     const data = await fetchEarningsStatus();
     if (data) {
-        updateEarningsStatusIndicator(data.status.toUpperCase());
+        const provider = (data.provider && data.provider.alpha_vantage) || null;
+        updateEarningsStatusIndicator(data.status.toUpperCase(), { provider });
     } else {
-        updateEarningsStatusIndicator('UNKNOWN');
+        updateEarningsStatusIndicator('UNKNOWN', { provider: null });
     }
 }
 
 /**
- * Update indicator UI
+ * Update indicator UI. Renders the manual status plus a compact
+ * Alpha Vantage provider state (status / quota / requests / cache age).
  * @param {string} statusText
+ * @param {Object} extra
  */
-function updateEarningsStatusIndicator(statusText) {
+function updateEarningsStatusIndicator(statusText, extra = {}) {
     const indicator = document.getElementById('earnings-status-indicator');
     if (!indicator) return;
 
     indicator.textContent = `EARNINGS: ${statusText}`;
-    if (statusText === 'RUNNING') {
-        indicator.className = 'badge bg-success';
-    } else if (statusText === 'REFRESHING...') {
-        indicator.className = 'badge bg-info text-dark';
-    } else {
-        indicator.className = 'badge bg-secondary';
+    let badgeClass = 'bg-secondary';
+    const provider = extra.provider || null;
+    const statusParts = [statusText];
+
+    if (provider) {
+        statusParts.push(`AV:${provider.status || 'idle'}`);
+        if (provider.requests_today != null && provider.daily_allowance != null) {
+            statusParts.push(`${provider.requests_today}/${provider.daily_allowance}req`);
+        }
+        if (provider.cache_age_hours != null) {
+            statusParts.push(`${provider.cache_age_hours}h`);
+        }
+        if (provider.error) {
+            badgeClass = 'bg-danger';
+        } else if (provider.status === 'quota') {
+            badgeClass = 'bg-warning text-dark';
+        }
     }
+
+    if (statusText === 'RUNNING') {
+        badgeClass = 'bg-success';
+    } else if (statusText === 'REFRESHING...') {
+        badgeClass = 'bg-info text-dark';
+    }
+
+    indicator.textContent = `EARNINGS: ${statusParts.join(' ')}`;
+    indicator.title = provider && provider.error ? provider.error : 'Earnings provider status';
+    indicator.className = `badge ${badgeClass}`;
 }
 
 export {

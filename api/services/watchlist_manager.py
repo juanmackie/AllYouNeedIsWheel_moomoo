@@ -14,6 +14,18 @@ except ImportError:
 
 logger = logging.getLogger("api.services.watchlist_manager")
 
+# Group states surfaced by get_scan_universe(). Distinct and stable string
+# tokens so the UI can badge each failure mode separately.
+GROUP_STATUS_OK = "ok"
+GROUP_STATUS_MISSING = "missing_group"
+GROUP_STATUS_EMPTY = "empty_group"
+GROUP_STATUS_CONNECTION = "connection_failed"
+
+# Known non-US market prefixes on Moomoo codes. A code carrying one of these
+# is never silently converted into a US ticker — it is reported as unsupported
+# with an explicit reason. Bare codes and US.-prefixed codes are US listings.
+KNOWN_NON_US_PREFIXES = {"HK", "SZ", "SH", "SS", "SG", "JP", "TW", "UK", "DE", "FR", "IT", "CA", "AU", "NZ"}
+
 
 class WatchlistManager:
     """
@@ -54,11 +66,119 @@ class WatchlistManager:
                 self._moomoo_connection = False
         return self._moomoo_connection if self._moomoo_connection else None
 
-    def _fetch_moomoo_watchlist(self):
+    # -- scan universe (signed-in OpenD session's My Watchlist group) ---------
+
+    @staticmethod
+    def _empty_status(status: str, explanation: str, groups_available=None, group_name="", fetched_at=""):
+        return {
+            "status": status,
+            "group_name": group_name or "",
+            "explanation": explanation or "",
+            "groups_available": list(groups_available or []),
+            "tickers": [],
+            "raw_codes": {},
+            "unsupported": [],
+            "fetched_at": fetched_at or "",
+        }
+
+    def _classify_symbol(self, code: str):
+        """Classify a raw Moomoo watchlist code into a scanner symbol entry.
+
+        Never silently converts a non-US listing into a US ticker. Returns
+        (kind, canonical, entry) where kind is "us" or "unsupported".
+        ``canonical`` is the bare US ticker for kind "us" and ``None``
+        otherwise, and ``entry`` is the per-ticker dict to merge into the
+        scan universe (``raw_codes`` / ``unsupported``).
+        """
+        from core.ticker_utils import canonical_underlying
+
+        raw = str(code or "").strip()
+        if not raw:
+            return None, None, None
+        if "." in raw:
+            market, _, rest = raw.partition(".")
+            market = market.upper()
+            if market == "US":
+                canonical = canonical_underlying(raw)
+                if not canonical:
+                    return "skip", None, None
+                return "us", canonical, {"raw": raw, "canonical": canonical}
+            if market in KNOWN_NON_US_PREFIXES:
+                return (
+                    "unsupported",
+                    None,
+                    {
+                        "symbol": raw,
+                        "reason": f"non-US listing {raw} is not scanned — only US-listed securities are eligible for US cash-secured put / covered-call scanning",
+                    },
+                )
+            return (
+                "unsupported",
+                None,
+                {
+                    "symbol": raw,
+                    "reason": f"unrecognized market prefix '{market}' on {raw} — not scanned; add a US listing (US.<ticker>) or report it as unsupported",
+                },
+            )
+        canonical = canonical_underlying(raw)
+        if not canonical:
+            return "skip", None, None
+        return "us", canonical, {"raw": raw, "canonical": canonical}
+
+    def _list_moomoo_groups(self, conn):
+        """Return group names from the signed-in OpenD session, or None if the
+        enumeration call fails (unavailable SDK / unsupported API).
+
+        Group enumeration is the reliable way to tell a missing group apart
+        from an empty one: both degrade to a generic RET_ERROR on
+        get_user_security, but the group list tells us whether the configured
+        group exists at all before we read its securities.
+        """
+        try:
+            ret, data = conn.get_user_security_group()
+            if ret != (RET_OK or 0) or data is None:
+                return None
+            if hasattr(data, "to_dict"):
+                records = data.to_dict("records")
+            else:
+                records = list(data)
+            names = []
+            for rec in records:
+                if isinstance(rec, dict):
+                    name = str(rec.get("group_name") or "").strip()
+                    if name and name not in names:
+                        names.append(name)
+            return names or None
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Moomoo watchlist group enumeration unavailable: {exc}")
+            return None
+
+    def get_scan_universe(self, growth_mode_config=None, portfolio_context=None):
+        """Return the active CSP scan universe: the configured OpenD watchlist
+        group of the signed-in session, US-listed securities only.
+
+        Legacy config/app additions are archived (settings preserved, never
+        deleted) and are NOT part of the scan universe; owned shares are
+        scanned separately for covered calls from Moomoo positions.
+
+        Returns a structured dict:
+          - status: ok | missing_group | empty_group | connection_failed
+          - group_name: the configured group name
+          - explanation: a distinct, human-readable reason for each status
+          - groups_available: group names enumerated from the session
+          - tickers: canonical US tickers in group order
+          - raw_codes: {canonical ticker: raw Moomoo code}
+          - unsupported: [{symbol, reason}] never scanned, with explicit reasons
+          - fetched_at: ISO timestamp of the successful group sync, or ""
+        """
+        from datetime import datetime, timezone
+
         conn = self._get_moomoo_connection()
         if conn is None:
-            logger.warning("Moomoo watchlist: no connection available")
-            return []
+            return self._empty_status(
+                GROUP_STATUS_CONNECTION,
+                "Moomoo/OpenD connection could not be initialized — check host, port, and OpenD configuration.",
+            )
         # Fail fast: TCP probe before any SDK connect attempt (SDK connect can
         # block with reconnect retries when OpenD is absent).
         try:
@@ -68,35 +188,104 @@ class WatchlistManager:
                 host=str(self.config.get("host", "127.0.0.1")), port=int(self.config.get("port", 11111))
             )
             if probe.get("status") != "connected":
-                logger.warning("Moomoo watchlist: OpenD not reachable")
-                return []
+                return self._empty_status(
+                    GROUP_STATUS_CONNECTION,
+                    "OpenD is not reachable at host:port (status probe returned %s) — start OpenD and confirm it is signed into the watchlist account."
+                    % probe.get("status"),
+                )
         except Exception as exc:
-            logger.warning(f"Moomoo watchlist: probe failed ({exc})")
-            return []
+            return self._empty_status(
+                GROUP_STATUS_CONNECTION,
+                f"OpenD status probe failed: {exc}. Start OpenD and retry.",
+            )
         if not conn.is_connected() and not conn.connect():
-            logger.warning("Moomoo watchlist: failed to connect")
-            return []
-        group_name = self.config.get("moomoo_watchlist_group", "My Watchlist")
+            return self._empty_status(
+                GROUP_STATUS_CONNECTION,
+                "Moomoo/OpenD quote session failed to connect — check credentials and that the watchlist account is signed in.",
+            )
+
+        group_name = str(self.config.get("moomoo_watchlist_group", "My Watchlist") or "My Watchlist")
+        groups_available = self._list_moomoo_groups(conn)
+        if groups_available and group_name not in groups_available:
+            available = ", ".join(sorted(groups_available)) or "(none)"
+            return self._empty_status(
+                GROUP_STATUS_MISSING,
+                f"Watchlist group '{group_name}' was not found in the signed-in OpenD session. Available groups: {available}. Configure moomoo_watchlist_group to a group that exists in Moomoo, or create '{group_name}' in the Moomoo app.",
+                groups_available=groups_available,
+                group_name=group_name,
+            )
+
         try:
             ret, data = conn.get_user_security(group_name)
-            if ret != (RET_OK or 0) or data is None or (hasattr(data, "empty") and data.empty):
-                logger.warning(f"Moomoo watchlist: group '{group_name}' returned no securities, falling back")
-                return self.config.get("watchlist", [])
-            if hasattr(data, "to_dict"):
-                records = data.to_dict("records")
-            else:
-                records = list(data)
-            tickers = []
-            for record in records:
-                code = record.get("code", "")
-                if code:
-                    if "." in code:
-                        code = code.rsplit(".", 1)[-1]
-                    tickers.append(code.upper())
-            logger.info(f"Moomoo watchlist: fetched {len(tickers)} tickers from group '{group_name}'")
-            return tickers
-        except Exception as e:
-            logger.warning(f"Moomoo watchlist fetch failed: {e}")
+        except Exception as exc:
+            return self._empty_status(
+                GROUP_STATUS_CONNECTION,
+                f"Moomoo watchlist read failed: {exc}. Check the connection and retry.",
+                groups_available=groups_available,
+                group_name=group_name,
+            )
+
+        if ret != (RET_OK or 0) or data is None or (hasattr(data, "empty") and data.empty):
+            message = None
+            if isinstance(data, str) and data.strip():
+                message = data.strip()
+            # The group is confirmed present but returned no securities, or the
+            # enumeration was unavailable so we cannot distinguish — either way
+            # the explanation states the group matched, never a config fallback.
+            return self._empty_status(
+                GROUP_STATUS_EMPTY,
+                f"Watchlist group '{group_name}' is empty or could not return its securities (SDK: {message or 'empty data'}) — add US-listed securities to this group in the Moomoo app.",
+                groups_available=groups_available,
+                group_name=group_name,
+            )
+
+        if hasattr(data, "to_dict"):
+            records = data.to_dict("records")
+        else:
+            records = list(data)
+
+        tickers = []
+        raw_codes = {}
+        unsupported = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            kind, canonical, entry = self._classify_symbol(record.get("code", ""))
+            if kind == "us" and canonical:
+                if canonical not in tickers:
+                    tickers.append(canonical)
+                raw_codes[canonical] = entry["raw"]
+            elif kind == "unsupported" and entry:
+                unsupported.append(entry)
+            # kind == "skip": blank/unparseable codes are ignored silently.
+
+        fetched_at = datetime.now(timezone.utc).isoformat() if tickers else ""
+        logger.info(
+            f"Moomoo watchlist: scanned group '{group_name}' -> {len(tickers)} US tickers, "
+            f"{len(unsupported)} unsupported skipped"
+        )
+        return {
+            "status": GROUP_STATUS_OK,
+            "group_name": group_name,
+            "explanation": "",
+            "groups_available": groups_available or [],
+            "tickers": tickers,
+            "raw_codes": raw_codes,
+            "unsupported": unsupported,
+            "fetched_at": fetched_at,
+        }
+
+    def _fetch_moomoo_watchlist(self):
+        """Legacy list-only form: the canonical US tickers of the scan universe.
+
+        Kept for callers and tests that only need the ticker list. Never
+        substitutes the legacy config watchlist for a failed Moomoo read.
+        """
+        try:
+            status = self.get_scan_universe()
+            return list(status.get("tickers", []) or [])
+        except Exception as exc:  # defensively match legacy contract
+            logger.warning(f"Moomoo watchlist fetch failed: {exc}")
             return []
 
     def get_watchlist_sources(self):
@@ -109,6 +298,9 @@ class WatchlistManager:
         """
         sources = {"moomoo": [], "app": [], "config": []}
         try:
+            # The moomoo source is the signed-in OpenD watchlist group only.
+            # A failed/unavailable group yields an empty list — the legacy
+            # config watchlist is NEVER substituted as the moomoo source.
             sources["moomoo"] = self._fetch_moomoo_watchlist() or []
         except Exception as exc:
             logger.warning(f"Moomoo watchlist fetch failed: {exc}")
@@ -125,8 +317,11 @@ class WatchlistManager:
     def get_effective_watchlist_with_origins(self, growth_mode_config=None, portfolio_context=None):
         """Return the canonical merged union with per-ticker origin labels.
 
-        Returns a list of dicts: {"ticker": str, "origins": [str, ...]}. Tickers
-        are canonicalized (UBER vs US.UBER) and deduplicated.
+        Returns a list of dicts: {"ticker": str, "origins": [str, ...],
+        "scanned": bool}. Tickers are canonicalized (UBER vs US.UBER) and
+        deduplicated. ``scanned`` is True only for symbols that came from the
+        Moomoo group (the active scan universe); app/config entries are
+        preserved for display but flagged as not scanned.
         """
         from core.ticker_utils import canonical_underlying
 
@@ -142,7 +337,10 @@ class WatchlistManager:
                     merged[canonical] = []
                 if origin not in merged[canonical]:
                     merged[canonical].append(origin)
-        return [{"ticker": ticker, "origins": sorted(origins)} for ticker, origins in sorted(merged.items())]
+        return [
+            {"ticker": ticker, "origins": sorted(origins), "scanned": "moomoo" in origins}
+            for ticker, origins in sorted(merged.items())
+        ]
 
     def preflight_scan_feasibility(self, watchlist_size: int) -> dict:
         """Estimate whether a full watchlist scan fits the quota + freshness budget.
@@ -179,8 +377,11 @@ class WatchlistManager:
 
     def get_effective_watchlist(self, growth_mode_config=None, portfolio_context=None):
         """
-        Return the canonical merged watchlist (Moomoo group + app SQLite + config).
-        Tickers are canonicalized and deduplicated.
+        Return the canonical merged watchlist for display (Moomoo group + app
+        SQLite + config). Tickers are canonicalized and deduplicated. This is
+        NOT the scan universe — scans use get_scan_universe() (Moomoo group
+        only); app/config entries are preserved here for the settings panel
+        and flagged as not scanned in get_effective_watchlist_with_origins().
         """
         return [item["ticker"] for item in self.get_effective_watchlist_with_origins()]
 

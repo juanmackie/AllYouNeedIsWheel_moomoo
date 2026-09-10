@@ -1,3 +1,34 @@
+## 2026-09-10 — Earnings / event calendar repair (schema v11)
+
+- **Alpha Vantage provider status surfacing**: the bulk earnings calendar (6h
+  cache, free-key documented 25 req/day) now classifies failures distinctly —
+  `missing_key`, `quota` (daily-allowance `Information`, per-minute `Note`, or
+  HTTP 429), and `error` (invalid key / 5xx / timeout / network) — each with a
+  human-readable message and cooldown back-off (15min for transient errors,
+  6h for quota) so a broken/exhausted provider is never hammered and old stale
+  cache is served instead of repeated failures.
+- **yfinance earnings fallback repaired**: earnings dates now parse the
+  yfinance **DataFrame index** (the 1.5.x shape where dates live in the index,
+  not a column), choosing the nearest upcoming date; the broken `stock.info`
+  path was removed.
+- **Ex-dividend dates added**: upcoming ex-dividend dates are read from
+  `Ticker.calendar` (dict and transposed-DataFrame shapes) for every ticker,
+  cached per-ticker for 24h like earnings, and stored in a new additive
+  `earnings_calendar.ex_dividend_date` column (schema v11; unknown stays NULL).
+- **Stale event context refreshed ahead of broker scans**: explicit refresh
+  workflows now refresh missing/errored/stale (>24h) earnings + ex-dividend
+  context between the portfolio fetch and the quote scan, bounded to 20
+  tickers at low concurrency and gated by the AV rate limiter / per-ticker
+  cache — provider or DB failures never abort the broker scan.
+- **UI-facing event payload**: `get_earnings_info` now includes
+  `ex_dividend_date`, `ex_dividend_source`, normalized `earnings_source`
+  (`alpha_vantage` | `yfinance`), `provider_status`, `provider_error`, and
+  `data_age_hours`; `GET /api/earnings/status` adds a `provider` block
+  (status / quota / requests-today / cache age), surfaced in the dashboard
+  earnings indicator and the earnings-status tile.
+- OpenD stays the sole source of truth for picks; earnings/ex-dividend data
+  remains informational only and ranking/risk gates are untouched.
+
 ## 2026-09-09 — Read-time copy revalidation (live/staged/review_only)
 
 - Copy is no longer trusted from a stale page state: immediately before any

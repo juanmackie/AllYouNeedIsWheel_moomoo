@@ -5,9 +5,10 @@ ambiguity hard-fail, never first-account), snapshot tradeability gates,
 failed-refresh preservation, and snapshot persistence.
 """
 
+import copy as _copy
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from core.run_model import (
     RefreshAttempt,
@@ -411,6 +412,135 @@ class TestReadTimeEligibility(unittest.TestCase):
         view = recompute_effective_snapshot(snapshot, self.now_utc, self.saturday_10am_et)
         self.assertEqual(view["eligibility"]["session"]["state"], "closed")
         self.assertEqual(view["signals"][0]["eligibility"]["mode"], "staged")
+
+    def _candidate(self, option_type="PUT", **overrides):
+        cand = {
+            "ticker": "AAPL",
+            "option_type": option_type,
+            "expiration": "20260619",
+            "strike": 140.0,
+            "recommended_contracts": 1,
+            "copy_eligible": True,
+            "chain_source": "broker",
+            "quote_fetched_at_utc": (self.now_utc - timedelta(seconds=45)).isoformat(),
+            "max_contracts": 2,
+            "cash_required": 12000.0,
+        }
+        cand.update(overrides)
+        return cand
+
+    def _lanes_snapshot(self, now_et=None):
+        return {
+            "run": self._run(),
+            "tradeable": True,
+            "signals": [self._candidate()],
+            "csp_picks": [self._candidate(), self._candidate(ticker="MSFT", strike=200.0, cash_required=18000.0)],
+            "cc_decisions": [self._candidate(option_type="CALL", strike=160.0, cash_required=None, max_contracts=3)],
+            "roll_decisions": [{"ticker": "NVDA"}],
+        }
+
+    def test_build_eligibility_view_surfaces_outside_shortlist_lanes(self):
+        snapshot = self._lanes_snapshot()
+        persisted = _copy.deepcopy(snapshot)
+        view = recompute_effective_snapshot(snapshot, self.now_utc, self.monday_10am_et)
+        # Every copy-addressable lane carries the same read-time eligibility.
+        for lane in ("signals", "csp_picks", "cc_decisions"):
+            for candidate in view[lane]:
+                self.assertIn("eligibility", candidate)
+                self.assertEqual(candidate["eligibility"]["mode"], "live")
+                self.assertIn("quote_age_sec", candidate)
+        # roll_decisions are a position-management panel, not candidates.
+        self.assertNotIn("eligibility", view["roll_decisions"][0])
+        # Persisted snapshot stays immutable (no read-time fields leak back).
+        for lane in ("signals", "csp_picks", "cc_decisions"):
+            self.assertEqual(persisted[lane], snapshot[lane])
+            self.assertNotIn("eligibility", snapshot[lane][0])
+            self.assertNotIn("quote_age_sec", snapshot[lane][0])
+
+    def test_read_time_capital_view_collateral_and_available_shares(self):
+        view = recompute_effective_snapshot(self._lanes_snapshot(), self.now_utc, self.monday_10am_et)
+        csp = view["csp_picks"][0]
+        self.assertEqual(csp["collateral"], 12000.0)
+        self.assertIsNone(csp["available_shares"])
+        self.assertAlmostEqual(csp["quote_age_sec"], 45.0, delta=1.0)
+        cc = view["cc_decisions"][0]
+        self.assertEqual(cc["available_shares"], 300.0)  # 3 contracts x 100
+        self.assertIsNone(cc["collateral"])
+        # Unknown quote timestamps stay None (em-dash), never 0.
+        stale = self._lanes_snapshot()
+        stale["csp_picks"][1]["quote_fetched_at_utc"] = ""
+        view = recompute_effective_snapshot(stale, self.now_utc, self.monday_10am_et)
+        self.assertIsNone(view["csp_picks"][1]["quote_age_sec"])
+
+
+class TestActiveWatchlistSnapshot(unittest.TestCase):
+    """The ACTIVE WATCHLIST foot payload is persisted with the run snapshot:
+    the tickers actually evaluated, the group name + status, the last successful
+    sync (stamped only on a healthy group), per-ticker scan status, unsupported
+    symbols, and the holdings checked for covered calls. Never carries archived
+    config/app additions."""
+
+    def _runner(self):
+        return WheelRunner(
+            MagicMock(), MagicMock(), {"portfolio_env": "SIMULATE", "account_id": ""}, max_tradeable_age_sec=120
+        )
+
+    def _build(self, active_watchlist, tradeable_run=True):
+        result = {
+            "generated_at": utc_now_iso(),
+            "scan_coverage": {"scanned": 2, "total": 2, "complete": True},
+            "errors": [],
+            "state": None if tradeable_run else "planning",
+            "watchlist_origins": {"AAPL": ["moomoo"], "MSFT": ["moomoo"]},
+            "quote_fetched_at": {"AAPL": utc_now_iso(), "MSFT": utc_now_iso()},
+            "signals": [],
+            "watchlist_csps": {"signals": []},
+            "covered_calls": {"signals": []},
+            "active_watchlist": active_watchlist,
+        }
+        with patch("core.wheel_runner.is_market_open", return_value=True):
+            return self._runner()._build_snapshot("REAL", "acc1", utc_now_iso(), result, {"account_value": 10000}, [])
+
+    def _active_watchlist(self, status="ok", ticker_status=None):
+        statuses = ticker_status or {"AAPL": "scanned", "MSFT": "scanned"}
+        return {
+            "group_name": "My Watchlist",
+            "group_status": status,
+            "explanation": "" if status == "ok" else "group unavailable",
+            "groups_available": ["My Watchlist"],
+            "fetched_at": "2026-09-10T12:00:00+00:00",
+            "last_successful_sync": "",
+            "tickers": [
+                {"symbol": s, "raw_code": f"US.{s}", "status": st, "quote_fetched_at": ""} for s, st in statuses.items()
+            ],
+            "unsupported": [],
+            "holdings_checked": ["AAPL", "NVDA"],
+        }
+
+    def test_snapshot_dict_roundtrip_includes_active_watchlist(self):
+        aw = self._active_watchlist()
+        snap = self._build(aw)
+        payload = snap.to_dict()
+        self.assertEqual(payload["active_watchlist"]["group_name"], "My Watchlist")
+        self.assertEqual(len(payload["active_watchlist"]["tickers"]), 2)
+        self.assertEqual(payload["active_watchlist"]["holdings_checked"], ["AAPL", "NVDA"])
+
+    def test_last_successful_sync_stamped_only_when_group_ok(self):
+        healthy = self._build(self._active_watchlist(status="ok"))
+        self.assertTrue(healthy.active_watchlist["last_successful_sync"])
+        broken = self._build(self._active_watchlist(status="missing_group"))
+        self.assertEqual(broken.active_watchlist["last_successful_sync"], "")
+
+    def test_error_tickers_populate_partial_symbols(self):
+        snap = self._build(self._active_watchlist(ticker_status={"AAPL": "error", "MSFT": "scanned"}))
+        self.assertEqual(snap.run.partial_symbols, ("AAPL",))
+        self.assertNotIn("MSFT", snap.run.partial_symbols)
+
+    def test_planning_run_never_looks_like_successful_sync(self):
+        snap = self._build(self._active_watchlist(status="empty_group"), tradeable_run=False)
+        self.assertEqual(snap.run.status, "planning")
+        self.assertEqual(snap.active_watchlist["last_successful_sync"], "")
+        self.assertTrue(snap.active_watchlist["explanation"])
 
 
 if __name__ == "__main__":

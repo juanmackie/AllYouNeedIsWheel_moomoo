@@ -82,23 +82,32 @@ def _contract_fingerprint(ticker: str, option_type: str, expiration: str, strike
 
 
 def _find_contract(view: dict, ticker, option_type, expiration, strike):
+    """Locate a contract in any copy-addressable lane.
+
+    Returns ``(candidate, lane)`` or ``(None, None)``. Lanes mirror
+    ``core.run_model.CANDIDATE_LANES`` so candidates outside the combined
+    top-3 shortlist (csp_picks / cc_decisions) get the same copy revalidation.
+    """
     target = _contract_fingerprint(ticker, option_type, expiration, strike)
     if not target:
-        return None
-    for candidate in view.get("signals") or []:
-        if not isinstance(candidate, dict):
-            continue
-        if (
-            _contract_fingerprint(
-                candidate.get("ticker", ""),
-                candidate.get("option_type", ""),
-                candidate.get("expiration", ""),
-                candidate.get("strike", 0),
-            )
-            == target
-        ):
-            return candidate
-    return None
+        return None, None
+    from core.run_model import CANDIDATE_LANES
+
+    for lane in CANDIDATE_LANES:
+        for candidate in view.get(lane) or []:
+            if not isinstance(candidate, dict):
+                continue
+            if (
+                _contract_fingerprint(
+                    candidate.get("ticker", ""),
+                    candidate.get("option_type", ""),
+                    candidate.get("expiration", ""),
+                    candidate.get("strike", 0),
+                )
+                == target
+            ):
+                return candidate, lane
+    return None, None
 
 
 def _fresh_option_age_sec(option: dict, now_utc: datetime) -> float | None:
@@ -141,6 +150,7 @@ def evaluate_copy_check(
         "reasons": [],
         "run_id": run.get("run_id", ""),
         "contract": None,
+        "signal_lane": None,
         "verified_at": now_utc.isoformat(),
     }
     if not run:
@@ -168,11 +178,12 @@ def evaluate_copy_check(
     except (TypeError, ValueError):
         strike = 0.0
 
-    contract = _find_contract(view, ticker, option_type, expiration, strike)
+    contract, signal_lane = _find_contract(view, ticker, option_type, expiration, strike)
     payload["matched_contract"] = contract is not None
     if contract is None:
         payload["reasons"] = ["contract no longer in the current signal shortlist"]
         return payload
+    payload["signal_lane"] = signal_lane
 
     def _stage_decision():
         # staged requires complete coverage + a copy-eligible candidate

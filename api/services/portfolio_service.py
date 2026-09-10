@@ -116,12 +116,16 @@ class PortfolioService:
                 continue
 
             contracts = abs(quantity)
-            avg_cost = _safe_float(pos.get("avg_cost", 0))
-            income = avg_cost * contracts * 100
+            raw_avg_cost = pos.get("avg_cost")
+            # A missing average-cost quote is unavailable (None), never a
+            # fabricated zero. The UI renders an em-dash for null income.
+            avg_cost = None if raw_avg_cost in (None, "") else _safe_float(raw_avg_cost)
+            income = None if avg_cost is None else round(avg_cost * contracts * 100, 2)
 
             open_short_positions_count += 1
             open_short_contracts_count += contracts
-            open_short_total_income += income
+            if income is not None:
+                open_short_total_income += income
 
             expiration = str(pos.get("expiration", "") or "")
             if this_friday_str and expiration and expiration <= this_friday_str:
@@ -132,10 +136,12 @@ class PortfolioService:
                         "strike": pos.get("strike", 0),
                         "expiration": expiration,
                         "position": quantity,
+                        "avg_cost": avg_cost,
                         "income": income,
                     }
                 )
-                weekly_total_income += income
+                if income is not None:
+                    weekly_total_income += income
 
         return {
             "positions": weekly_positions,
@@ -226,7 +232,10 @@ class PortfolioService:
             for pos in positions:
                 symbol = pos.get("symbol", "UNKNOWN")
                 pos_type = pos.get("security_type", "STK")
-                avg_cost = pos.get("avg_cost", 0)
+                # Missing avg_cost stays None ("unavailable") rather than a
+                # fabricated zero; consumers degrade to 0 via float(x or 0) and
+                # the UI renders an em-dash for null.
+                avg_cost = pos.get("avg_cost")
 
                 position_data = {
                     "symbol": symbol,

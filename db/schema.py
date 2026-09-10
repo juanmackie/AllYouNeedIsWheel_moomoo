@@ -4,7 +4,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def create_tables(conn):
@@ -85,6 +85,7 @@ def create_tables(conn):
             estimate REAL,
             currency TEXT,
             earnings_source TEXT,
+            ex_dividend_date TEXT,
             UNIQUE(ticker)
         )
     """)
@@ -580,6 +581,20 @@ def migrate_database(db_path):
                 )
                 logger.info("Migration: Created option_fills and account_cash_flows tables for outcome attribution")
                 cursor.execute("PRAGMA user_version = 10")
+                conn.commit()
+
+            if current_version < 11:
+                # Earnings/event calendar repair: ex-dividend date sourced from
+                # yfinance Ticker.calendar, cached per ticker like earnings. Additive
+                # only; NULL means "unknown", never fabricated.
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='earnings_calendar'")
+                if cursor.fetchone():
+                    cursor.execute("PRAGMA table_info(earnings_calendar)")
+                    earnings_cols = {row[1] for row in cursor.fetchall()}
+                    if "ex_dividend_date" not in earnings_cols:
+                        logger.info("Migration: Adding ex_dividend_date to earnings_calendar")
+                        cursor.execute("ALTER TABLE earnings_calendar ADD COLUMN ex_dividend_date TEXT")
+                cursor.execute("PRAGMA user_version = 11")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

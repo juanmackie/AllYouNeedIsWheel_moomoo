@@ -1,19 +1,58 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - AYNIWHEEL{% endblock %}
+{% block title %}Dashboard — AYNIWHEEL{% endblock %}
 {% block body_class %}page-dashboard{% endblock %}
 
 {% block content %}
+{# ZONE 1 — Always visible: operational state + primary signals #}
 {% include "partials/dashboard/run_strip.html" %}
-{% include "partials/dashboard/account_summary.html" %}
-{% include "partials/dashboard/growth_panel.html" %}
-{% include "partials/dashboard/outcome_panel.html" %}
-{% include "partials/dashboard/watchlist_panel.html" %}
-{% include "partials/dashboard/top_recommendations.html" %}
 
+<div class="ft-section mt-5 mb-5" style="border-top:2px solid var(--ft-ink); padding-top:24px;">
+  <div class="app-section__header" style="border-bottom:0; padding-bottom:8px;">
+    <h2 style="font-size:clamp(1.4rem,3.5vw,1.8rem);">Signals</h2>
+    <p class="text-muted small" style="margin:4px 0 0; max-width:720px;">Top watchlist wheel signals ranked by executable return on deployed capital per day. Review before copying.</p>
+  </div>
+  {% include "partials/dashboard/top_recommendations.html" %}
+</div>
+
+{% include "partials/dashboard/account_summary.html" %}
 {% include "partials/dashboard/weekly_income.html" %}
+
+{# ZONE 2 — Live positions (visible, operational) #}
 {% include "partials/dashboard/position_monitor.html" %}
-{% include "partials/dashboard/options_table.html" %}
+
+{# ZONE 3 — Collapsible analytics (growth / outcomes / watchlist) #}
+<details class="ft-section mt-4" style="border:1px solid var(--ft-rule); padding:0; background:transparent;">
+  <summary style="list-style:none; cursor:pointer; padding:14px 16px; background:var(--ft-paper); border-bottom:1px solid var(--ft-rule-soft); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+    <div>
+      <span class="app-section__eyebrow">Analytics</span>
+      <h2 style="font-size:18px; margin:0;">Growth · Outcomes · Watchlist</h2>
+    </div>
+    <span class="ft-btn ft-btn--ghost" style="font-size:10px; padding:4px 10px; white-space:nowrap;">Open details</span>
+  </summary>
+  <div style="padding:8px 0 0;">
+    {% include "partials/dashboard/growth_panel.html" %}
+    {% include "partials/dashboard/outcome_panel.html" %}
+    {% include "partials/dashboard/watchlist_panel.html" %}
+  </div>
+</details>
+
+{# ZONE 4 — Deep options table, collapsed by default #}
+<details class="ft-section mt-4" style="border:1px solid var(--ft-rule); padding:0; background:transparent;">
+  <summary style="list-style:none; cursor:pointer; padding:14px 16px; background:var(--ft-paper); border-bottom:1px solid var(--ft-rule-soft); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+    <div>
+      <span class="app-section__eyebrow">Market data</span>
+      <h2 style="font-size:18px; margin:0;">Options table</h2>
+    </div>
+    <span class="ft-btn ft-btn--ghost" style="font-size:10px; padding:4px 10px; white-space:nowrap;">Open scan</span>
+  </summary>
+  <div style="padding:8px 0 0;">
+    {% include "partials/dashboard/options_table.html" %}
+  </div>
+</details>
+
+{# ZONE 5 — Page foot: active watchlist scan provenance #}
+{% include "partials/dashboard/active_watchlist.html" %}
 {% endblock %}
 
 {% block scripts %}

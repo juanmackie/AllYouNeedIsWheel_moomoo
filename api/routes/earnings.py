@@ -124,6 +124,7 @@ def get_earnings_status():
             "status": "manual",
             "scheduler": {"running": False, "note": "automatic scheduler removed"},
             "cache_stats": service.get_cache_stats(),
+            "provider": service.get_provider_status(),
         }
     )
 

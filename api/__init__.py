@@ -392,11 +392,32 @@ def _register_services():
         from core.wheel_runner import WheelRunner
 
         config = current_app.config.get("connection_config", {})
+        # Resolve dependency services eagerly: the runner may execute on the
+        # background wheel-refresh thread, which has no Flask app context.
+        options_service = get_service("options")
+        iv_earnings = get_service("ivearnings")
+
+        def _refresh_stale_event_context(portfolio_context) -> dict:
+            """Best-effort, bounded refresh of stale earnings/ex-dividend context
+            ahead of a broker scan. Composed in the api layer (the injected
+            callable contract keeps core free of api imports)."""
+            tickers = set()
+            if isinstance(portfolio_context, dict):
+                for key in ("positions", "short_calls", "short_puts"):
+                    slot = portfolio_context.get(key) or {}
+                    if isinstance(slot, dict):
+                        tickers.update(k for k in slot.keys() if isinstance(k, str))
+            service = getattr(iv_earnings, "refresh_stale_event_context", None)
+            if service is None:
+                return {"refreshed": 0, "errors": 0, "skipped": len(tickers)}
+            return service(sorted(tickers))
+
         return WheelRunner(
             db=current_app.config.get("database"),
-            options_service=get_service("options"),
+            options_service=options_service,
             config=config,
             roll_diagnostics_provider=build_roll_decisions,
+            event_context_refresher=_refresh_stale_event_context,
         )
 
     register_service("wheel_runner", _create_wheel_runner)

@@ -52,6 +52,43 @@ class TestRunRoute(unittest.TestCase):
         self.assertTrue(response.get_json()["started"])
         mock_refresh.assert_called_once()
 
+    def test_get_run_exposes_lanes_rejected_portfolio_and_combined_signals(self):
+        fetched = datetime.now(timezone.utc).isoformat()
+        snapshot = {
+            "run": {
+                "run_id": "run-lanes",
+                "status": "ready",
+                "errors": [],
+                "coverage_complete": True,
+                "quote_fetched_at": {"AAPL": fetched},
+                "max_tradeable_age_sec": 120,
+                "coverage_scanned": 1,
+                "coverage_total": 1,
+            },
+            "tradeable": True,
+            "portfolio": {"account_value": 10000},
+            "signals": [{"rank": 1, "ticker": "MSFT", "option_type": "CALL"}],
+            "csp_picks": [{"ticker": "AAPL", "option_type": "PUT", "expiration": "20260619", "strike": 140.0}],
+            "cc_decisions": [{"ticker": "NVDA", "option_type": "CALL"}],
+            "rejected": [{"ticker": "AMZN", "reason_code": "no_cash_fit", "reason_text": "no fit"}],
+        }
+        self.db.get_latest_attempt.return_value = None
+        self.db.get_latest_snapshot.return_value = snapshot
+
+        with self.app.test_client() as client:
+            response = client.get("/api/run")
+
+        payload = response.get_json()["snapshot"]
+        # Every persisted lane is exposed alongside the intact combined shortlist.
+        self.assertEqual(payload["signals"][0]["ticker"], "MSFT")
+        self.assertEqual(len(payload["csp_picks"]), 1)
+        self.assertEqual(len(payload["cc_decisions"]), 1)
+        self.assertEqual(payload["rejected"][0]["reason_code"], "no_cash_fit")
+        self.assertEqual(payload["portfolio"]["account_value"], 10000)
+        # Lane candidates get the same read-time eligibility + capital view.
+        self.assertIn("eligibility", payload["csp_picks"][0])
+        self.assertIn("quote_age_sec", payload["cc_decisions"][0])
+
 
 def _run_dict(now_utc, **overrides):
     run = {
@@ -239,6 +276,30 @@ class TestRunCopyCheck(unittest.TestCase):
         payload = response.get_json()
         self.assertFalse(payload["matched_contract"])
         self.assertEqual(payload["mode"], "review_only")
+
+    def test_copy_check_matches_candidate_outside_shortlist(self):
+        """A candidate present only in csp_picks is copy-addressable too."""
+        now_et = self._weekday_noon_et()
+        now_utc = now_et.astimezone(timezone.utc)
+        snapshot = {
+            "run": _run_dict(now_utc, market_state="open", status="ready"),
+            "tradeable": True,
+            "signals": [{"ticker": "OTHER", "option_type": "CALL"}],
+            "csp_picks": [_signal_dict()],
+            "cc_decisions": [],
+        }
+        self.db.get_latest_snapshot.return_value = snapshot
+        fetch = MagicMock()
+        with self.app.test_client() as client:
+            with patch("api.routes.run._options_service_fetch_live_chain", fetch):
+                with patch("api.routes.run.market_now", return_value=now_et):
+                    with patch("core.run_model.market_now", return_value=now_et):
+                        response = client.get(self._url())
+        payload = response.get_json()
+        self.assertTrue(payload["matched_contract"])
+        self.assertEqual(payload["signal_lane"], "csp_picks")
+        self.assertEqual(payload["mode"], "live")
+        fetch.assert_not_called()
 
     def test_copy_check_invalid_params_400(self):
         with self.app.test_client() as client:

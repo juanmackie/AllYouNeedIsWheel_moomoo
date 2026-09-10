@@ -31,7 +31,7 @@ test('broker down: degraded banner + copy blocked; recovery restores staging', a
 
     // Healthy at load: banner hidden, staged copy available.
     await expect(page.locator('#opend-status-banner')).toHaveClass(/d-none/);
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
     const btn = cards.first().locator('.copy-ticket-btn');
     await expect(btn).toContainText('Stage ticket');

@@ -967,3 +967,493 @@ describe('P1a revalidate-then-copy', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('top-recommendations strategy lanes (preset rules + two sections)', () => {
+  let cleanup;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  // Lane-enabled DOM: adds the strategy-rules banner, the csp/cc lane sections
+  // with top-3 + remaining containers, and the rejected-candidates list.
+  function setupLaneDOM() {
+    setupDOM();
+    const extra = document.createElement('div');
+    extra.innerHTML = `
+      <div id="strategy-rules" class="d-none"><span id="strategy-rules-text"></span></div>
+      <div id="csp-section">
+        <div id="top-csp-cards" class="row g-3"></div>
+        <details id="csp-remaining"><summary>Remaining CSP candidates (<span id="csp-remaining-count"></span>)</summary><div id="csp-remaining-list"></div></details>
+      </div>
+      <div id="cc-section">
+        <div id="top-cc-cards" class="row g-3"></div>
+        <details id="cc-remaining"><summary>Remaining CC candidates (<span id="cc-remaining-count"></span>)</summary><div id="cc-remaining-list"></div></details>
+      </div>
+      <div id="blocked-candidates-count"></div>
+      <div id="blocked-candidates-list"></div>
+    `;
+    // Extend the card template with the lane-era fields under test. The
+    // template's nodes live in its content fragment, not the document tree.
+    const tpl = document.getElementById('recommendation-card-template');
+    const cardRoot = tpl && tpl.content ? tpl.content.querySelector('.recommendation-card') : null;
+    if (cardRoot) {
+      cardRoot.insertAdjacentHTML('beforeend', `
+        <span class="capital-velocity"></span>
+        <span class="quote-age"></span>
+        <span class="cc-available-shares"></span>
+      `);
+    }
+    document.body.appendChild(extra);
+  }
+
+  const csp = (i) => ({
+    rank: i, ticker: `CSP${i}`, option_type: 'PUT', signal_type: 'csp',
+    strike: 90 + i, expiration: '20260515', dte: 21,
+    bid_premium_per_contract: 2.5 + i * 0.5, premium_per_contract: 250 + i * 50,
+    capital_velocity_per_day: 0.008 + i * 0.001,
+    recommended_contracts: 1, max_contracts: 2,
+    collateral: 9500 + i * 100,
+    quote_age_sec: 40 + i * 10,
+    event_tier: 'event_safe', quality_tier: 'qualified',
+    score: 70 - i, annualized_return: 40 - i,
+    eligibility: { mode: 'live', reasons: [] },
+    wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified' },
+  });
+
+  const cc = (i) => ({
+    rank: i, ticker: `CC${i}`, option_type: 'CALL', signal_type: 'covered_call',
+    strike: 180 + i, expiration: '20260515', dte: 21,
+    bid_premium_per_contract: 1.8 + i * 0.4, premium_per_contract: 180 + i * 40,
+    capital_velocity_per_day: 0.009 + i * 0.001,
+    recommended_contracts: 1, max_contracts: 3,
+    available_shares: 200 + i * 50,
+    quote_age_sec: 50 + i * 10,
+    event_tier: 'event_safe', quality_tier: 'qualified',
+    score: 72, annualized_return: 35,
+    eligibility: { mode: 'live', reasons: [] },
+    wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified', avg_cost: 170, if_called_return: 8.5 },
+  });
+
+  async function renderWith(envelope) {
+    const { initializeTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
+    );
+    fetchRunState.mockResolvedValue(envelope);
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  it('renders the active preset screening rules (read-only) and both lanes', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+
+    await renderWith({
+      success: true, count: 3,
+      tradeable: true,
+      run: { run_id: 'lane-run', market_state: 'open', status: 'ready' },
+      signals: [csp(1)],
+      csp_picks: [csp(1), csp(2), csp(3)],
+      cc_decisions: [cc(1), cc(2), cc(3)],
+      rejected: [],
+      preset: {
+        key: 'wheel-conservative', label: 'Wheel Conservative', version: 2,
+        screener_profile: {
+          csp_target_delta: 0.25, csp_delta_tolerance: 0.05,
+          csp_min_dte: 30, csp_max_dte: 75, csp_preferred_dte: 45,
+          csp_min_otm_pct: 5, csp_max_otm_pct: 15, call_default_otm_pct: 8,
+          min_csp_buying_power: 0, max_buying_power_pct_per_csp: 20,
+          min_premium_per_contract: 50, min_mid_price: 0.4,
+          max_spread_pct: 30, min_open_interest: 100, require_cash_fit: true,
+        },
+      },
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    const ruleEl = document.getElementById('strategy-rules');
+    expect(ruleEl.classList.contains('d-none')).toBe(false);
+    const text = document.getElementById('strategy-rules-text').textContent;
+    expect(text).toContain('WHEEL CONSERVATIVE v2');
+    expect(text).toContain('CSP Δ 0.25 ±0.05');
+    expect(text).toContain('CSP DTE 30-75 (pref 45)');
+    expect(text).toContain('CSP OTM 5-15%');
+    expect(text).toContain('CC OTM 8%');
+    expect(text).toContain('min premium $50.00');
+    expect(text).toContain('≤20% buying power per CSP');
+    expect(text).toContain('max spread 30%');
+    expect(text).toContain('min OI 100');
+    expect(text).toContain('cash-fit required');
+
+    const cspSection = document.getElementById('csp-section');
+    const ccSection = document.getElementById('cc-section');
+    expect(cspSection.classList.contains('d-none')).toBe(false);
+    expect(ccSection.classList.contains('d-none')).toBe(false);
+    expect(document.getElementById('top-csp-cards').querySelectorAll('.recommendation-card').length).toBe(3);
+    expect(document.getElementById('top-cc-cards').querySelectorAll('.recommendation-card').length).toBe(3);
+  });
+
+  it('keeps both lanes always visible and lists remaining candidates below each', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+
+    await renderWith({
+      success: true, count: 3,
+      tradeable: true,
+      run: { run_id: 'lane-run', market_state: 'open', status: 'ready' },
+      signals: [csp(1)],
+      csp_picks: [csp(1), csp(2), csp(3), csp(4), csp(5)],
+      cc_decisions: [cc(1), cc(2)],
+      rejected: [],
+      preset: { label: 'Wheel Conservative', screener_profile: { csp_target_delta: 0.3 } },
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    // CSP has 5 candidates: 3 top cards + 2 remaining; CC has 2: top only.
+    expect(document.getElementById('top-csp-cards').querySelectorAll('.recommendation-card').length).toBe(3);
+    expect(document.getElementById('top-cc-cards').querySelectorAll('.recommendation-card').length).toBe(2);
+
+    const cspRemaining = document.getElementById('csp-remaining');
+    expect(cspRemaining.classList.contains('d-none')).toBe(false);
+    expect(cspRemaining.open).toBe(false);
+    expect(document.getElementById('csp-remaining-count').textContent).toBe('2');
+    const remainingRows = document.getElementById('csp-remaining-list').querySelectorAll('.lane-candidate-row');
+    expect(remainingRows.length).toBe(2);
+    expect(remainingRows[0].textContent).toContain('CSP4');
+    expect(remainingRows[1].textContent).toContain('CSP5');
+
+    // Every remaining candidate carries its own copy button.
+    remainingRows.forEach(row => expect(row.querySelector('.copy-ticket-btn')).toBeTruthy());
+
+    // CC lane has nothing remaining -> list hidden, not shown empty.
+    expect(document.getElementById('cc-remaining').classList.contains('d-none')).toBe(true);
+  });
+
+  it('shows executable bid, ROI/day, collateral vs shares, qty, quote age, and event per candidate', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+
+    await renderWith({
+      success: true, count: 2,
+      tradeable: true,
+      run: { run_id: 'lane-run', market_state: 'open', status: 'ready' },
+      signals: [csp(1)],
+      csp_picks: [csp(1), csp(2), csp(3), csp(4)],
+      cc_decisions: [cc(1)],
+      rejected: [],
+      preset: { label: 'Wheel', screener_profile: {} },
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    // CSP top card: executable bid premium + capital velocity + quote age.
+    const card = document.querySelector('#top-csp-cards .recommendation-card');
+    expect(card.querySelector('.premium-amount').textContent).toBe('$3.00');
+    expect(card.querySelector('.capital-velocity').textContent).toContain('% / day');
+    expect(card.querySelector('.quote-age').textContent).toBe('just now');
+
+    const rows = document.querySelectorAll('#csp-remaining-list .lane-candidate-row');
+    const row = rows[0];
+    expect(row.textContent).toContain('CSP4');
+    expect(row.textContent).toContain('Bid');
+    expect(row.textContent).toContain('$4.50');
+    expect(row.textContent).toContain('ROI/day');
+    expect(row.textContent).toContain('%/day');
+    expect(row.textContent).toContain('Collateral');
+    expect(row.textContent).toContain('$9900.00');
+    expect(row.textContent).toContain('Qty');
+    expect(row.textContent).toContain('1');
+    expect(row.textContent).toContain('Quote age');
+    expect(row.textContent).toContain('m ago');
+
+    const ccCard = document.querySelector('#top-cc-cards .recommendation-card');
+    expect(ccCard.querySelector('.cc-available-shares').textContent).toContain('sh');
+  });
+
+  it('renders the full rejection explanations from the rejected list', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+
+    await renderWith({
+      success: true, count: 1,
+      tradeable: true,
+      run: { run_id: 'lane-run', market_state: 'open', status: 'ready' },
+      signals: [csp(1)],
+      csp_picks: [csp(1)],
+      cc_decisions: [],
+      rejected: [
+        { ticker: 'XYZ', ticker_count: 3, reason_code: 'low_premium', reason_text: 'Bid below the preset minimum', signal_type: 'csp' },
+        { ticker: 'ABC', ticker_count: 1, reason_code: 'cash_fit', reason_text: 'Does not fit available cash', signal_type: 'cc' },
+      ],
+      preset: { label: 'Wheel', screener_profile: {} },
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    const section = document.getElementById('blocked-candidates-section');
+    expect(section.classList.contains('d-none')).toBe(false);
+    expect(document.getElementById('blocked-candidates-count').textContent).toBe('4');
+    const list = document.getElementById('blocked-candidates-list');
+    expect(list.textContent).toContain('XYZ');
+    expect(list.textContent).toContain('3 tickers');
+    expect(list.textContent).toContain('Bid below the preset minimum');
+    expect(list.textContent).toContain('ABC');
+    expect(list.textContent).toContain('Does not fit available cash');
+  });
+
+  it('copies a ticket from a remaining (out-of-shortlist) lane candidate', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+
+    const { revalidateCopy } = await import('../../frontend/static/js/dashboard/api-run.js');
+    revalidateCopy.mockResolvedValue({
+      ok: true, matched_run: true, matched_contract: true, mode: 'live',
+      run_id: 'lane-run', reasons: [], verified_at: '2026-05-24T12:00:01',
+    });
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    await renderWith({
+      success: true, count: 2,
+      tradeable: true,
+      run: { run_id: 'lane-run', market_state: 'open', status: 'ready' },
+      signals: [csp(1)],
+      csp_picks: [csp(1), csp(2), csp(3), csp(4)],
+      cc_decisions: [],
+      rejected: [],
+      preset: { label: 'Wheel', screener_profile: {} },
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    const row = document.querySelector('#csp-remaining-list .lane-candidate-row');
+    expect(row.textContent).toContain('CSP4');
+    const btn = row.querySelector('.copy-ticket-btn');
+    expect(btn.disabled).toBe(false);
+    btn.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const text = writeText.mock.calls[0][0];
+    expect(text).toContain('SELL TO OPEN CSP');
+    expect(text).toContain('CSP4');
+    expect(text).toContain('x1');
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('saved run reproduction (3 CSP + 4 CC + 25 rejected)', () => {
+  let cleanup;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  // Lane-enable the DOM exactly like the existing strategy-lanes block.
+  function setupLaneDOM() {
+    setupDOM();
+    const extra = document.createElement('div');
+    extra.innerHTML = `
+      <div id="strategy-rules" class="d-none"><span id="strategy-rules-text"></span></div>
+      <div id="csp-section">
+        <div id="top-csp-cards" class="row g-3"></div>
+        <details id="csp-remaining"><summary>Remaining CSP candidates (<span id="csp-remaining-count"></span>)</summary><div id="csp-remaining-list"></div></details>
+      </div>
+      <div id="cc-section">
+        <div id="top-cc-cards" class="row g-3"></div>
+        <details id="cc-remaining"><summary>Remaining CC candidates (<span id="cc-remaining-count"></span>)</summary><div id="cc-remaining-list"></div></details>
+      </div>
+      <div id="blocked-candidates-count"></div>
+      <div id="blocked-candidates-list"></div>
+    `;
+    const tpl = document.getElementById('recommendation-card-template');
+    const cardRoot = tpl && tpl.content ? tpl.content.querySelector('.recommendation-card') : null;
+    if (cardRoot) {
+      cardRoot.insertAdjacentHTML('beforeend', `
+        <span class="capital-velocity"></span>
+        <span class="quote-age"></span>
+        <span class="cc-available-shares"></span>
+      `);
+    }
+    document.body.appendChild(extra);
+  }
+
+  const cspPick = (i) => ({
+    rank: i, ticker: `CSP${i}`, option_type: 'PUT', signal_type: 'csp',
+    strike: 90 + i, expiration: '20260619', dte: 21,
+    bid_premium_per_contract: 2.5 + i * 0.5, premium_per_contract: 250 + i * 50,
+    capital_velocity_per_day: 0.008 + i * 0.001,
+    recommended_contracts: 1, max_contracts: 2, collateral: 9500 + i * 100,
+    quote_age_sec: 40 + i * 10,
+    event_tier: 'event_safe', quality_tier: 'qualified',
+    score: 70 - i, annualized_return: 40 - i,
+    eligibility: { mode: 'live', reasons: [] },
+    wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified' },
+  });
+
+  const ccPick = (i) => ({
+    rank: i, ticker: `CC${i}`, option_type: 'CALL', signal_type: 'covered_call',
+    strike: 180 + i, expiration: '20260619', dte: 21,
+    bid_premium_per_contract: 1.8 + i * 0.4, premium_per_contract: 180 + i * 40,
+    capital_velocity_per_day: 0.009 + i * 0.001,
+    recommended_contracts: 1, max_contracts: 3, available_shares: 300,
+    quote_age_sec: 50 + i * 10,
+    event_tier: 'event_safe', quality_tier: 'qualified',
+    score: 72, annualized_return: 35,
+    eligibility: { mode: 'live', reasons: [] },
+    wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified', avg_cost: 170, if_called_return: 8.5 },
+  });
+
+  const rejectedEntry = (i) => ({
+    ticker: `REJ${String(i).padStart(2, '0')}`,
+    ticker_count: 1,
+    reason_code: `reject_${String(i).padStart(2, '0')}`,
+    reason_text: `No OTM strike fits the active preset (explanation ${i})`,
+    signal_type: 'csp',
+  });
+
+  const savedRunEnvelope = (overrides = {}) => ({
+    success: true, count: 3, tradeable: true,
+    run: { run_id: 'saved-run', market_state: 'open', status: 'ready' },
+    signals: [ccPick(1)],
+    csp_picks: [cspPick(1), cspPick(2), cspPick(3)],
+    cc_decisions: [ccPick(1), ccPick(2), ccPick(3), ccPick(4)],
+    rejected: Array.from({ length: 25 }, (_, i) => rejectedEntry(i + 1)),
+    preset: { label: 'Wheel Conservative', screener_profile: { csp_target_delta: 0.3 } },
+    generated_at: '2026-05-24T12:00:00',
+    ...overrides,
+  });
+
+  async function renderWith(envelope) {
+    const { initializeTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import(
+      '../../frontend/static/js/dashboard/api-run.js'
+    );
+    fetchRunState.mockResolvedValue(envelope);
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  it('renders both strategy sections at the saved-run counts (3 CSP / 4 CC)', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+    await renderWith(savedRunEnvelope());
+
+    const cspSection = document.getElementById('csp-section');
+    const ccSection = document.getElementById('cc-section');
+    expect(cspSection.classList.contains('d-none')).toBe(false);
+    expect(ccSection.classList.contains('d-none')).toBe(false);
+    // Cards always render top-3; lane extras fall into the per-lane remaining
+    // list (CC4 is the 4th decision, so it lives below the top-3 cards).
+    expect(document.getElementById('top-csp-cards').querySelectorAll('.recommendation-card').length).toBe(3);
+    expect(document.getElementById('top-cc-cards').querySelectorAll('.recommendation-card').length).toBe(3);
+    expect(document.getElementById('cc-remaining').classList.contains('d-none')).toBe(false);
+    expect(document.getElementById('cc-remaining-list').querySelectorAll('.lane-candidate-row').length).toBe(1);
+    expect(document.getElementById('cc-remaining-list').textContent).toContain('CC4');
+  });
+
+  it('exposes all 25 rejection explanations, not a top-3 truncation', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+    await renderWith(savedRunEnvelope());
+
+    const section = document.getElementById('blocked-candidates-section');
+    expect(section.classList.contains('d-none')).toBe(false);
+    expect(document.getElementById('blocked-candidates-count').textContent).toBe('25');
+    const rows = document.querySelectorAll('#blocked-candidates-list > div');
+    expect(rows.length).toBe(25);
+    const listText = document.getElementById('blocked-candidates-list').textContent;
+    expect(listText).toContain('No OTM strike fits the active preset (explanation 1)');
+    expect(listText).toContain('No OTM strike fits the active preset (explanation 25)');
+    expect(listText).toContain('REJ01');
+    expect(listText).toContain('REJ25');
+  });
+
+  it('renders an em-dash for unavailable candidate values, never a zero', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+    const missing = cspPick(4);
+    delete missing.capital_velocity_per_day;
+    delete missing.collateral;
+    const missingCC = ccPick(5);
+    delete missingCC.available_shares;
+    delete missingCC.capital_velocity_per_day;
+
+    await renderWith(
+      savedRunEnvelope({
+        csp_picks: [cspPick(1), cspPick(2), cspPick(3), missing],
+        cc_decisions: [ccPick(1), ccPick(2), ccPick(3), ccPick(4), missingCC],
+      }),
+    );
+
+    const cspRow = document.querySelector('#csp-remaining-list .lane-candidate-row');
+    expect(cspRow.textContent).toContain('CSP4');
+    expect(cspRow.textContent).toContain('ROI/day');
+    expect(cspRow.textContent).toContain('—');
+    expect(cspRow.textContent).toContain('Collateral');
+    expect(cspRow.querySelectorAll('strong').length).toBeGreaterThan(0);
+    // The missing fields render the em-dash, not a fabricated 0.00 / 0 sh.
+    expect(cspRow.textContent).not.toMatch(/\$0\.00/);
+
+    const ccRows = document.querySelectorAll('#cc-remaining-list .lane-candidate-row');
+    const ccRow = ccRows[ccRows.length - 1]; // CCPick5 is the last remaining row
+    expect(ccRow.textContent).toContain('CC5');
+    expect(ccRow.textContent).toContain('Shares');
+    expect(ccRow.textContent).toContain('—');
+    expect(ccRow.textContent).not.toMatch(/0 sh/);
+  });
+
+  it('never renders execution-capable controls on the saved run', async () => {
+    setupLaneDOM();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+    await renderWith(savedRunEnvelope());
+
+    const executionNeedles = [
+      /place order/i, /apply to order/i, /modify order/i, /cancel order/i,
+      /buy to open/i, /sell to open/i, /unlock/i, /submit order/i,
+    ];
+    const allButtons = [...document.querySelectorAll('button')];
+    const executionButtons = allButtons.filter((b) =>
+      executionNeedles.some((re) => re.test(`${b.textContent} ${b.title || ''} ${b.getAttribute('aria-label') || ''}`)),
+    );
+    expect(executionButtons).toHaveLength(0);
+    // Inside every copy surface the only actionable control is a
+    // copy-to-ticket (never a place/modify/cancel control).
+    const copySurfaces = [
+      '#top-csp-cards',
+      '#top-cc-cards',
+      '#csp-remaining-list',
+      '#cc-remaining-list',
+      '#blocked-candidates-list',
+    ];
+    const copySurfaceButtons = copySurfaces.flatMap((sel) =>
+      [...document.querySelectorAll(`${sel} button`)],
+    );
+    expect(copySurfaceButtons.length).toBeGreaterThan(0);
+    copySurfaceButtons.forEach((b) => {
+      expect(b.classList.contains('copy-ticket-btn')).toBe(true);
+    });
+  });
+});

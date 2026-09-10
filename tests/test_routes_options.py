@@ -690,22 +690,38 @@ class TestLeakageAnalytics(unittest.TestCase):
 
 
 class TestWatchlistTickers(unittest.TestCase):
-    """GET /api/options/watchlist-tickers"""
+    """GET /api/options/watchlist-tickers
+
+    The active CSP scan universe is the signed-in OpenD session's Moomoo
+    watchlist group (US-listed securities only). Legacy config/app additions
+    are archived and never returned here as Moomoo symbols; a broken/missing/
+    empty group or a connection failure carries a distinct status + explanation
+    with an empty ticker list.
+    """
 
     @patch("api.routes.options.get_options_service")
     @patch("api.services.config.get_config")
-    def test_returns_effective_watchlist(self, mock_get_config, mock_get_options_service):
-        """Should return effective watchlist with mode."""
+    def test_returns_scan_universe(self, mock_get_config, mock_get_options_service):
+        """Should return the Moomoo group scan universe with group metadata."""
         mock_config = MagicMock()
         mock_config.get.side_effect = lambda k, d=None: {
-            "watchlist": ["AAPL", "MSFT"],
+            "watchlist": ["CONFIG.ONLY"],
             "watchlist_mode": "static",
             "growth_mode": {"enabled": True, "screener_profile": {"min_volatility_pct": 4.5}},
         }.get(k, d)
         mock_get_config.return_value = mock_config
 
         mock_wl = MagicMock()
-        mock_wl.get_effective_watchlist.return_value = ["AAPL", "MSFT", "GOOGL"]
+        mock_wl.get_scan_universe.return_value = {
+            "status": "ok",
+            "group_name": "My Watchlist",
+            "explanation": "",
+            "groups_available": ["My Watchlist"],
+            "tickers": ["AAPL", "MSFT", "GOOGL"],
+            "raw_codes": {"AAPL": "US.AAPL"},
+            "unsupported": [{"symbol": "HK.0700", "reason": "non-US listing"}],
+            "fetched_at": "2026-09-10T12:00:00+00:00",
+        }
         mock_get_options_service.return_value.watchlist_manager = mock_wl
 
         app = _make_app()
@@ -716,16 +732,31 @@ class TestWatchlistTickers(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(data["success"])
         self.assertEqual(data["count"], 3)
-        self.assertIn("mode", data)
+        self.assertEqual(data["tickers"], ["AAPL", "MSFT", "GOOGL"])
+        self.assertEqual(data["mode"], "moomoo_group")
         self.assertTrue(data["growth_mode_enabled"])
-        mock_wl.get_effective_watchlist.assert_called_once_with()
+        self.assertEqual(data["group"]["name"], "My Watchlist")
+        self.assertEqual(data["group"]["status"], "ok")
+        self.assertEqual(data["unsupported"][0]["symbol"], "HK.0700")
+        mock_wl.get_scan_universe.assert_called_once_with()
+        # Config symbols are archived, never exposed as the scan universe.
+        self.assertNotIn("CONFIG.ONLY", data["tickers"])
 
     @patch("api.routes.options.get_options_service")
     @patch("api.services.config.get_config")
-    def test_fallback_on_exception(self, mock_get_config, mock_get_options_service):
-        """Should fall back to static config on exception."""
+    def test_missing_group_status_is_distinct(self, mock_get_config, mock_get_options_service):
+        """A missing group surfaces a distinct explanation with an empty list."""
         mock_wl = MagicMock()
-        mock_wl.get_effective_watchlist.side_effect = Exception("Boom")
+        mock_wl.get_scan_universe.return_value = {
+            "status": "missing_group",
+            "group_name": "NoSuchGroup",
+            "explanation": "Watchlist group 'NoSuchGroup' was not found.",
+            "groups_available": ["My Watchlist"],
+            "tickers": [],
+            "raw_codes": {},
+            "unsupported": [],
+            "fetched_at": "",
+        }
         mock_get_options_service.return_value.watchlist_manager = mock_wl
 
         app = _make_app(connection_config={"host": "127.0.0.1", "port": 11111, "watchlist": ["AAPL"]})
@@ -735,8 +766,32 @@ class TestWatchlistTickers(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(data["success"])
-        self.assertEqual(data["count"], 1)
-        self.assertEqual(data["tickers"], ["AAPL"])
+        # Never silently fall back to the configured (legacy) watchlist list.
+        self.assertEqual(data["count"], 0)
+        self.assertEqual(data["tickers"], [])
+        self.assertEqual(data["group"]["status"], "missing_group")
+        self.assertIn("not found", data["group"]["explanation"])
+        self.assertEqual(data["group"]["groups_available"], ["My Watchlist"])
+
+    @patch("api.routes.options.get_options_service")
+    @patch("api.services.config.get_config")
+    def test_fallback_on_exception(self, mock_get_config, mock_get_options_service):
+        """A group-read exception surfaces connection_failed, never a static list."""
+        mock_wl = MagicMock()
+        mock_wl.get_scan_universe.side_effect = Exception("Boom")
+        mock_get_options_service.return_value.watchlist_manager = mock_wl
+
+        app = _make_app(connection_config={"host": "127.0.0.1", "port": 11111, "watchlist": ["AAPL"]})
+        with app.test_client() as client:
+            resp = client.get("/api/options/watchlist-tickers")
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data["success"])
+        self.assertEqual(data["count"], 0)
+        self.assertEqual(data["tickers"], [])
+        self.assertEqual(data["group"]["status"], "connection_failed")
+        self.assertIn("read failed", data["group"]["explanation"])
 
 
 # ---------------------------------------------------------------------------

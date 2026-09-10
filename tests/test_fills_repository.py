@@ -59,7 +59,7 @@ class TestFillsRepository(unittest.TestCase):
             self.assertIn("option_fills", tables)
             self.assertIn("account_cash_flows", tables)
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 10)
+            self.assertEqual(version, 11)
         finally:
             conn.close()
 
@@ -77,10 +77,13 @@ class TestFillsRepository(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 10)
+            self.assertEqual(version, 11)
             cols = {row[1] for row in conn.execute("PRAGMA table_info(option_fills)")}
             self.assertIn("fill_id", cols)
             self.assertIn("fees", cols)
+            # v11: ex-dividend column is added to the earnings calendar too.
+            earnings_cols = {row[1] for row in conn.execute("PRAGMA table_info(earnings_calendar)")}
+            self.assertIn("ex_dividend_date", earnings_cols)
         finally:
             conn.close()
 

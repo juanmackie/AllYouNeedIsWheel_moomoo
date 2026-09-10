@@ -19,7 +19,6 @@ let autoRefreshInterval = null;
 let isVisible = true;
 let listenersBound = false;
 let isInitialized = false;
-let activeSignalType = 'all';
 let _isLoading = false; // in-flight guard — prevents overlapping requests
 let pendingRecommendationRequest = null;
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -33,7 +32,10 @@ let _toggleRefreshInProgress = false;
 // DOM Elements (initialized lazily)
 let container, contentEl, cardsContainer, lastUpdatedEl;
 let blockedListEl, blockedCountEl, bpIndicator;
-let tabContainer, signalCountDisplay;
+let cspCardsEl, ccCardsEl;
+let cspRemainingEl, ccRemainingEl, cspRemainingListEl, ccRemainingListEl;
+let cspRemainingCountEl, ccRemainingCountEl;
+let strategyRulesEl, strategyRulesTextEl;
 
 /**
  * Initialize DOM element references
@@ -46,8 +48,16 @@ function initElements() {
     blockedListEl = document.getElementById('blocked-candidates-list');
     blockedCountEl = document.getElementById('blocked-candidates-count');
     bpIndicator = document.getElementById('buying-power-indicator');
-    tabContainer = document.getElementById('signal-tabs');
-    signalCountDisplay = document.getElementById('signal-count-display');
+    cspCardsEl = document.getElementById('top-csp-cards');
+    ccCardsEl = document.getElementById('top-cc-cards');
+    cspRemainingEl = document.getElementById('csp-remaining');
+    ccRemainingEl = document.getElementById('cc-remaining');
+    cspRemainingListEl = document.getElementById('csp-remaining-list');
+    ccRemainingListEl = document.getElementById('cc-remaining-list');
+    cspRemainingCountEl = document.getElementById('csp-remaining-count');
+    ccRemainingCountEl = document.getElementById('cc-remaining-count');
+    strategyRulesEl = document.getElementById('strategy-rules');
+    strategyRulesTextEl = document.getElementById('strategy-rules-text');
 }
 
 /**
@@ -189,6 +199,38 @@ function formatExpiration(expiration) {
     const day = expiration.slice(6, 8);
     const date = new Date(`${year}-${month}-${day}`);
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/**
+ * Resolve a candidate's broker-quote age in seconds. Prefers the read-time
+ * ``quote_age_sec`` attached by the backend; falls back to parsing a timestamp.
+ * @param {Object} rec - Recommendation data
+ * @returns {number|null} seconds, or null when unavailable
+ */
+function getQuoteAgeSec(rec) {
+    if (rec && rec.quote_age_sec != null && Number.isFinite(Number(rec.quote_age_sec))) {
+        return Number(rec.quote_age_sec);
+    }
+    const wd = (rec && rec.wheel_decision) || {};
+    const ts = rec?.quote_timestamp || wd.quote_timestamp || wd.quote_fetched_at_utc || rec?.quote_fetched_at_utc || '';
+    if (!ts) return null;
+    const t = new Date(ts).getTime();
+    return Number.isFinite(t) ? Math.max((Date.now() - t) / 1000, 0) : null;
+}
+
+/**
+ * Format a quote age (seconds) as human text; returns the em-dash placeholder
+ * when the value is unavailable so missing data never renders as 0/"now".
+ * @param {number|null} sec - Quote age in seconds
+ * @returns {string}
+ */
+function formatQuoteAge(sec) {
+    if (sec == null || !Number.isFinite(Number(sec)) || Number(sec) < 0) return '—';
+    const s = Number(sec);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`;
+    return `${Math.floor(s / 86400)}d ago`;
 }
 
 /**
@@ -576,11 +618,30 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         ivRankEl.textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
     }
 
+    // Return on deployed capital per day (decimal fraction -> % / day). This is
+    // the ranking key, shown read-only. Missing stays 'N/A', never a zero.
+    const capitalVelocityEl = clone.querySelector('.capital-velocity');
+    if (capitalVelocityEl) {
+        const capVel = rec.capital_velocity_per_day;
+        if (capVel != null && Number.isFinite(Number(capVel)) && Number(capVel) > 0) {
+            capitalVelocityEl.textContent = `${(Number(capVel) * 100).toFixed(3)}% / day`;
+            capitalVelocityEl.classList.add('text-success');
+        } else {
+            capitalVelocityEl.textContent = 'N/A';
+        }
+    }
+
+    // Quote age (broker quote freshness, read-time backend value)
+    const quoteAgeEl = clone.querySelector('.quote-age');
+    if (quoteAgeEl) {
+        quoteAgeEl.textContent = getQuoteAgeSec(rec) != null ? formatQuoteAge(getQuoteAgeSec(rec)) : '—';
+    }
+
     // CSP-specific details
     const cspSection = clone.querySelector('.csp-details');
     if (signalType === 'csp' || signalType === 'put') {
         cspSection.classList.remove('d-none');
-        const cashReq = rec.cash_required ?? rec.capital_required ?? rec.wheel_decision?.cash_required;
+        const cashReq = rec.cash_required ?? rec.collateral ?? rec.capital_required ?? rec.wheel_decision?.cash_required;
         const cspCash = signalsData?.cash_available_for_csp || 0;
         const cashPct = cashReq != null && cspCash > 0 ? (cashReq / cspCash) * 100 : 0;
         const breakevenBuffer = rec.breakeven_buffer_pct ?? rec.wheel_decision?.breakeven_buffer_pct;
@@ -649,6 +710,14 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         const costBasisDist = rec.strike != null && avgCost > 0
             ? ((rec.strike - avgCost) / avgCost) * 100 : null;
         const intent = rec.covered_call_intent || rec.wheel_decision?.covered_call_intent || '';
+
+        const availableSharesEl = clone.querySelector('.cc-available-shares');
+        if (availableSharesEl) {
+            availableSharesEl.textContent = rec.available_shares != null && Number.isFinite(Number(rec.available_shares))
+                ? `${Number(rec.available_shares).toLocaleString()} sh`
+                : 'N/A';
+        }
+
 
         clone.querySelector('.cc-if-called-return').textContent = ifCalledReturn != null ? `${ifCalledReturn.toFixed(1)}%` : 'N/A';
         clone.querySelector('.cc-if-called-proceeds').textContent = ifCalledProceeds != null ? formatCurrency(ifCalledProceeds) : 'N/A';
@@ -735,7 +804,6 @@ function showGenerating() {
     if (_toggleRefreshInProgress) {
         if (cardsContainer) cardsContainer.innerHTML = '';
         if (contentEl) contentEl.classList.add('d-none');
-        if (tabContainer) tabContainer.classList.add('d-none');
         if (stateEl) {
             stateEl.innerHTML = '';
             const notice = document.createElement('div');
@@ -1178,55 +1246,198 @@ async function fetchRequiredPace() {
 }
 
 /**
- * Render backend-selected next CSPs for cash that remains after the visible
- * top signals. This widget only displays server-vetted fields.
+ * Render the active preset's actual strategy rules (read-only, from the
+ * backend snapshot). Replaces the former Call/Put filter tabs with the
+ * effective thresholds the listed signals were screened under.
+ * @param {Object} result - API response
  */
-function renderDeploymentPlan(result) {
-    const section = document.getElementById('deployment-plan');
-    const heading = document.getElementById('deployment-plan-heading');
-    const summary = document.getElementById('deployment-plan-summary');
-    const cards = document.getElementById('deployment-plan-cards');
-    if (!section || !heading || !summary || !cards) return;
-
-    const plan = result?.deployment_plan;
-    const signals = Array.isArray(plan?.signals) ? plan.signals : [];
-    if (signals.length === 0) {
-        section.classList.add('d-none');
-        cards.innerHTML = '';
+function renderStrategyRules(result) {
+    if (!strategyRulesEl || !strategyRulesTextEl) return;
+    const preset = result?.preset || {};
+    const sp = preset.screener_profile || {};
+    const parts = [];
+    if (preset.label) {
+        parts.push(escapeHtml(String(preset.label).toUpperCase()) + (preset.version ? ` v${preset.version}` : ''));
+    }
+    if (sp.csp_target_delta != null) {
+        parts.push(`CSP \u0394 ${Number(sp.csp_target_delta).toFixed(2)} \u00b1${Number(sp.csp_delta_tolerance ?? 0).toFixed(2)}`);
+    }
+    if (sp.csp_min_dte != null && sp.csp_max_dte != null) {
+        const pref = sp.csp_preferred_dte != null ? ` (pref ${sp.csp_preferred_dte})` : '';
+        parts.push(`CSP DTE ${sp.csp_min_dte}-${sp.csp_max_dte}${pref}`);
+    }
+    if (sp.csp_min_otm_pct != null && sp.csp_max_otm_pct != null) {
+        parts.push(`CSP OTM ${sp.csp_min_otm_pct}-${sp.csp_max_otm_pct}%`);
+    }
+    if (sp.call_default_otm_pct != null) parts.push(`CC OTM ${sp.call_default_otm_pct}%`);
+    if (sp.min_csp_buying_power != null) parts.push(`min CSP buying power ${formatCurrency(Number(sp.min_csp_buying_power))}`);
+    if (sp.max_buying_power_pct_per_csp != null) parts.push(`\u2264${sp.max_buying_power_pct_per_csp}% buying power per CSP`);
+    if (sp.min_premium_per_contract != null) parts.push(`min premium ${formatCurrency(Number(sp.min_premium_per_contract))}`);
+    if (sp.min_mid_price != null) parts.push(`min mid $${Number(sp.min_mid_price).toFixed(2)}`);
+    if (sp.max_spread_pct != null) parts.push(`max spread ${sp.max_spread_pct}%`);
+    if (sp.min_open_interest != null) parts.push(`min OI ${sp.min_open_interest}`);
+    if (sp.require_cash_fit) parts.push('cash-fit required');
+    if (parts.length === 0) {
+        strategyRulesEl.classList.add('d-none');
+        strategyRulesTextEl.innerHTML = '';
         return;
     }
-
-    heading.textContent = 'Deploy remaining CSP cash';
-    summary.textContent = `After visible picks: ${formatCurrency(Number(plan.cash_remaining || 0))} remains available. Next ranked options:`;
-    cards.innerHTML = signals.map((signal) => {
-        const ticker = escapeHtml(String(signal.ticker || '—'));
-        const expiry = escapeHtml(signal.expiration ? formatExpiration(signal.expiration) : '—');
-        const strike = signal.strike != null ? `$${Number(signal.strike).toFixed(2)}` : '—';
-        const contracts = Number(signal.deployment_contracts || 0);
-        const cash = formatCurrency(Number(signal.deployment_cash_required || 0));
-        const income = formatCurrency(Number(signal.deployment_income || 0));
-        return `<div class="col-md-6 col-xl-4"><div class="border rounded p-2 h-100 bg-light-subtle">
-            <div class="d-flex justify-content-between"><strong>${ticker}</strong><span>${escapeHtml(strike)}</span></div>
-            <div class="small text-muted">${expiry} · ${contracts} contract${contracts === 1 ? '' : 's'}</div>
-            <div class="small">Cash ${escapeHtml(cash)} · Bid income ${escapeHtml(income)}</div>
-        </div></div>`;
-    }).join('');
-    section.classList.remove('d-none');
+    strategyRulesTextEl.innerHTML = parts.join(' <span class="text-secondary">\u00b7</span> ');
+    strategyRulesEl.classList.remove('d-none');
 }
 
 /**
- * Render signals filtered by active tab
+ * Render the two always-visible strategy lanes from the backend lane lists.
+ * ``csp_picks`` -> Top 3 cash-secured puts, ``cc_decisions`` -> Top 3 covered
+ * calls. Each lane shows its top-3 cards plus an expandable list of the
+ * remaining qualifying candidates (each one copy-addressable). Every candidate
+ * is labeled an alternative, not a recommendation to sell every contract.
+ * @param {Object} result - API response
+ */
+function renderLaneSections(result) {
+    renderLane('csp', result?.csp_picks || []);
+    renderLane('cc', result?.cc_decisions || []);
+    // Pace data loads once; refresh the lanes a single time when it arrives so
+    // per-card pace contributions populate without a second network request.
+    if (!requiredPaceFetched) {
+        fetchRequiredPace().then((found) => {
+            if (found && signalsData) {
+                renderLane('csp', signalsData.csp_picks || []);
+                renderLane('cc', signalsData.cc_decisions || []);
+            }
+        });
+    }
+}
+
+/**
+ * Render a single strategy lane.
+ * @param {'csp'|'cc'} kind - Lane key
+ * @param {Array} list - Ranked candidate list from the backend
+ */
+function renderLane(kind, list) {
+    const isCsp = kind === 'csp';
+    const topEl = isCsp ? cspCardsEl : ccCardsEl;
+    const remainingEl = isCsp ? cspRemainingEl : ccRemainingEl;
+    const remainingListEl = isCsp ? cspRemainingListEl : ccRemainingListEl;
+    const remainingCountEl = isCsp ? cspRemainingCountEl : ccRemainingCountEl;
+    const laneEl = document.getElementById(isCsp ? 'csp-section' : 'cc-section');
+    const cards = Array.isArray(list) ? list : [];
+
+    // No lane containers in the DOM: allow the caller to fall back to the grid.
+    if (!topEl) return;
+    if (cards.length === 0) {
+        topEl.innerHTML = '';
+        if (remainingEl) remainingEl.classList.add('d-none');
+        if (remainingListEl) remainingListEl.innerHTML = '';
+        if (laneEl) laneEl.classList.add('d-none');
+        return;
+    }
+    if (laneEl) laneEl.classList.remove('d-none');
+
+    const topCards = cards.slice(0, 3);
+    topEl.innerHTML = '';
+    topCards.forEach((rec, index) => {
+        const card = createRecommendationCard(rec, cards[index + 1] || null);
+        applyGrowthFieldsToCard(card, rec);
+        topEl.appendChild(card);
+    });
+
+    const rest = cards.slice(3);
+    if (remainingListEl) remainingListEl.innerHTML = '';
+    if (remainingEl) {
+        if (rest.length > 0) {
+            rest.forEach((rec) => remainingListEl.appendChild(buildRemainingCandidateRow(rec, kind)));
+            if (remainingCountEl) remainingCountEl.textContent = String(rest.length);
+            remainingEl.classList.remove('d-none');
+            remainingEl.open = false;
+        } else {
+            remainingEl.classList.add('d-none');
+        }
+    }
+}
+
+/**
+ * Build a compact "remaining qualifying candidate" row for a lane, with its
+ * own server-revalidated copy button. All API-fed fields are escaped; missing
+ * values render as an em-dash, never a hardcoded zero.
+ * @param {Object} rec - Recommendation data
+ * @param {'csp'|'cc'} kind - Lane key
+ * @returns {HTMLElement}
+ */
+function buildRemainingCandidateRow(rec, kind) {
+    const isCsp = kind === 'csp';
+    const row = document.createElement('div');
+    row.className = 'lane-candidate-row row g-2 align-items-center py-2 border-bottom border-light small';
+    const optionType = String(rec.option_type || '').toUpperCase();
+    const typeLabel = optionType === 'CALL' ? 'Covered call' : 'CSP';
+    const eventTier = rec.event_tier || rec.wheel_decision?.event_tier || 'event_unknown';
+    const qualityTier = rec.quality_tier || rec.wheel_decision?.quality_tier || 'marginal';
+    const bid = rec.bid_premium_per_contract != null
+        ? formatCurrency(Number(rec.bid_premium_per_contract))
+        : (rec.premium_per_contract != null ? formatCurrency(Number(rec.premium_per_contract)) : '\u2014');
+    const capVel = rec.capital_velocity_per_day;
+    const roiDay = capVel != null && Number.isFinite(Number(capVel)) && Number(capVel) > 0
+        ? `${(Number(capVel) * 100).toFixed(3)}%/day`
+        : '\u2014';
+    const capacity = isCsp
+        ? (rec.collateral ?? rec.cash_required ?? null)
+        : (rec.available_shares ?? null);
+    const capacityText = capacity != null && Number.isFinite(Number(capacity))
+        ? (isCsp ? formatCurrency(Number(capacity)) : `${Number(capacity).toLocaleString()} sh`)
+        : '\u2014';
+    const qty = Number(rec.recommended_contracts || 0);
+    const maxQty = Number(rec.max_contracts || 0);
+    const quoteAge = getQuoteAgeSec(rec) != null ? formatQuoteAge(getQuoteAgeSec(rec)) : '\u2014';
+    const strikeText = rec.strike != null ? `$${Number(rec.strike).toFixed(2)}` : '';
+    const expiryText = rec.expiration ? formatExpiration(rec.expiration) : '';
+    const dteText = rec.dte != null ? `\u00b7 ${rec.dte} DTE` : '';
+
+    row.innerHTML = `
+        <div class="col-12 col-md-4">
+            <strong class="me-1">${escapeHtml(rec.ticker)}</strong>
+            <span class="badge ${optionType === 'CALL' ? 'bg-success' : 'bg-danger'}">${escapeHtml(typeLabel)}</span>
+            <span class="ms-1">${escapeHtml(strikeText)}</span>
+            <span class="text-muted"> \u00b7 ${escapeHtml(expiryText)}${escapeHtml(dteText)}</span>
+        </div>
+        <div class="col-6 col-md-2"><span class="text-muted">Bid</span> <strong>${escapeHtml(bid)}</strong></div>
+        <div class="col-6 col-md-2"><span class="text-muted">ROI/day</span> <strong>${escapeHtml(roiDay)}</strong></div>
+        <div class="col-6 col-md-2"><span class="text-muted">${isCsp ? 'Collateral' : 'Shares'}</span> <strong>${escapeHtml(capacityText)}</strong></div>
+        <div class="col-6 col-md-2"><span class="text-muted">Qty</span> <strong>${qty}${maxQty > 0 ? `<small class="text-muted">/${maxQty}</small>` : ''}</strong></div>
+        <div class="col-6 col-md-2"><span class="text-muted">Quote age</span> <strong>${escapeHtml(quoteAge)}</strong></div>
+        <div class="col-6 col-md-2"><span class="text-muted">Event</span> <strong class="${qualityTier === 'qualified' ? 'text-success' : 'text-warning'}">${escapeHtml(qualityTier)} \u00b7 ${escapeHtml(eventTier.replaceAll('_', ' '))}</strong></div>
+        <div class="col-12 col-md-2 text-md-end">
+            <button type="button" class="btn btn-outline-primary btn-sm copy-ticket-btn lane-copy-btn">Copy</button>
+        </div>
+    `;
+
+    const btn = row.querySelector('.copy-ticket-btn');
+    if (btn) {
+        const { canCopy, staged, reasons } = copyEligibility(rec);
+        btn.disabled = !canCopy;
+        if (canCopy) {
+            btn.title = staged
+                ? 'Stage ticket \u2014 US market closed; re-validated against OpenD before copy'
+                : 'Copy a manual ticket draft (live broker quote)';
+            btn.innerHTML = staged ? '<i class="bi bi-clock"></i> Stage' : '<i class="bi bi-clipboard"></i> Copy';
+            btn.addEventListener('click', () => copyTicket(rec, btn));
+        } else {
+            btn.title = 'Review only: ' + reasons.join(' \u00b7 ');
+            btn.innerHTML = '<i class="bi bi-eye"></i> Review only';
+        }
+    }
+    return row;
+}
+
+/**
+ * Render signals into the single combined grid (legacy/fallback path used when
+ * the two-lane DOM is absent; the dashboard always renders per-lane sections).
  */
 function renderFilteredSignals() {
     if (!signalsData || !cardsContainer) return;
     const allSignals = signalsData.signals || [];
-    const filtered = activeSignalType === 'all'
-        ? allSignals
-        : allSignals.filter(s => getSignalType(s) === activeSignalType);
-
     cardsContainer.innerHTML = '';
-    filtered.forEach((rec, index) => {
-        const card = createRecommendationCard(rec, filtered[index + 1] || null);
+    allSignals.forEach((rec, index) => {
+        const card = createRecommendationCard(rec, allSignals[index + 1] || null);
         applyGrowthFieldsToCard(card, rec);
         cardsContainer.appendChild(card);
     });
@@ -1236,42 +1447,9 @@ function renderFilteredSignals() {
             if (found && cardsContainer && signalsData) renderFilteredSignals();
         });
     }
-
-    // Update count display
-    if (signalCountDisplay) {
-        const typeLabel = activeSignalType === 'all' ? 'Total' : activeSignalType.replace(/_/g, ' ');
-        signalCountDisplay.textContent = `${filtered.length} ${typeLabel} signals of ${allSignals.length} total`;
-    }
-
-    if (filtered.length > 0) {
+    if (allSignals.length > 0) {
         showContent();
     }
-}
-
-/**
- * Switch active signal type tab
- * @param {string} signalType - 'all', 'csp', 'covered_call', 'call', 'put'
- */
-function switchSignalTab(signalType) {
-    activeSignalType = signalType;
-    // Update tab button states
-    const tabBtns = document.querySelectorAll('#signal-tabs [data-signal-type]');
-    tabBtns.forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.signalType === signalType);
-    });
-    renderFilteredSignals();
-}
-
-/**
- * Initialize signal-type tab buttons
- */
-function initSignalTabs() {
-    const tabBtns = document.querySelectorAll('#signal-tabs [data-signal-type]');
-    tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            switchSignalTab(btn.dataset.signalType);
-        });
-    });
 }
 
 /**
@@ -1298,33 +1476,36 @@ function showMarketStateBadge(freshness) {
  * @param {Object|null} cacheInfo - Cache metadata
  */
 function renderRecommendations(result, timestamp, cacheInfo = null) {
-    if (!cardsContainer) return;
+    if (!container) return;
     signalsData = result;
-    
+
     // Show market state badge (after-hours indicator)
     showMarketStateBadge(result?._freshness);
-
-    renderDeploymentPlan(result);
-    
+    // Active preset's actual screening rules — read-only replacement for the
+    // former Call/Put filter tabs.
+    renderStrategyRules(result);
     // Apply growth mode banner
     applyPreset(result);
-    
     // Update buying power indicator
     updateBuyingPowerIndicator(result);
-    
-    // Show tabs and render filtered
-    if (result?.signals?.length > 0) {
-        if (tabContainer) tabContainer.classList.remove('d-none');
-        renderFilteredSignals();
+    // Full rejection explanations stay accessible under "Ticker diagnostics".
+    // The served snapshot carries them as `rejected` (engine `blocked_signals`).
+    renderBlockedSignals(result?.rejected ?? result?.blocked_signals ?? []);
+
+    // Two always-visible lanes: Top 3 CSP (+ remaining) and Top 3 CC
+    // (+ remaining). Fall back to the legacy combined grid only when the
+    // two-lane DOM is absent (old layout / tests).
+    if (cspCardsEl && ccCardsEl) {
+        renderLaneSections(result);
     } else {
-        if (tabContainer) tabContainer.classList.add('d-none');
-        cardsContainer.innerHTML = '';
+        renderFilteredSignals();
     }
-    
-    // Blocked signal diagnostics
-    renderBlockedSignals(result?.blocked_signals || []);
-    
-    if (result?.signals?.length > 0) {
+
+    const hasSignals = (result?.signals?.length > 0)
+        || (Array.isArray(result?.csp_picks) && result.csp_picks.length > 0)
+        || (Array.isArray(result?.cc_decisions) && result.cc_decisions.length > 0);
+    if (hasSignals) {
+        showContent();
         updateTimestamp(timestamp, cacheInfo);
     } else {
         showEmpty(result);
@@ -1414,7 +1595,6 @@ export async function loadTopRecommendations(manualRefresh = false) {
                 () => loadTopRecommendations()
             );
             if (contentEl) contentEl.classList.add('d-none');
-            if (tabContainer) tabContainer.classList.add('d-none');
             updateTimestamp(result.generated_at, null);
             return;
         }
@@ -1503,9 +1683,6 @@ function setupEventListeners() {
     // Preset selector
     initPresetSelector(() => loadTopRecommendations(true));
 
-    // Signal-type tabs
-    initSignalTabs();
-    
     // Visibility change
     document.addEventListener('visibilitychange', handleVisibilityChange);
 }
@@ -1536,7 +1713,6 @@ export function cleanupTopRecommendations() {
     clearGeneratingRetry();
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     signalsData = null;
-    activeSignalType = 'all';
     pendingRecommendationRequest = null;
     isVisible = true;
     listenersBound = false;

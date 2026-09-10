@@ -249,3 +249,90 @@ describe('weekly-income rendering', () => {
     expect(rows[0].textContent).toContain('Call');
   });
 });
+
+describe('weekly-income account premium summary wiring', () => {
+  function setupSummaryDOM() {
+    document.body.innerHTML = `
+      <section id="weekly-income-card">
+        <div id="weekly-income-state"></div>
+        <div class="summary-panel summary-panel--accent">
+          <h3 class="summary-income-value mb-0" id="weekly-income-summary">—</h3>
+          <span id="weekly-positions-count">—</span> positions expiring
+          <span id="friday-date">—</span>
+          <h3 class="summary-income-value mb-0" id="open-short-income-summary">—</h3>
+          <span id="open-short-contracts-count">—</span> contracts open
+        </div>
+        <table>
+          <tbody id="filled-orders-table"></tbody>
+          <tfoot id="weekly-earnings-summary">
+            <span id="weekly-earnings-total">—</span>
+            <span id="weekly-order-count">—</span>
+            <span id="weekly-average-premium">—</span>
+            <span id="weekly-notional-value">—</span>
+          </tfoot>
+        </table>
+      </section>
+    `;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupSummaryDOM();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('writes the authoritative weekly and open-short figures from the same income response', async () => {
+    fetchWeeklyOptionIncome.mockResolvedValue({
+      positions: [
+        { symbol: 'NVDA', option_type: 'P', strike: 850.0, expiration: '20260515', position: -2, avg_cost: 15.5, income: 155.0 },
+      ],
+      total_income: 155.0,
+      positions_count: 1,
+      open_short_total_income: 2330.0,
+      open_short_contracts_count: 11,
+      this_friday: '2026-05-15',
+    });
+    isOpenDUnavailable.mockReturnValue(false);
+
+    const { renderWeeklyIncome } = await import(
+      '../../frontend/static/js/dashboard/weekly-income.js'
+    );
+
+    await renderWeeklyIncome();
+
+    expect(document.getElementById('weekly-income-summary').textContent).toBe('$155.00');
+    expect(document.getElementById('weekly-positions-count').textContent).toBe('1');
+    expect(document.getElementById('friday-date').textContent).toBe('May 15');
+    expect(document.getElementById('open-short-income-summary').textContent).toBe('$2330.00');
+    expect(document.getElementById('open-short-contracts-count').textContent).toBe('11');
+    // Friday table still derives from positions (not hardcoded).
+    expect(document.getElementById('weekly-earnings-total').textContent).toBe('$155.00');
+  });
+
+  it('shows the em-dash for every unavailable account value when the payload errored', async () => {
+    fetchWeeklyOptionIncome.mockResolvedValue({
+      positions: [],
+      total_income: 0,
+      positions_count: 0,
+      error: 'OpenD unavailable',
+      error_code: 'opend_unavailable',
+    });
+    isOpenDUnavailable.mockReturnValue(true);
+
+    const { renderWeeklyIncome } = await import(
+      '../../frontend/static/js/dashboard/weekly-income.js'
+    );
+
+    await renderWeeklyIncome();
+
+    expect(document.getElementById('weekly-income-summary').textContent).toBe('—');
+    expect(document.getElementById('weekly-positions-count').textContent).toBe('—');
+    expect(document.getElementById('friday-date').textContent).toBe('—');
+    expect(document.getElementById('open-short-income-summary').textContent).toBe('—');
+    expect(document.getElementById('open-short-contracts-count').textContent).toBe('—');
+    expect(document.getElementById('weekly-earnings-total').textContent).toBe('—');
+  });
+});

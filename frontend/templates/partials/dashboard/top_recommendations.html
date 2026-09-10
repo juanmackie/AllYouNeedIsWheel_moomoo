@@ -45,28 +45,56 @@
         </div>
     </div>
 
-    <div id="signal-tabs" class="d-none mb-2">
-        <div class="btn-group btn-group-sm" role="group" aria-label="Signal type filter">
-            <button type="button" class="btn btn-outline-primary active" data-signal-type="all">All</button>
-            <button type="button" class="btn btn-outline-primary" data-signal-type="csp">CSP</button>
-            <button type="button" class="btn btn-outline-primary" data-signal-type="covered_call">Covered Call</button>
-            <button type="button" class="btn btn-outline-primary" data-signal-type="call">Call</button>
-            <button type="button" class="btn btn-outline-primary" data-signal-type="put">Put</button>
-        </div>
-        <div class="signal-summary d-inline-block ms-2 small text-muted">
-            <span id="signal-count-display"></span>
+    <div id="strategy-rules" class="strategy-rules d-none mb-3" aria-live="polite">
+        <div class="alert alert-light border small py-2 px-3 mb-0">
+            <i class="bi bi-sliders2 me-1"></i>
+            <strong>Active strategy (read-only):</strong>
+            <span id="strategy-rules-text" class="strategy-rules__text"></span>
         </div>
     </div>
 
     <div id="top-recommendations-container" class="recommendation-stage__body">
         <div id="top-recommendations-state"></div>
         <div id="top-recommendations-content" class="d-none">
-            <div id="deployment-plan" class="d-none mb-3" aria-live="polite">
-                <div class="small fw-semibold text-info" id="deployment-plan-heading"></div>
-                <div class="small text-muted mb-2" id="deployment-plan-summary"></div>
-                <div id="deployment-plan-cards" class="row g-2"></div>
+            <div id="csp-section" class="recommendation-lane mb-4">
+                <div class="app-section__header pb-1">
+                    <div>
+                        <span class="app-section__eyebrow">Strategy lane 1</span>
+                        <h3 class="fs-5 mb-1">Top 3 cash-secured puts</h3>
+                        <p class="small text-muted mb-0">Ranked by executable return on deployed capital per day.</p>
+                    </div>
+                    <span class="alt-label small text-secondary fw-semibold">Alternatives — not a recommendation to sell every contract</span>
+                </div>
+                <div id="top-csp-cards" class="row g-3"></div>
+                <details id="csp-remaining" class="recommendation-lane__remaining mt-2">
+                    <summary class="small text-secondary">
+                        Other qualifying CSP candidates
+                        <span class="badge bg-secondary" id="csp-remaining-count">0</span>
+                        <i class="bi bi-chevron-down"></i>
+                    </summary>
+                    <div id="csp-remaining-list"></div>
+                </details>
             </div>
-            <div id="top-recommendations-cards"></div>
+
+            <div id="cc-section" class="recommendation-lane mb-2">
+                <div class="app-section__header pb-1">
+                    <div>
+                        <span class="app-section__eyebrow">Strategy lane 2</span>
+                        <h3 class="fs-5 mb-1">Top 3 covered calls</h3>
+                        <p class="small text-muted mb-0">Ranked by executable return on deployed capital per day.</p>
+                    </div>
+                    <span class="alt-label small text-secondary fw-semibold">Alternatives — not a recommendation to sell every contract</span>
+                </div>
+                <div id="top-cc-cards" class="row g-3"></div>
+                <details id="cc-remaining" class="recommendation-lane__remaining mt-2">
+                    <summary class="small text-secondary">
+                        Other qualifying covered-call candidates
+                        <span class="badge bg-secondary" id="cc-remaining-count">0</span>
+                        <i class="bi bi-chevron-down"></i>
+                    </summary>
+                    <div id="cc-remaining-list"></div>
+                </details>
+            </div>
         </div>
     </div>
 
@@ -74,7 +102,7 @@
         <details class="small text-muted">
             <summary class="text-secondary">
                 <span class="fw-semibold">Ticker diagnostics</span>
-                <span id="blocked-candidates-count">0</span> tickers with no qualifying signal
+                <span id="blocked-candidates-count">0</span> tickers or contracts with no qualifying signal
                 <i class="bi bi-chevron-down"></i>
             </summary>
             <div id="blocked-candidates-list" class="mt-2 p-2 bg-light rounded"></div>
@@ -82,7 +110,7 @@
     </div>
 
     <div class="app-section__footer">
-        Signals ranked by executable return on deployed capital per day; executable-bid premium velocity breaks ties, then ticker/expiry/strike/option-type. Quality and event tiers are risk information only — they never change order. Midpoint values are limit targets—not guaranteed fills; copy remains disabled for review-only signals.
+        Every candidate below is an alternative, not a recommendation to sell every contract shown. Signals are ranked by executable return on deployed capital per day; executable-bid premium velocity breaks ties, then ticker/expiry/strike/option-type. Quality and event tiers are risk information only — they never change order. Midpoint values are limit targets—not guaranteed fills; copy is server-revalidated and stays disabled for review-only signals.
     </div>
 </section>
 
@@ -138,7 +166,9 @@
 
                 <!-- CAPITAL / RISK -->
                 <div class="recommendation-card__group">
-                    <div class="recommendation-details">
+                    <details style="margin-top:4px;">
+                        <summary style="font-family:var(--ft-font-mono);font-size:11px;color:var(--ft-ink-mute);cursor:pointer;letter-spacing:0.1em;text-transform:uppercase;padding:2px 0;list-style:none;display:inline-flex;align-items:center;gap:6px;">All metrics <span style="font-size:9px;color:var(--ft-rule-soft);">▼</span></summary>
+                        <div class="recommendation-details" style="margin-top:6px;">
                         <div class="recommendation-detail-row d-flex justify-content-between">
                             <span>Executable bid</span>
                             <span class="bid-premium fw-semibold"></span>
@@ -154,6 +184,14 @@
                         <div class="recommendation-detail-row d-flex justify-content-between">
                             <span>Quantity</span>
                             <span class="quantity-evidence fw-semibold"></span>
+                        </div>
+                        <div class="recommendation-detail-row d-flex justify-content-between">
+                            <span>Return on capital / day</span>
+                            <span class="capital-velocity fw-semibold"></span>
+                        </div>
+                        <div class="recommendation-detail-row d-flex justify-content-between">
+                            <span>Quote age</span>
+                            <span class="quote-age fw-semibold"></span>
                         </div>
                         <div class="recommendation-detail-row d-flex justify-content-between">
                             <span>OTM</span>
@@ -207,6 +245,10 @@
                         <div class="cc-details d-none">
                             <hr class="my-1">
                             <div class="d-flex justify-content-between">
+                                <span>Available shares</span>
+                                <span class="cc-available-shares fw-semibold"></span>
+                            </div>
+                            <div class="d-flex justify-content-between">
                                 <span>If-called return</span>
                                 <span class="cc-if-called-return fw-semibold"></span>
                             </div>
@@ -223,8 +265,9 @@
                                 <span class="cc-intent fw-semibold"></span>
                             </div>
                         </div>
+                        </div>
+                    </details>
                     </div>
-                </div>
 
                 <!-- WARNINGS -->
                 <div class="recommendation-card__group">

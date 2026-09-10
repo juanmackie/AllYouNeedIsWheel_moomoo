@@ -96,6 +96,7 @@ class WheelRunner:
         config: dict,
         max_tradeable_age_sec: int = 300,
         roll_diagnostics_provider=None,
+        event_context_refresher=None,
     ):
         self._db = db
         self._options_service = options_service
@@ -105,6 +106,12 @@ class WheelRunner:
         # core must never depend on the api layer, so roll diagnostics are
         # composed there and injected here.
         self._roll_diagnostics_provider = roll_diagnostics_provider
+        # Injected api-layer callable (portfolio_context) -> dict. Called once
+        # per explicit refresh, after the broker portfolio is fetched and
+        # before the quote scan, to refresh stale earnings/ex-dividend context.
+        # Failures must never abort the scan (best-effort, bounded on the api
+        # side); core only swallows exceptions as a last line of defence.
+        self._event_context_refresher = event_context_refresher
         self._latest_snapshot: WheelRunSnapshot | None = None
 
     # -- attempt helpers -------------------------------------------------
@@ -152,6 +159,15 @@ class WheelRunner:
                 )
             )
             portfolio_context = self._options_service._get_portfolio_context(refresh=True)
+
+            # Best-effort: refresh stale earnings/ex-dividend event context
+            # before broker quote collection. Provider failures are swallowed
+            # here and on the api side; the broker scan always proceeds.
+            if self._event_context_refresher is not None:
+                try:
+                    self._event_context_refresher(portfolio_context)
+                except Exception as exc:  # never let event-cache work kill a run
+                    logger.warning(f"Event context refresh failed (ignored): {exc}")
 
             self._persist_attempt(
                 RefreshAttempt(
@@ -285,11 +301,34 @@ class WheelRunner:
         # generation time for a broker fetch timestamp.
         quote_fetched_at = {sym: quote_fetched_at_by_symbol.get(sym, "") for sym in symbols}
 
+        # ACTIVE WATCHLIST foot payload: the scan universe actually used. The
+        # wheel runner stamps last_successful_sync only when the group itself
+        # synced (status ok) — a planning/partial publish after a broken group
+        # must NOT look like a successful sync.
+        active_watchlist = dict(result.get("active_watchlist") or {})
+        wl_tickers = active_watchlist.get("tickers") or []
+        wl_by_symbol = {str(t.get("symbol", "")): t for t in wl_tickers if isinstance(t, dict)}
+        partial_symbols = tuple(
+            sorted(sym for sym, entry in wl_by_symbol.items() if str(entry.get("status") or "") == "error")
+        )
+        stale_symbols_symbols = [sym for sym in symbols if not quote_fetched_at.get(sym)]
+        for sym in wl_by_symbol:
+            if sym not in stale_symbols_symbols and not quote_fetched_at.get(sym):
+                stale_symbols_symbols.append(sym)
+        stale_symbols = tuple(sorted(str(s) for s in stale_symbols_symbols))
+        published_at = utc_now_iso()
+        # last_successful_sync only when the group itself synced (status ok); a
+        # planning/partial publish after a broken group must NOT look like one.
+        if str(active_watchlist.get("group_status") or "") == "ok":
+            active_watchlist["last_successful_sync"] = published_at
+        elif "last_successful_sync" not in active_watchlist:
+            active_watchlist["last_successful_sync"] = ""
+
         preset = result.get("preset") or {}
         run = RunMetadata(
             run_id=uuid.uuid4().hex[:16],
             generated_at=generated_at,
-            published_at=utc_now_iso(),
+            published_at=published_at,
             env=env,
             account_id=opaque_account,
             preset_key=preset.get("key", "balanced"),
@@ -297,8 +336,8 @@ class WheelRunner:
             market_state=market_state,
             status=status,
             errors=tuple(errors),
-            partial_symbols=tuple(),
-            stale_symbols=tuple(),
+            partial_symbols=partial_symbols,
+            stale_symbols=stale_symbols,
             quote_fetched_at=quote_fetched_at,
             max_tradeable_age_sec=self._max_tradeable_age_sec,
             coverage_scanned=scanned,
@@ -314,6 +353,7 @@ class WheelRunner:
             preset=preset,
             watchlist_origins=result.get("watchlist_origins", {}) or {},
             signals=tuple(result.get("signals", []) or []),
+            active_watchlist=dict(active_watchlist),
         )
 
     def latest(self) -> WheelRunSnapshot | None:

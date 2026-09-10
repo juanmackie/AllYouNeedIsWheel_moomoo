@@ -15,6 +15,22 @@ class TestEarningsRoutes(unittest.TestCase):
     def test_get_earnings_status(self, mock_get_service):
         mock_service = MagicMock()
         mock_service.get_cache_stats.return_value = {"hits": 3, "misses": 1}
+        # Provider block: assert the richer payload is serialized and surfaced.
+        mock_service.get_provider_status.return_value = {
+            "alpha_vantage": {
+                "available": False,
+                "status": "missing_key",
+                "error": "ALPHA_VANTAGE_API_KEY is not set",
+                "daily_allowance": 25,
+                "requests_today": 0,
+                "last_attempt_at": None,
+                "last_success_at": None,
+                "cache_entries": 0,
+                "cache_age_hours": None,
+            },
+            "yfinance": {"available": True},
+            "cache": {"hits": 3, "misses": 1},
+        }
         mock_get_service.return_value = mock_service
 
         response = self.client.get("/api/earnings/status")
@@ -24,6 +40,8 @@ class TestEarningsRoutes(unittest.TestCase):
         self.assertEqual(data["status"], "manual")
         self.assertFalse(data["scheduler"]["running"])
         self.assertEqual(data["cache_stats"]["hits"], 3)
+        self.assertEqual(data["provider"]["alpha_vantage"]["status"], "missing_key")
+        self.assertEqual(data["provider"]["yfinance"]["available"], True)
         mock_get_service.assert_called_once_with("ivearnings")
 
     @patch("api.routes.earnings.get_service")

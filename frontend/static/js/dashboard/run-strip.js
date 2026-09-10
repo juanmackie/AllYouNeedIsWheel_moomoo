@@ -14,6 +14,7 @@
  */
 
 import { fetchWithTimeout, readJsonSafely } from './api-core.js';
+import { renderActiveWatchlist } from './active-watchlist.js';
 
 const STATUS_CLASSES = {
     ready: 'bg-success',
@@ -74,10 +75,12 @@ export function renderRunStrip(attempt, snapshot, opts = {}) {
 
     if (!snapshot?.run) {
         setBadge('run-status', 'NO RUN', 'bg-secondary');
+        renderActiveWatchlist(snapshot);
         return;
     }
 
     const run = snapshot.run;
+    renderActiveWatchlist(snapshot);
     const status = snapshot.effective_status || (snapshot.tradeable ? run.status : 'stale');
     setBadge('run-env', run.env || '--', run.env === 'REAL' ? 'bg-danger' : 'bg-secondary');
     setBadge('run-market', `MARKET ${(run.market_state || 'unknown').toUpperCase()}`, 'bg-secondary');

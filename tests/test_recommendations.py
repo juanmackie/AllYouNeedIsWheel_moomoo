@@ -130,6 +130,77 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["count"], 0)
 
+    def _scan_universe(self, tickers, status="ok"):
+        return {
+            "status": status,
+            "group_name": "My Watchlist",
+            "explanation": "" if status == "ok" else f"group status {status}",
+            "groups_available": ["My Watchlist"],
+            "tickers": tickers,
+            "raw_codes": {t: f"US.{t}" for t in tickers},
+            "unsupported": [],
+            "fetched_at": "2026-09-10T12:00:00+00:00",
+        }
+
+    def test_incomplete_coverage_reports_partial_active_watchlist(self):
+        """A ticker whose CSP fetch fails is recorded with status=error in the
+        ACTIVE WATCHLIST payload and coverage reports scanned < total — the
+        snapshot stays partial, never silently claimed complete."""
+        tickers = ["AAA", "BBB"]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": True,
+            "watchlist_size": 2,
+            "estimated_scan_sec": 30.0,
+            "freshness_window_sec": 300,
+            "chain_calls": 6,
+            "chain_quota_ok": True,
+            "recommended_max_size": 12,
+        }
+        engine = self._import_engine()
+
+        with (
+            patch.object(
+                engine,
+                "_fetch_watchlist_ticker_csp",
+                side_effect=[None, []],  # AAA fetch fails, BBB scans clean
+            ),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations(limit=5)
+
+        # Coverage truth: one of two symbols scanned -> partial, not complete.
+        self.assertTrue(result.get("success"))
+        self.assertEqual(result["scan_coverage"]["scanned"], 1)
+        self.assertEqual(result["scan_coverage"]["total"], 2)
+        self.assertFalse(result["scan_coverage"]["complete"])
+
+        # ACTIVE WATCHLIST foot payload: group name + per-ticker status truth.
+        active = result["active_watchlist"]
+        self.assertEqual(active["group_name"], "My Watchlist")
+        self.assertEqual(active["group_status"], "ok")
+        by_symbol = {t["symbol"]: t for t in active["tickers"]}
+        self.assertEqual(by_symbol["AAA"]["status"], "error")
+        self.assertEqual(by_symbol["BBB"]["status"], "scanned")
+        # Holdings checked for covered calls come from Moomoo positions.
+        self.assertIn("AAPL", active["holdings_checked"])
+
+    def test_broken_group_skips_csp_lane_keeps_cc_positions(self):
+        """A missing/empty group skips the CSP lane with an explicit lane
+        diagnostic and an empty scan universe; owned shares are still assessed
+        for covered calls and are never replaced by config symbols."""
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe([], status="missing_group")
+        engine = self._import_engine()
+
+        with patch("api.services.recommendations.is_market_open", return_value=True):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result.get("success"))
+        self.assertEqual(result["active_watchlist"]["group_status"], "missing_group")
+        self.assertEqual(result["active_watchlist"]["tickers"], [])
+        self.assertIn("AAPL", result["active_watchlist"]["holdings_checked"])
+        self.assertEqual(result["scan_coverage"], {"scanned": 0, "total": 0, "complete": False})
+
     def test_get_top_recommendations_scans_complete_watchlist_union(self):
         """A feasible scan evaluates every watchlist symbol; it never truncates."""
         tickers = [f"TICK{i}" for i in range(20)]

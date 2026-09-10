@@ -394,5 +394,190 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
         self.assertEqual(preset.get("require_cash_fit"), True)
 
 
+class TestWatchlistManagerScanUniverse(unittest.TestCase):
+    """get_scan_universe: the active CSP universe is the signed-in OpenD
+    session's Moomoo watchlist group (US listings only). A missing group, an
+    empty group, and a connection failure each produce a DISTINCT status with a
+    specific explanation; legacy config/app additions are archived and NEVER
+    substituted as Moomoo symbols."""
+
+    def setUp(self):
+        self.mock_context = MagicMock()
+        self.mock_context.config = {"moomoo_watchlist_group": "My Watchlist"}
+
+    def _manager(self):
+        return WatchlistManager(self.mock_context)
+
+    def _conn(self, groups=None, ret=0, data=None, empty=False, connected=True):
+        mock_conn = MagicMock()
+        mock_conn.is_connected.return_value = connected
+        mock_groups = MagicMock()
+        mock_groups.to_dict.return_value = [{"group_name": g} for g in (groups or [])]
+        mock_conn.get_user_security_group.return_value = (ret, mock_groups)
+        mock_df = MagicMock()
+        mock_df.empty = empty
+        mock_df.to_dict.return_value = data or []
+        mock_conn.get_user_security.return_value = (ret, mock_df)
+        return mock_conn
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connected"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_ok_us_universe_preserves_market_identifiers(self, mock_get_conn, _mock_probe):
+        """US codes canonicalize (US.BRK.B -> BRK-B) while HK listings are
+        reported as unsupported with an explicit reason, never scanned."""
+        conn = self._conn(
+            groups=["My Watchlist"],
+            data=[
+                {"code": "US.AAPL"},
+                {"code": "US.BRK.B"},
+                {"code": "HK.0700"},
+                {"code": ""},
+            ],
+        )
+        mock_get_conn.return_value = conn
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["group_name"], "My Watchlist")
+        self.assertEqual(result["tickers"], ["AAPL", "BRK-B"])
+        self.assertEqual(result["raw_codes"], {"AAPL": "US.AAPL", "BRK-B": "US.BRK.B"})
+        self.assertEqual(len(result["unsupported"]), 1)
+        self.assertEqual(result["unsupported"][0]["symbol"], "HK.0700")
+        self.assertIn("non-us", result["unsupported"][0]["reason"].lower())
+        self.assertTrue(result["fetched_at"])
+        conn.get_user_security.assert_called_once_with("My Watchlist")
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connected"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_ok_unrecognized_market_prefix_is_unsupported(self, mock_get_conn, _mock_probe):
+        conn = self._conn(groups=["My Watchlist"], data=[{"code": "XX.WEIRD"}])
+        mock_get_conn.return_value = conn
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["tickers"], [])
+        self.assertEqual(len(result["unsupported"]), 1)
+        self.assertIn("prefix", result["unsupported"][0]["reason"].lower())
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connected"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_missing_group_is_distinct_from_empty(self, mock_get_conn, _mock_probe):
+        """A configured group absent from the session's group list yields
+        missing_group with the available groups listed."""
+        conn = self._conn(groups=["My Watchlist", "Test Watchlist"])
+        mock_get_conn.return_value = conn
+        self.mock_context.config = {"moomoo_watchlist_group": "Does Not Exist"}
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "missing_group")
+        self.assertEqual(result["tickers"], [])
+        self.assertEqual(sorted(result["groups_available"]), ["My Watchlist", "Test Watchlist"])
+        self.assertIn("Does Not Exist", result["explanation"])
+        self.assertIn("not found", result["explanation"])
+        conn.get_user_security.assert_not_called()
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connected"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_empty_group_is_distinct(self, mock_get_conn, _mock_probe):
+        """A present-but-empty group (or an SDK empty-data response) yields
+        empty_group with a specific explanation."""
+        conn = self._conn(groups=["My Watchlist"], empty=True)
+        mock_get_conn.return_value = conn
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "empty_group")
+        self.assertEqual(result["tickers"], [])
+        self.assertIn("My Watchlist", result["explanation"])
+        self.assertIn("empty", result["explanation"].lower())
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connected"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_enumerating_groups_unavailable_still_reports_empty(self, mock_get_conn, _mock_probe):
+        """When group enumeration is unavailable (SDK/API gap) an empty read is
+        still labelled empty_group with the group name, never a config fallback."""
+        conn = MagicMock()
+        conn.is_connected.return_value = True
+        conn.get_user_security_group.return_value = (1, None)  # enumeration unsupported
+        mock_df = MagicMock()
+        mock_df.empty = True
+        conn.get_user_security.return_value = (1, mock_df)
+        mock_get_conn.return_value = conn
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "empty_group")
+        self.assertEqual(result["groups_available"], [])
+        self.assertIn("My Watchlist", result["explanation"])
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connecting"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_opend_unreachable_is_connection_failure(self, mock_get_conn, _mock_probe):
+        mock_get_conn.return_value = MagicMock()
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "connection_failed")
+        self.assertEqual(result["tickers"], [])
+        self.assertIn("not reachable", result["explanation"])
+
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_connection_none_is_connection_failure(self, mock_get_conn):
+        mock_get_conn.return_value = None
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "connection_failed")
+        self.assertEqual(result["tickers"], [])
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connected"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_config_never_substituted_as_moomoo_source(self, mock_get_conn, _mock_probe):
+        """False-provenance guard: on ANY group failure, the legacy config
+        watchlist is never relabelled as the Moomoo source."""
+        self.mock_context.config = {
+            "moomoo_watchlist_group": "My Watchlist",
+            "watchlist": ["CONFIG.FAKE", "ANOTHER"],
+        }
+        conn = self._conn(groups=["My Watchlist"], data=[{"code": "US.AAPL"}])
+        mock_get_conn.return_value = conn
+        manager = self._manager()
+
+        universe = manager.get_scan_universe()
+        sources = manager.get_watchlist_sources()
+        origins = manager.get_effective_watchlist_with_origins()
+
+        self.assertEqual(universe["tickers"], ["AAPL"])
+        self.assertEqual(sources["moomoo"], ["AAPL"])
+        self.assertEqual(sources["config"], ["CONFIG.FAKE", "ANOTHER"])
+        by_ticker = {item["ticker"]: item for item in origins}
+        # AAPL came from the group -> scanned.
+        self.assertTrue(by_ticker["AAPL"]["scanned"])
+        # Config additions are preserved for display but never scanned or
+        # labelled as the Moomoo/scan universe (canonicalized: . -> -).
+        self.assertFalse(by_ticker["CONFIG-FAKE"]["scanned"])
+        self.assertEqual(by_ticker["CONFIG-FAKE"]["origins"], ["config"])
+
+    @patch("core.context_factory.probe_opend_status", return_value={"status": "connected"})
+    @patch.object(WatchlistManager, "_get_moomoo_connection")
+    def test_missing_group_scan_universe_excludes_config(self, mock_get_conn, _mock_probe):
+        """With a broken group the scan universe is EMPTY even though a config
+        watchlist exists — no substitution, ever."""
+        self.mock_context.config = {
+            "moomoo_watchlist_group": "Gone",
+            "watchlist": ["AAPL"],
+        }
+        conn = self._conn(groups=["My Watchlist"])
+        mock_get_conn.return_value = conn
+
+        result = self._manager().get_scan_universe()
+
+        self.assertEqual(result["status"], "missing_group")
+        self.assertEqual(result["tickers"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -324,6 +324,7 @@ class OptionsDatabase:
         estimate=None,
         currency=None,
         earnings_source=None,
+        ex_dividend_date=None,
     ):
         return self._earnings.save_earnings_date(
             ticker,
@@ -335,6 +336,7 @@ class OptionsDatabase:
             estimate=estimate,
             currency=currency,
             earnings_source=earnings_source,
+            ex_dividend_date=ex_dividend_date,
         )
 
     def get_earnings_date(self, ticker):
@@ -342,6 +344,9 @@ class OptionsDatabase:
 
     def get_pending_earnings(self, days_threshold=7, as_of=None):
         return self._earnings.get_pending_earnings(days_threshold=days_threshold, as_of=as_of)
+
+    def get_all_earnings_dates(self):
+        return self._earnings.get_all_earnings_dates()
 
     def mark_earnings_error(self, ticker, error_message, earnings_source=None):
         return self._earnings.mark_earnings_error(ticker, error_message=error_message, earnings_source=earnings_source)

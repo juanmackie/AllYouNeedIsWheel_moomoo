@@ -50,8 +50,8 @@ test('preset change flips the active preset and triggers a republished refresh',
     await page.goto('/');
 
     await expect(page.locator('#run-preset')).toContainText('Balanced');
-    await expect(page.locator('#top-recommendations-cards .recommendation-card')).toHaveCount(2);
-    await expect(page.locator('#top-recommendations-cards')).toContainText('AAPL');
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
+    await expect(page.locator('#top-recommendations-content')).toContainText('AAPL');
 
     const effectiveBefore = await page.locator('#preset-effective').innerText();
     const lastSuccessBefore = await page.locator('#run-last-success').innerText();
@@ -72,8 +72,8 @@ test('preset change flips the active preset and triggers a republished refresh',
     await expect
         .poll(() => page.locator('#run-last-success').innerText())
         .not.toBe(lastSuccessBefore);
-    await expect(page.locator('#top-recommendations-cards')).toContainText('MSFT', { timeout: 20000 });
-    await expect(page.locator('#top-recommendations-cards .recommendation-card')).toHaveCount(2);
+    await expect(page.locator('#top-recommendations-content')).toContainText('MSFT', { timeout: 20000 });
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
 });
 
 test('first-ever run: NO RUN → refresh → PLANNING with cards', async ({ page }) => {
@@ -88,7 +88,7 @@ test('first-ever run: NO RUN → refresh → PLANNING with cards', async ({ page
     // Adopted on the 5s run-state poll cadence.
     await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
     await expect(page.locator('#run-last-success')).toContainText(/last success/i);
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
     await expect(cards.first().locator('.copy-ticket-btn')).toContainText('Stage ticket');
 });
@@ -125,7 +125,7 @@ test('scan longer than 60s keeps REFRESHING over the retained run until adoption
     // Scan finally completes and is adopted.
     await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
     await expect(page.locator('#run-last-success')).not.toHaveText(lastSuccessBefore);
-    await expect(page.locator('#top-recommendations-cards .recommendation-card')).toHaveCount(2);
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
 });
 
 test('failure after success keeps last-good results visible with a FAILED badge, then recovers', async ({ page }) => {
@@ -133,7 +133,7 @@ test('failure after success keeps last-good results visible with a FAILED badge,
     await server.publish('complete_closed');
     await page.goto('/');
     await expect(page.locator('#run-status')).toContainText('PLANNING');
-    await expect(page.locator('#top-recommendations-cards .recommendation-card')).toHaveCount(2);
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
     const lastSuccessBefore = await page.locator('#run-last-success').innerText();
     expect(lastSuccessBefore).toMatch(/last success/i);
 
@@ -148,12 +148,12 @@ test('failure after success keeps last-good results visible with a FAILED badge,
     // FAILED badge, yet the last-good run is retained (cards + last success).
     await expect(page.locator('#run-status')).toContainText('FAILED', { timeout: 20000 });
     await expect(page.locator('#run-last-success')).toHaveText(lastSuccessBefore);
-    await expect(page.locator('#top-recommendations-cards .recommendation-card')).toHaveCount(2);
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
     await expect(page.locator('#run-coverage')).toContainText('coverage 2/2');
 
     // Recovery: a fast refresh returns to PLANNING with a newer publish.
     await server.control('/__e2e/refresh', { mode: 'fast', duration_ms: 600 });
     await page.locator('#run-refresh-btn').click();
     await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
-    await expect(page.locator('#top-recommendations-cards .recommendation-card')).toHaveCount(2);
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
 });

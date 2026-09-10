@@ -51,9 +51,14 @@ function makeLiveRun(baseView) {
         coverage: { truth: 'complete' },
         quote_freshness: { fresh: true },
     };
-    for (const s of view.signals) {
-        s.eligibility = { mode: 'live', reasons: [] };
-        s.copy_eligible = true;
+    // Eligibility is attached per candidate across ALL lanes (signals, csp_picks,
+    // cc_decisions) — the two-lane dashboard renders from the lane fields, so
+    // every lane must be rewritten to live intent, not just `signals`.
+    for (const lane of ['signals', 'csp_picks', 'cc_decisions']) {
+        for (const s of view[lane] || []) {
+            s.eligibility = { mode: 'live', reasons: [] };
+            s.copy_eligible = true;
+        }
     }
     return view;
 }
@@ -105,7 +110,7 @@ test('open session: fresh evidence copies the live ticket', async ({ page }) => 
     });
 
     await page.goto('/');
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
 
     const btn = cards.first().locator('.copy-ticket-btn');
@@ -151,7 +156,7 @@ test('open session: evidence expiry between load and click blocks copy (clipboar
     });
 
     await page.goto('/');
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
 
     const btn = cards.first().locator('.copy-ticket-btn');
@@ -177,9 +182,14 @@ test('open session: run changed between load and click requires a second click',
     liveB.run.run_id = 'live-0002';
     liveB.run.generated_at = new Date().toISOString();
     liveB.run.published_at = new Date().toISOString();
-    const bSignal = structuredClone(liveB.signals[0]);
-    bSignal.ticker = 'MSFT';
-    liveB.signals = [bSignal, structuredClone(liveB.signals[1])];
+    // The two-lane dashboard renders from csp_picks/cc_decisions, so the new
+    // ticker must replace the first candidate in every lane, not just signals.
+    for (const lane of ['signals', 'csp_picks', 'cc_decisions']) {
+        if (!Array.isArray(liveB[lane]) || liveB[lane].length === 0) continue;
+        const bCand = structuredClone(liveB[lane][0]);
+        bCand.ticker = 'MSFT';
+        liveB[lane] = [bCand, ...structuredClone(liveB[lane].slice(1))];
+    }
 
     let currentView = liveA;
     let runChanged = false;
@@ -220,18 +230,18 @@ test('open session: run changed between load and click requires a second click',
 
     await page.goto('/');
     const sentinel = await seedClipboard(page);
-    let btn = page.locator('#top-recommendations-cards .recommendation-card').first().locator('.copy-ticket-btn');
+    let btn = page.locator('#top-recommendations-content .recommendation-card').first().locator('.copy-ticket-btn');
     await expect(btn).toContainText('Copy ticket');
 
     await btn.click();
     // The reload to the fresh run replaces the card (the transient blocked
     // state is not durable), so the durable contract to assert is: the first
     // click must NOT write anything...
-    await expect(page.locator('#top-recommendations-cards')).toContainText('MSFT');
+    await expect(page.locator('#top-recommendations-content')).toContainText('MSFT');
     expect(await readClipboard(page)).toBe(sentinel);
 
     // ...and a second click on the refreshed card copies the new contract.
-    btn = page.locator('#top-recommendations-cards .recommendation-card').first().locator('.copy-ticket-btn');
+    btn = page.locator('#top-recommendations-content .recommendation-card').first().locator('.copy-ticket-btn');
     await expect(btn).toContainText('Copy ticket');
     await btn.click();
     await expect(btn).toContainText('Copied');
@@ -247,7 +257,7 @@ test('live copy against the real backend (skipped unless the real US market is o
     await server.publish('live_ready');
     await page.goto('/');
 
-    const cards = page.locator('#top-recommendations-cards .recommendation-card');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(2);
     const btn = cards.first().locator('.copy-ticket-btn');
     await expect(btn).toContainText('Copy ticket');

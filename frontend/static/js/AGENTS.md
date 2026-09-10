@@ -15,7 +15,7 @@
 
 ## Ownership
 
-- `dashboard/` owns all dashboard widgets: run strip (`run-strip.js`, `api-run.js`), options table (`options-table-*.js`), top recommendations (`top-recommendations.js`), position monitor + account panels (`account.js`, `weekly-income.js`, `dashboard-cash.js`), growth & outcome panels (`growth-panel.js`, `outcome-panel.js`), and watchlist panel (`watchlist-panel.js`).
+- `dashboard/` owns all dashboard widgets: run strip (`run-strip.js`, `api-run.js`), active-watchlist foot (`active-watchlist.js`), options table (`options-table-*.js`), top recommendations (`top-recommendations.js`), position monitor + account panels (`account.js`, `weekly-income.js`, `dashboard-cash.js`), growth & outcome panels (`growth-panel.js`, `outcome-panel.js`), and watchlist panel (`watchlist-panel.js`).
 - `utils/` owns shared formatting (`formatters.js` exports `escapeHtml`), alerts, sparklines, and state helpers.
 
 ## Local Contracts

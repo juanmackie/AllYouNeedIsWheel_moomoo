@@ -758,22 +758,52 @@ class RecommendationEngine:
             short_calls = portfolio_context.get("short_calls", {})
             short_puts = portfolio_context.get("short_puts", {})
 
-            # Canonical merged union: Moomoo group + app-managed SQLite + config.
-            # The manager deduplicates by canonical underlying and labels origins.
-            watchlist_with_origins = self._watchlist_provider.get_effective_watchlist_with_origins(
+            # ── Scan universe ────────────────────────────────────────────
+            # The active CSP scan universe is the signed-in OpenD session's
+            # Moomoo watchlist group (US-listed securities). Legacy config/app
+            # additions are archived (settings preserved, never deleted) and are
+            # excluded from new scans; covered calls come from Moomoo positions
+            # below. get_scan_universe() reports DISTINCT explanations for a
+            # missing group, an empty group, and a connection failure — and
+            # never substitutes the config watchlist as the Moomoo universe.
+            watchlist_origins = {}
+            wl_group_name = ""
+            wl_group_status = "ok"
+            wl_explanation = ""
+            wl_groups_available = []
+            wl_unsupported = []
+            wl_raw_codes = {}
+            wl_fetched_at = ""
+            scan_universe = self._watchlist_provider.get_scan_universe(
                 growth_mode_config=self._preset_profile,
                 portfolio_context=portfolio_context,
             )
-            if not isinstance(watchlist_with_origins, list):
-                # Mock/stub providers: fall back to the plain list form.
-                plain = self._watchlist_provider.get_effective_watchlist(
+            if isinstance(scan_universe, dict) and isinstance(scan_universe.get("tickers"), list):
+                effective_watchlist = [str(t) for t in (scan_universe.get("tickers") or []) if str(t).strip()]
+                watchlist_origins = {t: ["moomoo"] for t in effective_watchlist}
+                wl_group_name = str(scan_universe.get("group_name") or "")
+                wl_group_status = str(scan_universe.get("status") or "ok")
+                wl_explanation = str(scan_universe.get("explanation") or "")
+                wl_groups_available = list(scan_universe.get("groups_available") or [])
+                wl_unsupported = _sanitize_unsupported(scan_universe.get("unsupported") or [])
+                wl_raw_codes = {str(k): str(v) for k, v in (scan_universe.get("raw_codes") or {}).items()}
+                wl_fetched_at = str(scan_universe.get("fetched_at") or "")
+            else:
+                # Mock/stub providers: fall back to the canonical merged union.
+                watchlist_with_origins = self._watchlist_provider.get_effective_watchlist_with_origins(
                     growth_mode_config=self._preset_profile,
                     portfolio_context=portfolio_context,
                 )
-                plain = plain if isinstance(plain, list) else []
-                watchlist_with_origins = [{"ticker": str(t), "origins": ["config"]} for t in plain]
-            effective_watchlist = [item["ticker"] for item in watchlist_with_origins]
-            watchlist_origins = {item["ticker"]: item["origins"] for item in watchlist_with_origins}
+                if not isinstance(watchlist_with_origins, list):
+                    # Mock/stub providers: fall back to the plain list form.
+                    plain = self._watchlist_provider.get_effective_watchlist(
+                        growth_mode_config=self._preset_profile,
+                        portfolio_context=portfolio_context,
+                    )
+                    plain = plain if isinstance(plain, list) else []
+                    watchlist_with_origins = [{"ticker": str(t), "origins": ["config"]} for t in plain]
+                effective_watchlist = [item["ticker"] for item in watchlist_with_origins]
+                watchlist_origins = {item["ticker"]: item["origins"] for item in watchlist_with_origins}
             security_types = {}
             get_security_types = getattr(conn, "get_security_types", None)
             if callable(get_security_types) and effective_watchlist:
@@ -787,7 +817,9 @@ class RecommendationEngine:
                 except Exception:
                     logger.debug("Broker security-type batch lookup unavailable", exc_info=True)
             self._scan_security_types = security_types
-            logger.info(f"Effective watchlist: {len(effective_watchlist)} tickers (canonical union)")
+            logger.info(
+                f"Effective watchlist: {len(effective_watchlist)} tickers from group '{wl_group_name}' (status={wl_group_status})"
+            )
 
             if not positions and not effective_watchlist:
                 try:
@@ -815,7 +847,23 @@ class RecommendationEngine:
                     "cash_reserved_for_csp": cash_reserved_for_csp,
                     "blocked_signals": [],
                     "blocked_reason_counts": {},
-                    "message": "No positions or watchlist configured",
+                    "state": "planning" if wl_group_status != "ok" else None,
+                    "scan_coverage": {"scanned": 0, "total": 0, "complete": False},
+                    "watchlist_origins": watchlist_origins,
+                    "active_watchlist": _build_active_watchlist(
+                        wl_group_name=wl_group_name,
+                        wl_group_status=wl_group_status,
+                        wl_explanation=wl_explanation,
+                        wl_groups_available=wl_groups_available,
+                        wl_unsupported=wl_unsupported,
+                        wl_raw_codes=wl_raw_codes,
+                        effective_watchlist=effective_watchlist,
+                        scan_status_by_ticker={},
+                        position_tickers=list(positions.keys()),
+                        quote_fetched_at={},
+                        fetched_at=wl_fetched_at,
+                    ),
+                    "message": wl_explanation or "No positions or watchlist configured",
                 }
 
             # ── Lanes ──────────────────────────────────────────────────
@@ -829,6 +877,7 @@ class RecommendationEngine:
             skipped_csp_diagnostics = []
             ticker_diagnostics = {}
             scan_quote_fetched_at = {}
+            scan_status_by_ticker = {}
 
             # ════════════════════════════════════════════════════════════
             # LANE 1: Watchlist CSPs — short-circuit when no cash to deploy
@@ -838,54 +887,89 @@ class RecommendationEngine:
             csp_start = time.time()
             min_csp_buying_power = float(self._preset_profile.get("min_csp_buying_power", 5000) or 5000)
 
-            # ── Scan feasibility preflight ────────────────────────────────
-            # Every actionable run must scan the COMPLETE canonical union. If the
-            # union cannot fit the OpenD quota + freshness window, we publish
-            # planning diagnostics and direct the user to reduce a source list.
-            # We never silently truncate and still claim a global top three.
-            preflight = self._watchlist_provider.preflight_scan_feasibility(len(effective_watchlist))
-            if not isinstance(preflight, dict):
-                # Mock/stub providers in tests: assume feasible.
-                preflight = {
-                    "feasible": True,
-                    "watchlist_size": len(effective_watchlist),
-                    "estimated_scan_sec": 0.0,
-                    "freshness_window_sec": 300,
-                    "chain_calls": 0,
-                    "chain_quota_ok": True,
-                    "recommended_max_size": max(12, len(effective_watchlist)),
-                }
-            if not preflight["feasible"]:
-                logger.warning(
-                    "Scan infeasible: %d tickers, est %.0fs vs freshness window %ds",
-                    preflight["watchlist_size"],
-                    preflight["estimated_scan_sec"],
-                    preflight["freshness_window_sec"],
-                )
-                return {
-                    "success": True,
-                    "count": 0,
-                    "total_scored": 0,
-                    "generated_at": datetime.now().isoformat(),
-                    "signals": [],
-                    "broker_buying_power": broker_buying_power,
-                    "cash_available_for_csp": cash_available_for_csp,
-                    "cash_reserved_for_csp": cash_reserved_for_csp,
-                    "blocked_signals": [],
-                    "blocked_reason_counts": {},
-                    "state": "planning",
-                    "scan_coverage": {"scanned": 0, "total": len(effective_watchlist), "complete": False},
-                    "preflight": preflight,
-                    "message": (
-                        f"Full watchlist scan is infeasible within the freshness window "
-                        f"({preflight['watchlist_size']} tickers, est {preflight['estimated_scan_sec']:.0f}s "
-                        f"vs {preflight['freshness_window_sec']}s). Reduce the Moomoo watchlist group "
-                        f"or the app-managed list to at most {preflight['recommended_max_size']} symbols "
-                        f"for actionable top-three results."
-                    ),
-                }
+            # A broken/empty watchlist group leaves no CSP universe to scan. The
+            # CSP lane and feasibility preflight are skipped with an explicit
+            # lane diagnostic; owned shares still get covered-call assessment
+            # from Moomoo positions. Config/app symbols are never substituted.
+            scan_universe_ok = bool(effective_watchlist) and wl_group_status == "ok"
 
-            # Scan the COMPLETE canonical union. The preflight above already
+            # ── Scan feasibility preflight ────────────────────────────────
+            # Every actionable run must scan the COMPLETE scan universe. If it
+            # cannot fit the OpenD quota + freshness window, we publish planning
+            # diagnostics and direct the user to reduce the Moomoo group. We
+            # never silently truncate and still claim a global top three.
+            if scan_universe_ok:
+                preflight = self._watchlist_provider.preflight_scan_feasibility(len(effective_watchlist))
+                if not isinstance(preflight, dict):
+                    # Mock/stub providers in tests: assume feasible.
+                    preflight = {
+                        "feasible": True,
+                        "watchlist_size": len(effective_watchlist),
+                        "estimated_scan_sec": 0.0,
+                        "freshness_window_sec": 300,
+                        "chain_calls": 0,
+                        "chain_quota_ok": True,
+                        "recommended_max_size": max(12, len(effective_watchlist)),
+                    }
+                if not preflight["feasible"]:
+                    logger.warning(
+                        "Scan infeasible: %d tickers, est %.0fs vs freshness window %ds",
+                        preflight["watchlist_size"],
+                        preflight["estimated_scan_sec"],
+                        preflight["freshness_window_sec"],
+                    )
+                    return {
+                        "success": True,
+                        "count": 0,
+                        "total_scored": 0,
+                        "generated_at": datetime.now().isoformat(),
+                        "signals": [],
+                        "broker_buying_power": broker_buying_power,
+                        "cash_available_for_csp": cash_available_for_csp,
+                        "cash_reserved_for_csp": cash_reserved_for_csp,
+                        "blocked_signals": [],
+                        "blocked_reason_counts": {},
+                        "state": "planning",
+                        "scan_coverage": {"scanned": 0, "total": len(effective_watchlist), "complete": False},
+                        "preflight": preflight,
+                        "watchlist_origins": watchlist_origins,
+                        "active_watchlist": _build_active_watchlist(
+                            wl_group_name=wl_group_name,
+                            wl_group_status=wl_group_status,
+                            wl_explanation=wl_explanation,
+                            wl_groups_available=wl_groups_available,
+                            wl_unsupported=wl_unsupported,
+                            wl_raw_codes=wl_raw_codes,
+                            effective_watchlist=effective_watchlist,
+                            scan_status_by_ticker={},
+                            position_tickers=list(positions.keys()),
+                            quote_fetched_at={},
+                            fetched_at=wl_fetched_at,
+                        ),
+                        "message": (
+                            f"Full watchlist scan is infeasible within the freshness window "
+                            f"({preflight['watchlist_size']} tickers, est {preflight['estimated_scan_sec']:.0f}s "
+                            f"vs {preflight['freshness_window_sec']}s). Reduce the Moomoo watchlist group "
+                            f"to at most {preflight['recommended_max_size']} symbols "
+                            f"for actionable top-three results."
+                        ),
+                    }
+            elif wl_group_status != "ok":
+                logger.warning(
+                    "Watchlist CSP lane skipped: group '%s' status=%s (%d positions still scanned for CC)",
+                    wl_group_name,
+                    wl_group_status,
+                    len(positions),
+                )
+                skipped_csp_diagnostics.append(
+                    self._make_skip_diagnostic(
+                        "__lane__",
+                        f"watchlist_{wl_group_status}",
+                        wl_explanation or f"Watchlist group '{wl_group_name}' unavailable ({wl_group_status})",
+                    )
+                )
+
+            # Scan the COMPLETE scan universe. The preflight above already
             # guaranteed feasibility (or we returned `planning`). We never
             # silently truncate and still claim a global top three.
             scan_watchlist = effective_watchlist
@@ -903,6 +987,8 @@ class RecommendationEngine:
                     )
                 )
                 skipped_csp_diagnostics[-1]["ticker_count"] = len(effective_watchlist)
+                for ticker in scan_watchlist:
+                    scan_status_by_ticker[ticker] = "skipped_no_cash"
             else:
                 if cash_available_for_csp < min_csp_buying_power:
                     logger.info(
@@ -920,14 +1006,17 @@ class RecommendationEngine:
                     is_evidence_cached = self._get_cached_watchlist_evidence(ticker) is not None
 
                     results = self._fetch_watchlist_ticker_csp(ticker, portfolio_context)
-                    if not results:
+                    if results is None:
                         watchlist_errors += 1
+                        scan_status_by_ticker[ticker] = "error"
                         continue
                     if is_evidence_cached:
                         watchlist_cached += 1
+                    scan_status_by_ticker[ticker] = "scanned"
 
                     for result in results:
                         if result.get("_skip_diagnostic"):
+                            scan_status_by_ticker[ticker] = "skipped"
                             skipped_csp_diagnostics.append(result)
                             continue
                         result["held_position"] = is_held
@@ -1307,11 +1396,25 @@ class RecommendationEngine:
                 "blocked_signals": blocked_signals,
                 "blocked_reason_counts": dict(sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)),
                 "scan_coverage": {
-                    "scanned": len(scan_watchlist),
+                    "scanned": max(0, len(scan_watchlist) - watchlist_errors),
                     "total": len(effective_watchlist),
-                    "complete": len(scan_watchlist) >= len(effective_watchlist),
+                    "complete": len(scan_watchlist) > 0
+                    and (len(scan_watchlist) - watchlist_errors) >= len(effective_watchlist),
                 },
                 "watchlist_origins": watchlist_origins,
+                "active_watchlist": _build_active_watchlist(
+                    wl_group_name=wl_group_name,
+                    wl_group_status=wl_group_status,
+                    wl_explanation=wl_explanation,
+                    wl_groups_available=wl_groups_available,
+                    wl_unsupported=wl_unsupported,
+                    wl_raw_codes=wl_raw_codes,
+                    effective_watchlist=effective_watchlist,
+                    scan_status_by_ticker=scan_status_by_ticker,
+                    position_tickers=list(positions.keys()),
+                    quote_fetched_at=scan_quote_fetched_at,
+                    fetched_at=wl_fetched_at,
+                ),
                 "quote_fetched_at": {ticker: scan_quote_fetched_at.get(ticker, "") for ticker in effective_watchlist},
                 "preset": {
                     "key": self._preset.key,
@@ -1334,6 +1437,14 @@ class RecommendationEngine:
                     "watchlist_errors": watchlist_errors,
                     "position_tickers": list(positions.keys()) if positions else [],
                     "watchlist_tickers": effective_watchlist,
+                    "scan_status": dict(scan_status_by_ticker),
+                    "watchlist_group": {
+                        "name": wl_group_name,
+                        "status": wl_group_status,
+                        "explanation": wl_explanation,
+                        "groups_available": wl_groups_available,
+                        "fetched_at": wl_fetched_at,
+                    },
                     "scan_tickers_count": len(scan_watchlist),
                     "scan_tickers_cap": len(effective_watchlist),
                     "skipped_csp": skipped_csp_diagnostics,
@@ -1380,3 +1491,64 @@ def _build_csp_profile_summary(profile: dict | None) -> str:
     if sp.get("require_cash_fit", True):
         parts.append("cash-fit req.")
     return " | ".join(parts)
+
+
+def _sanitize_unsupported(entries) -> list[dict]:
+    """Coerce the unsupported-symbol list into plain {symbol, reason} dicts."""
+    cleaned = []
+    for entry in entries or []:
+        if isinstance(entry, dict):
+            cleaned.append(
+                {
+                    "symbol": str(entry.get("symbol") or ""),
+                    "reason": str(entry.get("reason") or ""),
+                }
+            )
+    return cleaned
+
+
+def _build_active_watchlist(
+    *,
+    wl_group_name: str,
+    wl_group_status: str,
+    wl_explanation: str,
+    wl_groups_available: list,
+    wl_unsupported: list,
+    wl_raw_codes: dict,
+    effective_watchlist: list,
+    scan_status_by_ticker: dict,
+    position_tickers: list,
+    quote_fetched_at: dict,
+    fetched_at: str,
+) -> dict:
+    """Build the ACTIVE WATCHLIST payload persisted into the run snapshot and
+    rendered by the dashboard foot.
+
+    Documents exactly which scan universe was used: the tickers evaluated, the
+    Moomoo group name + status (with a distinct explanation for a missing,
+    empty, or unreachable group), per-ticker scan status, the last successful
+    group sync time, unsupported symbols, and the holdings checked for covered
+    calls. Never contains config/app additions (those are archived but not
+    scanned).
+    """
+    per_ticker = []
+    for ticker in effective_watchlist:
+        per_ticker.append(
+            {
+                "symbol": ticker,
+                "raw_code": wl_raw_codes.get(ticker, ticker),
+                "status": scan_status_by_ticker.get(ticker, "not_scanned"),
+                "quote_fetched_at": quote_fetched_at.get(ticker, ""),
+            }
+        )
+    return {
+        "group_name": wl_group_name,
+        "group_status": wl_group_status,
+        "explanation": wl_explanation,
+        "groups_available": sorted(str(g) for g in wl_groups_available if str(g).strip()),
+        "fetched_at": fetched_at,
+        "last_successful_sync": "",
+        "tickers": per_ticker,
+        "unsupported": wl_unsupported,
+        "holdings_checked": sorted(str(t) for t in position_tickers if str(t).strip()),
+    }

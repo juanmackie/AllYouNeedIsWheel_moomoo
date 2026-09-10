@@ -1,21 +1,25 @@
 """
 IV Tracking and Earnings Service
 Manages implied volatility history and earnings calendar data
-Uses Alpha Vantage -> yfinance provider chain
+Uses Alpha Vantage -> yfinance provider chain.
 """
 
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from api.services.alpha_vantage_provider import AlphaVantageEarningsProvider
+from api.services.alpha_vantage_provider import ALPHA_VANTAGE_FREE_DAILY_ALLOWANCE, AlphaVantageEarningsProvider
 from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
 from core.connection_constants import _normalize_iv
 from core.ticker_utils import earnings_underlying_ticker
 
 logger = logging.getLogger("api.services.iv_tracking")
+
+# Normalized, UI-facing source tokens (per repo contract: alpha_vantage|yfinance).
+SOURCE_ALPHA_VANTAGE = "alpha_vantage"
+SOURCE_YFINANCE = "yfinance"
 
 
 class IVEarningsService:
@@ -35,7 +39,139 @@ class IVEarningsService:
         self._earnings_cache = {}
         self._cache_duration_hours = 4
         self._earnings_cache_duration_hours = 24
+        self._max_stale_event_tickers = 20
         self._alpha_vantage = AlphaVantageEarningsProvider()
+
+    # -- small helpers -------------------------------------------------------
+
+    @staticmethod
+    def _normalize_source(value) -> Optional[str]:
+        """Standardize an earnings source to ``alpha_vantage`` or ``yfinance``.
+
+        Legacy rows may store "Alpha Vantage" / "yfinance" in free text; this
+        keeps display and payload tokens consistent without a data rewrite.
+        """
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        lowered = text.lower()
+        if lowered in ("alpha vantage", "alphavantage", "alpha_vantage"):
+            return SOURCE_ALPHA_VANTAGE
+        if lowered in ("yfinance", "yahoo", "yfinance api", "yfinance-api"):
+            return SOURCE_YFINANCE
+        return lowered or None
+
+    @staticmethod
+    def _coerce_date(value):
+        """Best-effort conversion of a yfinance/calendar date value to a date."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        try:
+            import pandas as pd
+
+            if isinstance(value, pd.Timestamp):
+                return value.date()
+        except Exception:
+            pass
+        text = str(value).strip()[:10]
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return None
+
+    def _parse_earnings_df_date(self, df) -> Tuple[Optional[str], Optional[str]]:
+        """Extract the next earnings date from a yfinance earnings DataFrame.
+
+        yfinance 1.5.x returns a DataFrame whose earnings dates live in the
+        **index** (``Earnings Date``) with columns ``EPS Estimate / Reported
+        EPS / Surprise(%)`` — scanning columns for a date silently no-ops. This
+        parses the index first, with a column scan as a forward-compatible
+        fallback, and prefers the nearest upcoming date (>= today).
+
+        Returns ``(date_str, error_msg)``.
+        """
+        try:
+            if df is None or getattr(df, "empty", True):
+                return None, None
+            candidates = []
+            index = getattr(df, "index", None)
+            if index is not None:
+                for value in list(index):
+                    d = self._coerce_date(value)
+                    if d:
+                        candidates.append(d)
+            if not candidates and hasattr(df, "columns"):
+                for column in ("Earnings Date", "earningsDate", "date", "report_date"):
+                    if column not in df.columns:
+                        continue
+                    for value in df[column].tolist():
+                        d = self._coerce_date(value)
+                        if d:
+                            candidates.append(d)
+            if not candidates:
+                return None, None
+            candidates.sort()
+            today = datetime.now().date()
+            upcoming = [d for d in candidates if d >= today]
+            chosen = (upcoming or candidates)[0]
+            return chosen.strftime("%Y-%m-%d"), None
+        except Exception as exc:  # pragma: no cover - defensive
+            return None, str(exc)
+
+    def _parse_calendar_ex_dividend(self, calendar):
+        """Extract the upcoming ex-dividend date from yfinance Ticker.calendar.
+
+        yfinance 1.5.x ``Ticker.calendar`` is a dict keyed by event name
+        (``'Ex-Dividend Date'`` is a ``datetime.date``). A transposed DataFrame
+        shape (index = event name) is handled as a fallback. Returns
+        ``(date_str, error_msg)``; unknown stays ``None`` — never fabricated.
+        """
+        try:
+            if calendar is None:
+                return None, None
+            value = None
+            if isinstance(calendar, dict):
+                value = calendar.get("Ex-Dividend Date")
+            else:
+                # DataFrame with an "Ex-Dividend Date" column or index row.
+                if hasattr(calendar, "columns") and "Ex-Dividend Date" in calendar.columns:
+                    col = calendar["Ex-Dividend Date"]
+                    if hasattr(col, "dropna"):
+                        col = col.dropna()
+                    if len(col):
+                        value = col.iloc[0]
+                elif hasattr(calendar, "index") and "Ex-Dividend Date" in calendar.index:
+                    row = calendar.loc["Ex-Dividend Date"]
+                    if hasattr(row, "iloc"):
+                        row = row.iloc[0] if len(row) else None
+                    value = row
+            d = self._coerce_date(value)
+            return (d.strftime("%Y-%m-%d"), None) if d else (None, None)
+        except Exception as exc:  # pragma: no cover - defensive
+            return None, str(exc)
+
+    def _build_provider_status(self) -> dict:
+        """Concise provider health block carried in event payloads and status."""
+        av = self._alpha_vantage.get_status()
+        return {
+            "alpha_vantage": {
+                "available": bool(av.get("available")),
+                "status": av.get("status"),
+                "error": av.get("error"),
+                "requests_today": av.get("requests_today", 0),
+                "daily_allowance": av.get("daily_allowance", ALPHA_VANTAGE_FREE_DAILY_ALLOWANCE),
+            },
+            "yfinance": {
+                "available": True,
+                "note": "per-ticker informational; best-effort, cached 24h",
+            },
+        }
 
     def _is_cache_valid(self, cache_entry, duration_hours):
         """Check if a cache entry is still valid"""
@@ -186,7 +322,7 @@ class IVEarningsService:
     def _earnings_lookup_ticker(self, ticker: str) -> str:
         return earnings_underlying_ticker(ticker)
 
-    def _earnings_data_freshness(self, last_updated: Optional[str]) -> tuple[bool, Optional[float]]:
+    def _earnings_data_freshness(self, last_updated: Optional[str]) -> Tuple[bool, Optional[float]]:
         if not last_updated:
             return False, None
         try:
@@ -198,105 +334,103 @@ class IVEarningsService:
 
     def fetch_earnings_date(self, ticker: str) -> Dict:
         """
-        Fetch earnings date using the Alpha Vantage -> yfinance provider chain.
+        Fetch event data (earnings + upcoming ex-dividend) for a ticker using
+        the Alpha Vantage -> yfinance provider chain. Never raises; provider
+        failures surface in ``provider_status`` / ``provider_error`` and unknown
+        dates stay ``None``.
+
+        Returns dict:
+            success, earnings_date, ex_dividend_date, time_of_day,
+            fiscal_date_ending, estimate, currency, earnings_source
+            ("alpha_vantage"|"yfinance"), provider_status, provider_error, error
         """
         clean_ticker = self._earnings_lookup_ticker(ticker)
-
-        # --- Provider 1: Alpha Vantage ---
-        if self._alpha_vantage.available:
-            try:
-                av_data = self._alpha_vantage.get_earnings(clean_ticker)
-                if av_data and av_data.get("reportDate"):
-                    report_date = av_data["reportDate"][:10]
-                    if "-" in report_date:
-                        return {
-                            "success": True,
-                            "earnings_date": report_date,
-                            "time_of_day": av_data.get("timeOfDay", ""),
-                            "fiscal_date_ending": av_data.get("fiscalDateEnding", ""),
-                            "estimate": av_data.get("estimate"),
-                            "currency": av_data.get("currency", ""),
-                            "earnings_source": "Alpha Vantage",
-                            "error": None,
-                        }
-            except Exception as e:
-                logger.warning(f"Alpha Vantage earnings lookup failed for {clean_ticker}: {e}")
-
-        # --- Provider 2: yfinance ---
-        try:
-            time.sleep(1)
-            stock = get_yfinance_ticker(clean_ticker)
-
-            try:
-                earnings_df = stock.get_earnings_dates(limit=1)
-                if earnings_df is not None and not earnings_df.empty:
-                    for col in ["earningsDate", "date", "report_date", "Earnings Date"]:
-                        if col in earnings_df.columns:
-                            ed = earnings_df[col].iloc[0]
-                            if ed is not None:
-                                if hasattr(ed, "strftime"):
-                                    earnings_date = ed.strftime("%Y-%m-%d")
-                                else:
-                                    earnings_date = str(ed)[:10]
-                                if earnings_date and "-" in earnings_date:
-                                    return {
-                                        "success": True,
-                                        "earnings_date": earnings_date,
-                                        "time_of_day": None,
-                                        "fiscal_date_ending": None,
-                                        "estimate": None,
-                                        "currency": None,
-                                        "earnings_source": "yfinance",
-                                        "error": None,
-                                    }
-            except Exception as e:
-                logger.warning(f"get_earnings_dates failed for {clean_ticker}: {e}")
-
-            try:
-                info = stock.info
-                for key in ["nextEarningsDate", "earningsDate"]:
-                    if info.get(key):
-                        ed = info[key]
-                        if isinstance(ed, (int, float)):
-                            earnings_date = datetime.fromtimestamp(ed).strftime("%Y-%m-%d")
-                        else:
-                            earnings_date = str(ed)[:10]
-                        if earnings_date and "-" in earnings_date:
-                            return {
-                                "success": True,
-                                "earnings_date": earnings_date,
-                                "time_of_day": None,
-                                "fiscal_date_ending": None,
-                                "estimate": None,
-                                "currency": None,
-                                "earnings_source": "yfinance",
-                                "error": None,
-                            }
-            except Exception as e:
-                logger.warning(f"stock.info earnings check failed for {clean_ticker}: {e}")
-        except Exception as e:
-            logger.warning(f"yfinance fallback failed for {clean_ticker}: {e}")
-
-        return {
+        result: Dict = {
             "success": False,
             "earnings_date": None,
+            "ex_dividend_date": None,
             "time_of_day": None,
             "fiscal_date_ending": None,
             "estimate": None,
             "currency": None,
             "earnings_source": None,
-            "error": "No data from Alpha Vantage or yfinance",
+            "provider_status": None,
+            "provider_error": None,
+            "error": None,
         }
+        if not clean_ticker:
+            result["error"] = "No valid ticker to look up"
+            result["provider_status"] = self._build_provider_status()
+            return result
+
+        # --- Provider 1: Alpha Vantage (bulk calendar; earnings only) ---
+        if self._alpha_vantage.available:
+            try:
+                av_data = self._alpha_vantage.get_earnings(clean_ticker)
+                if av_data and av_data.get("reportDate"):
+                    report_date = str(av_data["reportDate"])[:10]
+                    if "-" in report_date:
+                        result.update(
+                            {
+                                "earnings_date": report_date,
+                                "time_of_day": av_data.get("timeOfDay", "") or None,
+                                "fiscal_date_ending": av_data.get("fiscalDateEnding", "") or None,
+                                "estimate": av_data.get("estimate"),
+                                "currency": av_data.get("currency", "") or None,
+                                "earnings_source": SOURCE_ALPHA_VANTAGE,
+                            }
+                        )
+            except Exception as e:
+                logger.warning(f"Alpha Vantage earnings lookup failed for {clean_ticker}: {e}")
+                result["provider_error"] = f"Alpha Vantage lookup failed: {e}"
+
+        # --- Provider 2: yfinance (earnings fallback; ex-dividend source) ---
+        # Gentle pacing so yfinance network calls never burst; bounded upstream
+        # by the caller (24h per-ticker cache, capped stale refresh).
+        yf_ticker = None
+        try:
+            time.sleep(1)
+            yf_ticker = get_yfinance_ticker(clean_ticker)
+        except Exception as e:
+            logger.warning(f"yfinance Ticker init failed for {clean_ticker}: {e}")
+            result["provider_error"] = f"yfinance init failed: {e}"
+
+        if not result["earnings_date"] and yf_ticker is not None:
+            try:
+                earnings_df = yf_ticker.get_earnings_dates(limit=1)
+                ed, parse_err = self._parse_earnings_df_date(earnings_df)
+                if ed:
+                    result.update({"earnings_date": ed, "earnings_source": SOURCE_YFINANCE})
+                elif parse_err:
+                    result["provider_error"] = f"yfinance earnings parse failed: {parse_err}"
+            except Exception as e:
+                logger.warning(f"get_earnings_dates failed for {clean_ticker}: {e}")
+                result["provider_error"] = f"yfinance earnings failed: {e}"
+
+        if yf_ticker is not None:
+            try:
+                calendar = yf_ticker.calendar
+                ex_div, _err = self._parse_calendar_ex_dividend(calendar)
+                if ex_div:
+                    result["ex_dividend_date"] = ex_div
+            except Exception as e:
+                logger.warning(f"yfinance calendar (ex-dividend) failed for {clean_ticker}: {e}")
+                result["provider_error"] = f"yfinance calendar failed: {e}"
+
+        result["provider_status"] = self._build_provider_status()
+        result["success"] = bool(result["earnings_date"] or result["ex_dividend_date"])
+        result["error"] = None if result["success"] else "No data from Alpha Vantage or yfinance"
+        return result
 
     def update_earnings_data(self, ticker: str) -> bool:
         """
-        Update earnings data for a ticker
+        Update earnings + ex-dividend data for a ticker
 
         Args:
             ticker: Stock ticker symbol
 
         Returns:
-            bool: True if successful
+            bool: True if any event data was stored
         """
         if not self.db:
             logger.warning("No database connection for earnings update")
@@ -320,28 +454,40 @@ class IVEarningsService:
                     estimate=result.get("estimate"),
                     currency=result.get("currency"),
                     earnings_source=result.get("earnings_source"),
+                    ex_dividend_date=result.get("ex_dividend_date"),
                 )
 
-                # Update cache
+                # Update cache, including last_updated so freshness is honest
+                # on later cache hits (regression: cache entries previously
+                # omitted last_updated, making data_stale always False).
+                now = datetime.now()
                 self._earnings_cache[normalized_ticker] = {
                     "normalized_ticker": normalized_ticker,
                     "earnings_date": result["earnings_date"],
+                    "ex_dividend_date": result.get("ex_dividend_date"),
                     "time_of_day": result.get("time_of_day"),
                     "fiscal_date_ending": result.get("fiscal_date_ending"),
                     "estimate": result.get("estimate"),
                     "currency": result.get("currency"),
                     "earnings_source": result.get("earnings_source"),
-                    "timestamp": datetime.now(),
+                    "provider_status": result.get("provider_status"),
+                    "provider_error": result.get("provider_error"),
+                    "last_updated": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": now,
                 }
 
                 logger.info(
-                    f"Updated earnings for {ticker}: {result['earnings_date']} ({result.get('earnings_source', '?')})"
+                    "Updated earnings for %s: %s (%s) ex-div=%s",
+                    ticker,
+                    result["earnings_date"],
+                    result.get("earnings_source", "?"),
+                    result.get("ex_dividend_date"),
                 )
                 return True
             else:
                 self.db.mark_earnings_error(
                     normalized_ticker,
-                    error_message=result["error"],
+                    error_message=result.get("error") or "No data from Alpha Vantage or yfinance",
                     earnings_source=result.get("earnings_source"),
                 )
                 return False
@@ -360,6 +506,7 @@ class IVEarningsService:
         Returns:
             dict: {
                 'earnings_date': str or None,
+                'ex_dividend_date': str or None,
                 'days_to_earnings': int or None,
                 'warning_level': str ('none', 'soon', 'very_soon', 'today', 'error'),
                 'fetch_status': str,
@@ -368,52 +515,82 @@ class IVEarningsService:
                 'fiscal_date_ending': str or None,
                 'estimate': float or None,
                 'currency': str or None,
-                'earnings_source': str or None,
+                'earnings_source': 'alpha_vantage'|'yfinance'|None,
+                'ex_dividend_source': 'yfinance'|None,
+                'data_stale': bool,
+                'data_age_hours': float or None,
+                'provider_status': dict,
+                'provider_error': str or None,
             }
         """
         normalized_ticker = self._earnings_lookup_ticker(ticker)
         cache_entry = self._earnings_cache.get(normalized_ticker)
         if self._is_cache_valid(cache_entry, self._earnings_cache_duration_hours):
             earnings_date = cache_entry.get("earnings_date")
+            ex_dividend_date = cache_entry.get("ex_dividend_date")
             time_of_day = cache_entry.get("time_of_day")
             fiscal_date_ending = cache_entry.get("fiscal_date_ending")
             estimate = cache_entry.get("estimate")
             currency = cache_entry.get("currency")
             earnings_source = cache_entry.get("earnings_source")
+            provider_error = cache_entry.get("provider_error")
             last_updated = cache_entry.get("last_updated")
         elif self.db:
             record = self.db.get_earnings_date(normalized_ticker)
             if record:
                 earnings_date = record.get("earnings_date")
+                ex_dividend_date = record.get("ex_dividend_date")
                 time_of_day = record.get("time_of_day")
                 fiscal_date_ending = record.get("fiscal_date_ending")
                 estimate = record.get("estimate")
                 currency = record.get("currency")
-                earnings_source = record.get("earnings_source")
+                earnings_source = self._normalize_source(record.get("earnings_source"))
+                provider_error = record.get("error_message")
                 last_updated = record.get("last_updated")
                 self._earnings_cache[normalized_ticker] = {
                     "earnings_date": earnings_date,
+                    "ex_dividend_date": ex_dividend_date,
                     "time_of_day": time_of_day,
                     "fiscal_date_ending": fiscal_date_ending,
                     "estimate": estimate,
                     "currency": currency,
                     "earnings_source": earnings_source,
+                    "provider_error": provider_error,
                     "last_updated": last_updated,
                     "timestamp": datetime.now(),
                 }
             else:
-                earnings_date = None
-                time_of_day = fiscal_date_ending = estimate = currency = earnings_source = None
-                last_updated = None
+                (
+                    earnings_date,
+                    ex_dividend_date,
+                    time_of_day,
+                    fiscal_date_ending,
+                    estimate,
+                    currency,
+                    earnings_source,
+                    provider_error,
+                    last_updated,
+                ) = (None, None, None, None, None, None, None, None, None)
         else:
-            earnings_date = None
-            time_of_day = fiscal_date_ending = estimate = currency = earnings_source = None
-            last_updated = None
+            (
+                earnings_date,
+                ex_dividend_date,
+                time_of_day,
+                fiscal_date_ending,
+                estimate,
+                currency,
+                earnings_source,
+                provider_error,
+                last_updated,
+            ) = (None, None, None, None, None, None, None, None, None)
+
+        data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
 
         if not earnings_date:
-            data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
             return {
                 "earnings_date": None,
+                "ex_dividend_date": ex_dividend_date,
+                "ex_dividend_source": SOURCE_YFINANCE if ex_dividend_date else None,
                 "days_to_earnings": None,
                 "warning_level": "none",
                 "fetch_status": "pending" if not self.db else "unknown",
@@ -425,6 +602,8 @@ class IVEarningsService:
                 "earnings_source": None,
                 "data_stale": data_stale,
                 "data_age_hours": data_age_hours,
+                "provider_status": self._build_provider_status(),
+                "provider_error": provider_error,
             }
 
         try:
@@ -445,9 +624,10 @@ class IVEarningsService:
             else:
                 warning_level = "none"
 
-            data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
             return {
                 "earnings_date": earnings_date,
+                "ex_dividend_date": ex_dividend_date,
+                "ex_dividend_source": SOURCE_YFINANCE if ex_dividend_date else None,
                 "days_to_earnings": days_to_earnings,
                 "warning_level": warning_level,
                 "fetch_status": "success",
@@ -459,12 +639,15 @@ class IVEarningsService:
                 "earnings_source": earnings_source,
                 "data_stale": data_stale,
                 "data_age_hours": data_age_hours,
+                "provider_status": self._build_provider_status(),
+                "provider_error": provider_error,
             }
 
         except Exception as e:
-            data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
             return {
                 "earnings_date": earnings_date,
+                "ex_dividend_date": ex_dividend_date,
+                "ex_dividend_source": SOURCE_YFINANCE if ex_dividend_date else None,
                 "days_to_earnings": None,
                 "warning_level": "error",
                 "fetch_status": "error",
@@ -476,6 +659,8 @@ class IVEarningsService:
                 "earnings_source": earnings_source,
                 "data_stale": data_stale,
                 "data_age_hours": data_age_hours,
+                "provider_status": self._build_provider_status(),
+                "provider_error": provider_error,
             }
 
     def get_earnings_score_impact(self, ticker: str) -> tuple:
@@ -508,12 +693,108 @@ class IVEarningsService:
         else:
             return (0, None)
 
-    def batch_update_earnings(self, tickers: List[str]) -> Dict:
+    def refresh_stale_event_context(
+        self,
+        tickers: List[str],
+        max_tickers: Optional[int] = None,
+        hours: Optional[int] = None,
+        max_workers: int = 2,
+    ) -> Dict:
+        """Best-effort refresh of event context (earnings + ex-dividend) that is
+        missing, errored, or older than ``hours`` (default: the 24h per-ticker
+        cache window). Bounded to ``max_tickers`` (default 20) with low
+        concurrency. Never raises — used ahead of a broker scan so freshness is
+        improved without ever blocking or aborting it.
         """
-        Update earnings data for multiple tickers
+        hours = self._earnings_cache_duration_hours if hours is None else int(hours)
+        if max_tickers is None:
+            max_tickers = self._max_stale_event_tickers
+        empty = {"refreshed": 0, "stale": 0, "skipped": 0, "errors": 0, "provider": self._alpha_vantage.get_status()}
+        if not tickers:
+            return empty
+
+        normalized: List[str] = []
+        seen = set()
+        for ticker in tickers:
+            n = self._earnings_lookup_ticker(ticker)
+            if n and n not in seen:
+                seen.add(n)
+                normalized.append(n)
+        if not normalized:
+            return empty
+
+        existing = {}
+        if self.db:
+            try:
+                for row in self.db.get_all_earnings_dates() or []:
+                    existing[row["ticker"]] = row
+            except Exception as exc:
+                # Best-effort contract: a failing DB read must never block or
+                # abort the broker scan that called this refresher.
+                logger.warning("Could not read stored earnings context: %s", exc)
+                return empty
+
+        stale: List[str] = []
+        now = datetime.now()
+        for n in normalized:
+            row = existing.get(n)
+            if row is None or (row.get("fetch_status") or "") in ("error", "pending"):
+                stale.append(n)
+                continue
+            parsed = None
+            try:
+                parsed = datetime.strptime(str(row.get("last_updated") or ""), "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                parsed = None
+            if parsed is None or now - parsed > timedelta(hours=hours):
+                stale.append(n)
+
+        stale = stale[: int(max_tickers)]
+        if not stale:
+            return {
+                "refreshed": 0,
+                "stale": 0,
+                "skipped": len(normalized),
+                "errors": 0,
+                "provider": self._alpha_vantage.get_status(),
+            }
+
+        refreshed = 0
+        failed = 0
+        workers = max(1, min(int(max_workers), len(stale)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(self.update_earnings_data, n): n for n in stale}
+            for future in as_completed(future_map):
+                try:
+                    if future.result():
+                        refreshed += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+
+        logger.info(
+            "Stale event context refreshed: %d updated, %d failed (of %d stale, %d skipped)",
+            refreshed,
+            failed,
+            len(stale),
+            len(normalized) - len(stale),
+        )
+        return {
+            "refreshed": refreshed,
+            "stale": len(stale),
+            "skipped": len(normalized) - len(stale),
+            "errors": failed,
+            "provider": self._alpha_vantage.get_status(),
+        }
+
+    def batch_update_earnings(self, tickers: List[str], max_tickers: Optional[int] = None) -> Dict:
+        """
+        Update earnings + ex-dividend data for multiple tickers
 
         Args:
             tickers: List of ticker symbols
+            max_tickers: Optional cap on how many are fetched this call
 
         Returns:
             dict: {'successful': int, 'failed': int, 'errors': List[str]}
@@ -546,6 +827,9 @@ class IVEarningsService:
                 "errors": [],
                 "status": "empty",
             }
+
+        if max_tickers is not None:
+            normalized_tickers = normalized_tickers[: int(max_tickers)]
 
         max_workers = min(8, max(1, len(normalized_tickers)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -599,4 +883,27 @@ class IVEarningsService:
                 for entry in self._earnings_cache.values()
                 if self._is_cache_valid(entry, self._earnings_cache_duration_hours)
             ),
+        }
+
+    def get_provider_status(self) -> Dict:
+        """UI-facing provider health: Alpha Vantage (incl. missing-key/quota/error)
+        plus local cache dimensions."""
+        av = self._alpha_vantage.get_status()
+        return {
+            "alpha_vantage": {
+                "available": bool(av.get("available")),
+                "status": av.get("status"),
+                "error": av.get("error"),
+                "daily_allowance": av.get("daily_allowance", ALPHA_VANTAGE_FREE_DAILY_ALLOWANCE),
+                "requests_today": av.get("requests_today", 0),
+                "last_attempt_at": av.get("last_attempt_at"),
+                "last_success_at": av.get("last_success_at"),
+                "cache_entries": av.get("cache_entries", 0),
+                "cache_age_hours": av.get("cache_age_hours"),
+            },
+            "yfinance": {
+                "available": True,
+                "note": "per-ticker informational; cached 24h",
+            },
+            "cache": self.get_cache_stats(),
         }

@@ -13,8 +13,8 @@
   --ft-paper: #0A0A0A;
   --ft-ink: #EAEAEA;
   --ft-ink-soft: rgba(234,234,234,0.72);
-  --ft-ink-mute: rgba(234,234,234,0.48);
-  --ft-ink-faint: rgba(234,234,234,0.32);
+  --ft-ink-mute: rgba(234,234,234,0.65);
+  --ft-ink-faint: rgba(234,234,234,0.38);
   --ft-rule: rgba(234,234,234,0.88);
   --ft-rule-soft: rgba(234,234,234,0.16);
   --ft-rule-softer: rgba(234,234,234,0.08);
@@ -29,7 +29,7 @@
   --ft-green: #4AF626;
   --ft-green-soft: rgba(74,246,38,0.14);
   --ft-font-display: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --ft-font-body: "JetBrains Mono", "IBM Plex Mono", monospace;
+  --ft-font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --ft-font-mono: "JetBrains Mono", "IBM Plex Mono", monospace;
   --ft-shell-max: 1320px;
   --ft-radius: 0;
@@ -41,8 +41,8 @@
     --ft-paper: #F4F4F0;
     --ft-ink: #111111;
     --ft-ink-soft: rgba(17,17,17,0.72);
-    --ft-ink-mute: rgba(17,17,17,0.48);
-    --ft-ink-faint: rgba(17,17,17,0.32);
+    --ft-ink-mute: rgba(17,17,17,0.65);
+    --ft-ink-faint: rgba(17,17,17,0.38);
     --ft-rule: rgba(17,17,17,0.88);
     --ft-rule-soft: rgba(17,17,17,0.16);
     --ft-rule-softer: rgba(17,17,17,0.08);
@@ -61,12 +61,12 @@
 
 html[data-theme="light"] :root,
 html[data-theme="light"] {
-  --ft-paper: #F4F4F0; --ft-ink: #111111; --ft-ink-soft: rgba(17,17,17,0.72); --ft-ink-mute: rgba(17,17,17,0.48); --ft-ink-faint: rgba(17,17,17,0.32); --ft-rule: rgba(17,17,17,0.88); --ft-rule-soft: rgba(17,17,17,0.16); --ft-rule-softer: rgba(17,17,17,0.08); --ft-signal: #E61919; --ft-signal-soft: rgba(230,25,25,0.10); --ft-warn: #B8763A; --ft-warn-soft: rgba(184,118,58,0.10); --ft-down: #B23A3A; --ft-down-soft: rgba(178,58,58,0.10); --ft-info: #2563EB; --ft-info-soft: rgba(37,99,235,0.10); --ft-green: #2A7A12; --ft-green-soft: rgba(42,122,18,0.14);
+  --ft-paper: #F4F4F0; --ft-ink: #111111; --ft-ink-soft: rgba(17,17,17,0.72); --ft-ink-mute: rgba(17,17,17,0.65); --ft-ink-faint: rgba(17,17,17,0.38); --ft-rule: rgba(17,17,17,0.88); --ft-rule-soft: rgba(17,17,17,0.16); --ft-rule-softer: rgba(17,17,17,0.08); --ft-signal: #E61919; --ft-signal-soft: rgba(230,25,25,0.10); --ft-warn: #B8763A; --ft-warn-soft: rgba(184,118,58,0.10); --ft-down: #B23A3A; --ft-down-soft: rgba(178,58,58,0.10); --ft-info: #2563EB; --ft-info-soft: rgba(37,99,235,0.10); --ft-green: #2A7A12; --ft-green-soft: rgba(42,122,18,0.14);
 }
 
 html[data-theme="dark"] :root,
 html[data-theme="dark"] {
-  --ft-paper: #0A0A0A; --ft-ink: #EAEAEA; --ft-ink-soft: rgba(234,234,234,0.72); --ft-ink-mute: rgba(234,234,234,0.48); --ft-ink-faint: rgba(234,234,234,0.32); --ft-rule: rgba(234,234,234,0.88); --ft-rule-soft: rgba(234,234,234,0.16); --ft-rule-softer: rgba(234,234,234,0.08); --ft-signal: #E61919; --ft-signal-soft: rgba(230,25,25,0.14); --ft-warn: #FF8C2A; --ft-warn-soft: rgba(255,140,42,0.14); --ft-down: #E61919; --ft-down-soft: rgba(230,25,25,0.14); --ft-info: #4A90E2; --ft-info-soft: rgba(74,144,226,0.14); --ft-green: #4AF626; --ft-green-soft: rgba(74,246,38,0.14);
+  --ft-paper: #0A0A0A; --ft-ink: #EAEAEA; --ft-ink-soft: rgba(234,234,234,0.72); --ft-ink-mute: rgba(234,234,234,0.65); --ft-ink-faint: rgba(234,234,234,0.38); --ft-rule: rgba(234,234,234,0.88); --ft-rule-soft: rgba(234,234,234,0.16); --ft-rule-softer: rgba(234,234,234,0.08); --ft-signal: #E61919; --ft-signal-soft: rgba(230,25,25,0.14); --ft-warn: #FF8C2A; --ft-warn-soft: rgba(255,140,42,0.14); --ft-down: #E61919; --ft-down-soft: rgba(230,25,25,0.14); --ft-info: #4A90E2; --ft-info-soft: rgba(74,144,226,0.14); --ft-green: #4AF626; --ft-green-soft: rgba(74,246,38,0.14);
 }
 
 /* ── 2. BASE ─────────────────────────────────────────────────── */
@@ -76,8 +76,8 @@ html, body {
   background: var(--ft-paper);
   color: var(--ft-ink);
   font-family: var(--ft-font-body);
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: 14px;
+  line-height: 1.5;
   letter-spacing: 0.02em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -241,11 +241,11 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   margin: 0;
 }
 .ft-section__caption {
-  font-family: var(--ft-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
-  text-transform: uppercase;
+  font-family: var(--ft-font-body);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+  text-transform: none;
   color: var(--ft-ink-soft);
   max-width: 720px;
   padding-bottom: 16px;
@@ -255,11 +255,10 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .ft-section__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ft-section__footer {
   padding-top: 12px;
-  font-family: var(--ft-font-mono);
-  font-size: 10px;
-  color: var(--ft-ink-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  font-family: var(--ft-font-body);
+  font-size: 11px;
+  color: var(--ft-ink-mute);
+  letter-spacing: 0.02em;
 }
 @media (max-width: 900px) {
   .ft-section__title { font-size: 24px; }
@@ -274,25 +273,25 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   font-family: var(--ft-font-mono);
   font-size: 12px;
   letter-spacing: 0.03em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--ft-ink);
 }
 .ft-table thead th {
   text-align: left;
-  padding: 12px 12px 12px 0;
+  padding: 10px 12px 10px 12px;
   border-top: 1px solid var(--ft-ink);
   border-bottom: 1px solid var(--ft-ink);
-  font-family: var(--ft-font-mono);
-  font-size: 10px;
+  font-family: var(--ft-font-body);
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  text-transform: none;
   color: var(--ft-ink-mute);
   white-space: nowrap;
 }
 .ft-table thead th.ft-th-right { text-align: right; }
 .ft-table tbody td {
-  padding: 14px 12px 14px 0;
+  padding: 14px 12px 14px 12px;
   border-bottom: 1px solid var(--ft-rule-soft);
   vertical-align: top;
 }
@@ -878,7 +877,7 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 }
 .app-section__eyebrow {
   font-family: var(--ft-font-mono); font-size: 10px; font-weight: 600;
-  color: var(--ft-ink-mute); text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--ft-ink-mute); letter-spacing: 0.1em;
   display: block; margin-bottom: 6px;
 }
 .app-section__header h2, .app-section__header h5 {
@@ -890,8 +889,8 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .app-section__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .app-section__footer {
   margin-top: 12px;
-  font-family: var(--ft-font-mono); font-size: 10px;
-  color: var(--ft-ink-faint); text-transform: uppercase; letter-spacing: 0.14em;
+  font-family: var(--ft-font-body); font-size: 11px;
+  color: var(--ft-ink-mute); letter-spacing: 0.02em;
 }
 .banner {
   padding: 8px 12px; background: var(--ft-rule-softer);
@@ -918,8 +917,9 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
 }
 .income-stage-summary__label {
   display: block;
-  font-family: var(--ft-font-mono);
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
+  font-family: var(--ft-font-body);
+  font-size: 11px; letter-spacing: 0.03em;
+  text-transform: none;
   color: var(--ft-ink-mute);
   margin-bottom: 4px;
 }
@@ -929,8 +929,89 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
   font-size: 16px;
   color: var(--ft-ink);
 }
+
+/* ── 24b. SUMMARY PANELS / ACCOUNT & GROWTH (restored) ───── */
+.dashboard-summary-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1px;
+  background: var(--ft-rule-soft);
+  border: 1px solid var(--ft-rule-soft);
+  margin: 16px 0;
+}
+.summary-panel {
+  background: var(--ft-paper);
+  padding: 20px 20px 16px;
+  border: 1px solid var(--ft-rule);
+}
+.summary-panel--accent {
+  border-left: 3px solid var(--ft-signal);
+}
+.summary-panel__header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding-bottom: 12px; border-bottom: 1px solid var(--ft-rule);
+  gap: 12px; flex-wrap: wrap;
+}
+.summary-panel__header > div { min-width: 0; flex: 1 1 240px; }
+.summary-panel__header h2 {
+  font-family: var(--ft-font-display); font-weight: 600; font-size: 24px;
+  letter-spacing: -0.03em; text-transform: uppercase; color: var(--ft-ink); margin: 0; line-height: 0.95;
+}
+.summary-panel__header span.app-section__eyebrow {
+  display: block; margin-bottom: 4px;
+}
+
+.summary-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px 8px;
+  padding-top: 14px;
+}
+.summary-metric-cell { min-width: 0; }
+.summary-metric-label {
+  font-family: var(--ft-font-body); font-size: 11px; letter-spacing: 0.02em;
+  text-transform: none; color: var(--ft-ink-mute); margin-bottom: 6px; line-height: 1.35;
+}
+.summary-metric-value {
+  font-family: var(--ft-font-display); font-weight: 600; font-size: 22px;
+  letter-spacing: -0.02em; line-height: 1; color: var(--ft-ink);
+}
+.summary-leverage-panel { padding-top: 14px; }
+.leverage-bar-height { height: 4px; }
+
+.summary-income-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px 8px; margin-top: 8px;
+}
+.summary-income-metric { min-width: 0; }
+.summary-income-label {
+  font-family: var(--ft-font-body); font-size: 11px; letter-spacing: 0.02em;
+  text-transform: none; color: var(--ft-ink-mute); margin-bottom: 4px;
+}
+.summary-income-value {
+  font-family: var(--ft-font-display); font-weight: 600; font-size: 22px;
+  letter-spacing: -0.02em; line-height: 1; color: var(--ft-ink);
+}
+.summary-income-caption {
+  font-family: var(--ft-font-body); font-size: 13px; color: var(--ft-ink-soft); line-height: 1.35;
+}
+
+.growth-equity-curve {
+  font-family: var(--ft-font-mono); font-size: 11px; letter-spacing: 0.04em;
+  color: var(--ft-ink-mute); padding-top: 4px; line-height: 1.4;
+}
+
+/* Watchlist panel box */
+.watchlist-panel {
+  background: var(--ft-paper);
+  border: 1px solid var(--ft-rule);
+  padding: 18px 18px 14px;
+  margin-top: 8px;
+}
+
 @media (max-width: 900px) {
-  .income-stage-summary__grid { grid-template-columns: 1fr 1fr; }
+  .dashboard-summary-grid { grid-template-columns: 1fr; }
+  .summary-metrics-grid { grid-template-columns: repeat(2, 1fr); }
+  .summary-income-grid { grid-template-columns: 1fr; }
 }
 
 /* ── 25. DATA SOURCE (top-recommendation context block) ─── */

@@ -22,6 +22,7 @@ class EarningsRepository:
         estimate=None,
         currency=None,
         earnings_source=None,
+        ex_dividend_date=None,
     ):
         try:
             with pooled_connection(self.db_path) as conn:
@@ -33,8 +34,9 @@ class EarningsRepository:
                     """
                     INSERT INTO earnings_calendar
                     (ticker, earnings_date, last_updated, fetch_status, error_message,
-                     time_of_day, fiscal_date_ending, estimate, currency, earnings_source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     time_of_day, fiscal_date_ending, estimate, currency, earnings_source,
+                     ex_dividend_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(ticker) DO UPDATE SET
                         earnings_date = excluded.earnings_date,
                         last_updated = excluded.last_updated,
@@ -44,7 +46,8 @@ class EarningsRepository:
                         fiscal_date_ending = excluded.fiscal_date_ending,
                         estimate = excluded.estimate,
                         currency = excluded.currency,
-                        earnings_source = excluded.earnings_source
+                        earnings_source = excluded.earnings_source,
+                        ex_dividend_date = excluded.ex_dividend_date
                 """,
                     (
                         ticker,
@@ -57,6 +60,7 @@ class EarningsRepository:
                         estimate,
                         currency,
                         earnings_source,
+                        ex_dividend_date,
                     ),
                 )
 
@@ -107,6 +111,24 @@ class EarningsRepository:
         except Exception as e:
             logger.error(f"Error getting earnings date for {ticker}: {str(e)}")
             return None
+
+    def get_all_earnings_dates(self):
+        """Return every stored earnings_calendar row (ticker, status, freshness)."""
+        try:
+            with pooled_connection(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT ticker, last_updated, fetch_status FROM earnings_calendar")
+                return [
+                    {
+                        "ticker": row[0],
+                        "last_updated": row[1],
+                        "fetch_status": row[2],
+                    }
+                    for row in cursor.fetchall()
+                ]
+        except Exception as e:
+            logger.error(f"Error listing all earnings dates: {str(e)}")
+            return []
 
     def get_pending_earnings(self, days_threshold=7, as_of=None):
         try:

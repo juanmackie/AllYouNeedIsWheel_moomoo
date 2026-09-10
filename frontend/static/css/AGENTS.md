@@ -29,12 +29,13 @@
 - Zero border-radius everywhere (`--ft-radius: 0`). All corners exactly 90°.
 - Visible compartmentalization via 1px / 2px solid rules (`--ft-rule`, `--ft-rule-soft`).
 - `display: grid; gap: 1px;` hairline technique used for table/card borders.
+- Restored `.summary-panel` / `.summary-metrics-grid` / `.dashboard-summary-grid` CSS (2026-08-02 redesign left these unstyled). Panels must show clear 1px borders; metrics grids must be 4-col responsive with sentence-case labels.
 - No gradients, no soft drop shadows, no translucency beyond token soft backgrounds.
 - No analog textures: no scanlines, no mechanical noise, no halftone filters, no CRT overlays. Clean grid only.
 
 ## Component Rules
 
-- **Tables (`.ft-table`):** mono font, uppercase, 12px, tight tracking (`0.03em`). Header rules via `border-top` / `border-bottom`. Hover row must stay subtle in both substrates.
+- **Tables (`.ft-table`):** mono font for data rows (`12px`, `0.03em` tracking). Headers are sentence-case sans (`11px`) for readability; data cells remain mono. Symmetric `12px` padding; no left-hug.
 - **Badges / pills (`.ft-pill`, `.badge.*` shims):** mono, uppercase, 10–11px, tight tracking, 1px solid border, transparent background with `-soft` token fill for state colors.
 - **Buttons (`.ft-btn`):** mono, uppercase, 11px, 0.1em tracking, 1px solid ink border, no radius, hover inverts to ink-on-paper.
 - **State colors (`--ft-signal`, `--ft-warn`, `--ft-down`, `--ft-info`):** must remain readable on both substrates. Read them against both `#0A0A0A` and `#F4F4F0` backgrounds; contrast ratios must stay compliant.

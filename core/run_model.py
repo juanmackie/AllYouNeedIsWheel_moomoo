@@ -176,11 +176,67 @@ def _max_tradeable_age_sec(run: dict) -> int:
         return 300
 
 
+# Candidate lanes that share the same read-time eligibility + copy surface as
+# the combined shortlist. ``roll_decisions`` is intentionally excluded: it is a
+# position-management panel, not a copy-addressable wheel candidate.
+CANDIDATE_LANES = ("signals", "csp_picks", "cc_decisions")
+
+
+def _candidate_quote_age_sec(candidate: dict, now_utc: datetime) -> float | None:
+    """Age (seconds) of a candidate's broker quote; None when unparseable."""
+    ts = (
+        candidate.get("quote_fetched_at_utc")
+        or (candidate.get("wheel_decision") or {}).get("quote_fetched_at_utc", "")
+        or candidate.get("quote_update_time", "")
+        or ""
+    )
+    if not ts:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(ts))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return round((now_utc - parsed.astimezone(timezone.utc)).total_seconds(), 1)
+
+
+def _attach_candidate_capital_view(candidate: dict, now_utc: datetime) -> None:
+    """Read-time capital metrics for a copy-addressable candidate (never persisted).
+
+    Adds ``quote_age_sec`` for every lane and a lane-appropriate capital base:
+    ``collateral`` (CSP cash secured) or ``available_shares`` (CC share capacity).
+    Unavailable values stay ``None`` so the UI renders an em-dash, never a zero
+    derived from missing data.
+    """
+    candidate["quote_age_sec"] = _candidate_quote_age_sec(candidate, now_utc)
+    if str(candidate.get("option_type", "")).upper() == "CALL":
+        candidate["available_shares"] = None
+        candidate["collateral"] = None
+        max_contracts = candidate.get("max_contracts")
+        try:
+            contracts = float(max_contracts)
+        except (TypeError, ValueError):
+            contracts = 0.0
+        if contracts > 0:
+            candidate["available_shares"] = round(contracts * 100, 2)
+    else:
+        candidate["available_shares"] = None
+        cash_required = candidate.get("cash_required")
+        try:
+            candidate["collateral"] = round(float(cash_required), 2) if cash_required not in (None, "") else None
+        except (TypeError, ValueError):
+            candidate["collateral"] = None
+
+
 def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: datetime | None = None) -> dict:
     """Attach read-time eligibility to a snapshot view (never persisted).
 
     Adds ``view["eligibility"]`` (session context + coverage truth + freshness)
-    and a per-signal ``eligibility = {"mode", "reasons"}`` dict.
+    and, on every candidate in ``signals`` / ``csp_picks`` / ``cc_decisions``, a
+    per-candidate ``eligibility = {"mode", "reasons"}`` plus the read-time
+    capital view (``quote_age_sec``, ``collateral`` / ``available_shares``) so
+    candidates outside the combined top-3 shortlist are surfaced identically.
     """
     run = view.get("run") or {}
     if not run:
@@ -204,18 +260,20 @@ def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: 
         },
         "quote_freshness": {"fresh": bool(fresh), "stale_symbols": stale_symbols},
     }
-    for candidate in view.get("signals") or []:
-        if not isinstance(candidate, dict):
-            continue
-        mode, reasons = compute_signal_eligibility(
-            candidate,
-            session_state=session_state,
-            coverage_truth=coverage_truth,
-            quotes_fresh=fresh,
-            coverage_reasons=coverage_reasons,
-            session_reasons=session_reasons,
-        )
-        candidate["eligibility"] = {"mode": mode, "reasons": reasons}
+    for lane in CANDIDATE_LANES:
+        for candidate in view.get(lane) or []:
+            if not isinstance(candidate, dict):
+                continue
+            mode, reasons = compute_signal_eligibility(
+                candidate,
+                session_state=session_state,
+                coverage_truth=coverage_truth,
+                quotes_fresh=fresh,
+                coverage_reasons=coverage_reasons,
+                session_reasons=session_reasons,
+            )
+            candidate["eligibility"] = {"mode": mode, "reasons": reasons}
+            _attach_candidate_capital_view(candidate, now_utc)
     return view
 
 
@@ -288,6 +346,12 @@ class WheelRunSnapshot:
     preset: dict
     watchlist_origins: dict
     signals: tuple[dict, ...] = ()
+    # ACTIVE WATCHLIST foot payload: the scan universe actually evaluated (the
+    # signed-in OpenD session's Moomoo watchlist group), its group status +
+    # explanation, per-ticker scan status, last successful sync, unsupported
+    # symbols, and the holdings checked for covered calls. Never contains
+    # archived config/app additions. Default {} keeps old snapshots loadable.
+    active_watchlist: dict = field(default_factory=dict)
 
     @property
     def tradeable(self) -> bool:
@@ -337,6 +401,7 @@ class WheelRunSnapshot:
             "preset": self.preset,
             "watchlist_origins": self.watchlist_origins,
             "signals": list(self.signals),
+            "active_watchlist": dict(self.active_watchlist or {}),
         }
 
 
