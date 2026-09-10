@@ -34,7 +34,9 @@ logger = get_logger("ayniwheel.api", "api")
 # process-global by design: factories are pure constructors shared across apps.
 _service_registry = {}
 # Serializes lazy construction so concurrent first access builds each service once.
-_service_construction_lock = threading.Lock()
+# Must be reentrant: a factory may resolve a sibling service through get_service()
+# (e.g. wheel_runner -> options) while this lock is already held by the same thread.
+_service_construction_lock = threading.RLock()
 # Fallback instance store used when no Flask app context is active (tests/scripts).
 # Inside a request context, instances live on current_app.extensions (per-app), so
 # two apps built with different configs (e.g. distinct test databases) never share

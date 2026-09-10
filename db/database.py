@@ -370,8 +370,10 @@ class OptionsDatabase:
     def get_latest_portfolio_snapshot(self, env=None, account_id=None):
         return self._portfolio_snapshots.get_latest_portfolio_snapshot(env=env, account_id=account_id)
 
-    def get_portfolio_history(self, limit: int = 180, env=None, account_id=None):
-        return self._portfolio_snapshots.get_portfolio_history(limit=limit, env=env, account_id=account_id)
+    def get_portfolio_history(self, limit: int = 180, env=None, account_id=None, unbounded: bool = False):
+        return self._portfolio_snapshots.get_portfolio_history(
+            limit=limit, env=env, account_id=account_id, unbounded=unbounded
+        )
 
     def save_portfolio_transition(self, snapshot: dict, events: list[dict]) -> bool:
         """Persist a portfolio baseline plus its inferred event batch in one atomic

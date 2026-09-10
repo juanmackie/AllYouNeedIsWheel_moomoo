@@ -20,6 +20,7 @@
 
 - Routes must remain thin. Put reusable portfolio, options, risk, scoring, and market-data behavior in services or `core`.
 - Preserve the lazy service registry in `api/__init__.py`; avoid import-time service initialization that can reintroduce circular imports or external calls. Service *instances* are scoped to the Flask app (`current_app.extensions`) and lazy construction is serialized by a module lock, so two apps never share a service built under another app's context.
+- That serialization lock must stay **reentrant** (`threading.RLock`): a factory may resolve a sibling through `get_service()` (e.g. `wheel_runner` → `options`) while the lock is already held by the same thread. With a plain `Lock` the first `POST /api/run/refresh` self-deadlocks and every later request that resolves a service hangs with it (2026-09-09 lockup).
 - API responses should use consistent `success`/`error` shapes where existing routes already do.
 - Validate request input at the route boundary before calling services.
 - Do not let optional external providers override Moomoo portfolio/account truth.

@@ -64,6 +64,32 @@ class TestServiceRegistry(unittest.TestCase):
         # Two apps must NOT share a service instantiated under another app's context.
         self.assertIsNot(a1, b1)
 
+    def test_nested_get_service_does_not_deadlock(self):
+        """A factory may resolve a sibling service (wheel_runner -> options). The
+        construction lock is held by the same thread, so a non-reentrant lock would
+        hang that thread forever and poison every later request."""
+
+        def outer():
+            return ("outer", get_service("_s08dep"))
+
+        api._service_registry["_s08outer"] = outer
+        api._service_registry["_s08dep"] = _Counter
+        self.addCleanup(api._service_registry.pop, "_s08outer", None)
+
+        app = self._app("db_nested")
+        results = []
+
+        def access():
+            with app.app_context():
+                results.append(get_service("_s08outer"))
+
+        thread = threading.Thread(target=access, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+        self.assertFalse(thread.is_alive(), "nested get_service() deadlocked")
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0][1], _Counter)
+
     def test_concurrent_first_access_constructs_single_instance(self):
         app = self._app("db_c")
         results = []

@@ -131,6 +131,15 @@ class TestPortfolioSnapshotsRepository(unittest.TestCase):
         self.assertEqual(len(self.repo.get_portfolio_history(limit=3)), 3)
         self.assertEqual(self.repo.get_portfolio_history(limit=0), [])
 
+    def test_database_facade_forwards_unbounded(self):
+        """/api/portfolio/history reads pace through the OptionsDatabase facade
+        with ``unbounded=True``; the facade must forward it or the route 500s."""
+        for i in range(5):
+            self.repo.save_portfolio_snapshot(self._snap(f"r{i}", f"2026-08-2{i}T15:00:00"))
+        self.assertEqual(len(self.db.get_portfolio_history(limit=2)), 2)
+        full = self.db.get_portfolio_history(unbounded=True)
+        self.assertEqual([s["run_id"] for s in full], ["r0", "r1", "r2", "r3", "r4"])
+
     def test_unbounded_ignores_limit(self):
         """C07: growth-pace baseline must be computed from the full history,
         never truncated by the chart limit."""

@@ -109,7 +109,7 @@ def main():
                 from app import ensure_app
 
                 application = ensure_app()
-                serve(application, host="127.0.0.1", port=port, threads=2)
+                serve(application, host="127.0.0.1", port=port, threads=6)
             except ImportError:
                 logger.error("Waitress is not installed. Please install it with: pip install waitress")
                 sys.exit(1)
