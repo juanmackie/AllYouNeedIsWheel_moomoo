@@ -11,18 +11,10 @@ from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
 from core.scoring_factors import premium_velocity_per_day
 from core.utils import get_closest_friday, is_market_open
+from core.utils import normalize_expiration as _normalize_expiration
 from core.wheel_decision import score_contract
 
 logger = logging.getLogger("api.services.options_data")
-
-
-def _normalize_expiration(expiration):
-    value = str(expiration or "").strip()
-    if not value:
-        return ""
-    if len(value) >= 10 and value[4] == "-" and value[7] == "-":
-        return value[:10].replace("-", "")
-    return value.replace("-", "")
 
 
 def _parse_expiration_date(expiration):

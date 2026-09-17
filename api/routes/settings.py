@@ -9,18 +9,13 @@ there are no granular overrides.
 from flask import Blueprint, jsonify, request
 
 from api.routes.utils import error_response
+from api.routes.utils import get_db as _get_db
 from core.logging_config import get_logger
 from core.presets import DEFAULT_PRESET_KEY, WHEEL_PRESETS, all_presets, get_preset
 
 logger = get_logger("api.routes.settings", "api")
 
 bp = Blueprint("settings", __name__, url_prefix="/api/settings")
-
-
-def _get_db():
-    from flask import current_app
-
-    return current_app.config.get("database")
 
 
 def _get_options_service():

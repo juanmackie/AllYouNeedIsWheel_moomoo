@@ -11,6 +11,7 @@ from moomoo import (
 )
 
 from core.logging_config import get_logger
+from core.utils import safe_float as _safe_float
 
 logger = get_logger("ayniwheel.connection", "moomoo")
 
@@ -128,16 +129,6 @@ def _parse_option_code_metadata(code):
         "strike": strike_price,
         "option_type": "CALL" if match.group("right") == "C" else "PUT",
     }
-
-
-def _safe_float(value, default=0.0):
-    if value in (None, "", "N/A", "nan", "NaN"):
-        return default
-
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _normalize_iv(value, default=0.0):

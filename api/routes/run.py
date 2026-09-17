@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
+from api.routes.utils import get_db as _get_db
 from core.run_model import (
     MODE_REVIEW_ONLY,
     MODE_STAGED,
@@ -23,6 +24,7 @@ from core.run_model import (
     resolve_session_context,
 )
 from core.utils import market_now
+from core.utils import normalize_expiration as _normalize_expiration
 from core.wheel_runner import start_background_refresh
 
 logger = logging.getLogger("api.routes.run")
@@ -34,12 +36,6 @@ def _get_runner():
     import api
 
     return api.get_service("wheel_runner")
-
-
-def _get_db():
-    from flask import current_app
-
-    return current_app.config.get("database")
 
 
 def _get_options_service():
@@ -68,10 +64,6 @@ def refresh():
     db = _get_db()
     attempt = db.get_latest_attempt() if db is not None else None
     return jsonify({"started": started, "attempt": attempt}), (202 if started else 409)
-
-
-def _normalize_expiration(value: str) -> str:
-    return str(value or "").replace("-", "")
 
 
 def _contract_fingerprint(ticker: str, option_type: str, expiration: str, strike) -> str:

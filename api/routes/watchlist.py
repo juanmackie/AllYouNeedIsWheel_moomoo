@@ -7,15 +7,10 @@ config list. Tickers are canonicalized and deduplicated; origins are labelled.
 
 from flask import Blueprint, jsonify, request
 
+from api.routes.utils import get_db as _get_db
 from core.ticker_utils import canonical_underlying
 
 bp = Blueprint("watchlist", __name__, url_prefix="/api/watchlist")
-
-
-def _get_db():
-    from flask import current_app
-
-    return current_app.config.get("database")
 
 
 def _get_watchlist_manager():

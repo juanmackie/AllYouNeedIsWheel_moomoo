@@ -234,3 +234,15 @@ def opend_unavailable_response(probe_result):
         error_code=error_code,
         opend_status=probe_result,
     )
+
+
+def get_db():
+    """The app-configured database handle (None when unconfigured)."""
+    return current_app.config.get("database")
+
+
+def get_portfolio_service():
+    """The portfolio service bound in the app registry."""
+    import api
+
+    return api.get_service("portfolio")

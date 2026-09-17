@@ -30,19 +30,10 @@ import sys
 import time
 import traceback
 
-# ---------------------------------------------------------------------------
-# Structural safety: mirror core/broker_protocol.py forbidden list
-# ---------------------------------------------------------------------------
-FORBIDDEN_SDK_MEMBERS = (
-    "unlock_trade",
-    "place_order",
-    "modify_order",
-    "cancel_order",
-    "place_combo_order",
-    "place_crypto_order",
-    "cancel_crypto_order",
-    "modify_crypto_order",
-)
+# Allow running this script directly from tools/.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.broker_protocol import FORBIDDEN_SDK_MEMBERS  # noqa: E402 - path bootstrap above
 
 # Read-side query members we intentionally call. Anything else is off-limits.
 ALLOWED_QUERY_MEMBERS = (
@@ -104,7 +95,6 @@ def _pace():
 
 
 def _load_config():
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from config import Config
 
     cfg = Config()

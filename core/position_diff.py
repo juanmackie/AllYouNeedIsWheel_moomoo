@@ -19,12 +19,7 @@ Events match the ``trade_events`` table schema consumed by
 
 from __future__ import annotations
 
-
-def _safe_float(value) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
+from core.utils import safe_float as _safe_float
 
 
 def _option_map(positions: list[dict]) -> dict[str, dict]:

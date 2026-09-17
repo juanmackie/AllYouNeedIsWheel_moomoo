@@ -10,18 +10,13 @@ from flask import Blueprint
 
 from api.routes.utils import ensure_opend_available as _ensure_opend_available
 from api.routes.utils import error_response, success_response
+from api.routes.utils import get_portfolio_service as _get_portfolio_service
 from api.services.portfolio_scoring import build_portfolio_context, score_position
 from core.logging_config import get_logger
 
 logger = get_logger("api.routes.alerts", "api")
 
 bp = Blueprint("alerts", __name__, url_prefix="/api/portfolio")
-
-
-def _get_portfolio_service():
-    import api
-
-    return api.get_service("portfolio")
 
 
 @bp.route("/alerts", methods=["GET"])

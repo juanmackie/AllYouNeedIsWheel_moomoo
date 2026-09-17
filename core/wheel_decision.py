@@ -45,6 +45,7 @@ from core.scoring_factors import (
     quote_is_stale,
 )
 from core.utils import is_market_open
+from core.utils import normalize_expiration as _normalize_expiration
 
 logger = logging.getLogger(__name__)
 
@@ -244,18 +245,6 @@ def _create_failed_decision(
         hard_blockers=[reason],
         blocked_reason_codes=blocked_reason_codes or [],
     )
-
-
-def _normalize_expiration(expiration: str) -> str:
-    """Return YYYYMMDD for common broker/yfinance expiration formats."""
-    value = str(expiration or "").strip()
-    if not value:
-        return ""
-
-    if len(value) >= 10 and value[4] == "-" and value[7] == "-":
-        return value[:10].replace("-", "")
-
-    return value.replace("-", "")
 
 
 def _coerce_optional_float(value):

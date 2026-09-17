@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from core.position_utils import parse_moomoo_symbol, parse_position_qty
+from core.utils import safe_float as _safe_float
 
 # Option-code shape produced by Moomoo after stripping the "US." prefix, e.g.
 # TSLA260904P00300000 -> underlying TSLA, expiry 260904, right P, strike 300.
@@ -33,13 +34,6 @@ _STOCK_FIELDS = ("market_price", "avg_cost", "cost_price", "market_val")
 
 # Fields copied from each option position into positions_json.
 _OPTION_FIELDS = ("strike", "expiration", "option_type", "market_price", "avg_cost", "market_val")
-
-
-def _safe_float(value) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _serialize_position(raw_symbol: str, pos: dict) -> dict | None:

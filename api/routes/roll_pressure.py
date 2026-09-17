@@ -11,27 +11,16 @@ from flask import Blueprint
 
 from api.routes.utils import ensure_opend_available as _ensure_opend_available
 from api.routes.utils import error_response, success_response
+from api.routes.utils import get_portfolio_service as _get_portfolio_service
 from api.services.portfolio_scoring import build_portfolio_context, score_position
 from core.logging_config import get_logger
 from core.ticker_utils import earnings_underlying_ticker
+from core.utils import safe_float as _safe_float
 
 logger = get_logger("api.routes.roll_pressure", "api")
 
 
-def _safe_float(value) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
 bp = Blueprint("roll_pressure", __name__, url_prefix="/api/portfolio")
-
-
-def _get_portfolio_service():
-    import api
-
-    return api.get_service("portfolio")
 
 
 @bp.route("/roll-pressure", methods=["GET"])

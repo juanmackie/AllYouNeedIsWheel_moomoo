@@ -139,3 +139,28 @@ def format_percentage(value):
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "0.00%"
     return f"{value:.2f}%"
+
+
+def safe_float(value, default=0.0):
+    """Coerce broker/yfinance values to float.
+
+    Nulls, empty strings and the NaN spellings brokers emit return `default`
+    instead of leaking NaN into downstream math.
+    """
+    if value in (None, "", "N/A", "nan", "NaN"):
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_expiration(expiration) -> str:
+    """Return YYYYMMDD for common broker/yfinance expiration formats."""
+    value = str(expiration or "").strip()
+    if not value:
+        return ""
+    if len(value) >= 10 and value[4] == "-" and value[7] == "-":
+        return value[:10].replace("-", "")
+    return value.replace("-", "")
