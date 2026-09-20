@@ -64,7 +64,7 @@ class TestPortfolioServiceEnsureConnection(unittest.TestCase):
         self.assertIs(result, mock_conn)
         mock_conn.connect.assert_called_once()
 
-    @patch("core.connection.MoomooConnection")
+    @patch("core.connection_manager.MoomooConnection")
     def test_creates_new_when_reconnect_fails(self, mock_moomoo_class):
         shared = Mock()
         shared.is_connected.return_value = False
@@ -80,7 +80,7 @@ class TestPortfolioServiceEnsureConnection(unittest.TestCase):
         self.assertIs(result, fresh)
         mock_moomoo_class.assert_called_once()
 
-    @patch("core.connection.MoomooConnection")
+    @patch("core.connection_manager.MoomooConnection")
     def test_creates_new_when_no_shared(self, mock_moomoo_class):
         self.svc.connection = None
         fresh = Mock()
@@ -92,7 +92,7 @@ class TestPortfolioServiceEnsureConnection(unittest.TestCase):
         mock_moomoo_class.assert_called_once()
         fresh.connect.assert_called_once()
 
-    @patch("core.connection.MoomooConnection")
+    @patch("core.connection_manager.MoomooConnection")
     def test_new_connection_failure_sets_error(self, mock_moomoo_class):
         self.svc.connection = None
         fresh = Mock()

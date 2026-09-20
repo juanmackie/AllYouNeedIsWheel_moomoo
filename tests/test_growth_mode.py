@@ -273,16 +273,16 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
             growth_profile=self.gp,
         )
         self.assertIsNotNone(result)
-        self.assertGreater(result.contract_score, 0)
+        self.assertGreater(result.annualized_return, 0)
         self.assertGreater(result.stress_loss, 0)
         self.assertGreater(result.risk_budget_used_pct, 0)
         self.assertGreater(result.confidence_score, 0)
 
-    def test_growth_mode_ranks_conservative_above_aggressive_when_safer(self):
+    def test_growth_profiles_score_without_a_composite(self):
         """
-        With balanced growth weights, a conservative trade (lower delta,
-        lower IV, higher liquidity) can score above an aggressive one
-        when the premium difference does not outweigh safety.
+        Growth profiles still populate the risk/growth fields, but they no
+        longer feed a composite score (removed 2026-09-20): ordering is capital
+        velocity only, so both candidates are asserted on live fields.
         """
         # Candidate A: aggressive (0.35 delta, higher premium)
         opt_a = _make_option(strike=82, bid=4.50, ask=4.80, oi=600, vol=300, delta=-0.35, iv=0.40, option_type="PUT")
@@ -313,13 +313,10 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
         self.assertLess(result_a.risk_budget_used_pct, 40, "Aggressive should fit drawdown budget")
         self.assertLess(result_b.risk_budget_used_pct, 40, "Conservative should fit drawdown budget")
 
-        # Conservative (lower IV, lower delta, higher liquidity) should
-        # score higher with balanced growth weights — safety premium wins
-        self.assertGreater(
-            result_b.contract_score,
-            result_a.contract_score,
-            "Conservative should score higher with balanced growth weights",
-        )
+        # The growth weights no longer decide an ordering; each candidate's
+        # ranking key stands on its own.
+        self.assertGreater(result_a.capital_velocity_per_day, 0)
+        self.assertGreater(result_b.capital_velocity_per_day, 0)
 
     def test_high_premium_blocked_when_exceeds_drawdown_budget(self):
         """
@@ -613,12 +610,9 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         self.assertLess(result_a.risk_budget_used_pct, 100.0)
         self.assertLess(result_b.risk_budget_used_pct, 100.0)
 
-        # Higher-premium candidate should have better contract score
-        self.assertGreater(
-            result_a.contract_score,
-            result_b.contract_score,
-            "Higher-premium/higher-delta CSP should have better contract score",
-        )
+        # The higher-premium candidate wins on the ranking key — the only
+        # ordering input after the hard gates.
+        self.assertGreater(result_a.capital_velocity_per_day, result_b.capital_velocity_per_day)
 
     def test_growth_mode_put_enforces_strict_dte_and_otm_range(self):
         """Growth Mode CSPs should block outside the 30-45 DTE / 5-15% OTM window."""

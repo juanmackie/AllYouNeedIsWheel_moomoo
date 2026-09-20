@@ -46,7 +46,7 @@ class WatchlistManager:
     def _get_moomoo_connection(self):
         if not hasattr(self, "_moomoo_connection"):
             try:
-                from core.connection import MoomooConnection
+                from core.connection_manager import MoomooConnection
 
                 cfg = self.config
                 self._moomoo_connection = MoomooConnection(
@@ -385,210 +385,85 @@ class WatchlistManager:
         """
         return [item["ticker"] for item in self.get_effective_watchlist_with_origins()]
 
-    def get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None, growth_mode_config=None):
-        """
-        Get screening profile based on option type, DTE, and VIX regime.
+    def get_screening_profile(self, option_type, dte=None, profile_type=None, growth_mode_config=None):
+        """Return the active preset's screener profile for one option lane.
 
-        When growth_mode is enabled with a screener_profile block, PUT profiles
-        are tuned for shorter DTE, higher delta, and closer OTM targets.
+        The preset (``WheelPreset.to_screener_profile()``) is the single source of
+        screening thresholds; nothing here overrides its values. ``option_type``
+        only projects the side-specific delta/OTM target, and ``profile_type`` is
+        display metadata derived from DTE (weekly <= 14, monthly <= 45, else
+        quarterly). Every key a reader subscripts is always present, so no reader
+        can hit a missing-key path.
 
         Args:
             option_type: 'CALL' or 'PUT'
-            dte: Days to expiration (auto-detects profile if None)
-            profile_type: 'weekly', 'monthly', 'quarterly', or None (auto-detect)
-            vix_regime: dict from _get_vix_regime() with delta_adjustment, exposure_multiplier
-            growth_mode_config: Optional growth_mode dict. When enabled with
-                                screener_profile, overrides PUT profile defaults.
+            dte: Days to expiration (labels ``profile_type`` when not given)
+            profile_type: 'weekly', 'monthly', 'quarterly', or None (from dte)
+            growth_mode_config: The active preset's flat screener profile. When
+                omitted, the manager resolves the active preset itself.
 
         Returns:
-            dict: Screening profile parameters with VIX regime adjustments
+            dict: Screening profile parameters
         """
-        if profile_type is None and dte is not None:
-            if dte <= 14:
-                profile_type = "weekly"
-            elif dte <= 45:
-                profile_type = "monthly"
-            else:
-                profile_type = "quarterly"
-        elif profile_type is None:
-            profile_type = "monthly"
-
-        # Base profile with targets from Phase 1
-        base_profile = {
-            "max_expirations": 2,
-            "min_mid_price": 0.05,
-            "min_open_interest": 10,
-            "ideal_open_interest": 500,
-            "min_volume": 1,
-            "ideal_volume": 100,
-            "max_spread_pct": 60,
-            "ideal_spread_pct": 12,
-            "profile_type": profile_type,
-            # Risk-adjusted scoring targets (Phase 1)
-            "target_iv_adjusted": 50,
-            "target_theta_delta_ratio": 0.005,
-            "target_capital_efficiency": 100,
-            # IV environment thresholds (Phase 2)
-            "min_iv_percentile_for_bonus": 60,
-            "max_iv_percentile_for_penalty": 30,
-            "earnings_warning_days": 7,
+        preset_profile = (
+            growth_mode_config
+            if isinstance(growth_mode_config, dict) and growth_mode_config
+            else self._active_preset_profile()
+        )
+        profile = dict(preset_profile)
+        profile["profile_type"] = profile_type or self._profile_type_for_dte(dte)
+        # Project the neutral reader keys from the preset's side-specific
+        # originals. core reads these by name (one of them by direct subscript),
+        # so a profile without them would silently skip a gate or raise.
+        neutral = {
+            "min_dte": preset_profile.get("csp_min_dte"),
+            "max_dte": preset_profile.get("csp_max_dte"),
+            "preferred_dte": preset_profile.get("csp_preferred_dte"),
+            "min_otm_pct": preset_profile.get("csp_min_otm_pct"),
+            "max_otm_pct": preset_profile.get("csp_max_otm_pct"),
         }
+        for key, value in neutral.items():
+            if value is not None and profile.get(key) is None:
+                profile[key] = value
+        if str(option_type or "").upper() == "CALL":
+            profile["target_delta"] = preset_profile.get("call_target_delta", profile.get("target_delta", 0.30))
+            profile["delta_tolerance"] = preset_profile.get(
+                "call_delta_tolerance", profile.get("delta_tolerance", 0.12)
+            )
+            profile["default_otm_pct"] = preset_profile.get("call_default_otm_pct", profile.get("default_otm_pct", 10))
+        else:
+            profile["target_delta"] = preset_profile.get("csp_target_delta", profile.get("target_delta", 0.30))
+            profile["delta_tolerance"] = preset_profile.get("csp_delta_tolerance", profile.get("delta_tolerance", 0.12))
+            profile["default_otm_pct"] = preset_profile.get("csp_default_otm_pct", profile.get("default_otm_pct", 10))
+        return profile
 
-        # Dynamic profiles based on expiration type
-        if profile_type == "weekly":
-            # Weeklies (0-14 DTE): Tighter delta, higher liquidity focus
-            if option_type == "CALL":
-                base_profile.update(
-                    {
-                        "min_dte": 3,
-                        "max_dte": 14,
-                        "preferred_dte": 7,
-                        "target_delta": 0.18,
-                        "delta_tolerance": 0.14,
-                        "min_premium_per_contract": 8,
-                        "liquidity_weight_multiplier": 1.5,  # 35% effective
-                        "delta_fit_weight_multiplier": 0.5,  # 8% effective
-                    }
-                )
-            else:  # PUT
-                base_profile.update(
-                    {
-                        "min_dte": 3,
-                        "max_dte": 14,
-                        "preferred_dte": 7,
-                        "target_delta": 0.16,
-                        "delta_tolerance": 0.12,
-                        "min_premium_per_contract": 10,
-                        "liquidity_weight_multiplier": 1.5,
-                        "delta_fit_weight_multiplier": 0.5,
-                    }
-                )
+    @staticmethod
+    def _profile_type_for_dte(dte) -> str:
+        """Expiry-class label for display; thresholds are preset-driven."""
+        if dte is None:
+            return "monthly"
+        try:
+            days = float(dte)
+        except (TypeError, ValueError):
+            return "monthly"
+        if days <= 14:
+            return "weekly"
+        if days <= 45:
+            return "monthly"
+        return "quarterly"
 
-        elif profile_type == "quarterly":
-            # Quarterlies (46-90 DTE): Wider delta, lower liquidity focus
-            if option_type == "CALL":
-                base_profile.update(
-                    {
-                        "min_dte": 46,
-                        "max_dte": 90,
-                        "preferred_dte": 60,
-                        "target_delta": 0.28,
-                        "delta_tolerance": 0.22,
-                        "min_premium_per_contract": 25,
-                        "liquidity_weight_multiplier": 0.75,  # 15% effective
-                        "delta_fit_weight_multiplier": 1.2,  # 18% effective
-                    }
-                )
-            else:  # PUT
-                base_profile.update(
-                    {
-                        "min_dte": 46,
-                        "max_dte": 90,
-                        "preferred_dte": 60,
-                        "target_delta": 0.26,
-                        "delta_tolerance": 0.20,
-                        "min_premium_per_contract": 30,
-                        "liquidity_weight_multiplier": 0.75,
-                        "delta_fit_weight_multiplier": 1.2,
-                    }
-                )
+    def _active_preset_profile(self) -> dict:
+        """The active preset's flat screener profile (the single threshold source)."""
+        from core.presets import DEFAULT_PRESET_KEY, WHEEL_PRESETS, get_preset
 
-        else:  # 'monthly' (default, 15-45 DTE)
-            if option_type == "CALL":
-                base_profile.update(
-                    {
-                        "min_dte": 5,
-                        "max_dte": 35,
-                        "preferred_dte": 14,
-                        "target_delta": 0.24,
-                        "delta_tolerance": 0.18,
-                        "min_premium_per_contract": 12,
-                        "liquidity_weight_multiplier": 1.0,
-                        "delta_fit_weight_multiplier": 1.0,
-                    }
-                )
-            else:  # PUT
-                base_profile.update(
-                    {
-                        "min_dte": 7,
-                        "max_dte": 45,
-                        "preferred_dte": 21,
-                        "target_delta": 0.22,
-                        "delta_tolerance": 0.16,
-                        "min_premium_per_contract": 15,
-                        "liquidity_weight_multiplier": 1.0,
-                        "delta_fit_weight_multiplier": 1.0,
-                    }
-                )
-
-        if vix_regime:
-            delta_adj = vix_regime.get("delta_adjustment", 0.0)
-            regime_name = vix_regime.get("regime", "normal")
-
-            if "target_delta" in base_profile:
-                base_profile["target_delta"] = max(0.10, min(0.40, base_profile["target_delta"] + delta_adj))
-
-            if "delta_tolerance" in base_profile:
-                base_profile["delta_tolerance"] = max(0.08, base_profile["delta_tolerance"] + (delta_adj * 0.5))
-
-            if regime_name == "fear":
-                base_profile["min_premium_per_contract"] *= 1.2
-            elif regime_name == "complacency":
-                base_profile["min_premium_per_contract"] *= 0.8
-
-            base_profile["vix_regime"] = regime_name
-
-        # -- Selected-preset merge -------------------------------------------
-        # The recommendation engine passes the active preset's flat screener
-        # profile (from WheelPreset.to_screener_profile()). Merge its explicit
-        # thresholds over the base profile so score_contract() honours the
-        # selected preset instead of silently falling back to legacy defaults.
-        # Retired growth/VIX overlay behavior was removed: the preset is the
-        # single source of these thresholds.
-        if growth_mode_config:
-            sp = growth_mode_config or {}
-            if not isinstance(sp, dict):
-                sp = {}
-            # Generic liquidity / premium floors apply to both CALL and PUT.
-            generic = {
-                "min_mid_price": sp.get("min_mid_price"),
-                "min_premium_per_contract": sp.get("min_premium_per_contract"),
-                "max_spread_pct": sp.get("max_spread_pct"),
-                "min_open_interest": sp.get("min_open_interest"),
-                "min_volume": sp.get("min_volume"),
-                "max_buying_power_pct_per_csp": sp.get("max_buying_power_pct_per_csp"),
-                "target_account_multiple": sp.get("target_account_multiple"),
-            }
-            for key, value in generic.items():
-                if value is not None:
-                    base_profile[key] = value
-            if option_type == "PUT":
-                put_overrides = {
-                    "target_delta": sp.get("csp_target_delta"),
-                    "delta_tolerance": sp.get("csp_delta_tolerance"),
-                    "min_dte": sp.get("csp_min_dte"),
-                    "max_dte": sp.get("csp_max_dte"),
-                    "preferred_dte": sp.get("csp_preferred_dte"),
-                    "default_otm_pct": sp.get("csp_default_otm_pct"),
-                    "min_otm_pct": sp.get("csp_min_otm_pct"),
-                    "max_otm_pct": sp.get("csp_max_otm_pct"),
-                }
-                for key, value in put_overrides.items():
-                    if value is not None:
-                        base_profile[key] = value
-            if option_type == "CALL":
-                call_overrides = {
-                    "default_otm_pct": sp.get("call_default_otm_pct"),
-                    # Covered calls use the same active preset DTE risk
-                    # window as CSPs; only the OTM target differs by side.
-                    "min_dte": sp.get("csp_min_dte"),
-                    "max_dte": sp.get("csp_max_dte"),
-                    "preferred_dte": sp.get("csp_preferred_dte"),
-                }
-                for key, value in call_overrides.items():
-                    if value is not None:
-                        base_profile[key] = value
-            if sp.get("require_cash_fit", True):
-                base_profile["require_cash_fit"] = True
-
-        return base_profile
+        key = ""
+        if self._db is not None:
+            try:
+                key = str(self._db.get_setting("wheel_preset") or "")
+            except Exception:
+                key = ""
+        if key not in WHEEL_PRESETS:
+            config = self.config
+            configured = config.get("wheel_preset", "") if isinstance(config, dict) else ""
+            key = str(configured or "")
+        return get_preset(key if key in WHEEL_PRESETS else DEFAULT_PRESET_KEY).to_screener_profile()

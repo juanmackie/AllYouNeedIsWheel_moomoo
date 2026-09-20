@@ -1,5 +1,5 @@
 """
-Tests for core/connection.py - MoomooConnection class and helper functions
+Tests for core.connection_manager.py - MoomooConnection class and helper functions
 """
 
 import os
@@ -9,26 +9,25 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
-from moomoo import RET_ERROR, RET_OK
 
-# Import the module under test
-from core.connection import (
-    MoomooConnection,
-    SecurityFirm,
-    TrdEnv,
+# Import the modules under test
+from moomoo import RET_ERROR, RET_OK, SecurityFirm, TrdEnv
+
+from core.connection_constants import (
     _clean_account_id,
     _env_name,
     _first_non_zero,
     _infer_security_type_from_code,
     _is_truthy_flag,
+    _normalize_iv,
     _normalize_security_firm,
     _normalize_trd_env,
     _parse_option_code_metadata,
     _safe_close_context,
-    _safe_float,
-    probe_opend_status,
 )
-from core.connection_constants import _normalize_iv
+from core.connection_manager import MoomooConnection
+from core.context_factory import probe_opend_status
+from core.utils import safe_float
 from core.wheel_runner import opaque_account_id
 
 
@@ -168,16 +167,19 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertIsNone(_parse_option_code_metadata("US.AAPL"))
 
     def test_safe_float(self):
-        """Test _safe_float"""
-        self.assertEqual(_safe_float(None), 0.0)
-        self.assertEqual(_safe_float(""), 0.0)
-        self.assertEqual(_safe_float("N/A"), 0.0)
-        self.assertEqual(_safe_float("nan"), 0.0)
-        self.assertEqual(_safe_float("NaN"), 0.0)
-        self.assertEqual(_safe_float(42), 42.0)
-        self.assertEqual(_safe_float(3.14), 3.14)
-        self.assertEqual(_safe_float("3.14"), 3.14)
-        self.assertEqual(_safe_float("invalid", default=99.0), 99.0)
+        """Test safe_float"""
+        self.assertEqual(safe_float(None), 0.0)
+        self.assertEqual(safe_float(""), 0.0)
+        self.assertEqual(safe_float("N/A"), 0.0)
+        self.assertEqual(safe_float("nan"), 0.0)
+        self.assertEqual(safe_float("NaN"), 0.0)
+        self.assertEqual(safe_float(42), 42.0)
+        self.assertEqual(safe_float(3.14), 3.14)
+        self.assertEqual(safe_float("3.14"), 3.14)
+        self.assertEqual(safe_float("invalid", default=99.0), 99.0)
+        # A NaN from a numeric source never leaks into downstream math.
+        self.assertEqual(safe_float(float("nan")), 0.0)
+        self.assertIsNone(safe_float(float("nan"), default=None))
 
     def test_first_non_zero(self):
         """Test _first_non_zero"""

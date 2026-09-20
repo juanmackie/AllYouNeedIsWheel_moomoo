@@ -124,7 +124,6 @@ def _format_decision_to_candidate(
         "implied_volatility": decision.implied_volatility,
         "open_interest": decision.open_interest,
         "volume": decision.volume,
-        "score": round(decision.contract_score, 2),
         "iv_rank": decision.iv_rank,
         "iv_status": decision.iv_status,
         "iv_env_adjustment": decision.iv_env_adjustment,
@@ -135,7 +134,6 @@ def _format_decision_to_candidate(
         "size_fit": decision.size_fit,
         "expected_move_buffer": decision.expected_move_buffer,
         "wheel_decision": decision.to_dict(),
-        "score_details": decision.score_details,
         "rationale": decision.rationale,
         "warnings": warnings,
         "quality_tier": decision.quality_tier,
@@ -325,7 +323,6 @@ class RecommendationEngine:
         wl_profile = self._watchlist_provider.get_screening_profile(
             "PUT",
             dte=dte,
-            vix_regime=portfolio_context.get("vix_regime"),
             growth_mode_config=self._preset_profile,
         )
         try:
@@ -1096,7 +1093,6 @@ class RecommendationEngine:
                         # applied rather than the legacy generic profile.
                         call_profile = self._watchlist_provider.get_screening_profile(
                             "CALL",
-                            vix_regime=portfolio_context.get("vix_regime"),
                             growth_mode_config=self._preset_profile,
                         )
                         result = self._options_data_provider._process_ticker_for_otm(
@@ -1202,11 +1198,17 @@ class RecommendationEngine:
             all_candidates = eligible_covered_call_candidates + eligible_watchlist_csp_candidates
             for opt in all_candidates:
                 t = opt.get("ticker", "UNKNOWN")
-                score = opt.get("score", 0)
+                annualized = opt.get("annualized_return", 0) or 0
                 if t not in ticker_diagnostics:
-                    ticker_diagnostics[t] = {"top_score": score, "candidate_count": 0, "filtered_out": False}
+                    ticker_diagnostics[t] = {
+                        "top_annualized_return": annualized,
+                        "candidate_count": 0,
+                        "filtered_out": False,
+                    }
                 else:
-                    ticker_diagnostics[t]["top_score"] = max(ticker_diagnostics[t]["top_score"], score)
+                    ticker_diagnostics[t]["top_annualized_return"] = max(
+                        ticker_diagnostics[t]["top_annualized_return"], annualized
+                    )
                 ticker_diagnostics[t]["candidate_count"] += 1
 
             # ── Unified deterministic ranking (see recommendation_ranking) ──
@@ -1238,8 +1240,13 @@ class RecommendationEngine:
             signals = _select_top(all_candidates, max_per=2)[:limit]
 
             # Log per-ticker diagnostics
-            for t, diag in sorted(ticker_diagnostics.items(), key=lambda x: x[1]["top_score"], reverse=True):
-                logger.info(f"  TICKER {t}: top_score={diag['top_score']:.1f}, candidates={diag['candidate_count']}")
+            for t, diag in sorted(
+                ticker_diagnostics.items(), key=lambda x: x[1]["top_annualized_return"], reverse=True
+            ):
+                logger.info(
+                    f"  TICKER {t}: top_annualized_return={diag['top_annualized_return']:.1f}, "
+                    f"candidates={diag['candidate_count']}"
+                )
 
             # Format the unified signal list.
             def _format_rec_list(candidates, start_rank=1):
@@ -1332,7 +1339,6 @@ class RecommendationEngine:
                         "ticker": s.get("ticker"),
                         "option_type": s.get("option_type"),
                         "strike": s.get("strike"),
-                        "score": s.get("score"),
                         "bid_premium_per_contract": s.get("bid_premium_per_contract"),
                         "premium_velocity_per_day": s.get("premium_velocity_per_day"),
                         "quality_tier": s.get("quality_tier"),

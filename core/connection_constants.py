@@ -1,6 +1,6 @@
 """
 Moomoo connection constants and pure utility functions.
-Extracted from core/connection.py for maintainability.
+Extracted from the decomposed connection modules for maintainability.
 """
 
 import re
@@ -11,7 +11,7 @@ from moomoo import (
 )
 
 from core.logging_config import get_logger
-from core.utils import safe_float as _safe_float
+from core.utils import safe_float
 
 logger = get_logger("ayniwheel.connection", "moomoo")
 
@@ -140,7 +140,7 @@ def _normalize_iv(value, default=0.0):
     Values > 3.0 are assumed to be percentages and divided by 100.
     Values already in decimal form (<= 3.0) are passed through unchanged.
     """
-    iv = _safe_float(value, default)
+    iv = safe_float(value, default)
     if iv > 3.0:
         return round(iv / 100.0, 4)
     return round(iv, 4)
@@ -148,12 +148,12 @@ def _normalize_iv(value, default=0.0):
 
 def _first_non_zero(*values):
     for value in values:
-        numeric_value = _safe_float(value, None)
+        numeric_value = safe_float(value, None)
         if numeric_value is not None and numeric_value != 0:
             return numeric_value
 
     for value in values:
-        numeric_value = _safe_float(value, None)
+        numeric_value = safe_float(value, None)
         if numeric_value is not None:
             return numeric_value
 

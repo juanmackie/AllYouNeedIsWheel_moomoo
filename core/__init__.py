@@ -23,7 +23,7 @@ __all__ = [
 
 def __getattr__(name):
     if name == "MoomooConnection":
-        from .connection import MoomooConnection
+        from .connection_manager import MoomooConnection
 
         return MoomooConnection
     raise AttributeError(f"module 'core' has no attribute {name!r}")

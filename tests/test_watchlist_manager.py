@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api.services.watchlist_manager import WatchlistManager
+from core.presets import DEFAULT_PRESET_KEY, get_preset
 
 
 class TestWatchlistManagerInit(unittest.TestCase):
@@ -286,26 +287,6 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
         put_profile = self.manager.get_screening_profile("PUT")
         self.assertNotEqual(call_profile["target_delta"], put_profile["target_delta"])
 
-    def test_profile_vix_adjustment(self):
-        vix_regime = {
-            "regime": "fear",
-            "delta_adjustment": -0.05,
-            "exposure_multiplier": 0.5,
-        }
-        profile = self.manager.get_screening_profile("PUT", vix_regime=vix_regime)
-        self.assertEqual(profile["vix_regime"], "fear")
-        self.assertLess(profile["target_delta"], 0.22)
-
-    def test_profile_vix_complacency(self):
-        vix_regime = {
-            "regime": "complacency",
-            "delta_adjustment": 0.05,
-            "exposure_multiplier": 1.5,
-        }
-        profile = self.manager.get_screening_profile("PUT", vix_regime=vix_regime)
-        self.assertEqual(profile["vix_regime"], "complacency")
-        self.assertGreater(profile["target_delta"], 0.22)
-
     # ------------------------------------------------------------------ #
     # Selected-preset screener profile tests
     # ------------------------------------------------------------------ #
@@ -368,24 +349,41 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
         profile = self.manager.get_screening_profile("PUT", growth_mode_config=preset)
         self.assertTrue(profile.get("require_cash_fit"))
 
-    def test_balanced_mode_keeps_conservative_defaults(self):
-        """Balanced mode (no preset) should keep current monthly defaults."""
-        balanced_profile = self.manager.get_screening_profile("PUT")
-        self.assertEqual(balanced_profile["target_delta"], 0.22)
-        self.assertEqual(balanced_profile["delta_tolerance"], 0.16)
-        self.assertEqual(balanced_profile["preferred_dte"], 21)
-        self.assertEqual(balanced_profile["min_dte"], 7)
-        self.assertEqual(balanced_profile["max_dte"], 45)
-        self.assertFalse(balanced_profile.get("growth_screener", False))
-        self.assertNotIn("require_cash_fit", balanced_profile)
+    def test_no_preset_argument_uses_the_active_preset(self):
+        """Omitting the preset resolves the active one instead of a legacy ladder."""
+        profile = self.manager.get_screening_profile("PUT")
+        balanced = get_preset(DEFAULT_PRESET_KEY)
+        self.assertEqual(profile["target_delta"], balanced.csp_target_delta)
+        self.assertEqual(profile["delta_tolerance"], balanced.csp_delta_tolerance)
+        self.assertEqual(profile["preferred_dte"], balanced.csp_preferred_dte)
+        self.assertEqual(profile["min_dte"], balanced.csp_min_dte)
+        self.assertEqual(profile["max_dte"], balanced.csp_max_dte)
+        self.assertTrue(profile["require_cash_fit"])
+        # Every key a reader subscripts is present: no missing-key path exists.
+        for key in (
+            "ideal_open_interest",
+            "ideal_volume",
+            "ideal_spread_pct",
+            "min_volume",
+            "max_expirations",
+            "target_delta",
+            "delta_tolerance",
+            "default_otm_pct",
+        ):
+            self.assertIn(key, profile, f"missing {key}")
 
-    def test_preset_profile_does_not_affect_call_target_delta(self):
-        """Selected preset PUT keys should not overwrite CALL target delta."""
-        preset = self._flat_preset()
+    def test_preset_call_delta_comes_from_the_preset(self):
+        """A preset's call_target_delta drives the CALL lane."""
+        preset = self._flat_preset(call_target_delta=0.24, call_delta_tolerance=0.18)
         call_profile = self.manager.get_screening_profile("CALL", growth_mode_config=preset)
-        # CALL keeps its own defaults; only generic floors / call OTM are merged.
         self.assertEqual(call_profile["target_delta"], 0.24)
         self.assertEqual(call_profile["delta_tolerance"], 0.18)
+
+    def test_call_lane_never_loses_its_delta_on_a_partial_preset(self):
+        """A partial preset dict still yields a complete CALL profile."""
+        call_profile = self.manager.get_screening_profile("CALL", growth_mode_config=self._flat_preset())
+        self.assertEqual(call_profile["target_delta"], 0.30)
+        self.assertEqual(call_profile["delta_tolerance"], 0.12)
 
     def test_effective_watchlist_uses_preset_fields(self):
         """Flat preset profile carries the expected threshold keys."""

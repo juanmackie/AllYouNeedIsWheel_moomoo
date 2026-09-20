@@ -51,7 +51,7 @@ manual copy-to-ticket suggestions for your broker UI.
   `earnings_before_expiry`, or `event_unknown`) as visible risk information.
   Ordering is executable return on deployed capital per day, then executable
   bid premium per day as a tie-break, then stable ticker/expiry/strike/option-type
-  keys. Tiers, midpoint, and composite score never influence that order.
+  keys. Tiers and midpoint never influence that order.
 - Moomoo `update_time` is preserved verbatim and interpreted in
   `America/New_York`; UTC fetch time is carried separately. Missing/invalid/
   stale broker time blocks actionable candidates while the market is open.

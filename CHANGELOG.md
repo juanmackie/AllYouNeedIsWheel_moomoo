@@ -1,3 +1,42 @@
+## 2026-09-20 — Complexity pass: one profile source, no display-only composite
+
+Deletions, each behaviour-preserving except where stated:
+
+- **The compact composite score is gone.** `contract_score`, `score_details`,
+  `COMPOSITE_W_*`, the sub-score computations (`_compute_shared_subscores`, the
+  scoring primitives), the risk-budget score penalty, the dashboard score chip,
+  the "top score drivers" list and the score-derived "Goal impact" row are all
+  removed from the scorer, every payload and the UI, plus their dead CSS.
+  It could never gate or reorder a candidate (SCORING.md), so a risk-flavoured
+  number that cannot affect the outcome only implied influence it did not have.
+  `SCORING.md`/`README.md` record the change; hard gates, `quality_tier`,
+  `event_tier`, the rationale and the capital-velocity rank key are unchanged.
+- **One screening-profile source.** The weekly/monthly/quarterly ladder in
+  `WatchlistManager.get_screening_profile` is deleted; the versioned preset is
+  the only source of thresholds, and `to_screener_profile()` now carries the
+  neutral reader keys (`target_delta`, `delta_tolerance`, `default_otm_pct`,
+  `ideal_*`, `min_volume`, `max_expirations`) so no reader can hit a
+  missing-key path. Presets were versioned up (v4 → v5) rather than mutated.
+- **Dead code/config removed:** VIX-regime plumbing (its only producer was a
+  neutral constant), long-option/`earnings_calendar` research branches (the live
+  cash-short `research_only` path stays), the `core/connection.py` re-export
+  shim, four duplicate float/str coercion helpers (one `core.utils.safe_float`,
+  now NaN-safe), `core/position_utils.py`, and the frontend `api.js` /
+  `dashboard.js` barrels (the dashboard boot hook moved into `dashboard-init.js`).
+- **`tools/probe_broker_history.py` trimmed 661 → ~105 lines**, reusing the
+  app's structurally read-only connection instead of a bespoke SDK facade; its
+  durable findings now live in `docs/broker-history-capability.md`.
+
+Decisions recorded rather than executed:
+
+- **`db/schema.py` keeps its migration ladder.** It is the only thing preserving
+  the outcome journal and IV history that the measurement loop reads.
+- **Alpha Vantage provider untouched** — the owner has not confirmed removing it.
+
+Verified: 887 backend tests, 91 frontend tests, `ruff check`/`format --check`
+clean, live browser render (cards draw, composite surfaces absent, no console
+errors) and a live read-only broker probe.
+
 ## 2026-09-20 — Outcome ingestion works from a cold connection
 
 - **Cold-start account resolution fixed**: `MoomooConnection.resolve_portfolio_identity()`

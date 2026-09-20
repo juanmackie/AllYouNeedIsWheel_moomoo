@@ -14,13 +14,11 @@ class TestPortfolioContextInit(unittest.TestCase):
 
         portfolio_provider = Mock()
         portfolio_provider.portfolio_service = Mock()
-        vix_provider = Mock()
         config_provider = Mock()
         config_provider.config = {"db_path": ":memory:"}
 
         ctx = PortfolioContext(
             portfolio_service_provider=portfolio_provider,
-            vix_regime_provider=vix_provider,
             config_provider=config_provider,
         )
         self.assertIs(ctx._portfolio_service_provider, portfolio_provider)
@@ -53,7 +51,6 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context["cash_balance"], 0.0)
         self.assertEqual(context["account_value"], 0.0)
         self.assertEqual(context["positions"], {})
-        self.assertEqual(context["vix_regime"]["regime"], "normal")
 
     def test_populates_cash_and_account_value(self):
         self.portfolio_service.get_portfolio_summary.return_value = {
@@ -122,7 +119,6 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context["short_puts"]["AAPL240315P00150000"], 2)
         self.assertEqual(context["cash_reserved_for_csp"], 30000.0)
         self.assertEqual(context["cash_available_for_csp"], 0.0)
-        self.assertEqual(context["vix_regime"]["regime"], "normal")
 
 
 class TestPortfolioContextHelpers(unittest.TestCase):

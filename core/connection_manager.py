@@ -47,13 +47,13 @@ from core.connection_constants import (
     _normalize_trd_env,
     _parse_option_code_metadata,
     _safe_close_context,
-    _safe_float,
 )
 from core.context_factory import create_contexts
 from core.logging_config import get_logger
 from core.quote_cache import OptionChainCache, PendingRequestCoordinator
 from core.rate_limiter import RateLimiter
 from core.ticker_utils import TickerCache, format_symbol
+from core.utils import safe_float
 
 logger = get_logger("ayniwheel.connection", "moomoo")
 
@@ -77,16 +77,6 @@ def _is_rate_limit_response(value) -> bool:
     )
 
 
-def _safe_cash_value(value) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if numeric != numeric:
-        return None
-    return numeric
-
-
 def _select_withdrawable_cash_field(acc_row) -> tuple[float, str]:
     """Choose withdrawable/cash-like USD fields, not margin buying power."""
     cash_fields = (
@@ -97,7 +87,7 @@ def _select_withdrawable_cash_field(acc_row) -> tuple[float, str]:
         "cash",
     )
     for field in cash_fields:
-        value = _safe_cash_value(acc_row.get(field))
+        value = safe_float(acc_row.get(field), default=None)
         if value is not None and value > 0:
             return value, field
     return 0.0, "none"
@@ -112,7 +102,7 @@ def _select_buying_power_field(acc_row) -> tuple[float, str]:
         "buying_power",
     )
     for field in power_fields:
-        value = _safe_cash_value(acc_row.get(field))
+        value = safe_float(acc_row.get(field), default=None)
         if value is not None and value > 0:
             return value, field
     return 0.0, "none"
@@ -924,11 +914,11 @@ class MoomooConnection:
 
                     pos_key = symbol
                     pos_details = {
-                        "shares": _safe_float(pos.get("qty", 0)),
-                        "avg_cost": _safe_float(pos.get("average_cost", pos.get("cost_price", 0))),
-                        "market_price": _safe_float(pos.get("nominal_price", pos.get("last_price", 0))),
-                        "market_value": _safe_float(pos.get("market_val", 0)),
-                        "unrealized_pnl": _safe_float(pos.get("unrealized_pl", pos.get("pl_val", 0))),
+                        "shares": safe_float(pos.get("qty", 0)),
+                        "avg_cost": safe_float(pos.get("average_cost", pos.get("cost_price", 0))),
+                        "market_price": safe_float(pos.get("nominal_price", pos.get("last_price", 0))),
+                        "market_value": safe_float(pos.get("market_val", 0)),
+                        "unrealized_pnl": safe_float(pos.get("unrealized_pl", pos.get("pl_val", 0))),
                         "security_type": sec_type,
                     }
 
@@ -938,7 +928,7 @@ class MoomooConnection:
                             {
                                 "expiration": snap.get("option_expiry_date", "").replace("-", "")
                                 or (option_metadata or {}).get("expiration", ""),
-                                "strike": _safe_float(
+                                "strike": safe_float(
                                     snap.get("option_strike_price", (option_metadata or {}).get("strike", 0))
                                 ),
                                 "option_type": "CALL" if snap.get("option_type") == "CALL" else "PUT",
@@ -948,7 +938,7 @@ class MoomooConnection:
                         pos_details.update(
                             {
                                 "expiration": option_metadata.get("expiration", ""),
-                                "strike": _safe_float(option_metadata.get("strike", 0)),
+                                "strike": safe_float(option_metadata.get("strike", 0)),
                                 "option_type": option_metadata.get("option_type", ""),
                             }
                         )
@@ -1033,7 +1023,7 @@ class MoomooConnection:
                 return []
             rows = data.to_dict("records")
             for row in rows:
-                row["fee_amount"] = _safe_float(row.get("fee_amount"), 0.0)
+                row["fee_amount"] = safe_float(row.get("fee_amount"), 0.0)
             return rows
         except Exception as e:
             self.last_error = f"Error querying order fees: {e}"

@@ -69,8 +69,6 @@ def compute_portfolio_hash(portfolio_context: dict) -> str:
 
 def extract_data_sources(portfolio_context: dict, decisions: list | None = None) -> list[dict]:
     sources: set[str] = set()
-    if portfolio_context.get("vix_regime"):
-        sources.add("vix_regime")
     if portfolio_context.get("broker_buying_power"):
         sources.add("moomoo_portfolio")
     if decisions:

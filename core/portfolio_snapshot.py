@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import re
 
-from core.position_utils import parse_moomoo_symbol, parse_position_qty
+from core.ticker_utils import parse_moomoo_symbol
+from core.utils import parse_position_qty
 from core.utils import safe_float as _safe_float
 
 # Option-code shape produced by Moomoo after stripping the "US." prefix, e.g.

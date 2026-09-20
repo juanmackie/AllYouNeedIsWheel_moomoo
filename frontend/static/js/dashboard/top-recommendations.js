@@ -2,7 +2,7 @@
  * Top Recommendations Module
  * Displays the highest-scoring option opportunities with auto-refresh
  */
-import { fetchRunState, refreshRun, revalidateCopy } from './api-run.js';
+import { fetchRunState, refreshRun, revalidateCopy, markRecommendationTaken } from './api-run.js';
 import { initPresetSelector } from './preset-selector.js';
 import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
@@ -10,6 +10,10 @@ import StateModel from '../utils/state-model.js';
 
 // Module state
 let signalsData = null;
+
+// Recommendations the owner has recorded as acted on for the run on screen
+// (from /api/run `taken_links`). Card state only — the backend owns the link.
+let takenRecommendedKeys = new Set();
 
 // Daily premium needed to stay on the active preset's 5x pace (from portfolio history).
 // Fetched lazily once; null when history is insufficient.
@@ -58,18 +62,6 @@ function initElements() {
     ccRemainingCountEl = document.getElementById('cc-remaining-count');
     strategyRulesEl = document.getElementById('strategy-rules');
     strategyRulesTextEl = document.getElementById('strategy-rules-text');
-}
-
-/**
- * Get heatmap color class based on score
- * @param {number} score - Option score (0-100)
- * @returns {string} CSS class
- */
-function getScoreColorClass(score) {
-    if (score == null) return 'bg-secondary';
-    if (score >= 70) return 'bg-success';
-    if (score >= 50) return 'bg-warning text-dark';
-    return 'bg-secondary';
 }
 
 /**
@@ -155,37 +147,6 @@ function getDataSourceInfo(rec) {
     return { icon, sources, freshness, freshnessClass };
 }
 
-/**
- * Extract top score drivers from score_details
- * @param {Object} scoreDetails - Score breakdown dict
- * @returns {Object} { positive: string[], negative: string[] }
- */
-function extractScoreDrivers(scoreDetails) {
-    if (!scoreDetails) return { positive: [], negative: [] };
-    const thresholds = { iv_adjusted: 70, liquidity: 70, theta_delta: 65, expected_value: 60, iv_environment: 65, upside: 70, buffer: 70, capital_efficiency: 65, delta_fit: 60, otm_fit: 65, annualized: 60 };
-    const labels = { iv_adjusted: 'IV-adj return', liquidity: 'Liquidity', theta_delta: 'Theta/Delta', expected_value: 'Expected value', iv_environment: 'IV environment', upside: 'Upside', buffer: 'Buffer', capital_efficiency: 'Capital eff.', delta_fit: 'Delta fit', otm_fit: 'OTM fit', annualized: 'Yield' };
-    const positive = [];
-    const negative = [];
-    for (const [key, val] of Object.entries(scoreDetails)) {
-        if (typeof val !== 'number') continue;
-        const label = labels[key] || key;
-        const threshold = thresholds[key] || 60;
-        if (val >= threshold) positive.push(`${label}: ${val.toFixed(0)}`);
-        else if (val < 40) negative.push(`${label}: ${val.toFixed(0)}`);
-    }
-    // Sort by value descending for positive, ascending for negative
-    positive.sort((a, b) => {
-        const va = parseFloat(a.split(': ')[1]);
-        const vb = parseFloat(b.split(': ')[1]);
-        return vb - va;
-    });
-    negative.sort((a, b) => {
-        const va = parseFloat(a.split(': ')[1]);
-        const vb = parseFloat(b.split(': ')[1]);
-        return va - vb;
-    });
-    return { positive: positive.slice(0, 3), negative: negative.slice(0, 3) };
-}
 
 /**
  * Format expiration date
@@ -305,6 +266,94 @@ function contractFingerprint(rec) {
     const strike = Number(rec && rec.strike);
     if (!rec || !rec.ticker || !rec.option_type || !exp || !Number.isFinite(strike)) return '';
     return [String(rec.ticker).toUpperCase(), String(rec.option_type).toUpperCase(), exp, strike.toFixed(2)].join('|');
+}
+
+/**
+ * Build the set of recommended-contract keys the owner has marked taken.
+ * Only the recommendation identity is keyed: the card is the recommendation,
+ * whatever strike was actually traded.
+ */
+function buildTakenKeySet(links) {
+    const keys = new Set();
+    (Array.isArray(links) ? links : []).forEach((link) => {
+        const key = contractFingerprint(link && link.recommendation);
+        if (key) keys.add(key);
+    });
+    return keys;
+}
+
+function isTaken(rec) {
+    const key = contractFingerprint(rec);
+    return Boolean(key) && takenRecommendedKeys.has(key);
+}
+
+function setTakenStatus(statusEl, message, isError = false) {
+    if (!statusEl) return;
+    statusEl.className = `taken-status small mt-1${isError ? ' text-danger' : ' text-success'}`;
+    statusEl.textContent = message || '';
+}
+
+/**
+ * Render the taken control for one card from module state (never a guess).
+ */
+function renderTakenState(rec, btn, input, statusEl) {
+    const taken = isTaken(rec);
+    btn.disabled = taken;
+    if (input) input.disabled = taken;
+    if (taken) {
+        btn.classList.remove('btn-outline-secondary');
+        btn.classList.add('btn-success');
+        btn.innerHTML = '<i class="bi bi-bookmark-check"></i> Taken';
+        btn.title = 'Recorded as acted on — outcome attribution links to this recommendation';
+        setTakenStatus(statusEl, 'Linked to this recommendation');
+    } else {
+        btn.classList.add('btn-outline-secondary');
+        btn.classList.remove('btn-success');
+        btn.innerHTML = '<i class="bi bi-bookmark"></i> Mark taken';
+        btn.title = 'Record that you acted on this recommendation (no order is placed)';
+        setTakenStatus(statusEl, '');
+    }
+}
+
+/**
+ * Record the owner's taken link for this card. Explicit owner evidence, never
+ * an order: the backend validates the contract against the published run and
+ * stores a link the outcome engine attributes against. Failures stay visible.
+ */
+async function markTaken(rec, btn, input, statusEl) {
+    const runId = (signalsData && signalsData.run && signalsData.run.run_id) || '';
+    if (!runId) {
+        setTakenStatus(statusEl, 'Not recorded: no published run id — refresh and retry.', true);
+        return;
+    }
+    const expiration = String(rec.expiration || '').replace(/-/g, '');
+    const tradedStrike = input && input.value !== '' ? Number(input.value) : null;
+    const traded = Number.isFinite(tradedStrike) && tradedStrike > 0
+        ? { ticker: rec.ticker, option_type: rec.option_type, expiration, strike: tradedStrike }
+        : undefined;
+
+    const original = btn.innerHTML;
+    setButtonBusy(btn, 'Saving…');
+    const payload = {
+        run_id: runId,
+        ticker: rec.ticker,
+        option_type: rec.option_type,
+        expiration,
+        strike: Number(rec.strike),
+    };
+    // Only send the traded contract when the owner actually stated it: an
+    // absent key means "not stated", never "same as recommended".
+    if (traded) payload.traded = traded;
+    try {
+        await markRecommendationTaken(payload);
+        takenRecommendedKeys.add(contractFingerprint(rec));
+        renderTakenState(rec, btn, input, statusEl);
+    } catch (err) {
+        btn.disabled = false;
+        btn.classList.remove('btn-success');
+        btn.innerHTML = original;
+        setTakenStatus(statusEl, `Not recorded: ${err && err.message ? err.message : 'request failed'}`, true);
+    }
 }
 
 function setButtonBusy(btn, label) {
@@ -501,11 +550,6 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     annualizedEl.textContent = rec.annualized_return != null ? `${rec.annualized_return.toFixed(1)}%` : 'N/A';
     annualizedEl.classList.add(rec.annualized_return != null && rec.annualized_return > 0 ? 'text-success' : 'text-danger');
     
-    // Score badge (secondary — capital-normalized return is the primary rank metric)
-    const scoreBadge = clone.querySelector('.score-badge');
-    scoreBadge.textContent = rec.score != null ? `Score: ${rec.score.toFixed(1)}` : 'Score: N/A';
-    addClassTokens(scoreBadge, getScoreColorClass(rec.score));
-
     // Explicit quality/event tiers are the actionability explanation.
     const tierBadge = clone.querySelector('.underlying-quality-badge');
     const qualityTier = rec.quality_tier || rec.wheel_decision?.quality_tier || 'marginal';
@@ -604,6 +648,17 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         copyBtn.addEventListener('click', () => {
             if (canCopy) copyTicket(rec, copyBtn);
         });
+    }
+
+    // Owner-recorded taken link: explicit journal evidence that the owner acted
+    // on this recommendation (no order, no clipboard). State comes from the run
+    // payload, so it survives a reload; failures are shown on the card.
+    const takenBtn = clone.querySelector('.mark-taken-btn');
+    if (takenBtn) {
+        const tradedStrikeInput = clone.querySelector('.traded-strike-input');
+        const takenStatusEl = clone.querySelector('.taken-status');
+        renderTakenState(rec, takenBtn, tradedStrikeInput, takenStatusEl);
+        takenBtn.addEventListener('click', () => markTaken(rec, takenBtn, tradedStrikeInput, takenStatusEl));
     }
 
     // Details
@@ -724,20 +779,6 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         clone.querySelector('.cc-cost-basis-dist').textContent = costBasisDist != null ? `${costBasisDist.toFixed(1)}%` : 'N/A';
         const intentLabels = { 'income': 'Income', 'profit-taking': 'Profit-taking', 'upside-capping risk': 'Capping upside' };
         clone.querySelector('.cc-intent').textContent = intentLabels[intent] || intent || 'N/A';
-    }
-
-    // Score drivers
-    const driversSection = clone.querySelector('.score-drivers');
-    const scoreDetails = rec.score_details || rec.wheel_decision?.score_details;
-    const drivers = extractScoreDrivers(scoreDetails);
-    if (drivers.positive.length > 0 || drivers.negative.length > 0) {
-        driversSection.classList.remove('d-none');
-        if (drivers.positive.length > 0) {
-            driversSection.querySelector('.score-drivers__positive').textContent = 'Drivers: ' + drivers.positive.join(' | ');
-        }
-        if (drivers.negative.length > 0) {
-            driversSection.querySelector('.score-drivers__negative').textContent = 'Drags: ' + drivers.negative.join(' | ');
-        }
     }
 
     // Hard blockers (if any leak through — should be empty for surfaced signals)
@@ -1091,22 +1132,6 @@ function applyGrowthFieldsToCard(card, rec) {
 
     // Growth mode is always-on — growth details are always visible
     growthDetails.classList.remove('d-none');
-
-    // Show the unified contract_score (always growth-weighted)
-    const score = rec.score ?? rec.contract_score ?? 0;
-    const scoreBadge = card.querySelector('.score-badge');
-    if (scoreBadge) {
-        scoreBadge.textContent = `Score: ${score.toFixed(1)}`;
-        scoreBadge.className = `score-badge badge fs-6 ${getScoreColorClass(score)}`;
-        scoreBadge.title = 'Composite score capped at 100';
-    }
-
-    const goalImpact = card.querySelector('.growth-impact');
-    if (goalImpact) {
-        const label = score >= 70 ? 'High' : score >= 50 ? 'Medium' : 'Low';
-        goalImpact.textContent = `${label} (${score.toFixed(1)})`;
-        goalImpact.className = `fw-semibold ${score >= 70 ? 'text-success' : score >= 50 ? 'text-warning' : 'text-muted'}`;
-    }
 
     const riskBudget = card.querySelector('.risk-budget');
     if (riskBudget && rec.risk_budget_used_pct != null) {
@@ -1539,6 +1564,7 @@ export async function loadTopRecommendations(manualRefresh = false) {
         }
         const envelope = await fetchRunState();
         const snapshot = envelope.snapshot;
+        takenRecommendedKeys = buildTakenKeySet(envelope.taken_links);
         const attempt = envelope.attempt || {};
         const result = (envelope.error || envelope.generating || envelope.signals)
             ? envelope

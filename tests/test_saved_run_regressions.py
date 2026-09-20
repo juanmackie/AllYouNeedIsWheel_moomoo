@@ -53,7 +53,6 @@ def _csp_candidate(ticker, strike, bid, capital_velocity_per_day):
         "implied_volatility": 0.30,
         "open_interest": 500,
         "volume": 100,
-        "score": 70.0,
         "quality_tier": "qualified",
         "cash_required": strike * 100,
         "recommended_contracts": 1,
@@ -64,7 +63,6 @@ def _csp_candidate(ticker, strike, bid, capital_velocity_per_day):
         "warnings": [],
         "quote_fetched_at_utc": "2026-05-25T15:59:00+00:00",
         "wheel_decision": {
-            "contract_score": 70.0,
             "confidence_score": 100,
             "capital_velocity_per_day": capital_velocity_per_day,
             "copy_eligible": True,

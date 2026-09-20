@@ -2,7 +2,7 @@
  * Cash management dashboard panels.
  * Split from dashboard.js (F042)
  */
-import { fetchWeeklyOptionIncome } from './api.js';
+import { fetchWeeklyOptionIncome } from './api-portfolio.js';
 import { escapeHtml, formatCurrency } from '../utils/formatters.js';
 
 export async function updateCashReserveStatus() {

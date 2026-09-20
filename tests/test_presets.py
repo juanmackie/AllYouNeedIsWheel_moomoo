@@ -42,6 +42,7 @@ class TestPresetContract(unittest.TestCase):
         self.assertIs(get_preset(None), get_preset(DEFAULT_PRESET_KEY))
 
     def test_screener_profile_shape_is_complete(self):
+        """The profile is the only threshold source: every reader key is present."""
         profile = get_preset("balanced").to_screener_profile()
         for key in (
             "csp_target_delta",
@@ -52,11 +53,29 @@ class TestPresetContract(unittest.TestCase):
             "csp_min_otm_pct",
             "csp_max_otm_pct",
             "call_default_otm_pct",
+            "call_target_delta",
+            "call_delta_tolerance",
             "min_csp_buying_power",
+            "min_mid_price",
+            "max_spread_pct",
+            "min_premium_per_contract",
+            "min_open_interest",
+            "min_volume",
+            "ideal_open_interest",
+            "ideal_volume",
+            "ideal_spread_pct",
+            "max_expirations",
+            "max_buying_power_pct_per_csp",
+            "target_account_multiple",
             "require_cash_fit",
+            # Neutral keys readers subscript directly (no missing-key path).
+            "target_delta",
+            "delta_tolerance",
+            "default_otm_pct",
         ):
             self.assertIn(key, profile, f"missing {key}")
         self.assertTrue(profile["require_cash_fit"])
+        self.assertEqual(profile["target_delta"], profile["csp_target_delta"])
 
     def test_presets_do_not_weaken_safety_constraints(self):
         """No preset may disable cash-fit or drop the buying-power cap."""

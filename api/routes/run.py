@@ -53,7 +53,32 @@ def get_run_state():
 
     identity_env, identity_account = get_current_identity()
     snapshot = db.get_latest_snapshot(env=identity_env, account_id=identity_account) if db is not None else None
-    return jsonify({"attempt": attempt, "snapshot": recompute_effective_snapshot(snapshot)})
+    view = recompute_effective_snapshot(snapshot)
+    return jsonify(
+        {
+            "attempt": attempt,
+            "snapshot": view,
+            # Owner-recorded taken links for the run on screen, so a card can show
+            # that it was acted on without a second request or a browser-side guess.
+            "taken_links": _taken_links_for_run(db, view, identity_env, identity_account),
+        }
+    )
+
+
+def _taken_links_for_run(db, view, env, account_id) -> list:
+    """Owner-recorded taken links that belong to the run currently on screen.
+
+    Read-only and locally scoped (no broker call). Links for other runs are not
+    returned: a card may only claim the recommendation from its own run.
+    """
+    if db is None or not isinstance(view, dict):
+        return []
+    run_id = str((view.get("run") or {}).get("run_id") or "")
+    if not run_id:
+        return []
+    from api.services.taken_links import read_taken_links
+
+    return [link for link in read_taken_links(db, env, account_id) if link.get("run_id") == run_id]
 
 
 @bp.route("/refresh", methods=["POST"])
@@ -64,6 +89,107 @@ def refresh():
     db = _get_db()
     attempt = db.get_latest_attempt() if db is not None else None
     return jsonify({"started": started, "attempt": attempt}), (202 if started else 409)
+
+
+def _find_published_run_view(db, run_id, env, account_id) -> dict | None:
+    """Return the effective view of one stored run by id, or None.
+
+    A taken link may be recorded after the dashboard has moved on (the owner
+    trades the evening run at the next US open and marks it later), so the link
+    is validated against published history, not only the run currently on
+    screen. Still evidence-backed: the run must exist for this account, and the
+    contract must have been in that run's shortlist.
+    """
+    requested = str(run_id or "").strip()
+    if db is None or not requested or not hasattr(db, "get_run_snapshots"):
+        return None
+    try:
+        snapshots = db.get_run_snapshots(env=env, account_id=account_id, limit=500) or []
+    except Exception:
+        return None
+    for snapshot in snapshots:
+        view = recompute_effective_snapshot(snapshot)
+        if isinstance(view, dict) and str((view.get("run") or {}).get("run_id") or "") == requested:
+            return view
+    return None
+
+
+@bp.route("/taken", methods=["POST"])
+def mark_recommendation_taken():
+    """Record that the owner acted on a recommendation from a published run.
+
+    Owner-recorded journal evidence, not broker evidence: fills alone cannot say
+    which recommendation they came from, and this account's fills show trades
+    whose strike differs from the suggested one. Validates the run id against
+    stored published history and the contract against that run's shortlist, then
+    stores an owner-recorded link (no broker call, no order or unlock surface —
+    see ``api/services/taken_links.py``). Idempotent per (run, recommended
+    contract).
+    """
+    from api.routes.utils import enforce_route_rate_limit, error_response
+    from api.services.taken_links import TakenLinkError, record_taken_link
+
+    allowed, retry_after = enforce_route_rate_limit(
+        "run_taken", request.remote_addr or "local", max_requests=30, window_seconds=60
+    )
+    if not allowed:
+        return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return error_response("Request body must be a JSON object", status_code=400)
+
+    run_id = str(body.get("run_id") or "").strip()
+    ticker = str(body.get("ticker") or "").strip()
+    option_type = str(body.get("option_type") or "").upper()
+    expiration = _normalize_expiration(body.get("expiration") or "")
+    try:
+        strike = float(body.get("strike", 0) or 0)
+    except (TypeError, ValueError):
+        strike = 0.0
+    if not run_id or not ticker or option_type not in ("CALL", "PUT") or not expiration or strike <= 0:
+        return error_response(
+            "Invalid taken-link parameters: run_id, ticker, option_type, expiration and strike are required",
+            status_code=400,
+        )
+
+    db = _get_db()
+    if db is None:
+        return error_response("Database not available", status_code=503)
+
+    from api.services.config import get_current_identity
+
+    identity_env, identity_account = get_current_identity()
+    view = _find_published_run_view(db, run_id, identity_env, identity_account)
+    if view is None:
+        return error_response(
+            "run_id is not a published run for this account",
+            status_code=404,
+        )
+
+    contract, lane = _find_contract(view, ticker, option_type, expiration, strike)
+    if contract is None:
+        return error_response("Contract is not in that run's shortlist", status_code=404)
+
+    try:
+        result = record_taken_link(
+            db,
+            run_id=run_id,
+            lane=lane,
+            recommendation={
+                "ticker": ticker,
+                "option_type": option_type,
+                "expiration": expiration,
+                "strike": strike,
+            },
+            traded=body.get("traded"),
+            env=identity_env,
+            account_id=identity_account,
+        )
+    except TakenLinkError as exc:
+        return error_response(str(exc), status_code=400)
+
+    return jsonify({"ok": True, "idempotent": result["idempotent"], "link": result["link"]})
 
 
 def _contract_fingerprint(ticker: str, option_type: str, expiration: str, strike) -> str:

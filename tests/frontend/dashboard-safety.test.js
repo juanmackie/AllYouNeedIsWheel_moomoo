@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../../frontend/static/js/dashboard/api.js', () => ({
+vi.mock('../../frontend/static/js/dashboard/api-portfolio.js', () => ({
   fetchWeeklyOptionIncome: vi.fn(),
 }));
 

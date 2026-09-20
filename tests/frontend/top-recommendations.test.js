@@ -4,6 +4,7 @@ vi.mock('../../frontend/static/js/dashboard/api-run.js', () => ({
   fetchRunState: vi.fn(),
   refreshRun: vi.fn(),
   revalidateCopy: vi.fn(),
+  markRecommendationTaken: vi.fn(),
 }));
 
 vi.mock('../../frontend/static/js/utils/state-model.js', () => ({
@@ -74,12 +75,15 @@ function setupDOM() {
         <span class="premium-velocity"></span>
         <span class="premium-amount"></span>
         <span class="annualized-return"></span>
-        <span class="score-badge"></span>
+        <span class="quality-badge"></span>
         <span class="confidence-badge"></span>
         <span class="underlying-quality-badge"></span>
         <span class="research-only-badge"></span>
         <span class="signal-data-source"></span>
         <button type="button" class="btn btn-sm copy-ticket-btn">Copy ticket</button>
+        <input type="number" class="form-control traded-strike-input" />
+        <button type="button" class="btn btn-sm mark-taken-btn">Mark taken</button>
+        <div class="taken-status small"></div>
         <span class="recommendation-warnings"></span>
         <div class="missing-risk-badge small text-warning fw-semibold d-none"></div>
         <span class="otm-pct"></span>
@@ -99,10 +103,7 @@ function setupDOM() {
           <span class="cc-cost-basis-dist"></span>
           <span class="cc-intent"></span>
         </div>
-        <div class="score-drivers d-none">
-          <span class="score-drivers__positive"></span>
-          <span class="score-drivers__negative"></span>
-        </div>
+        <div class="hard-blockers d-none"></div>
         <div class="hard-blockers d-none">
           <span class="hard-blockers-list"></span>
         </div>
@@ -365,7 +366,6 @@ describe('top-recommendations unknown IV status', () => {
           ask: 2.10,
           mid_price: 2.05,
           annualized_return: 50.0,
-          score: 65.0,
           iv_rank: 50,
           iv_status: 'unknown',
           otm_pct: 5.0,
@@ -386,15 +386,14 @@ describe('top-recommendations unknown IV status', () => {
     const ivRankEl = cards[0].querySelector('.iv-rank');
     expect(ivRankEl.textContent).toBe('IV unavailable');
     expect(ivRankEl.classList.contains('text-muted')).toBe(true);
-    // Regression: score 75 maps to multi-token 'bg-warning text-dark'; both
-    // tokens must be applied (classList.add chokes on the space, addClassTokens does not).
-    const scoreBadgeEl = cards[0].querySelector('.score-badge');
-    expect(scoreBadgeEl.classList.contains('bg-warning')).toBe(true);
-    expect(scoreBadgeEl.classList.contains('text-dark')).toBe(true);
+    // Regression: multi-token class strings ('bg-warning text-dark') must be
+    // applied whole (classList.add chokes on the space; addClassTokens does not).
+    const tierBadgeEl = cards[0].querySelector('.underlying-quality-badge');
+    expect(tierBadgeEl.classList.contains('bg-warning')).toBe(true);
+    expect(tierBadgeEl.classList.contains('text-dark')).toBe(true);
     expect(cards[0].querySelectorAll('.recommendation-detail-row').length).toBe(4);
     expect(cards[0].querySelector('.csp-details')?.classList.contains('d-none')).toBe(false);
     expect(cards[0].querySelector('.cc-details')?.classList.contains('d-none')).toBe(true);
-    expect(cards[0].querySelector('.score-drivers')?.classList.contains('d-none')).toBe(true);
     expect(cards[0].querySelector('.hard-blockers')?.classList.contains('d-none')).toBe(true);
   });
 });
@@ -447,7 +446,6 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
       ask: 2.10,
       mid_price: 2.05,
       annualized_return: 50.0,
-      score: 65.0,
       event_tier: 'event_unknown',
     });
     expect(riskBadge).toBeTruthy();
@@ -468,7 +466,6 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
       ask: 2.10,
       mid_price: 2.05,
       annualized_return: 50.0,
-      score: 65.0,
       event_tier: 'event_safe',
     });
     expect(riskBadge).toBeTruthy();
@@ -487,7 +484,6 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
       ask: 2.10,
       mid_price: 2.05,
       annualized_return: 50.0,
-      score: 65.0,
       event_tier: 'earnings_before_expiry',
     });
     expect(riskBadge).toBeTruthy();
@@ -506,7 +502,6 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
       ask: 2.10,
       mid_price: 2.05,
       annualized_return: 50.0,
-      score: 65.0,
       wheel_decision: { event_tier: 'earnings_before_expiry' },
     });
     expect(riskBadge).toBeTruthy();
@@ -569,7 +564,6 @@ describe('top-recommendations source badges', () => {
         dte: 21,
         mid_price: 1.25,
         premium_per_contract: 125,
-        score: 88,
         annualized_return: 21,
         iv_adjusted_return: 18,
         otm_pct: 7.5,
@@ -587,7 +581,6 @@ describe('top-recommendations source badges', () => {
         open_interest: 500,
         volume: 100,
         implied_volatility: 0.32,
-        score_details: {},
         size_fit: 1,
         expected_move_buffer: 0,
         wheel_decision: {
@@ -1025,7 +1018,6 @@ describe('top-recommendations strategy lanes (preset rules + two sections)', () 
     collateral: 9500 + i * 100,
     quote_age_sec: 40 + i * 10,
     event_tier: 'event_safe', quality_tier: 'qualified',
-    score: 70 - i, annualized_return: 40 - i,
     eligibility: { mode: 'live', reasons: [] },
     wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified' },
   });
@@ -1039,7 +1031,6 @@ describe('top-recommendations strategy lanes (preset rules + two sections)', () 
     available_shares: 200 + i * 50,
     quote_age_sec: 50 + i * 10,
     event_tier: 'event_safe', quality_tier: 'qualified',
-    score: 72, annualized_return: 35,
     eligibility: { mode: 'live', reasons: [] },
     wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified', avg_cost: 170, if_called_return: 8.5 },
   });
@@ -1304,7 +1295,6 @@ describe('saved run reproduction (3 CSP + 4 CC + 25 rejected)', () => {
     recommended_contracts: 1, max_contracts: 2, collateral: 9500 + i * 100,
     quote_age_sec: 40 + i * 10,
     event_tier: 'event_safe', quality_tier: 'qualified',
-    score: 70 - i, annualized_return: 40 - i,
     eligibility: { mode: 'live', reasons: [] },
     wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified' },
   });
@@ -1317,7 +1307,6 @@ describe('saved run reproduction (3 CSP + 4 CC + 25 rejected)', () => {
     recommended_contracts: 1, max_contracts: 3, available_shares: 300,
     quote_age_sec: 50 + i * 10,
     event_tier: 'event_safe', quality_tier: 'qualified',
-    score: 72, annualized_return: 35,
     eligibility: { mode: 'live', reasons: [] },
     wheel_decision: { event_tier: 'event_safe', quality_tier: 'qualified', avg_cost: 170, if_called_return: 8.5 },
   });
@@ -1439,8 +1428,11 @@ describe('saved run reproduction (3 CSP + 4 CC + 25 rejected)', () => {
       executionNeedles.some((re) => re.test(`${b.textContent} ${b.title || ''} ${b.getAttribute('aria-label') || ''}`)),
     );
     expect(executionButtons).toHaveLength(0);
-    // Inside every copy surface the only actionable control is a
-    // copy-to-ticket (never a place/modify/cancel control).
+    // Inside every signal surface the only actionable controls are the
+    // copy-to-ticket and the owner-recorded taken link (a local journal write).
+    // No order-capable control may appear, and no action label may use an
+    // execution verb. Button titles are excluded from the verb check because
+    // they legitimately carry broker vocabulary (e.g. "buying power").
     const copySurfaces = [
       '#top-csp-cards',
       '#top-cc-cards',
@@ -1452,8 +1444,145 @@ describe('saved run reproduction (3 CSP + 4 CC + 25 rejected)', () => {
       [...document.querySelectorAll(`${sel} button`)],
     );
     expect(copySurfaceButtons.length).toBeGreaterThan(0);
+    const allowedControls = ['copy-ticket-btn', 'mark-taken-btn'];
     copySurfaceButtons.forEach((b) => {
-      expect(b.classList.contains('copy-ticket-btn')).toBe(true);
+      expect(allowedControls.some((cls) => b.classList.contains(cls))).toBe(true);
     });
+    expect(document.querySelectorAll('.mark-taken-btn').length).toBeGreaterThan(0);
+    const executionVerbs = ['place', 'buy', 'sell', 'cancel', 'modify', 'unlock', 'submit', 'execute'];
+    copySurfaceButtons.forEach((b) => {
+      const label = String(b.textContent || '').toLowerCase();
+      executionVerbs.forEach((verb) => expect(label).not.toContain(verb));
+    });
+  });
+});
+
+describe('top-recommendations owner-recorded taken link', () => {
+  let cleanup;
+  const flush = () => new Promise((r) => setTimeout(r, 10));
+
+  const SIGNAL = {
+    ticker: 'SOXL',
+    option_type: 'PUT',
+    strike: 100.0,
+    expiration: '20260918',
+    dte: 19,
+    bid: 6.2,
+    ask: 6.4,
+    mid_price: 6.3,
+    annualized_return: 119.1,
+    capital_velocity_per_day: 0.00326,
+    delta: -0.295,
+    otm_pct: 10.19,
+    signal_type: 'csp',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDOM();
+  });
+
+  afterEach(() => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  async function renderTakenCard(takenLinks = []) {
+    const { initializeTopRecommendations, cleanupTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+    const api = await import('../../frontend/static/js/dashboard/api-run.js');
+    api.fetchRunState.mockResolvedValue({
+      success: true,
+      count: 1,
+      signals: [SIGNAL],
+      run: { run_id: 'run-1', status: 'ready' },
+      taken_links: takenLinks,
+      generated_at: '2026-09-20T00:00:00',
+    });
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await flush();
+    return {
+      api,
+      btn: document.querySelector('.mark-taken-btn'),
+      input: document.querySelector('.traded-strike-input'),
+      status: document.querySelector('.taken-status'),
+    };
+  }
+
+  it('renders the taken state from the run payload, so it survives a reload', async () => {
+    const { btn, status } = await renderTakenCard([
+      {
+        run_id: 'run-1',
+        recommendation: { ticker: 'SOXL', option_type: 'PUT', expiration: '20260918', strike: 100 },
+        traded: null,
+      },
+    ]);
+
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toContain('Taken');
+    expect(status.textContent).toContain('Linked to this recommendation');
+  });
+
+  it('records the recommended contract when no traded strike was entered', async () => {
+    const { api, btn, status } = await renderTakenCard([]);
+    api.markRecommendationTaken.mockResolvedValue({ ok: true, idempotent: false });
+
+    btn.click();
+    await flush();
+
+    expect(api.markRecommendationTaken).toHaveBeenCalledTimes(1);
+    const payload = api.markRecommendationTaken.mock.calls[0][0];
+    expect(payload).toEqual({
+      run_id: 'run-1',
+      ticker: 'SOXL',
+      option_type: 'PUT',
+      expiration: '20260918',
+      strike: 100,
+    });
+    // Nothing is claimed about the traded contract when the owner did not say.
+    expect(payload).not.toHaveProperty('traded');
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toContain('Taken');
+    expect(status.textContent).toContain('Linked to this recommendation');
+  });
+
+  it('carries the traded strike when it differs from the suggestion', async () => {
+    const { api, btn, input } = await renderTakenCard([]);
+    api.markRecommendationTaken.mockResolvedValue({ ok: true, idempotent: false });
+    input.value = '106';
+
+    btn.click();
+    await flush();
+
+    const payload = api.markRecommendationTaken.mock.calls[0][0];
+    expect(payload.traded).toEqual({
+      ticker: 'SOXL',
+      option_type: 'PUT',
+      expiration: '20260918',
+      strike: 106,
+    });
+    expect(payload.strike).toBe(100);
+  });
+
+  it('shows a rejected link on the card instead of swallowing it', async () => {
+    const { api, btn, status } = await renderTakenCard([]);
+    api.markRecommendationTaken.mockRejectedValue(new Error('run_id does not match the published run'));
+
+    btn.click();
+    await flush();
+
+    expect(status.textContent).toContain('Not recorded');
+    expect(status.textContent).toContain('run_id does not match the published run');
+    expect(status.classList.contains('text-danger')).toBe(true);
+    // The control stays usable and the card never claims a link that failed.
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toContain('Mark taken');
   });
 });

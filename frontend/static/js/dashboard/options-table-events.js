@@ -2,7 +2,7 @@ import { state, setSelectedExpirationPreference, getSelectedExpirationPreference
 import { calculatePremium } from './options-table-calc.js';
 import { showAlert } from '../utils/alerts.js';
 import { formatCurrency } from '../utils/formatters.js';
-import { fetchOptionData } from './api.js';
+import { fetchOptionData } from './api-options.js';
 import { updateOptionsTable, showToast, addOtmInputEventListeners } from './options-table-rendering.js';
 
 async function getOptionsTableActions() {

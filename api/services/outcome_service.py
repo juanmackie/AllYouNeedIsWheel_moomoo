@@ -30,7 +30,13 @@ Field semantics (all money is option-leg, dollars-per-contract unless stated):
   recommendation's timestamp precedes the first fill (``attribution=
   "inferred"``). Ambiguous (multiple candidate recommendations) or
   fill-before-any-recommendation runs are ``attribution="unattributed"`` and
-  surfaced as matched evidence only, like the existing unmatched path.
+  surfaced as matched evidence only, like the existing unmatched path. An
+  owner-recorded taken link (``api.services.taken_links``) is explicit owner
+  evidence rather than inference: when exactly one link resolves to a stored
+  recommendation, the traded contract is attributed to it with
+  ``attribution="owner-linked"`` — including when the owner traded a different
+  strike. Ambiguous or unresolvable links never attribute; the link itself is
+  still surfaced on the record so nothing is silently dropped.
 
 Every aggregate exposes sample size, coverage %, and unknown-outcome count,
 and every outcome record carries the supporting fill transactions for
@@ -48,6 +54,7 @@ import logging
 from collections import deque
 from datetime import datetime, timedelta
 
+from api.services.taken_links import read_taken_links
 from core.outcome_attribution import (
     broker_price_to_contract_credit,
     capital_base_cc,
@@ -58,6 +65,7 @@ from core.outcome_attribution import (
     parse_timestamp,
     slippage_dollars,
 )
+from core.utils import safe_float
 
 logger = logging.getLogger("api.services.outcomes")
 
@@ -72,6 +80,10 @@ _DTE_BUCKET_EDGES = (
 )
 
 _UNTIERED = "untiered"
+
+# Explicit owner evidence that a manual trade came from a recommendation
+# (``api.services.taken_links``) — distinct from the temporal "inferred" match.
+ATTRIBUTION_OWNER_LINKED = "owner-linked"
 
 
 def dte_bucket(dte) -> str:
@@ -98,16 +110,6 @@ def normalize_expiration_key(value) -> str:
     return text.replace("-", "")
 
 
-def _safe_float(value, default=None):
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return default
-    if parsed != parsed:  # NaN
-        return default
-    return parsed
-
-
 def signal_identity(signal) -> tuple | None:
     """Canonical contract identity for a recommendation signal, or None.
 
@@ -120,7 +122,7 @@ def signal_identity(signal) -> tuple | None:
     ticker = str(signal.get("ticker", "") or "").strip().upper()
     option_type = str(signal.get("option_type", "") or "").strip().upper()
     expiration = normalize_expiration_key(signal.get("expiration"))
-    strike = _safe_float(signal.get("strike"))
+    strike = safe_float(signal.get("strike"), default=None)
     if not ticker or option_type not in ("CALL", "PUT") or len(expiration) != 8 or strike is None:
         return None
     return (ticker, expiration, option_type, round(strike, 4))
@@ -135,7 +137,7 @@ def fill_identity(fill) -> tuple | None:
     ticker = str(fill.get("ticker", "") or "").strip().upper()
     option_type = str(fill.get("option_type", "") or "").strip().upper()
     expiration = normalize_expiration_key(fill.get("expiration"))
-    strike = _safe_float(fill.get("strike"))
+    strike = safe_float(fill.get("strike"), default=None)
     if not ticker or option_type not in ("CALL", "PUT") or len(expiration) != 8 or strike is None:
         return None
     return (ticker, expiration, option_type, round(strike, 4))
@@ -144,7 +146,7 @@ def fill_identity(fill) -> tuple | None:
 def quoted_credit_per_contract(signal):
     """The recommended executable credit: bid → limit target → premium."""
     for key in ("bid_premium_per_contract", "limit_target_per_contract", "premium_per_contract"):
-        value = _safe_float((signal or {}).get(key))
+        value = safe_float((signal or {}).get(key), default=None)
         if value is not None and value > 0:
             return value
     return None
@@ -169,7 +171,7 @@ def _capital_per_contract(signal, option_type: str, strike: float):
     """
     if option_type == "PUT":
         return capital_base_csp(strike, 1)
-    stock_price = _safe_float((signal or {}).get("stock_price"))
+    stock_price = safe_float((signal or {}).get("stock_price"), default=None)
     if stock_price is None or stock_price <= 0:
         return None
     return capital_base_cc(stock_price, 1)
@@ -324,13 +326,84 @@ def _select_candidate(candidates, fills) -> tuple[dict | None, str]:
     return None, "unattributed"
 
 
-def build_outcome_records(run_snapshots, option_fills, now=None) -> list[dict]:
+def _owner_link_index(taken_links) -> dict[tuple, list]:
+    """Map each fill identity an owner-recorded link can explain to its link(s).
+
+    A link explains the contract the owner stated they traded, otherwise the
+    recommended contract it names. Multiple links for one identity are kept —
+    ambiguity must be detected, never resolved by guessing.
+    """
+    index: dict[tuple, list] = {}
+    for link in taken_links or []:
+        if not isinstance(link, dict):
+            continue
+        traded = link.get("traded")
+        target = None
+        if isinstance(traded, dict) and all(
+            traded.get(field) not in (None, "") for field in ("ticker", "option_type", "expiration", "strike")
+        ):
+            target = signal_identity(traded)
+        if target is None:
+            recommendation = link.get("recommendation")
+            target = signal_identity(recommendation if isinstance(recommendation, dict) else {})
+        if target is None:
+            continue
+        index.setdefault(target, []).append(link)
+    return index
+
+
+def _best_owner_candidate(candidates) -> dict | None:
+    """Most evidenced stored recommendation for one identity (deterministic)."""
+    if not candidates:
+        return None
+    with_credit = [c for c in candidates if quoted_credit_per_contract(c.get("signal")) is not None]
+    return (with_credit or candidates)[0]
+
+
+def _resolve_owner_link(links, candidates_by_run_identity) -> tuple[dict | None, dict | None]:
+    """Resolve one unambiguous owner link to the recommendation it names.
+
+    Returns ``(link, meta)``. ``meta`` is None when the link cannot be resolved
+    to a stored recommendation (its run or contract is no longer in the
+    snapshot history) or when several links claim the same fill: the link is
+    still surfaced as context, but nothing is attributed.
+    """
+    if len(links) != 1:
+        return None, None
+    link = links[0]
+    recommendation = link.get("recommendation")
+    identity = signal_identity(recommendation) if isinstance(recommendation, dict) else None
+    run_id = str(link.get("run_id") or "")
+    if identity is None or not run_id:
+        return link, None
+    return link, _best_owner_candidate(candidates_by_run_identity.get((run_id, identity)))
+
+
+def _link_context(link) -> dict:
+    """Owner-link context attached to a record (invents nothing)."""
+    if not isinstance(link, dict):
+        return {}
+    recommendation = link.get("recommendation")
+    traded = link.get("traded")
+    return {
+        "run_id": str(link.get("run_id") or ""),
+        "recommendation": recommendation if isinstance(recommendation, dict) else {},
+        "traded": traded if isinstance(traded, dict) else None,
+        "traded_differs_from_recommendation": link.get("traded_differs_from_recommendation"),
+        "recorded_at": str(link.get("recorded_at") or ""),
+    }
+
+
+def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=None) -> list[dict]:
     """Join recommendation signals to option fills and attribute outcomes.
 
     ``run_snapshots``: published snapshot dicts (any order; recommendations
     kept at full cardinality per identity so attribution can detect
     ambiguity). ``option_fills``: fill rows for the same identity scope.
-    ``now``: as-of for open-lot capital days. Returns one record per unique
+    ``now``: as-of for open-lot capital days. ``taken_links``: owner-recorded
+    links stating which recommendation a manual trade came from; an
+    unambiguous link that resolves to a stored recommendation attributes the
+    traded contract to it (``owner-linked``). Returns one record per unique
     contract identity — the signal identity when a recommendation can be
     attributed, otherwise an unattributed evidence record for orphan fills
     (never dropped).
@@ -340,7 +413,11 @@ def build_outcome_records(run_snapshots, option_fills, now=None) -> list[dict]:
     # All candidate recommendations per identity (across signals + pick
     # lists), kept at full cardinality — never deduped early — because
     # attribution must detect ambiguity (multiple recs before the first fill).
+    # The same candidates are indexed by (run, identity) so an owner link can
+    # resolve the exact recommendation it names, including when the traded
+    # contract differs from the recommended one.
     signals_by_identity: dict[tuple, list] = {}
+    candidates_by_run_identity: dict[tuple, list] = {}
     snapshots = sorted(
         [s for s in run_snapshots if isinstance(s, dict)],
         key=lambda s: str((s.get("run") or {}).get("generated_at", "") or ""),
@@ -359,14 +436,14 @@ def build_outcome_records(run_snapshots, option_fills, now=None) -> list[dict]:
             identity = signal_identity(signal)
             if identity is None:
                 continue
-            signals_by_identity.setdefault(identity, []).append(
-                {
-                    "signal": signal,
-                    "preset_key": preset_key,
-                    "generated_at": generated_at,
-                    "run_id": run_id,
-                }
-            )
+            meta = {
+                "signal": signal,
+                "preset_key": preset_key,
+                "generated_at": generated_at,
+                "run_id": run_id,
+            }
+            signals_by_identity.setdefault(identity, []).append(meta)
+            candidates_by_run_identity.setdefault((run_id, identity), []).append(meta)
 
     # Option fills grouped by contract identity.
     fills_by_identity: dict[tuple, list] = {}
@@ -376,34 +453,48 @@ def build_outcome_records(run_snapshots, option_fills, now=None) -> list[dict]:
             continue
         fills_by_identity.setdefault(identity, []).append(fill)
 
+    links_by_identity = _owner_link_index(taken_links)
+
+    def _record_for(identity, fills, candidates) -> dict:
+        """Build one record, preferring explicit owner evidence over inference."""
+        ticker, expiration, option_type, strike = identity
+        links = links_by_identity.get(identity) or []
+        link, linked_meta = _resolve_owner_link(links, candidates_by_run_identity)
+        if linked_meta is not None:
+            record = _build_record(
+                linked_meta["signal"], linked_meta, ticker, expiration, option_type, strike, fills, now
+            )
+            record["attribution"] = ATTRIBUTION_OWNER_LINKED
+        else:
+            meta, attribution = _select_candidate(candidates, fills)
+            if attribution != "unattributed" and meta is not None:
+                record = _build_record(meta["signal"], meta, ticker, expiration, option_type, strike, fills, now)
+                record["attribution"] = attribution
+            else:
+                # Orphan/unattributed fills are still real transactions: surfaced
+                # as matched evidence only, never silently dropped, never given a
+                # fabricated quoted price or a recommendation identity.
+                empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
+                record = _build_record(None, empty_meta, ticker, expiration, option_type, strike, fills, now)
+                record["signal_type"] = "unmatched"
+                record["attribution"] = "unattributed"
+        if link is not None:
+            # The owner's claim is surfaced even when it could not be resolved to
+            # a stored recommendation — visible, never silently promoted.
+            record["owner_link"] = _link_context(link)
+        elif len(links) > 1:
+            record["owner_link_conflict"] = sorted(str(entry.get("run_id") or "") for entry in links)
+        return record
+
     records = []
     for identity, candidates in list(signals_by_identity.items()):
-        ticker, expiration, option_type, strike = identity
-        fills = fills_by_identity.pop(identity, [])
-        meta, attribution = _select_candidate(candidates, fills)
-        if attribution != "unattributed" and meta is not None:
-            record = _build_record(meta["signal"], meta, ticker, expiration, option_type, strike, fills, now)
-            record["attribution"] = attribution
-        else:
-            # Orphan/unattributed fills are still real transactions: surfaced
-            # as matched evidence only, never silently dropped, never given a
-            # fabricated quoted price or a recommendation identity.
-            empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
-            record = _build_record(None, empty_meta, ticker, expiration, option_type, strike, fills, now)
-            record["signal_type"] = "unmatched"
-            record["attribution"] = "unattributed"
-        records.append(record)
+        records.append(_record_for(identity, fills_by_identity.pop(identity, []), candidates))
 
     # Fills with no stored signal at all are still real transactions; they are
     # surfaced as unattributed evidence, never silently dropped and never
-    # given a fabricated quoted price.
+    # given a fabricated quoted price. An owner link may still attribute them.
     for identity, fills in fills_by_identity.items():
-        ticker, expiration, option_type, strike = identity
-        empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
-        record = _build_record(None, empty_meta, ticker, expiration, option_type, strike, fills, now)
-        record["signal_type"] = "unmatched"
-        record["attribution"] = "unattributed"
-        records.append(record)
+        records.append(_record_for(identity, fills, []))
 
     records.sort(key=lambda r: (str(r.get("first_recommended_at", "") or ""), r["identity"]))
     return records
@@ -529,6 +620,9 @@ def aggregate_group(records) -> dict:
     Counts follow realization:
     - ``measured_count`` = records with any REALIZED net P&L (closed or
       partially closed option legs);
+    - ``owner_linked_count`` = records an owner-recorded taken link attributes
+      to a recommendation (explicit owner evidence, whatever the realization
+      state);
     - ``unknown_count`` = records with fill evidence but nothing realized
       (fully open obligations, or unresolved fees);
     - ``pending_count`` = signals still waiting for fill evidence.
@@ -556,6 +650,7 @@ def aggregate_group(records) -> dict:
 
     fees_known_sum = sum(r.get("fees_total") or 0.0 for r in evidenced if r.get("fees_known"))
     fees_unknown_count = sum(1 for r in evidenced if not r.get("fees_known"))
+    owner_linked = [r for r in records if r.get("attribution") == ATTRIBUTION_OWNER_LINKED]
 
     return {
         "sample_size": sample_size,
@@ -563,6 +658,7 @@ def aggregate_group(records) -> dict:
         "pending_count": len(pending),
         "measured_count": len(realized),
         "unknown_count": len(unknown),
+        "owner_linked_count": len(owner_linked),
         "coverage_pct": round(len(evidenced) * 100.0 / sample_size, 1) if sample_size else 0.0,
         "net_dollars": owner["net_dollars"],
         "capital_days": owner["capital_days"],
@@ -665,8 +761,8 @@ class OutcomeService:
     ) -> dict:
         """Build the outcome summary payload for the current identity.
 
-        Reads local SQLite only (fills + published run snapshots); never
-        gates on live OpenD and never touches the ranking path.
+        Reads local SQLite only (fills + published run snapshots + owner-taken
+        links); never gates on live OpenD and never touches the ranking path.
         """
         fills = self._db.get_fills(
             env=env,
@@ -675,7 +771,8 @@ class OutcomeService:
             limit=max(1, int(fill_limit)),
         )
         snapshots = self._db.get_run_snapshots(env=env, account_id=account_id, limit=max(1, int(snapshot_limit)))
-        records = build_outcome_records(snapshots, fills)
+        taken_links = read_taken_links(self._db, env, account_id)
+        records = build_outcome_records(snapshots, fills, taken_links=taken_links)
         records = filter_records(
             records, ticker=ticker, preset=preset, event_tier=event_tier, dte_bucket_filter=dte_bucket
         )
@@ -685,6 +782,7 @@ class OutcomeService:
 
         return {
             "generated_at": datetime.now().isoformat(),
+            "taken_link_count": len(taken_links),
             "filters": {
                 "ticker": ticker or "",
                 "preset": preset or "",

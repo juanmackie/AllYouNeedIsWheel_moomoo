@@ -19,7 +19,8 @@ import logging
 from datetime import datetime, timedelta
 
 from core.connection_constants import _infer_security_type_from_code, _parse_option_code_metadata
-from core.position_utils import parse_moomoo_symbol, parse_position_qty
+from core.ticker_utils import parse_moomoo_symbol
+from core.utils import parse_position_qty
 
 logger = logging.getLogger("api.services.fills")
 

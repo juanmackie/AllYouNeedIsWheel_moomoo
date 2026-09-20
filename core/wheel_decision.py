@@ -21,10 +21,6 @@ from core.growth_mode import (
 )
 from core.scoring_factors import (
     ACCOUNT_VALUE_MIN,
-    COMPOSITE_W_CAPITAL,
-    COMPOSITE_W_DELTA,
-    COMPOSITE_W_EVENT,
-    COMPOSITE_W_LIQUIDITY,
     PUT_MAX_LOSS_ESTIMATE_PCT,
     STALE_QUOTE_THRESHOLD,
     _calculate_mid_price,
@@ -33,18 +29,14 @@ from core.scoring_factors import (
     _compute_profit_target_progress,
     _compute_recommended_contracts,
     _compute_roll_pressure,
-    _compute_shared_subscores,
     _compute_size_fit,
-    _score_positive_metric,
-    _score_proximity,
     capital_velocity_per_day,
     classify_event_tier,
     is_crossed_market,
-    iv_environment_multiplier,
     premium_velocity_per_day,
     quote_is_stale,
 )
-from core.utils import is_market_open
+from core.utils import is_market_open, safe_float
 from core.utils import normalize_expiration as _normalize_expiration
 
 logger = logging.getLogger(__name__)
@@ -94,26 +86,7 @@ class WheelDecision:
     volume: int = 0
     spread_pct: float = 0.0
 
-    # -- Sub-scores (0-100) -------------------------------------------------
-    delta_score: float = 0.0
-    dte_score: float = 0.0
-    oi_score: float = 0.0
-    volume_score: float = 0.0
-    spread_score: float = 0.0
-    liquidity_score: float = 0.0
-    iv_adjusted_score: float = 0.0
-    tdr_score: float = 0.0  # theta/delta ratio score
-    ev_score: float = 0.0  # expected value score
-    iv_env_score: float = 0.0  # IV environment score
-    otm_score: float = 0.0
-    upside_score: float = 0.0  # CALL only
-    buffer_score: float = 0.0  # PUT only
-    cost_basis_score: float = 0.0  # CALL only
-    capital_fit: float = 0.0  # PUT only
-    ce_score: float = 0.0  # PUT: capital efficiency
-
     # -- Composite ----------------------------------------------------------
-    contract_score: float = 0.0  # Final composite score (0-~200+)
     wheel_rank: int = 0  # Rank among peer candidates
 
     # -- Position-specific (for open positions) -----------------------------
@@ -143,8 +116,6 @@ class WheelDecision:
     earnings_adjustment: float = 0.0  # % score adjustment
     earnings_date: Optional[str] = None
     days_to_earnings: Optional[int] = None
-    vix_regime: str = "normal"
-    vix_level: float = 20.0
     profile_type: str = "monthly"
 
     # -- Quote quality ------------------------------------------------------
@@ -186,7 +157,6 @@ class WheelDecision:
     generated_at: Optional[str] = None
 
     # -- Score breakdown (for display) --------------------------------------
-    score_details: dict = field(default_factory=dict)
 
     # -- Expected value -----------------------------------------------------
     expected_value: float = 0.0
@@ -247,16 +217,6 @@ def _create_failed_decision(
     )
 
 
-def _coerce_optional_float(value):
-    """Return a float when possible, otherwise None."""
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _normalize_source_value(value: object, fallback: str) -> str:
     """Return a normalized source label with a fallback when the value is missing."""
     if isinstance(value, str):
@@ -273,10 +233,7 @@ def _normalize_source_value(value: object, fallback: str) -> str:
 __all__ = [
     "WheelDecision",
     "_clamp",
-    "_score_proximity",
-    "_score_positive_metric",
     "_calculate_mid_price",
-    "_compute_shared_subscores",
     "_compute_roll_pressure",
     "_compute_profit_target_progress",
     "_compute_size_fit",
@@ -334,8 +291,8 @@ def score_contract(
         return _create_failed_decision(ticker, option_type, strike, expiration, "Expired or no time value")
 
     if option_type == "PUT":
-        min_dte = _coerce_optional_float(profile.get("min_dte"))
-        max_dte = _coerce_optional_float(profile.get("max_dte"))
+        min_dte = safe_float(profile.get("min_dte"), default=None)
+        max_dte = safe_float(profile.get("max_dte"), default=None)
         if min_dte is not None and dte < min_dte:
             return _create_failed_decision(
                 ticker,
@@ -490,7 +447,6 @@ def score_contract(
         portfolio_context.get("broker_buying_power", cash_available_for_csp) or cash_available_for_csp
     )
     account_value = portfolio_context.get("account_value", cash_balance)
-    vix_regime = portfolio_context.get("vix_regime")
 
     # -- Check for external fallback data ------------------------------
     price_source = _normalize_source_value(option.get("price_source"), "")
@@ -544,8 +500,6 @@ def score_contract(
         earnings_adjustment=earnings_adjustment,
         earnings_date=earnings_info.get("earnings_date"),
         days_to_earnings=earnings_info.get("days_to_earnings"),
-        vix_regime=vix_regime.get("regime", "normal") if vix_regime else "normal",
-        vix_level=vix_regime.get("vix", 20.0) if vix_regime else 20.0,
         profile_type=profile.get("profile_type", "monthly"),
         # Data provenance
         price_source=price_source,
@@ -583,7 +537,6 @@ def score_contract(
     decision.annualized_return = round(annualized_return_raw, 2)
     decision.capital_velocity_per_day = round(capital_velocity_per_day(premium_per_contract, capital_at_risk, dte), 8)
     decision.iv_adjusted_return = round(iv_adjusted_return, 2)
-    decision.iv_adjusted_score = _score_positive_metric(iv_adjusted_return, profile.get("target_iv_adjusted", 50)) * 100
 
     # -- Expected value -----------------------------------------------------
     abs_delta = abs(delta)
@@ -598,15 +551,7 @@ def score_contract(
         expected_value = (pop * premium_per_contract) - ((1 - pop) * max_loss_estimate)
     decision.expected_value = round(expected_value, 2)
     decision.pop = round(pop, 4)
-    decision.ev_score = _clamp(expected_value / max(premium_per_contract, 0.01)) * 100
-
-    # -- Shared sub-scores --------------------------------------------------
-    _compute_shared_subscores(decision, profile)
-
     # -- Hard blocker checks ------------------------------------------------
-
-    profile_type = str(profile.get("profile_type", "") or "").lower()
-    is_long_research = research_only_mode and profile_type in {"long_call", "long_put"}
 
     if option_type == "CALL":
         if stock_price <= 0 or strike <= stock_price:
@@ -614,57 +559,14 @@ def score_contract(
                 ticker, "CALL", strike, expiration, f"Strike {strike} not above stock price {stock_price}"
             )
         max_contracts = max(int(shares_owned // 100), 0)
-        if max_contracts < 1 and not is_long_research:
+        if max_contracts < 1:
             return _create_failed_decision(ticker, "CALL", strike, expiration, "No covered shares available")
         decision.max_contracts = max_contracts
 
         otm_pct = ((strike - stock_price) / stock_price) * 100
         if_called_return = (((strike - stock_price) + bid) / stock_price) * 100 if stock_price > 0 else 0
-        cost_basis_score = (
-            1.0 if avg_cost <= 0 or strike >= avg_cost else _clamp(1 - ((avg_cost - strike) / avg_cost) * 4)
-        )
-
         decision.otm_pct = round(otm_pct, 2)
         decision.if_called_return = round(if_called_return, 2)
-        decision.cost_basis_score = round(cost_basis_score * 100, 1)
-        decision.otm_score = (
-            _score_proximity(
-                otm_pct, profile.get("default_otm_pct", 10), max(profile.get("default_otm_pct", 10) * 0.75, 6)
-            )
-            * 100
-        )
-        decision.upside_score = _score_positive_metric(if_called_return, 12) * 100
-
-        # Capital efficiency for covered calls — how much premium per dollar of account equity
-        capital_efficiency = 0.0
-        ce_score_val = 0.0
-        if account_value > 0:
-            call_capital = shares_owned * stock_price
-            if call_capital > 0:
-                capital_efficiency = annualized_return_raw / (call_capital / account_value)
-                ce_score_val = (
-                    _score_positive_metric(capital_efficiency, profile.get("target_capital_efficiency", 100)) * 100
-                )
-        decision.capital_efficiency = round(capital_efficiency, 1)
-        decision.ce_score = round(ce_score_val, 1)
-
-        # Earnings risk score from earnings_adjustment (e.g., -30 → 70, 0 → 100)
-        earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
-
-        # Compact secondary score: capital efficiency, liquidity, delta fit,
-        # and event safety explain quality without competing with rank_key.
-        base_score = (
-            decision.ce_score * COMPOSITE_W_CAPITAL
-            + decision.liquidity_score * COMPOSITE_W_LIQUIDITY
-            + decision.delta_score * COMPOSITE_W_DELTA
-            + earnings_risk_score * COMPOSITE_W_EVENT
-        )
-
-        iv_adjusted_score_final = base_score * iv_environment_multiplier(iv_status_str) * (1 + iv_env_adjustment / 100)
-        score = iv_adjusted_score_final
-        score *= 0.65 + (0.35 * cost_basis_score)
-
-        decision.contract_score = round(_clamp(score / 100) * 100, 2)
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
 
         # Warnings
@@ -686,11 +588,6 @@ def score_contract(
             decision.warnings.append(f"Earnings in {earnings_info.get('days_to_earnings')}d - high assignment risk")
         elif earnings_info.get("warning_level") == "soon":
             decision.warnings.append(f"Earnings in {earnings_info.get('days_to_earnings')} days")
-        if vix_regime:
-            if vix_regime.get("regime") == "complacency":
-                decision.warnings.append(f"Low VIX ({vix_regime['vix']}) - premiums compressed")
-            elif vix_regime.get("regime") == "fear":
-                decision.warnings.append(f"High VIX ({vix_regime['vix']}) - elevated risk, wider stops")
 
         # Rationale
         decision.rationale = [
@@ -699,29 +596,8 @@ def score_contract(
             f"{otm_pct:.1f}% OTM, {abs_delta:.2f} delta | {open_interest} OI / {volume} vol",
         ]
 
-        decision.score_details = {
-            "annualized": round(_score_positive_metric(annualized_return_raw, 24) * 100, 1),
-            "upside": decision.upside_score,
-            "liquidity": decision.liquidity_score,
-            "delta_fit": decision.delta_score,
-            "otm_fit": decision.otm_score,
-            "composite": {
-                "capital_efficiency": decision.ce_score,
-                "liquidity": decision.liquidity_score,
-                "delta_fit": decision.delta_score,
-                "event_safety": earnings_risk_score,
-            },
-            "cost_basis_fit": decision.cost_basis_score,
-            "iv_adjusted": decision.iv_adjusted_score,
-            "theta_delta": decision.tdr_score,
-            "expected_value": decision.ev_score,
-            "iv_environment": _clamp((iv_env_adjustment + 20) / 40) * 100,
-        }
-
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
         decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context, profile)
-        if is_long_research:
-            decision.warnings.append("Research-only long call signal - user executes manually")
 
     elif option_type == "PUT":
         if stock_price <= 0 or strike >= stock_price:
@@ -730,8 +606,8 @@ def score_contract(
             )
 
         otm_pct = ((stock_price - strike) / stock_price) * 100
-        min_otm_pct = _coerce_optional_float(profile.get("min_otm_pct"))
-        max_otm_pct = _coerce_optional_float(profile.get("max_otm_pct"))
+        min_otm_pct = safe_float(profile.get("min_otm_pct"), default=None)
+        max_otm_pct = safe_float(profile.get("max_otm_pct"), default=None)
         if min_otm_pct is not None and otm_pct < min_otm_pct:
             return _create_failed_decision(
                 ticker,
@@ -768,48 +644,17 @@ def score_contract(
 
         breakeven = strike - bid
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
-        capital_fit = 0.0 if cash_available_for_csp <= 0 else _clamp(cash_available_for_csp / cash_required)
-
         capital_efficiency = 0.0
-        ce_score = 0.0
         account_value = max(account_value, 1)
         if account_value > 0 and cash_required > 0:
             capital_efficiency = annualized_return_raw / (cash_required / account_value)
-            ce_score = _score_positive_metric(capital_efficiency, profile.get("target_capital_efficiency", 100)) * 100
 
         decision.otm_pct = round(otm_pct, 2)
         decision.breakeven = round(breakeven, 2)
         decision.breakeven_buffer_pct = round(breakeven_buffer_pct, 2)
         decision.cash_required = round(cash_required, 2)
         decision.max_contracts = max(int(cash_available_for_csp // cash_required), 0)
-        decision.capital_fit = round(capital_fit * 100, 1)
-        decision.ce_score = round(ce_score, 1)
         decision.capital_efficiency = round(capital_efficiency, 1)
-        decision.otm_score = (
-            _score_proximity(
-                otm_pct, profile.get("default_otm_pct", 10), max(profile.get("default_otm_pct", 10) * 0.75, 6)
-            )
-            * 100
-        )
-        decision.buffer_score = _score_positive_metric(breakeven_buffer_pct, max(10, 8)) * 100
-
-        # Earnings risk score from earnings_adjustment (e.g., -30 → 70, 0 → 100)
-        earnings_risk_score = _clamp((100 + earnings_adjustment) / 100) * 100
-
-        # Compact secondary score: capital efficiency, liquidity, delta fit,
-        # and event safety explain quality without competing with rank_key.
-        base_score = (
-            decision.ce_score * COMPOSITE_W_CAPITAL
-            + decision.liquidity_score * COMPOSITE_W_LIQUIDITY
-            + decision.delta_score * COMPOSITE_W_DELTA
-            + earnings_risk_score * COMPOSITE_W_EVENT
-        )
-
-        iv_adjusted_score_final = base_score * iv_environment_multiplier(iv_status_str) * (1 + iv_env_adjustment / 100)
-        score = iv_adjusted_score_final
-        score *= 0.75 + (0.25 * capital_fit)
-
-        decision.contract_score = round(_clamp(score / 100) * 100, 2)
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
 
         # Warnings
@@ -841,30 +686,8 @@ def score_contract(
             f"{otm_pct:.1f}% OTM, {breakeven_buffer_pct:.1f}% buffer | Profile: {profile.get('profile_type', 'monthly')}",
         ]
 
-        decision.score_details = {
-            "annualized": round(_score_positive_metric(annualized_return_raw, 18) * 100, 1),
-            "buffer": decision.buffer_score,
-            "liquidity": decision.liquidity_score,
-            "delta_fit": decision.delta_score,
-            "otm_fit": decision.otm_score,
-            "capital_fit": decision.capital_fit,
-            "iv_adjusted": decision.iv_adjusted_score,
-            "theta_delta": decision.tdr_score,
-            "expected_value": decision.ev_score,
-            "capital_efficiency": decision.ce_score,
-            "iv_environment": _clamp((iv_env_adjustment + 20) / 40) * 100,
-            "composite": {
-                "capital_efficiency": decision.ce_score,
-                "liquidity": decision.liquidity_score,
-                "delta_fit": decision.delta_score,
-                "event_safety": earnings_risk_score,
-            },
-        }
-
         decision.expected_move_buffer = _compute_expected_move_buffer(decision)
         decision.recommended_contracts = _compute_recommended_contracts(decision, portfolio_context, profile)
-        if is_long_research:
-            decision.warnings.append("Research-only long put signal - user executes manually")
 
     else:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Unknown option type")
@@ -909,24 +732,14 @@ def score_contract(
         ticker=ticker,
     )
 
-    # Risk-budget gate: penalize trade scores that consume too much drawdown budget.
-    # Trades using >25% of the budget are progressively penalized so the
-    # secondary quality score remains inside the account's risk envelope.
-    _rbp = decision.risk_budget_used_pct
-    if _rbp > 25:
-        _penalty = max(0.0, 1.0 - ((_rbp - 25) / 150))
-        decision.contract_score = round(decision.contract_score * _penalty, 2)
-
     if logger.isEnabledFor(logging.INFO):
         logger.info(
-            "score_contract ticker=%s type=%s strike=%.2f exp=%s dte=%d score=%.1f "
-            "premium=%.2f delta=%.3f iv=%.2f blockers=%s",
+            "score_contract ticker=%s type=%s strike=%.2f exp=%s dte=%d premium=%.2f delta=%.3f iv=%.2f blockers=%s",
             ticker,
             option_type,
             strike,
             expiration,
             dte,
-            decision.contract_score,
             premium_per_contract,
             delta,
             implied_volatility,
@@ -1049,13 +862,6 @@ def _apply_growth_scoring(
     )
 
     rationale_parts = []
-    if decision.contract_score >= 70:
-        rationale_parts.append("Strong secondary qualification")
-    elif decision.contract_score >= 50:
-        rationale_parts.append("Moderate secondary qualification")
-    else:
-        rationale_parts.append("Limited secondary qualification")
-
     if decision.risk_budget_used_pct > 0:
         rationale_parts.append(f"Uses {decision.risk_budget_used_pct:.0f}% of drawdown budget")
     if decision.covered_call_intent:

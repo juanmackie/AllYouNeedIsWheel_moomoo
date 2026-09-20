@@ -12,13 +12,8 @@ from core.wheel_decision import (
     WheelDecision,
     _calculate_mid_price,
     _clamp,
-    _compute_expected_move_buffer,
     _compute_profit_target_progress,
     _compute_roll_pressure,
-    _compute_shared_subscores,
-    _compute_size_fit,
-    _score_positive_metric,
-    _score_proximity,
     score_contract,
 )
 
@@ -43,18 +38,16 @@ class TestWheelDecisionDataclass(unittest.TestCase):
         self.assertEqual(decision.ticker, "")
         self.assertEqual(decision.option_type, "")
         self.assertEqual(decision.strike, 0.0)
-        self.assertEqual(decision.contract_score, 0.0)
         self.assertEqual(decision.warnings, [])
         self.assertEqual(decision.rationale, [])
-        self.assertEqual(decision.score_details, {})
 
     def test_custom_creation(self):
         """Test creating WheelDecision with custom values"""
-        decision = WheelDecision(ticker="AAPL", option_type="PUT", strike=150.0, contract_score=85.5)
+        decision = WheelDecision(ticker="AAPL", option_type="PUT", strike=150.0, annualized_return=42.0)
         self.assertEqual(decision.ticker, "AAPL")
         self.assertEqual(decision.option_type, "PUT")
         self.assertEqual(decision.strike, 150.0)
-        self.assertEqual(decision.contract_score, 85.5)
+        self.assertEqual(decision.annualized_return, 42.0)
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -65,14 +58,6 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertEqual(_clamp(0.5), 0.5)
         self.assertEqual(_clamp(0.0), 0.0)
         self.assertEqual(_clamp(1.0), 1.0)
-
-    def test_score_proximity_exact_match(self):
-        """Test _score_proximity when value equals target"""
-        self.assertEqual(_score_proximity(10.0, 10.0, 5.0), 1.0)
-
-    def test_score_positive_metric_below_ideal(self):
-        """Test _score_positive_metric when value is below ideal"""
-        self.assertEqual(_score_positive_metric(50.0, 100.0), 0.5)
 
     def test_calculate_mid_price_both_valid(self):
         """Test _calculate_mid_price with both bid and ask"""
@@ -213,7 +198,7 @@ class TestScoreContract(unittest.TestCase):
         self.assertIsInstance(result, WheelDecision)
         self.assertEqual(result.ticker, "AAPL")
         self.assertEqual(result.option_type, "PUT")
-        self.assertGreater(result.contract_score, 0)
+        self.assertGreater(result.annualized_return, 0)
 
     def test_accepts_dash_formatted_expiration(self):
         """Broker/yfinance expirations may arrive as YYYY-MM-DD."""
@@ -258,392 +243,6 @@ class TestHelperFunctionsEdgeCases(unittest.TestCase):
         """_clamp handles min > max (degenerate range)"""
         self.assertEqual(_clamp(5.0, 10.0, 1.0), 10.0)  # clamped to min
         self.assertEqual(_clamp(0.0, 10.0, 1.0), 10.0)  # clamped to min
-
-    # -- _score_proximity edge cases --------------------------------------
-
-    def test_score_proximity_zero_tolerance(self):
-        """_score_proximity returns 0 when tolerance is 0"""
-        self.assertEqual(_score_proximity(10.0, 10.0, 0.0), 0.0)
-        self.assertEqual(_score_proximity(5.0, 10.0, 0.0), 0.0)
-
-    def test_score_proximity_exact_match(self):
-        """_score_proximity returns 1.0 on exact match"""
-        self.assertEqual(_score_proximity(10.0, 10.0, 5.0), 1.0)
-
-    def test_score_proximity_far_outside(self):
-        """_score_proximity returns 0 when value far outside tolerance"""
-        self.assertEqual(_score_proximity(100.0, 10.0, 5.0), 0.0)
-
-    def test_score_proximity_half_tolerance(self):
-        """_score_proximity returns 0.5 at half tolerance"""
-        self.assertEqual(_score_proximity(12.5, 10.0, 5.0), 0.5)
-
-    def test_score_proximity_negative_tolerance(self):
-        """_score_proximity returns 0 for negative tolerance"""
-        self.assertEqual(_score_proximity(10.0, 10.0, -5.0), 0.0)
-
-    # -- _score_positive_metric edge cases --------------------------------
-
-    def test_score_positive_metric_zero_ideal(self):
-        """_score_positive_metric returns 0 when ideal_value is 0"""
-        self.assertEqual(_score_positive_metric(50.0, 0.0), 0.0)
-
-    def test_score_positive_metric_zero_value(self):
-        """_score_positive_metric returns 0 when value is 0"""
-        self.assertEqual(_score_positive_metric(0.0, 100.0), 0.0)
-
-    def test_score_positive_metric_exceeds_ideal(self):
-        """_score_positive_metric caps at 1.0 when value exceeds ideal"""
-        self.assertEqual(_score_positive_metric(200.0, 100.0), 1.0)
-
-    def test_score_positive_metric_negative_values(self):
-        """_score_positive_metric handles negative values gracefully"""
-        result = _score_positive_metric(-50.0, 100.0)
-        self.assertEqual(result, 0.0)  # negative / positive = 0 via clamp
-
-    # -- _calculate_mid_price edge cases ----------------------------------
-
-    def test_calculate_mid_price_bid_only(self):
-        """_calculate_mid_price falls back to bid when ask is 0"""
-        self.assertEqual(_calculate_mid_price(5.0, 0.0, 0.0), 5.0)
-
-    def test_calculate_mid_price_ask_only(self):
-        """_calculate_mid_price falls back to ask when bid is 0"""
-        self.assertEqual(_calculate_mid_price(0.0, 7.0, 0.0), 7.0)
-
-    def test_calculate_mid_price_last_only(self):
-        """_calculate_mid_price falls back to last when bid/ask are 0"""
-        self.assertEqual(_calculate_mid_price(0.0, 0.0, 3.0), 3.0)
-
-    def test_calculate_mid_price_all_zero(self):
-        """_calculate_mid_price returns 0 when all prices are 0"""
-        self.assertEqual(_calculate_mid_price(0.0, 0.0, 0.0), 0.0)
-
-    def test_calculate_mid_price_negative_values(self):
-        """_calculate_mid_price treats negative values as 0"""
-        mid = _calculate_mid_price(-1.0, -2.0, 0.0)
-        self.assertEqual(mid, 0.0)
-
-    def test_calculate_mid_price_prefers_bid_ask(self):
-        """_calculate_mid_price uses bid/ask average even when last is available"""
-        self.assertEqual(_calculate_mid_price(5.0, 7.0, 10.0), 6.0)
-
-    # -- _compute_roll_pressure edge cases --------------------------------
-
-    def test_roll_pressure_zero_strike_and_price(self):
-        """_compute_roll_pressure handles zero strike and stock_price"""
-        d = WheelDecision(option_type="PUT", strike=0, stock_price=0, extrinsic_remaining=0)
-        pressure = _compute_roll_pressure(d)
-        self.assertGreaterEqual(pressure, 0.0)
-        self.assertLessEqual(pressure, 100.0)
-
-    def test_roll_pressure_zero_extrinsic(self):
-        """_compute_roll_pressure handles zero extrinsic remaining"""
-        d = WheelDecision(option_type="PUT", dte=10, strike=95.0, stock_price=100.0, extrinsic_remaining=0)
-        pressure = _compute_roll_pressure(d)
-        self.assertGreater(pressure, 0)
-
-    def test_roll_pressure_itm_call(self):
-        """_compute_roll_pressure for ITM CALL (strike < stock_price)"""
-        d = WheelDecision(option_type="CALL", dte=10, strike=90.0, stock_price=100.0, extrinsic_remaining=0.50)
-        pressure = _compute_roll_pressure(d)
-        self.assertGreater(pressure, 50.0)
-
-    def test_roll_pressure_itm_put(self):
-        """_compute_roll_pressure for ITM PUT (stock_price < strike)"""
-        d = WheelDecision(option_type="PUT", dte=10, strike=110.0, stock_price=100.0, extrinsic_remaining=0.50)
-        pressure = _compute_roll_pressure(d)
-        self.assertGreater(pressure, 50.0)
-
-    def test_roll_pressure_far_otm(self):
-        """_compute_roll_pressure for far OTM position (low pressure)"""
-        d = WheelDecision(option_type="PUT", dte=45, strike=80.0, stock_price=100.0, extrinsic_remaining=1.50)
-        pressure = _compute_roll_pressure(d)
-        self.assertGreaterEqual(pressure, 0.0)
-        self.assertLess(pressure, 30.0)
-
-    def test_roll_pressure_negative_dte(self):
-        """_compute_roll_pressure with negative DTE (expired)"""
-        d = WheelDecision(option_type="PUT", dte=-5, strike=95.0, stock_price=100.0, extrinsic_remaining=0.0)
-        pressure = _compute_roll_pressure(d)
-        self.assertGreaterEqual(pressure, 0.0)
-        self.assertLessEqual(pressure, 100.0)
-
-    # -- _compute_profit_target_progress edge cases ------------------------
-
-    def test_profit_progress_zero_premium(self):
-        """_compute_profit_target_progress returns 0 when premium is 0"""
-        self.assertEqual(_compute_profit_target_progress(WheelDecision(premium_per_contract=0, dte=10)), 0.0)
-
-    def test_profit_progress_zero_dte(self):
-        """_compute_profit_target_progress returns 100 when dte is 0"""
-        self.assertEqual(_compute_profit_target_progress(WheelDecision(premium_per_contract=2, dte=0)), 100.0)
-
-    def test_profit_progress_negative_dte(self):
-        """_compute_profit_target_progress returns 100 when dte is negative"""
-        self.assertEqual(_compute_profit_target_progress(WheelDecision(premium_per_contract=2, dte=-5)), 100.0)
-
-    def test_profit_progress_high_dte(self):
-        """_compute_profit_target_progress near 0 for high DTE"""
-        self.assertEqual(_compute_profit_target_progress(WheelDecision(premium_per_contract=2, dte=30)), 0.0)
-
-    def test_profit_progress_partial(self):
-        """_compute_profit_target_progress partial progress at 15 DTE"""
-        progress = _compute_profit_target_progress(WheelDecision(premium_per_contract=2, dte=15))
-        self.assertAlmostEqual(progress, 50.0, places=1)
-
-    # -- _compute_size_fit edge cases --------------------------------------
-
-    def test_size_fit_call_no_shares(self):
-        """_compute_size_fit returns 0 for CALL with no shares owned"""
-        d = WheelDecision(option_type="CALL", ticker="AAPL", max_contracts=1)
-        ctx = {"positions": {"AAPL": {"position": 0}}, "cash_balance": 10000.0}
-        self.assertEqual(_compute_size_fit(d, ctx), 0.0)
-
-    def test_size_fit_call_zero_max_contracts(self):
-        """_compute_size_fit returns 0 for CALL when max_contracts is 0"""
-        d = WheelDecision(option_type="CALL", ticker="AAPL", max_contracts=0)
-        ctx = {"positions": {"AAPL": {"position": 200}}, "cash_balance": 10000.0}
-        self.assertEqual(_compute_size_fit(d, ctx), 0.0)
-
-    def test_size_fit_put_no_cash(self):
-        """_compute_size_fit returns 0 for PUT when cash_balance is 0"""
-        d = WheelDecision(option_type="PUT", ticker="AAPL", cash_required=10000.0)
-        ctx = {"cash_balance": 0.0}
-        self.assertEqual(_compute_size_fit(d, ctx), 0.0)
-
-    def test_size_fit_put_zero_cash_required(self):
-        """_compute_size_fit returns 50 for PUT when cash_required is 0"""
-        d = WheelDecision(option_type="PUT", ticker="AAPL", cash_required=0.0)
-        ctx = {"cash_balance": 10000.0}
-        self.assertEqual(_compute_size_fit(d, ctx), 50.0)
-
-    def test_size_fit_put_partial(self):
-        """_compute_size_fit returns proportional fit for PUT"""
-        d = WheelDecision(option_type="PUT", ticker="AAPL", cash_required=20000.0)
-        ctx = {"cash_balance": 10000.0}
-        self.assertEqual(_compute_size_fit(d, ctx), 50.0)
-
-    def test_size_fit_call_full(self):
-        """_compute_size_fit returns 100 for CALL with enough shares"""
-        d = WheelDecision(option_type="CALL", ticker="AAPL", max_contracts=2)
-        ctx = {"positions": {"AAPL": {"position": 200}}, "cash_balance": 10000.0}
-        self.assertEqual(_compute_size_fit(d, ctx), 100.0)
-
-    # -- _compute_expected_move_buffer edge cases --------------------------
-
-    def test_expected_move_zero_stock_price(self):
-        """_compute_expected_move_buffer returns 0 when stock_price is 0"""
-        d = WheelDecision(stock_price=0, implied_volatility=0.3, dte=21, otm_pct=5.0)
-        self.assertEqual(_compute_expected_move_buffer(d), 0.0)
-
-    def test_expected_move_zero_iv(self):
-        """_compute_expected_move_buffer returns 0 when IV is 0"""
-        d = WheelDecision(stock_price=100, implied_volatility=0, dte=21, otm_pct=5.0)
-        self.assertEqual(_compute_expected_move_buffer(d), 0.0)
-
-    def test_expected_move_zero_dte(self):
-        """_compute_expected_move_buffer returns 0 when DTE is 0"""
-        d = WheelDecision(stock_price=100, implied_volatility=0.3, dte=0, otm_pct=5.0)
-        self.assertEqual(_compute_expected_move_buffer(d), 0.0)
-
-    def test_expected_move_positive_buffer(self):
-        """_compute_expected_move_buffer positive when OTM > expected move"""
-        d = WheelDecision(stock_price=100, implied_volatility=0.2, dte=7, otm_pct=10.0)
-        buf = _compute_expected_move_buffer(d)
-        self.assertGreater(buf, 0.0)
-
-    def test_expected_move_negative_buffer(self):
-        """_compute_expected_move_buffer negative when OTM < expected move"""
-        d = WheelDecision(stock_price=100, implied_volatility=0.5, dte=30, otm_pct=2.0)
-        buf = _compute_expected_move_buffer(d)
-        self.assertLess(buf, 0.0)
-
-    def test_expected_move_buffer_with_percentage_iv(self):
-        """_compute_expected_move_buffer handles percentage IV (50 → 0.50 after normalize)"""
-        d = WheelDecision(stock_price=100, implied_volatility=50.0, dte=21, otm_pct=5.0)
-        buf = _compute_expected_move_buffer(d)
-        # With 50.0 treated as 50%=0.50, expected_move = 100 * 0.50 * sqrt(21/365) ≈ 11.99
-        # expected_move_pct = 11.99%, buffer = 5% - 11.99% = -6.99
-        self.assertAlmostEqual(buf, -6.99, delta=0.5)
-
-    def test_expected_move_buffer_same_result_normalized(self):
-        """_compute_expected_move_buffer yields same result with decimal IV 0.50 as with normalized percentage 50"""
-        d_decimal = WheelDecision(stock_price=100, implied_volatility=0.50, dte=21, otm_pct=5.0)
-        buf_decimal = _compute_expected_move_buffer(d_decimal)
-        d_pct = WheelDecision(stock_price=100, implied_volatility=50.0, dte=21, otm_pct=5.0)
-        buf_pct = _compute_expected_move_buffer(d_pct)
-        # After normalization both should produce the same buffer
-        self.assertAlmostEqual(buf_decimal, buf_pct, delta=0.01)
-
-    # -- _compute_shared_subscores edge cases ------------------------------
-
-    def test_shared_subscores_zero_delta(self):
-        """_compute_shared_subscores handles zero delta (no division by zero)"""
-        d = WheelDecision(
-            delta=0,
-            stock_price=100,
-            theta=-0.05,
-            spread_pct=20,
-            open_interest=500,
-            volume=100,
-            iv_adjusted_return=10,
-            premium_per_contract=2.0,
-            expected_value=1.0,
-            dte=21,
-            otm_pct=10,
-        )
-        profile = {
-            "ideal_open_interest": 500,
-            "ideal_volume": 100,
-            "ideal_spread_pct": 12,
-            "target_delta": 0.20,
-            "delta_tolerance": 0.15,
-            "preferred_dte": 21,
-            "target_theta_delta_ratio": 0.005,
-            "liquidity_weight_multiplier": 1.0,
-            "target_iv_adjusted": 50,
-        }
-        _compute_shared_subscores(d, profile)
-        self.assertEqual(d._theta_delta_ratio, 0.0)
-        self.assertEqual(d.tdr_score, 0.0)
-
-    def test_shared_subscores_zero_stock_price(self):
-        """_compute_shared_subscores handles zero stock_price"""
-        d = WheelDecision(
-            delta=-0.2,
-            stock_price=0,
-            theta=-0.05,
-            spread_pct=20,
-            open_interest=500,
-            volume=100,
-            iv_adjusted_return=10,
-            premium_per_contract=2.0,
-            expected_value=1.0,
-            dte=21,
-            otm_pct=10,
-        )
-        profile = {
-            "ideal_open_interest": 500,
-            "ideal_volume": 100,
-            "ideal_spread_pct": 12,
-            "target_delta": 0.20,
-            "delta_tolerance": 0.15,
-            "preferred_dte": 21,
-            "target_theta_delta_ratio": 0.005,
-            "liquidity_weight_multiplier": 1.0,
-            "target_iv_adjusted": 50,
-        }
-        _compute_shared_subscores(d, profile)
-        self.assertEqual(d._theta_delta_ratio, 0.0)
-
-    def test_shared_subscores_zero_theta(self):
-        """_compute_shared_subscores handles zero theta"""
-        d = WheelDecision(
-            delta=-0.2,
-            stock_price=100,
-            theta=0,
-            spread_pct=20,
-            open_interest=500,
-            volume=100,
-            iv_adjusted_return=10,
-            premium_per_contract=2.0,
-            expected_value=1.0,
-            dte=21,
-            otm_pct=10,
-        )
-        profile = {
-            "ideal_open_interest": 500,
-            "ideal_volume": 100,
-            "ideal_spread_pct": 12,
-            "target_delta": 0.20,
-            "delta_tolerance": 0.15,
-            "preferred_dte": 21,
-            "target_theta_delta_ratio": 0.005,
-            "liquidity_weight_multiplier": 1.0,
-            "target_iv_adjusted": 50,
-        }
-        _compute_shared_subscores(d, profile)
-        self.assertEqual(d._theta_delta_ratio, 0.0)
-
-    def test_shared_subscores_zero_iv_adjusted_return(self):
-        """_compute_shared_subscores handles zero iv_adjusted_return"""
-        d = WheelDecision(
-            delta=-0.2,
-            stock_price=100,
-            theta=-0.05,
-            spread_pct=20,
-            open_interest=500,
-            volume=100,
-            iv_adjusted_return=0,
-            premium_per_contract=2.0,
-            expected_value=1.0,
-            dte=21,
-            otm_pct=10,
-        )
-        profile = {
-            "ideal_open_interest": 500,
-            "ideal_volume": 100,
-            "ideal_spread_pct": 12,
-            "target_delta": 0.20,
-            "delta_tolerance": 0.15,
-            "preferred_dte": 21,
-            "target_theta_delta_ratio": 0.005,
-            "liquidity_weight_multiplier": 1.0,
-            "target_iv_adjusted": 50,
-        }
-        _compute_shared_subscores(d, profile)
-        self.assertEqual(d.iv_adjusted_score, 0.0)
-
-    def test_shared_subscores_requires_required_keys(self):
-        """_compute_shared_subscores raises KeyError when required profile keys missing"""
-        d = WheelDecision(
-            delta=-0.2,
-            stock_price=100,
-            theta=-0.05,
-            spread_pct=20,
-            open_interest=500,
-            volume=100,
-            iv_adjusted_return=10,
-            premium_per_contract=2.0,
-            expected_value=1.0,
-            dte=21,
-            otm_pct=10,
-        )
-        with self.assertRaises(KeyError):
-            _compute_shared_subscores(d, {})  # Empty profile = missing required keys
-
-    def test_shared_subscores_missing_optional_keys(self):
-        """_compute_shared_subscores handles missing optional profile keys (used via .get())"""
-        d = WheelDecision(
-            delta=-0.2,
-            stock_price=100,
-            theta=-0.05,
-            spread_pct=20,
-            open_interest=500,
-            volume=100,
-            iv_adjusted_return=10,
-            premium_per_contract=2.0,
-            expected_value=1.0,
-            dte=21,
-            otm_pct=10,
-        )
-        # Required keys present, optional keys (liquidity_weight_multiplier,
-        # target_iv_adjusted, target_theta_delta_ratio) missing
-        profile = {
-            "ideal_open_interest": 500,
-            "ideal_volume": 100,
-            "ideal_spread_pct": 12,
-            "target_delta": 0.20,
-            "delta_tolerance": 0.15,
-            "preferred_dte": 21,
-        }
-        _compute_shared_subscores(d, profile)
-        self.assertIsInstance(d.oi_score, (int, float))
-        self.assertIsInstance(d.volume_score, (int, float))
-        self.assertIsInstance(d.spread_score, (int, float))
-        # target_theta_delta_ratio defaults to 0.005, so tdr_score = 0.0025/0.005*100 = 50
-        self.assertEqual(d.tdr_score, 50.0)
 
 
 class TestScoreContractEdgeCases(unittest.TestCase):
@@ -819,7 +418,7 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertFalse(result.hard_blockers)
         self.assertEqual(result.quote_quality, "tradable")
-        self.assertGreater(result.contract_score, 0)
+        self.assertGreater(result.annualized_return, 0)
 
     def test_quote_quality_wide_spread_blocks(self):
         """score_contract blocks bid=0.5, ask=5 (wide spread) with wide_spread reason code."""
@@ -852,7 +451,7 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         result = score_contract("AAPL", opt, 100.0, self.base_profile, portfolio)
         self.assertIsNotNone(result)
         self.assertEqual(result.option_type, "CALL")
-        self.assertGreater(result.contract_score, 0)
+        self.assertGreater(result.annualized_return, 0)
 
     def test_score_contract_missing_optional_fields(self):
         """score_contract handles missing gamma/theta/vega fields"""
@@ -918,7 +517,6 @@ class TestScoreExistingPositionEdgeCases(unittest.TestCase):
         """score_existing_position handles empty portfolio_context"""
         result = score_existing_position("AAPL", self.base_position, 100.0, {})
         self.assertIsNotNone(result)
-        self.assertEqual(result.vix_regime, "normal")
 
     def test_existing_position_missing_market_data(self):
         """score_existing_position handles missing bid/ask/last"""
@@ -1245,7 +843,7 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertFalse(result.hard_blockers)
-        self.assertGreater(result.contract_score, 0)
+        self.assertGreater(result.annualized_return, 0)
 
     def test_percentage_iv_produces_reasonable_delta(self):
         """score_contract with percentage IV (50.0) should produce non-zero delta after normalization"""

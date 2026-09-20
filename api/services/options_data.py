@@ -282,8 +282,6 @@ class OptionsDataService:
             "premium_velocity_per_day": round(decision.premium_velocity_per_day, 4),
             "capital_velocity_per_day": round(decision.capital_velocity_per_day, 8),
             "spread_pct": round(decision.spread_pct, 2),
-            "score": round(decision.contract_score, 2),
-            "score_details": decision.score_details,
             "rationale": decision.rationale,
             "warnings": decision.warnings,
             "hard_blockers": decision.hard_blockers,
@@ -299,8 +297,6 @@ class OptionsDataService:
             "iv_status": decision.iv_status,
             "iv_env_adjustment": decision.iv_env_adjustment,
             "profile_type": decision.profile_type,
-            "vix_regime": decision.vix_regime,
-            "vix_level": decision.vix_level,
             "earnings_date": decision.earnings_date,
             "days_to_earnings": decision.days_to_earnings,
             "earnings_adjustment": decision.earnings_adjustment,
@@ -491,7 +487,6 @@ class OptionsDataService:
                     if screening_profile is not None and side == option_type
                     else self._screening_profile_provider.get_screening_profile(
                         side,
-                        vix_regime=portfolio_context.get("vix_regime"),
                         growth_mode_config=self._get_config().get("growth_mode", {}),
                     )
                 )
@@ -575,7 +570,6 @@ class OptionsDataService:
 
                 profile = self._screening_profile_provider.get_screening_profile(
                     side,
-                    vix_regime=portfolio_context.get("vix_regime"),
                     growth_mode_config=self._get_config().get("growth_mode", {}),
                 )
                 candidates = []
@@ -598,7 +592,6 @@ class OptionsDataService:
                     key=lambda item: (
                         premium_velocity_per_day(item.get("premium_per_contract", 0), item.get("dte", 0)),
                         item.get("annualized_return", 0),
-                        item.get("wheel_decision", {}).get("contract_score", 0),
                     ),
                     reverse=True,
                 )

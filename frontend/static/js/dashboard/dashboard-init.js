@@ -5,7 +5,7 @@
 import { loadPortfolioData } from './account.js';
 import { initializeTopRecommendations, loadTopRecommendations, isBackendGenerating } from './top-recommendations.js';
 import { formatCurrency, escapeHtml } from '../utils/formatters.js';
-import { fetchWeeklyOptionIncome } from './api.js';
+import { fetchWeeklyOptionIncome } from './api-portfolio.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
 import { initWatchlistPanel, loadWatchlist } from './watchlist-panel.js';
@@ -343,3 +343,15 @@ function renderEarningsBadge(days) {
 function toggleCashReserve(enabled) {
     updateCashReserveStatus();
 }
+
+// Bootstrap dashboard on page load. This module is loaded as a deferred module
+// script, which runs after parsing but BEFORE DOMContentLoaded — so the listener
+// is registered in time for the boot. (In jsdom/vitest the event has already
+// fired, so importing this module in tests never auto-boots the dashboard, and
+// no `readyState` guard is needed or wanted: guarding on 'loading' would skip
+// the boot in a real browser.)
+document.addEventListener('DOMContentLoaded', () => {
+    initializeDashboard().catch((err) => {
+        console.error('Dashboard initialization failed:', err);
+    });
+});

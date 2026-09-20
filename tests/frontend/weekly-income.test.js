@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../../frontend/static/js/dashboard/api.js', () => ({
+vi.mock('../../frontend/static/js/dashboard/api-portfolio.js', () => ({
   fetchWeeklyOptionIncome: vi.fn(),
+}));
+
+vi.mock('../../frontend/static/js/dashboard/api-core.js', () => ({
   isOpenDUnavailable: vi.fn(),
 }));
 
@@ -22,7 +25,8 @@ vi.mock('../../frontend/static/js/utils/formatters.js', () => ({
   formatPercent: vi.fn((v) => `${v.toFixed(1)}%`),
 }));
 
-import { fetchWeeklyOptionIncome, isOpenDUnavailable } from '../../frontend/static/js/dashboard/api.js';
+import { fetchWeeklyOptionIncome } from '../../frontend/static/js/dashboard/api-portfolio.js';
+import { isOpenDUnavailable } from '../../frontend/static/js/dashboard/api-core.js';
 import StateModel from '../../frontend/static/js/utils/state-model.js';
 
 function setupDOM() {

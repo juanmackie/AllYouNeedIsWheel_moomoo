@@ -1,6 +1,6 @@
 """
 Context creation helpers for moomoo OpenD connections.
-Extracted from core/connection.py for maintainability.
+Extracted from the decomposed connection modules for maintainability.
 """
 
 import socket

@@ -78,7 +78,6 @@ class TestWheelDecisionLogging(unittest.TestCase):
             "available_cash": 50000,
             "cash_available_for_csp": 50000,
             "account_value": 100000,
-            "vix_regime": {"vix": 15, "regime": "normal"},
         }
         option = {
             "strike": 95.0,
@@ -331,7 +330,7 @@ class TestServiceConnectionLogging(unittest.TestCase):
         new_conn = MagicMock()
         new_conn.connect.return_value = True
 
-        with patch("core.connection.MoomooConnection", return_value=new_conn) as mock_moomoo:
+        with patch("core.connection_manager.MoomooConnection", return_value=new_conn) as mock_moomoo:
             with self.assertLogs("api.services.options", level="INFO") as log:
                 result = service._ensure_connection()
 

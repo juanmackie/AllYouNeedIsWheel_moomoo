@@ -30,14 +30,21 @@ class WheelPreset:
     csp_preferred_dte: int
     csp_min_otm_pct: float
     csp_max_otm_pct: float
-    # Covered-call strike
+    # Covered-call strike and delta
     call_default_otm_pct: float
-    # Liquidity / premium floors
+    call_target_delta: float
+    call_delta_tolerance: float
+    # Liquidity / premium floors and reader thresholds
     min_csp_buying_power: float
     min_mid_price: float
     max_spread_pct: float
     min_premium_per_contract: float
     min_open_interest: int
+    min_volume: int
+    ideal_open_interest: int
+    ideal_volume: int
+    ideal_spread_pct: float
+    max_expirations: int
     # Sizing cap (per CSP, % of buying power)
     max_buying_power_pct_per_csp: float
     # Long-horizon growth objective this preset is tuned for (e.g., 10x capital).
@@ -47,7 +54,14 @@ class WheelPreset:
         return asdict(self)
 
     def to_screener_profile(self) -> dict:
-        """Shape consumed by watchlist/screening code."""
+        """Flat threshold shape consumed by scoring and screening code.
+
+        This is the ONLY screening-profile source: it carries neutral reader
+        keys (``target_delta``, ``delta_tolerance``, ``default_otm_pct``,
+        ``ideal_*``, ``min_volume``, ``max_expirations``) as well as the
+        side-specific ``csp_*`` / ``call_*`` originals, so a reader that
+        subscripts a key can never hit a missing-key path.
+        """
         return {
             "csp_target_delta": self.csp_target_delta,
             "csp_delta_tolerance": self.csp_delta_tolerance,
@@ -56,6 +70,8 @@ class WheelPreset:
             "csp_preferred_dte": self.csp_preferred_dte,
             "csp_default_otm_pct": self.csp_min_otm_pct,
             "call_default_otm_pct": self.call_default_otm_pct,
+            "call_target_delta": self.call_target_delta,
+            "call_delta_tolerance": self.call_delta_tolerance,
             "csp_min_otm_pct": self.csp_min_otm_pct,
             "csp_max_otm_pct": self.csp_max_otm_pct,
             "min_csp_buying_power": self.min_csp_buying_power,
@@ -63,17 +79,27 @@ class WheelPreset:
             "max_spread_pct": self.max_spread_pct,
             "min_premium_per_contract": self.min_premium_per_contract,
             "min_open_interest": self.min_open_interest,
+            "min_volume": self.min_volume,
+            "ideal_open_interest": self.ideal_open_interest,
+            "ideal_volume": self.ideal_volume,
+            "ideal_spread_pct": self.ideal_spread_pct,
+            "max_expirations": self.max_expirations,
             "max_buying_power_pct_per_csp": self.max_buying_power_pct_per_csp,
             "target_account_multiple": self.target_account_multiple,
             "max_watchlist_tickers": 25,
             "require_cash_fit": True,
+            # Neutral reader keys (CSP side by default; the CALL lane is
+            # projected per-option-type where a profile is requested).
+            "target_delta": self.csp_target_delta,
+            "delta_tolerance": self.csp_delta_tolerance,
+            "default_otm_pct": self.csp_min_otm_pct,
         }
 
 
 WHEEL_PRESETS: dict[str, WheelPreset] = {
     "conservative": WheelPreset(
         key="conservative",
-        version=4,
+        version=5,
         label="Conservative",
         description="Stricter liquidity, smaller allocations, farther OTM strikes.",
         target_account_multiple=5.0,
@@ -85,16 +111,23 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         csp_min_otm_pct=7.0,
         csp_max_otm_pct=15.0,
         call_default_otm_pct=8.0,
+        call_target_delta=0.24,
+        call_delta_tolerance=0.18,
         min_csp_buying_power=7500.0,
         min_mid_price=0.10,
         max_spread_pct=45.0,
         min_premium_per_contract=15.0,
         min_open_interest=25,
+        min_volume=1,
+        ideal_open_interest=500,
+        ideal_volume=100,
+        ideal_spread_pct=12.0,
+        max_expirations=2,
         max_buying_power_pct_per_csp=50.0,
     ),
     "balanced": WheelPreset(
         key="balanced",
-        version=4,
+        version=5,
         label="Balanced",
         description="Moderate DTE/delta/liquidity and position-size limits (default).",
         target_account_multiple=5.0,
@@ -106,16 +139,23 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         csp_min_otm_pct=5.0,
         csp_max_otm_pct=15.0,
         call_default_otm_pct=10.0,
+        call_target_delta=0.24,
+        call_delta_tolerance=0.18,
         min_csp_buying_power=5000.0,
         min_mid_price=0.05,
         max_spread_pct=60.0,
         min_premium_per_contract=10.0,
         min_open_interest=10,
+        min_volume=1,
+        ideal_open_interest=500,
+        ideal_volume=100,
+        ideal_spread_pct=12.0,
+        max_expirations=2,
         max_buying_power_pct_per_csp=80.0,
     ),
     "aggressive": WheelPreset(
         key="aggressive",
-        version=4,
+        version=5,
         label="Aggressive",
         description="Shorter DTE, broader deltas, and larger allocations.",
         target_account_multiple=5.0,
@@ -127,11 +167,18 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         csp_min_otm_pct=3.0,
         csp_max_otm_pct=15.0,
         call_default_otm_pct=12.0,
+        call_target_delta=0.24,
+        call_delta_tolerance=0.18,
         min_csp_buying_power=3000.0,
         min_mid_price=0.03,
         max_spread_pct=70.0,
         min_premium_per_contract=5.0,
         min_open_interest=5,
+        min_volume=1,
+        ideal_open_interest=500,
+        ideal_volume=100,
+        ideal_spread_pct=12.0,
+        max_expirations=2,
         max_buying_power_pct_per_csp=90.0,
     ),
 }

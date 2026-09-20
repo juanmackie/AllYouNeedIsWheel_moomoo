@@ -2,7 +2,7 @@
  * Options Table module for handling options display and interaction
  * Orchestrator that composes functionality from focused sub-modules.
  */
-import { fetchTickers, fetchAccountData } from './api.js';
+import { fetchTickers, fetchAccountData } from './api-portfolio.js';
 import { fetchWatchlistTickers } from './api-portfolio.js';
 import { escapeHtml } from '../utils/formatters.js';
 import { state, loadOtmSettings, ensureTickerDataState, getSavedTabPreference, setSavedTabPreference } from './options-table-state.js';

@@ -70,7 +70,7 @@ class TestConnectionStatus(unittest.TestCase):
         self.mock_service.connection = None
 
     @patch("api.routes.options.get_options_service")
-    @patch("core.connection.MoomooConnection")
+    @patch("core.connection_manager.MoomooConnection")
     def test_returns_pool_stats_and_service_info(self, mock_moomoo_cls, mock_get_svc):
         """Should return connection pool stats and service connection info."""
         mock_get_svc.return_value = self.mock_service
@@ -87,7 +87,7 @@ class TestConnectionStatus(unittest.TestCase):
         self.assertFalse(data["service_initialized"])
 
     @patch("api.routes.options.get_options_service")
-    @patch("core.connection.MoomooConnection")
+    @patch("core.connection_manager.MoomooConnection")
     def test_includes_conn_info_when_initialized(self, mock_moomoo_cls, mock_get_svc):
         """Should include connection info when service connection exists."""
         mock_conn = MagicMock()
@@ -106,7 +106,7 @@ class TestConnectionStatus(unittest.TestCase):
         self.assertEqual(data["service_connection"]["host"], "127.0.0.1")
 
     @patch("api.routes.options.get_options_service")
-    @patch("core.connection.MoomooConnection")
+    @patch("core.connection_manager.MoomooConnection")
     def test_handles_exception_gracefully(self, mock_moomoo_cls, mock_get_svc):
         """Should return error response on exception."""
         mock_get_svc.side_effect = RuntimeError("boom")

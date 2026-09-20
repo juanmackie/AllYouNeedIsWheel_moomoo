@@ -19,7 +19,7 @@ from pathlib import Path
 from flask import current_app, jsonify
 
 from api.services.utils import clean_yfinance_ticker, validate_ticker
-from core.connection import probe_opend_status
+from core.context_factory import probe_opend_status
 
 _logger = logging.getLogger("api.routes.utils")
 

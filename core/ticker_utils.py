@@ -1,6 +1,6 @@
 """
 Ticker formatting and normalization utilities for moomoo.
-Extracted from core/connection.py for maintainability.
+Extracted from the decomposed connection modules for maintainability.
 """
 
 import re
@@ -127,3 +127,17 @@ def earnings_underlying_ticker(ticker):
         return match.group("underlying")
 
     return s
+
+
+def parse_moomoo_symbol(raw_symbol: str) -> str:
+    """Strip the "US." prefix from a Moomoo symbol to get the canonical ticker.
+
+    Args:
+        raw_symbol: The raw symbol from Moomoo (e.g., 'US.AAPL' or 'AAPL')
+
+    Returns:
+        The canonical ticker symbol (e.g., 'AAPL')
+    """
+    if not raw_symbol:
+        return ""
+    return str(raw_symbol).replace("US.", "").strip()

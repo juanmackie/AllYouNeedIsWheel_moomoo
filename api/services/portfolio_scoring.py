@@ -8,9 +8,8 @@ the roll-pressure and alerts endpoints.
 from datetime import datetime
 
 from core.logging_config import get_logger
-from core.position_utils import parse_moomoo_symbol, parse_position_qty
-from core.ticker_utils import earnings_underlying_ticker
-from core.utils import market_now
+from core.ticker_utils import earnings_underlying_ticker, parse_moomoo_symbol
+from core.utils import market_now, parse_position_qty
 
 logger = get_logger("api.services.portfolio_scoring", "api")
 
@@ -35,7 +34,6 @@ def build_portfolio_context(option_positions, portfolio_service):
         "account_value": account_value,
         "short_calls": {},
         "short_puts": {},
-        "vix_regime": {"regime": "normal", "vix": 20.0},
     }
 
     for pos in option_positions:

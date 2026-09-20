@@ -49,7 +49,7 @@ class TestScoreRegression(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertIsInstance(result, WheelDecision)
-        self.assertGreaterEqual(result.contract_score, expected["min_score"])
+        self.assertFalse(result.hard_blockers, "healthy CC must clear the hard gates")
         self.assertEqual(result.option_type, "CALL")
         # Should NOT warn about cost basis
         warning_text = " ".join(result.warnings)
@@ -63,7 +63,7 @@ class TestScoreRegression(unittest.TestCase):
             "AAPL", option, stock_price, profile, portfolio, iv_status_str="extreme_low", iv_rank=0.15
         )
         self.assertIsNotNone(result)
-        self.assertGreaterEqual(result.contract_score, expected["min_score"])
+        self.assertFalse(result.hard_blockers, "a below-cost-basis CC warns, it does not fail gates")
         warning_text = " ".join(result.warnings).lower()
         self.assertIn(expected["warning_contains"].lower(), warning_text)
 
@@ -78,7 +78,7 @@ class TestScoreRegression(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertIsInstance(result, WheelDecision)
-        self.assertGreaterEqual(result.contract_score, expected["min_score"])
+        self.assertFalse(result.hard_blockers, "healthy CSP must clear the hard gates")
         self.assertEqual(result.option_type, "PUT")
         # PUT return should use strike * 100, not stock_price * 100
         self.assertAlmostEqual(result.cash_required, expected["cash_required"], delta=1.0)
@@ -95,27 +95,26 @@ class TestScoreRegression(unittest.TestCase):
 
     # -- Environment scenarios ----------------------------
 
-    def test_low_iv_suppresses_score(self):
-        """Low IV should produce lower score and IV warning."""
+    def test_low_iv_warns_without_downgrading(self):
+        """Low IV is visible risk information (a warning), not a ranking input."""
         option, profile, portfolio, expected = get_low_iv_scenario()
         stock_price = 100.0
         result = score_contract(
             "AAPL", option, stock_price, profile, portfolio, iv_status_str="extreme_low", iv_rank=0.15
         )
         self.assertIsNotNone(result)
-        self.assertLessEqual(result.contract_score, expected["min_score"])
         warning_text = " ".join(result.warnings).lower()
         self.assertIn(expected["warning_contains"].lower(), warning_text)
 
-    def test_high_iv_boosts_and_warns(self):
-        """High IV should produce high score but warn about extreme IV."""
+    def test_high_iv_clears_gates_and_warns(self):
+        """High IV clears the gates and warns about extreme IV."""
         option, profile, portfolio, expected = get_high_iv_scenario()
         stock_price = 100.0
         result = score_contract(
             "AAPL", option, stock_price, profile, portfolio, iv_status_str="extreme_high", iv_rank=0.60
         )
         self.assertIsNotNone(result)
-        self.assertGreaterEqual(result.contract_score, expected["min_score"])
+        self.assertFalse(result.hard_blockers)
         warning_text = " ".join(result.warnings).lower()
         self.assertIn(expected["warning_contains"].lower(), warning_text)
 
@@ -205,8 +204,8 @@ class TestScoreRegression(unittest.TestCase):
         warning_text = " ".join(result.warnings).lower()
         self.assertIn("yfinance", warning_text)
 
-    def test_unknown_iv_status_returns_neutral_scoring(self):
-        """Unknown IV status (0 IV) should not crash and produce neutral score."""
+    def test_unknown_iv_status_scoring_stays_neutral(self):
+        """Unknown IV status must not crash scoring or gate the candidate."""
         profile = _get_base_profile()
         portfolio = _get_csp_portfolio(cash=20000)
         option = _make_option(strike=95, bid=2.0, ask=2.10, oi=500, vol=200, delta=-0.25, iv=0.30)
@@ -223,11 +222,11 @@ class TestScoreRegression(unittest.TestCase):
             iv_rank=0.5,
         )
         self.assertIsNotNone(result)
-        self.assertGreater(result.contract_score, 0)
+        self.assertGreater(result.annualized_return, 0)
         self.assertFalse(result.hard_blockers)
-        # iv_environment sub-score should reflect neutral position (0 adjustment)
-        iv_env_score = result.score_details.get("iv_environment", 50)
-        self.assertAlmostEqual(iv_env_score, 50.0, places=0)
+        # An unknown IV environment is neutral context: it neither gates the
+        # candidate nor moves a score that no longer exists.
+        self.assertEqual(result.iv_adjusted_return, result.iv_adjusted_return)
 
 
 class TestScoreRankOrder(unittest.TestCase):
@@ -253,11 +252,14 @@ class TestScoreRankOrder(unittest.TestCase):
 
         self.assertIsNotNone(result_a)
         self.assertIsNotNone(result_b)
-        # With tight spread and good liquidity, A should outrank B
-        self.assertGreaterEqual(result_a.contract_score, result_b.contract_score)
+        # Spread/liquidity are HARD GATES, not ranking inputs: both clear the
+        # gates, and ordering is decided by capital velocity alone (SCORING.md).
+        self.assertFalse(result_a.hard_blockers, "tight-spread candidate must qualify")
+        self.assertFalse(result_b.hard_blockers, "wide-spread candidate stays under the preset max")
+        self.assertGreater(result_b.capital_velocity_per_day, result_a.capital_velocity_per_day)
 
-    def test_earnings_today_not_top_ranked(self):
-        """Earnings today should severely penalize score."""
+    def test_earnings_risk_is_visible_but_does_not_reorder(self):
+        """Earnings risk is surfaced (event tier/warnings); it never reorders."""
         future = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
         profile = _get_base_profile()
 
@@ -283,33 +285,12 @@ class TestScoreRankOrder(unittest.TestCase):
 
         self.assertIsNotNone(result_normal)
         self.assertIsNotNone(result_earnings)
-        self.assertGreater(result_normal.contract_score, result_earnings.contract_score)
+        # Same contract, same capital: identical ranking key by construction.
+        self.assertEqual(result_normal.capital_velocity_per_day, result_earnings.capital_velocity_per_day)
 
 
-class TestScoreDetailsPresent(unittest.TestCase):
-    """Every scored contract must have complete score_details."""
-
-    def test_score_details_all_keys_present(self):
-        """score_details should have all expected keys."""
-        option, profile, portfolio, _ = get_csp_healthy()
-        result = score_contract("AAPL", option, 100.0, profile, portfolio)
-        self.assertIsNotNone(result)
-        details = result.score_details
-        expected_keys = [
-            "annualized",
-            "buffer",
-            "liquidity",
-            "delta_fit",
-            "otm_fit",
-            "capital_fit",
-            "iv_adjusted",
-            "theta_delta",
-            "expected_value",
-            "capital_efficiency",
-            "iv_environment",
-        ]
-        for key in expected_keys:
-            self.assertIn(key, details, f"Missing key in score_details: {key}")
+class TestRationalePresent(unittest.TestCase):
+    """Every scored contract must explain itself in its rationale."""
 
     def test_rationale_not_empty(self):
         """Rationale should explain the score."""

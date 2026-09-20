@@ -117,15 +117,13 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
     """Format a raw option dict into a standardized recommendation dict (signal-only)."""
     wd = option.get("wheel_decision", {})
     opt_type = option.get("option_type", "")
-    is_long = option.get("profile_type", "") in ("long_call", "long_put")
     is_csp = opt_type == "PUT" and not option.get("held_position", False)
     is_cc = opt_type == "CALL" and option.get("max_contracts", 0) > 0
     is_covered_call = is_cc
     is_csp_signal = is_csp
-    # Research-only: long calls, long puts, earnings-vol calendars
-    research_only = bool(
-        option.get("research_only") or is_long or option.get("profile_type", "") == "earnings_calendar"
-    )
+    # Research-only is set by the engine when a candidate cannot be acted on
+    # (e.g. cash-short mode); it is broker-agnostic display context only.
+    research_only = bool(option.get("research_only"))
     return {
         "rank": rank,
         "ticker": option["ticker"],
@@ -139,7 +137,6 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "limit_target_per_contract": option.get("limit_target_per_contract", wd.get("limit_target_per_contract")),
         "premium_velocity_per_day": option.get("premium_velocity_per_day", wd.get("premium_velocity_per_day")),
         "capital_velocity_per_day": option.get("capital_velocity_per_day", wd.get("capital_velocity_per_day")),
-        "score": option.get("score"),
         "annualized_return": option.get("annualized_return"),
         "iv_adjusted_return": option.get("iv_adjusted_return"),
         "otm_pct": option.get("otm_pct"),
@@ -161,7 +158,6 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "open_interest": option.get("open_interest"),
         "volume": option.get("volume"),
         "implied_volatility": option.get("implied_volatility"),
-        "score_details": option.get("score_details", {}),
         "size_fit": option.get("size_fit", 0),
         "expected_move_buffer": option.get("expected_move_buffer", 0),
         "wheel_decision": option.get("wheel_decision", {}),

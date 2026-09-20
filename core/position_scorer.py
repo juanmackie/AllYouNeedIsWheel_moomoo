@@ -99,8 +99,6 @@ def score_existing_position(
         iv_status=iv_status_str,
         iv_env_adjustment=iv_env_adjustment,
         earnings_adjustment=earnings_adjustment,
-        vix_regime=portfolio_context.get("vix_regime", {}).get("regime", "normal"),
-        vix_level=portfolio_context.get("vix_regime", {}).get("vix", 20.0),
     )
 
     # Compute roll pressure

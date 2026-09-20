@@ -43,7 +43,7 @@ class TestCoreImport(unittest.TestCase):
         import core
 
         # core.MoomooConnection should trigger __getattr__ lazy load
-        with patch("core.connection.MoomooConnection", MagicMock()):
+        with patch("core.connection_manager.MoomooConnection", MagicMock()):
             # Accessing MoomooConnection should not fail
             cls = core.MoomooConnection
             self.assertIsNotNone(cls)
@@ -57,10 +57,11 @@ class TestCoreImport(unittest.TestCase):
 
     def test_import_core_scoring_factors_no_moomoo(self):
         """Importing core.scoring_factors should not import moomoo."""
-        from core.scoring_factors import _clamp, _score_proximity
+        from core.scoring_factors import _clamp, capital_velocity_per_day, classify_event_tier
 
         self.assertTrue(callable(_clamp))
-        self.assertTrue(callable(_score_proximity))
+        self.assertTrue(callable(capital_velocity_per_day))
+        self.assertTrue(callable(classify_event_tier))
 
     def test_import_core_greeks_uses_stdlib_normaldist_not_moomoo(self):
         """core.greeks imports stdlib NormalDist (no scipy) and must not import
@@ -79,15 +80,15 @@ class TestAPIImport(unittest.TestCase):
 
     def test_import_api_services_no_side_effects(self):
         """Importing service modules should not trigger moomoo SDK."""
-        # These modules use lazy imports - patch core.connection instead
-        with patch("core.connection.MoomooConnection", MagicMock()):
+        # These modules use lazy imports - patch core.connection_manager instead
+        with patch("core.connection_manager.MoomooConnection", MagicMock()):
             module = importlib.import_module("api.services.options_service")
 
         self.assertTrue(hasattr(module, "OptionsService"))
 
     def test_import_wheel_decision_no_moomoo_side_effects(self):
         """Importing core.wheel_decision should not trigger moomoo SDK."""
-        with patch("core.connection.MoomooConnection", MagicMock()):
+        with patch("core.connection_manager.MoomooConnection", MagicMock()):
             from core.wheel_decision import score_contract
 
             self.assertTrue(callable(score_contract))
@@ -105,25 +106,47 @@ class TestRouteResponseHelpers(unittest.TestCase):
 
 
 class TestConnectionImports(unittest.TestCase):
-    """Test that connection.py no longer has top-level moomoo imports."""
+    """The connection module must tolerate a missing moomoo SDK at import time.
 
-    def test_connection_no_top_level_moomoo_import(self):
-        """core/connection.py should NOT import moomoo at top level."""
+    The old ``core/connection.py`` re-export shim was removed in favour of
+    importing the decomposed modules directly. This keeps the property that
+    mattered: importing the module that owns ``MoomooConnection`` never
+    hard-fails when the SDK is absent, so test collection and the pure helpers
+    still work.
+    """
+
+    def test_connection_manager_guards_top_level_moomoo_import(self):
+        """core/connection_manager.py must import moomoo only inside try/except."""
         import ast
 
-        with open(os.path.join(os.path.dirname(__file__), "..", "core", "connection.py"), "r") as f:
+        with open(os.path.join(os.path.dirname(__file__), "..", "core", "connection_manager.py"), "r") as f:
             tree = ast.parse(f.read())
 
+        parents = {}
         for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    self.assertNotEqual(
-                        alias.name, "moomoo", "core/connection.py should not have top-level 'from moomoo import ...'"
-                    )
-            elif isinstance(node, ast.ImportFrom):
-                self.assertNotEqual(
-                    node.module, "moomoo", "core/connection.py should not have top-level 'from moomoo import ...'"
-                )
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+
+        moomoo_imports = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "moomoo":
+                moomoo_imports.append(node)
+            elif isinstance(node, ast.Import) and any(alias.name == "moomoo" for alias in node.names):
+                moomoo_imports.append(node)
+
+        self.assertTrue(moomoo_imports, "expected the optional SDK import to be present but guarded")
+        for node in moomoo_imports:
+            ancestor = parents.get(node)
+            guarded = False
+            while ancestor is not None:
+                if isinstance(ancestor, ast.Try):
+                    guarded = True
+                    break
+                ancestor = parents.get(ancestor)
+            self.assertTrue(
+                guarded,
+                f"core/connection_manager.py:{node.lineno} must keep its moomoo import inside try/except",
+            )
 
 
 if __name__ == "__main__":

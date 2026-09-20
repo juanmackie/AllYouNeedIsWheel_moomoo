@@ -306,7 +306,6 @@ class TestScorePositionExitInputs(unittest.TestCase):
             "account_value": 100000,
             "short_puts": {"AAPL": 1},
             "short_calls": {},
-            "vix_regime": {"regime": "normal", "vix": 20.0},
         }
         return score_position(pos, conn, portfolio_context, iv)
 

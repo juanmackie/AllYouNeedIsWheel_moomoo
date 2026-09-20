@@ -54,7 +54,7 @@ session/coverage resolution in `core/run_model.py`, live/staged/review_only
 signal modes, and copy revalidation at `api/routes/run.py::evaluate_copy_check`,
 matched by the state/action table in `SCORING.md`). No code-level gap remains
 open; the only unexercised surface is the owner-run live Windows/OpenD
-acceptance runbook (`plans/live-measure-and-tune.md`).
+acceptance runbook (`docs/acceptance-runbook.md`).
 
 ## Child contracts
 

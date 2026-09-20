@@ -49,7 +49,7 @@ def connection_status():
     Get detailed connection status for debugging connection cycling issues
     """
     try:
-        from core.connection import MoomooConnection
+        from core.connection_manager import MoomooConnection
 
         # Get pool stats
         pool_stats = MoomooConnection.get_connection_pool_stats()

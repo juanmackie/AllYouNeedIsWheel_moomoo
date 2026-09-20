@@ -7,8 +7,8 @@ import logging
 import traceback
 from datetime import datetime, timedelta
 
-from core.connection_constants import _safe_float
 from core.ticker_utils import earnings_underlying_ticker
+from core.utils import safe_float as _safe_float
 
 logger = logging.getLogger("api.services.portfolio")
 
@@ -65,7 +65,7 @@ class PortfolioService:
                 logger.warning("Failed to reconnect shared connection, will create new one")
 
             logger.info("Creating new moomoo connection for portfolio")
-            from core.connection import MoomooConnection
+            from core.connection_manager import MoomooConnection
 
             self.connection = MoomooConnection(
                 host=str(self.config.get("host", "127.0.0.1")),

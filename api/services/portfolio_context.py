@@ -5,7 +5,8 @@ Extracted from the monolithic options_service.py for maintainability.
 
 import logging
 
-from core.position_utils import parse_moomoo_symbol, parse_position_qty
+from core.ticker_utils import parse_moomoo_symbol
+from core.utils import parse_position_qty
 
 logger = logging.getLogger("api.services.portfolio_context")
 
@@ -60,22 +61,11 @@ class PortfolioContext:
     Handles portfolio context building and cash reservation calculations.
     """
 
-    def __init__(self, portfolio_service_provider, vix_regime_provider=None, config_provider=None):
+    def __init__(self, portfolio_service_provider, config_provider=None):
         self._portfolio_service_provider = portfolio_service_provider
-        self._vix_regime_provider = vix_regime_provider
         self._config_provider = config_provider
         self.config = config_provider.config if config_provider and hasattr(config_provider, "config") else {}
         self._portfolio_service = None
-
-    def _default_vix_regime(self):
-        """Return a neutral VIX regime without making any live requests."""
-        return {
-            "regime": "normal",
-            "vix": 20.0,
-            "delta_adjustment": 0.0,
-            "exposure_multiplier": 1.0,
-            "description": "Normal volatility (VIX 15-30) - standard delta targets",
-        }
 
     def _get_portfolio_service(self):
         if self._portfolio_service is not None:
@@ -113,7 +103,6 @@ class PortfolioContext:
             "broker_buying_power": 0.0,
             "broker_buying_power_source": "none",
             "open_short_put_collateral": 0.0,
-            "vix_regime": self._default_vix_regime(),
         }
 
         if not isinstance(portfolio, dict):
@@ -246,9 +235,6 @@ class PortfolioContext:
             "broker_buying_power": 0.0,
             "broker_buying_power_source": "none",
             "open_short_put_collateral": 0.0,
-            "vix_regime": self._vix_regime_provider.get_vix_regime()
-            if refresh and self._vix_regime_provider
-            else self._default_vix_regime(),
         }
 
         if not refresh:

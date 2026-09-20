@@ -45,6 +45,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from core.utils import safe_float
+
 # One US equity option contract covers 100 shares.
 CONTRACT_MULTIPLIER = 100
 
@@ -62,13 +64,6 @@ _CAPITAL_MOVEMENT_MARKERS: tuple[str, ...] = (
     "transfer in",
     "transfer out",
 )
-
-
-def _to_float(value, default=0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def parse_timestamp(value) -> "datetime | None":
@@ -104,17 +99,17 @@ def broker_price_to_contract_credit(price_per_share: float) -> float:
     (a $200 quoted contract credit filled at $2/share is $200, not a -$198
     slippage). Missing/NaN prices convert to 0.0 (never fabricated upward).
     """
-    return _to_float(price_per_share) * CONTRACT_MULTIPLIER
+    return safe_float(price_per_share) * CONTRACT_MULTIPLIER
 
 
 def gross_premium_dollars(price_per_contract: float, qty: float, multiplier: int = CONTRACT_MULTIPLIER) -> float:
     """Dollar value of one fill: per-contract price × contracts × multiplier."""
-    return _to_float(price_per_contract) * _to_float(qty) * multiplier
+    return safe_float(price_per_contract) * safe_float(qty) * multiplier
 
 
 def net_event_pnl(premium_in: float, premium_out: float, fees: float) -> float:
     """Option-leg net P&L: premium collected − premium paid back − fees."""
-    return _to_float(premium_in) - _to_float(premium_out) - _to_float(fees)
+    return safe_float(premium_in) - safe_float(premium_out) - safe_float(fees)
 
 
 def slippage_dollars(
@@ -131,12 +126,12 @@ def slippage_dollars(
     """
     side_norm = str(side or "").upper()
     if "SELL" in side_norm:
-        signed_diff = _to_float(fill_price) - _to_float(reference_price)
+        signed_diff = safe_float(fill_price) - safe_float(reference_price)
     elif "BUY" in side_norm:
-        signed_diff = _to_float(reference_price) - _to_float(fill_price)
+        signed_diff = safe_float(reference_price) - safe_float(fill_price)
     else:
         return 0.0
-    return signed_diff * _to_float(qty) * multiplier
+    return signed_diff * safe_float(qty) * multiplier
 
 
 def leakage_dollars(
@@ -163,7 +158,7 @@ def share_leg_pnl(basis_price, exit_price, shares: float, fees: float = 0.0):
     """
     if basis_price is None or str(basis_price).strip() == "":
         return None
-    return (_to_float(exit_price) - _to_float(basis_price)) * _to_float(shares) - _to_float(fees)
+    return (safe_float(exit_price) - safe_float(basis_price)) * safe_float(shares) - safe_float(fees)
 
 
 def combined_outcome(option_leg: dict | None, share_leg: dict | None) -> dict:
@@ -211,12 +206,12 @@ def combined_outcome(option_leg: dict | None, share_leg: dict | None) -> dict:
 
 def capital_base_csp(strike: float, contracts: float) -> float:
     """Cash secured by a short put: strike × 100 × contracts."""
-    return _to_float(strike) * CONTRACT_MULTIPLIER * _to_float(contracts)
+    return safe_float(strike) * CONTRACT_MULTIPLIER * safe_float(contracts)
 
 
 def capital_base_cc(share_price: float, contracts: float) -> float:
     """Capital covered by a short call: share price × 100 × contracts."""
-    return _to_float(share_price) * CONTRACT_MULTIPLIER * _to_float(contracts)
+    return safe_float(share_price) * CONTRACT_MULTIPLIER * safe_float(contracts)
 
 
 def capital_days_from_lots(lots, capital_per_contract: float, as_of=None) -> float:
@@ -240,7 +235,7 @@ def capital_days_from_lots(lots, capital_per_contract: float, as_of=None) -> flo
     """
     end_default = parse_timestamp(as_of) if as_of is not None else None
 
-    capital_each = _to_float(capital_per_contract)
+    capital_each = safe_float(capital_per_contract)
     if capital_each <= 0:
         return 0.0
 
@@ -258,7 +253,7 @@ def capital_days_from_lots(lots, capital_per_contract: float, as_of=None) -> flo
         days = (end - start).total_seconds() / 86400.0
         if days <= 0:
             continue
-        total += capital_each * _to_float(qty) * days
+        total += capital_each * safe_float(qty) * days
     return total
 
 
@@ -268,10 +263,10 @@ def owner_efficiency(net_pnl, capital_days):
     Returns None when capital-days is unknown/non-positive — an unknown
     denominator is reported as unknown, never flattened to 0.
     """
-    days = _to_float(capital_days, 0.0)
+    days = safe_float(capital_days, 0.0)
     if days <= 0:
         return None
-    return _to_float(net_pnl, 0.0) / days
+    return safe_float(net_pnl, 0.0) / days
 
 
 def max_drawdown(realized_pnl_sequence) -> float:
@@ -283,7 +278,7 @@ def max_drawdown(realized_pnl_sequence) -> float:
     peak = 0.0
     drawdown = 0.0
     for pnl in realized_pnl_sequence or []:
-        cumulative += _to_float(pnl, 0.0)
+        cumulative += safe_float(pnl, 0.0)
         peak = max(peak, cumulative)
         drawdown = max(drawdown, peak - cumulative)
     return drawdown
@@ -322,13 +317,13 @@ def owner_summary(outcomes) -> dict:
             unknown += 1
         else:
             measured += 1
-            pnl = _to_float(pnl, 0.0)
+            pnl = safe_float(pnl, 0.0)
             net_dollars += pnl
             realized_sequence.append(pnl)
             if is_open and pnl < 0:
                 open_losses += pnl
         if days is not None:
-            days = _to_float(days, 0.0)
+            days = safe_float(days, 0.0)
             if days > 0:
                 capital_days += days
                 has_capital_days = True

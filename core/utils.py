@@ -151,9 +151,12 @@ def safe_float(value, default=0.0):
         return default
 
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return default
+    if parsed != parsed:  # NaN from a Numeric (not string) source
+        return default
+    return parsed
 
 
 def normalize_expiration(expiration) -> str:
@@ -164,3 +167,17 @@ def normalize_expiration(expiration) -> str:
     if len(value) >= 10 and value[4] == "-" and value[7] == "-":
         return value[:10].replace("-", "")
     return value.replace("-", "")
+
+
+def parse_position_qty(qty_value) -> int:
+    """Parse a Moomoo position quantity to an int (0 when unusable).
+
+    Quantities arrive as strings, floats, or None; a missing or unparseable
+    value is 0, never a guess.
+    """
+    if qty_value is None:
+        return 0
+    try:
+        return int(float(qty_value))
+    except (TypeError, ValueError):
+        return 0

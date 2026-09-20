@@ -56,10 +56,9 @@ class TestScanLedgerSources(unittest.TestCase):
         self.assertEqual(sources, [])
 
     def test_extract_data_sources_from_portfolio(self):
-        ctx = {"vix_regime": {"vix": 18}, "broker_buying_power": 50000}
+        ctx = {"broker_buying_power": 50000}
         sources = extract_data_sources(ctx)
         names = [s["name"] for s in sources]
-        self.assertIn("vix_regime", names)
         self.assertIn("moomoo_portfolio", names)
 
     def test_extract_data_sources_from_decisions(self):

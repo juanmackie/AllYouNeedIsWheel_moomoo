@@ -157,7 +157,6 @@
                     </div>
 
                     <div class="d-flex justify-content-center gap-2 flex-wrap">
-                        <span class="score-badge badge fs-6"></span>
                         <span class="confidence-badge badge"></span>
                         <span class="underlying-quality-badge badge d-none"></span>
                         <span class="research-only-badge badge d-none"></span>
@@ -275,21 +274,12 @@
                     <div class="missing-risk-badge small text-warning fw-semibold d-none"></div>
                     <div class="why-winner small text-muted"></div>
 
-                    <div class="score-drivers d-none">
-                        <div class="score-drivers__positive small text-success"></div>
-                        <div class="score-drivers__negative small text-warning mt-1"></div>
-                    </div>
-
                     <div class="hard-blockers d-none">
                         <div class="hard-blockers-list small text-danger"></div>
                     </div>
 
                     <div class="growth-mode-details d-none">
                         <hr class="my-1">
-                        <div class="d-flex justify-content-between">
-                            <span>Goal impact</span>
-                            <span class="growth-impact fw-semibold"></span>
-                        </div>
                         <div class="d-flex justify-content-between">
                             <span>Risk budget</span>
                             <span class="risk-budget fw-semibold"></span>
@@ -310,6 +300,19 @@
                         <button type="button" class="btn btn-outline-primary btn-sm copy-ticket-btn">
                             <i class="bi bi-clipboard"></i> Copy ticket
                         </button>
+                    </div>
+
+                    <!-- OWNER-RECORDED TAKEN LINK (journal evidence; no order surface) -->
+                    <div class="text-center mt-2">
+                        <div class="input-group input-group-sm">
+                            <input type="number" class="form-control traded-strike-input" step="0.5" min="0"
+                                   placeholder="strike you traded (optional)"
+                                   aria-label="Strike actually traded, when it differs from the suggestion">
+                            <button type="button" class="btn btn-outline-secondary mark-taken-btn">
+                                <i class="bi bi-bookmark"></i> Mark taken
+                            </button>
+                        </div>
+                        <div class="taken-status small mt-1" role="status" aria-live="polite"></div>
                     </div>
                 </div>
             </div>

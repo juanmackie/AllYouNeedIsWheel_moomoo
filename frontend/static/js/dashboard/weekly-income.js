@@ -1,6 +1,6 @@
 import { escapeHtml, formatCurrency } from '../utils/formatters.js';
-import { fetchWeeklyOptionIncome } from './api.js';
-import { isOpenDUnavailable } from './api.js';
+import { fetchWeeklyOptionIncome } from './api-portfolio.js';
+import { isOpenDUnavailable } from './api-core.js';
 import StateModel from '../utils/state-model.js';
 
 const TABLE_BODY_ID = 'filled-orders-table';

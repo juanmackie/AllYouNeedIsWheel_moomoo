@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api.services.fills_service import FillsService
 from api.services.outcome_service import OutcomeService
+from api.services.taken_links import record_taken_link
 from core.outcome_attribution import is_capital_movement_cash_flow
 from core.run_model import RunMetadata, WheelRunSnapshot
 from core.wheel_runner import opaque_account_id
@@ -342,6 +343,178 @@ class TestRouteIntegration(TestIngestToAttributionToSummary):
         self.assertEqual(len(conn.deal_calls), 6)
         self.assertEqual(len(conn.fee_calls), 6)
         self.assertEqual(len(conn.cash_calls), 36)
+
+
+# OpenD-style codes for the observed divergence: the app published SOXL
+# 20260918 P100 and the owner traded SOXL 20260918 P106.
+SOXL_PUT_100 = "US.SOXL260918P00100000"
+SOXL_PUT_106 = "US.SOXL260918P00106000"
+UBER_PUT_CODE = "US.UBER260116P00075000"
+
+
+def _soxl_signal(**extra):
+    """The published recommendation: SOXL 20260918 P100 at a 6.20 bid."""
+    return _signal(
+        ticker="SOXL",
+        option_type="PUT",
+        expiration="20260918",
+        strike=100.0,
+        dte=19,
+        bid_premium_per_contract=620.0,
+        stock_price=110.0,
+        **extra,
+    )
+
+
+class TestOwnerLinkedAttribution(_OutcomeIntegrationBase):
+    """Owner-recorded taken links attribute real trades — honestly.
+
+    A link is explicit owner evidence (``owner-linked``), never a temporal
+    guess, and it must not change any other record: unlinked fills keep their
+    existing attribution and their realized/unrealized P&L semantics.
+    """
+
+    def _ingest(self, deals, fees):
+        conn = _FakeBrokerConnection(deals, fees, {})
+        result = FillsService(conn, self.db).ingest_history_fills(days=90)
+        self.assertTrue(result["ok"])
+        return conn
+
+    def _link(self, *, traded, run_id="run-1", strike=100.0):
+        return record_taken_link(
+            self.db,
+            run_id=run_id,
+            lane="csp_picks",
+            recommendation={"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": strike},
+            traded=traded,
+            env=ENV,
+            account_id=OPAQUE,
+        )
+
+    def _summary(self):
+        return OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
+
+    def _soxl_record(self, summary, strike):
+        return next(r for r in summary["outcomes"] if r["ticker"] == "SOXL" and float(r["strike"]) == strike)
+
+    def _soxl_106_deals(self):
+        return [
+            _deal("D1", "O1", SOXL_PUT_106, "SELL", 1.0, 6.10, "2026-01-05 14:30:00"),
+            _deal("D2", "O1", SOXL_PUT_106, "BUY", 1.0, 0.11, "2026-02-05 14:30:00"),
+        ]
+
+    def test_owner_link_attributes_a_different_strike_to_the_recommendation(self):
+        self._publish_signal_run(signals=[_soxl_signal()])
+        self._ingest(self._soxl_106_deals(), {"O1": 1.08})
+
+        before = self._summary()
+        trade = self._soxl_record(before, 106.0)
+        self.assertEqual(trade["signal_type"], "unmatched")
+        self.assertEqual(trade["attribution"], "unattributed")
+        self.assertIsNone(trade["quoted_credit_per_contract"])
+        self.assertAlmostEqual(trade["net_pnl"], 597.92)  # 610 - 11 - 1.08 fees
+        self.assertEqual(before["totals"]["owner_linked_count"], 0)
+
+        self._link(traded={"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": 106.0})
+        after = self._summary()
+        linked = self._soxl_record(after, 106.0)
+
+        self.assertEqual(linked["attribution"], "owner-linked")
+        self.assertEqual(linked["signal_type"], "csp")
+        self.assertEqual(linked["run_id"], "run-1")
+        self.assertEqual(linked["preset_key"], "balanced")
+        self.assertEqual(linked["event_tier"], "earnings_week")
+        self.assertEqual(linked["outcome_status"], "measured")
+        self.assertAlmostEqual(linked["net_pnl"], 597.92)
+        self.assertAlmostEqual(linked["filled_credit_per_contract"], 610.0)
+        self.assertAlmostEqual(linked["quoted_credit_per_contract"], 620.0)
+        self.assertAlmostEqual(linked["slippage_per_contract"], -10.0)
+        # Capital follows the traded contract (106 × 100 held 31 days), not the
+        # recommended strike — the recommendation only supplies the comparison.
+        self.assertAlmostEqual(linked["capital_days"], 10600.0 * 31)
+        self.assertAlmostEqual(linked["owner_efficiency"], 597.92 / (10600.0 * 31))
+        self.assertTrue(linked["owner_link"]["traded_differs_from_recommendation"])
+        self.assertEqual(linked["owner_link"]["recommendation"]["strike"], 100.0)
+        self.assertEqual(after["taken_link_count"], 1)
+        self.assertEqual(after["totals"]["owner_linked_count"], 1)
+        self.assertEqual(after["totals"]["measured_count"], before["totals"]["measured_count"])
+
+    def test_exact_contract_match_keeps_inferred_and_gains_owner_evidence(self):
+        self._publish_signal_run(signals=[_soxl_signal()])
+        self._ingest(
+            [
+                _deal("D1", "O1", SOXL_PUT_100, "SELL", 1.0, 6.20, "2026-01-05 14:30:00"),
+                _deal("D2", "O1", SOXL_PUT_100, "BUY", 1.0, 0.10, "2026-02-05 14:30:00"),
+            ],
+            {"O1": 1.08},
+        )
+
+        inferred = self._soxl_record(self._summary(), 100.0)
+        self.assertEqual(inferred["attribution"], "inferred")
+        self.assertAlmostEqual(inferred["slippage_per_contract"], 0.0)  # filled at the quoted bid
+
+        self._link(traded={"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": 100.0})
+        linked = self._soxl_record(self._summary(), 100.0)
+        self.assertEqual(linked["attribution"], "owner-linked")
+        self.assertFalse(linked["owner_link"]["traded_differs_from_recommendation"])
+        self.assertAlmostEqual(linked["net_pnl"], 608.92)  # 620 - 10 - 1.08 fees
+
+    def test_unlinked_records_are_not_touched_by_another_contracts_link(self):
+        self._publish_signal_run(signals=[_soxl_signal()])
+        self._ingest(
+            [
+                _deal("D1", "O1", MSFT_PUT_CODE, "SELL", 1.0, 0.80, "2026-01-07 14:30:00"),
+                _deal("D2", "O1", MSFT_PUT_CODE, "BUY", 1.0, 0.20, "2026-02-06 14:30:00"),
+                _deal("D3", "O2", UBER_PUT_CODE, "SELL", 1.0, 1.00, "2026-01-08 14:30:00"),
+            ],
+            {"O1": 1.0, "O2": 0.55},
+        )
+        self._link(traded={"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": 100.0})
+        summary = self._summary()
+
+        msft = next(r for r in summary["outcomes"] if r["ticker"] == "MSFT")
+        self.assertEqual(msft["attribution"], "unattributed")
+        self.assertEqual(msft["outcome_status"], "measured")
+        self.assertAlmostEqual(msft["net_pnl"], 59.0)  # 80 - 20 - 1.0 fees
+
+        uber = next(r for r in summary["outcomes"] if r["ticker"] == "UBER")
+        self.assertEqual(uber["attribution"], "unattributed")
+        self.assertEqual(uber["outcome_status"], "open")
+        self.assertIsNone(uber["net_pnl"])  # collected premium is never realized
+
+        # Marked taken but no broker fill yet: labelled, never credited with P&L.
+        soxl = self._soxl_record(summary, 100.0)
+        self.assertEqual(soxl["attribution"], "owner-linked")
+        self.assertEqual(soxl["outcome_status"], "pending")
+        self.assertIsNone(soxl["net_pnl"])
+        self.assertEqual(summary["totals"]["owner_linked_count"], 1)
+
+    def test_ambiguous_owner_links_never_attribute(self):
+        self._publish_signal_run(generated_at="2026-01-02T15:00:00", run_id="run-1", signals=[_soxl_signal()])
+        self._publish_signal_run(generated_at="2026-01-03T15:00:00", run_id="run-2", signals=[_soxl_signal()])
+        self._ingest(self._soxl_106_deals(), {"O1": 1.08})
+        traded = {"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": 106.0}
+        self._link(traded=dict(traded), run_id="run-1")
+        self._link(traded=dict(traded), run_id="run-2")
+
+        trade = self._soxl_record(self._summary(), 106.0)
+        self.assertEqual(trade["attribution"], "unattributed")
+        self.assertEqual(trade["owner_link_conflict"], ["run-1", "run-2"])
+        self.assertNotIn("owner_link", trade)
+        self.assertIsNone(trade["quoted_credit_per_contract"])
+
+    def test_link_to_an_unstored_run_is_surfaced_but_never_attributed(self):
+        self._publish_signal_run(run_id="run-1", signals=[_soxl_signal()])
+        self._ingest(self._soxl_106_deals(), {"O1": 1.08})
+        self._link(
+            traded={"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": 106.0},
+            run_id="run-gone",
+        )
+
+        trade = self._soxl_record(self._summary(), 106.0)
+        self.assertEqual(trade["attribution"], "unattributed")
+        self.assertEqual(trade["owner_link"]["run_id"], "run-gone")
+        self.assertIsNone(trade["quoted_credit_per_contract"])
 
 
 if __name__ == "__main__":

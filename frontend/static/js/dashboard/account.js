@@ -2,7 +2,7 @@
  * Account module for handling portfolio data
  * Manages account summary and positions display
  */
-import { fetchAccountData, fetchPositions, fetchEarningsStatus, refreshAllEarnings, updateSingleEarnings } from './api.js';
+import { fetchAccountData, fetchPositions, fetchEarningsStatus, refreshAllEarnings, updateSingleEarnings } from './api-portfolio.js';
 import { showAlert } from '../utils/alerts.js';
 import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
 

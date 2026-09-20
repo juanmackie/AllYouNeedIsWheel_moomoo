@@ -37,10 +37,8 @@ class OptionsService:
         # Initialize composed services with explicit dependencies
         # Order matters: leaf dependencies first, then consumers
         self.watchlist_manager = WatchlistManager(config_provider=self, db=self.db)
-        # VIX/macro enrichment removed: wheel decisions use broker truth only.
         self.portfolio_context_helper = PortfolioContext(
             portfolio_service_provider=self,
-            vix_regime_provider=None,
             config_provider=self,
         )
         self.options_data = OptionsDataService(
@@ -83,7 +81,7 @@ class OptionsService:
 
             logger.info("Creating new moomoo connection")
 
-            from core.connection import MoomooConnection
+            from core.connection_manager import MoomooConnection
 
             self.connection = MoomooConnection(
                 host=str(self.config.get("host", "127.0.0.1")),
@@ -116,13 +114,12 @@ class OptionsService:
         """Get effective watchlist (delegates to watchlist_manager)"""
         return self.watchlist_manager.get_effective_watchlist(growth_mode_config=self.config.get("growth_mode", {}))
 
-    def _get_screening_profile(self, option_type, dte=None, profile_type=None, vix_regime=None):
+    def _get_screening_profile(self, option_type, dte=None, profile_type=None):
         """Get screening profile (delegates to watchlist_manager)"""
         return self.watchlist_manager.get_screening_profile(
             option_type,
             dte,
             profile_type,
-            vix_regime,
             growth_mode_config=self.config.get("growth_mode", {}),
         )
 

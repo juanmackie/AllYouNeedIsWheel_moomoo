@@ -19,11 +19,6 @@ NY_TZ = ZoneInfo("America/New_York")
 # core/presets.py and cache TTLs from their call sites.
 
 # Secondary composite weights. These explain qualification quality but never
-# outrank the capital-normalized rank key.
-COMPOSITE_W_CAPITAL = 0.40
-COMPOSITE_W_LIQUIDITY = 0.25
-COMPOSITE_W_DELTA = 0.20
-COMPOSITE_W_EVENT = 0.15
 
 # Max loss estimates
 PUT_MAX_LOSS_ESTIMATE_PCT = 0.10
@@ -39,18 +34,6 @@ ROLL_THETA_HIGH_THRESHOLD = 0.50  # daily theta decay ($) considered high
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
     return max(minimum, min(maximum, value))
-
-
-def _score_proximity(value: float, target: float, tolerance: float) -> float:
-    if tolerance <= 0:
-        return 0.0
-    return _clamp(1 - (abs(value - target) / tolerance))
-
-
-def _score_positive_metric(value: float, ideal_value: float) -> float:
-    if ideal_value <= 0:
-        return 0.0
-    return _clamp(value / ideal_value)
 
 
 def _calculate_mid_price(bid: float, ask: float, last: float = 0.0) -> float:
@@ -201,63 +184,6 @@ def capital_velocity_per_day(premium_per_contract: float, capital_base: float, d
     if premium <= 0 or capital <= 0 or days <= 0:
         return 0.0
     return premium / (capital * days)
-
-
-def _compute_shared_subscores(decision, profile: dict, growth_mode_weights: dict | None = None) -> None:
-    """
-    Compute all sub-scores that are shared between CALL and PUT.
-    Operates in-place on the WheelDecision.
-    When growth_mode_weights is provided, sub-score computations tilt toward
-    growth-oriented priorities (premium, capital efficiency, theta decay).
-    """
-    _growth_w = growth_mode_weights or {}
-    _growth_active = bool(_growth_w.get("enabled", True))
-    decision.oi_score = _score_positive_metric(decision.open_interest, profile["ideal_open_interest"]) * 100
-    decision.volume_score = _score_positive_metric(decision.volume, profile["ideal_volume"]) * 100
-    decision.spread_score = _clamp(1 - (decision.spread_pct / max(profile["ideal_spread_pct"], 1)), 0, 1) * 100
-
-    if _growth_active:
-        # Growth-tuned liquidity: volume matters more (ease of entry/exit)
-        liquidity_raw = (decision.oi_score * 0.35 + decision.volume_score * 0.35 + decision.spread_score * 0.30) / 100
-    else:
-        liquidity_raw = (decision.oi_score * 0.45 + decision.volume_score * 0.2 + decision.spread_score * 0.35) / 100
-    liq_mult = profile.get("liquidity_weight_multiplier", 1.0)
-    decision.liquidity_score = _clamp(liquidity_raw * liq_mult) * 100
-
-    if decision.iv_adjusted_return > 0:
-        target_iv_adj = profile.get("target_iv_adjusted", 50)
-        if _growth_active:
-            target_iv_adj = max(target_iv_adj, 60)  # higher bar for IV-adjusted return in growth mode
-        decision.iv_adjusted_score = _score_positive_metric(decision.iv_adjusted_return, target_iv_adj) * 100
-
-    if decision.stock_price > 0 and abs(decision.delta) > 0:
-        decision._theta_delta_ratio = abs(decision.theta) / (abs(decision.delta) * decision.stock_price)
-    decision.tdr_score = (
-        _score_positive_metric(decision._theta_delta_ratio, profile.get("target_theta_delta_ratio", 0.005)) * 100
-    )
-
-    if decision.premium_per_contract > 0:
-        decision.ev_score = _clamp(decision.expected_value / max(decision.premium_per_contract, 0.01)) * 100
-
-    logger.debug(
-        "shared_subscores ticker=%s option_type=%s dte=%d liquidity=%.1f iv_adj=%.1f delta_score=%.1f dte_score=%.1f",
-        getattr(decision, "ticker", "?"),
-        getattr(decision, "option_type", "?"),
-        decision.dte,
-        decision.liquidity_score,
-        decision.iv_adjusted_score,
-        decision.delta_score,
-        decision.dte_score,
-    )
-    decision.delta_score = (
-        _score_proximity(abs(decision.delta), profile["target_delta"], profile["delta_tolerance"]) * 100
-    )
-    decision.dte_score = (
-        _score_proximity(decision.dte, profile["preferred_dte"], max(profile["preferred_dte"], 10)) * 100
-    )
-
-    desired_otm = profile.get("default_otm_pct", 10)
-    decision.otm_score = _score_proximity(decision.otm_pct, desired_otm, max(desired_otm * 0.75, 6)) * 100
 
 
 def _compute_roll_pressure(decision) -> float:

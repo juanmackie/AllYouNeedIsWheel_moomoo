@@ -520,10 +520,6 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .recommendation-card__score-row {
   display: flex; justify-content: center; gap: 8px; flex-wrap: wrap;
 }
-.recommendation-card .score-badge {
-  font-family: var(--ft-font-mono); font-weight: 700; font-size: 18px;
-  color: var(--ft-ink); letter-spacing: 0;
-}
 .recommendation-card .signal-data-source,
 .recommendation-card .recommendation-warnings {
   text-align: center; font-size: 12px; color: var(--ft-ink-mute);
@@ -546,16 +542,13 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
   color: var(--ft-ink-mute);
   min-width: 0;
 }
-.recommendation-card .csp-details hr, .recommendation-card .cc-details hr, .recommendation-card .growth-mode-details hr, .recommendation-card .score-drivers hr, .recommendation-card .hard-blockers hr {
+.recommendation-card .csp-details hr, .recommendation-card .cc-details hr, .recommendation-card .growth-mode-details hr, .recommendation-card .hard-blockers hr {
   border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 6px 0;
 }
 .recommendation-card .growth-mode-details,
-.recommendation-card .score-drivers,
 .recommendation-card .hard-blockers {
   min-width: 0;
 }
-.recommendation-card .score-drivers__positive,
-.recommendation-card .score-drivers__negative,
 .recommendation-card .hard-blockers-list,
 .recommendation-card .growth-rationale {
   overflow-wrap: anywhere;

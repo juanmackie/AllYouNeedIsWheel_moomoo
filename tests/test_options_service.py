@@ -101,7 +101,7 @@ class TestOptionsServiceConnectionConfig(unittest.TestCase):
     def test_ensure_connection_propagates_portfolio_env(self):
         with (
             patch("api.services.config.get_config") as mock_get_config,
-            patch("core.connection.MoomooConnection") as mock_moomoo,
+            patch("core.connection_manager.MoomooConnection") as mock_moomoo,
             patch("db.database.OptionsDatabase") as mock_options_db,
         ):
             mock_config = MagicMock()

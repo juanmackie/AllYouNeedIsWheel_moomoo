@@ -1,7 +1,8 @@
 import { state, getSelectedExpirationPreference, getRenderExpirationValue, loadExcludedTickers, ensureTickerDataState } from './options-table-state.js';
 import { calculatePremium, calculateEarningsSummary, updateEarningsSummary } from './options-table-calc.js';
 import { showAlert } from '../utils/alerts.js';
-import { fetchOptionData, fetchTickers, fetchAccountData, fetchOptionExpirations } from './api.js';
+import { fetchOptionData, fetchOptionExpirations } from './api-options.js';
+import { fetchTickers, fetchAccountData } from './api-portfolio.js';
 import { updateOptionsTable, addTickerRowToTable, displayPremiumSummary, showToast, addPutQtyInputEventListeners } from './options-table-rendering.js';
 
 const expirationPrefetches = new Map();

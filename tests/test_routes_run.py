@@ -7,6 +7,29 @@ from flask import Flask
 from api.routes.run import bp
 
 
+def _taken_row(run_id, link_key="link-1"):
+    """Stored ``trade_events`` row shape for an owner-recorded taken link."""
+    return {
+        "event_type": "taken",
+        "ticker": "SOXL",
+        "option_type": "PUT",
+        "strike": 100.0,
+        "expiration": "20260918",
+        "env": "REAL",
+        "account_id": "acct-1",
+        "provenance": "owner_recorded",
+        "timestamp": "2026-09-20T00:00:00+00:00",
+        "details": {
+            "run_id": run_id,
+            "link_key": link_key,
+            "lane": "csp_picks",
+            "recommendation": {"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": 100.0},
+            "traded": None,
+            "recorded_at": "2026-09-20T00:00:00+00:00",
+        },
+    }
+
+
 class TestRunRoute(unittest.TestCase):
     def setUp(self):
         self.db = MagicMock()
@@ -38,6 +61,36 @@ class TestRunRoute(unittest.TestCase):
         self.assertEqual(payload["snapshot"]["effective_status"], "stale")
         self.assertEqual(snapshot["run"]["status"], "ready")
         self.assertTrue(snapshot["tradeable"])
+
+    def test_get_run_exposes_only_the_current_runs_taken_links(self):
+        snapshot = {
+            "run": {
+                "run_id": "run-a",
+                "status": "ready",
+                "errors": [],
+                "coverage_complete": True,
+                "quote_fetched_at": {},
+                "max_tradeable_age_sec": 120,
+            },
+            "signals": [{"ticker": "SOXL", "option_type": "PUT", "expiration": "20260918", "strike": 100.0}],
+        }
+        self.db.get_latest_attempt.return_value = None
+        self.db.get_latest_snapshot.return_value = snapshot
+        self.db.get_trade_events.return_value = [
+            _taken_row("run-a", link_key="link-a"),
+            _taken_row("run-b", link_key="link-b"),
+        ]
+
+        with patch("api.services.config.get_current_identity", return_value=("REAL", "acct-1")):
+            with self.app.test_client() as client:
+                response = client.get("/api/run")
+
+        payload = response.get_json()
+        # Only the run on screen may claim a taken link; another run's link is
+        # never attached to this card surface.
+        self.assertEqual([link["run_id"] for link in payload["taken_links"]], ["run-a"])
+        self.assertEqual(payload["taken_links"][0]["recommendation"]["ticker"], "SOXL")
+        self.assertEqual(payload["snapshot"]["run"]["run_id"], "run-a")
 
     @patch("api.routes.run._get_runner")
     @patch("api.routes.run.start_background_refresh", return_value=True)

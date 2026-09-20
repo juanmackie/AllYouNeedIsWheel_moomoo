@@ -254,12 +254,10 @@ class TestRecommendationEngine(unittest.TestCase):
             "implied_volatility": 0.30,
             "open_interest": 500,
             "volume": 100,
-            "score": 60.0,
             "quality_tier": "marginal",
             "profile_type": "monthly",
             "research_only": False,
             "warnings": [],
-            "wheel_decision": {"contract_score": 60.0, "confidence_score": 100},
         }
         lower_capital_return = {
             "ticker": "BBB",
@@ -279,12 +277,10 @@ class TestRecommendationEngine(unittest.TestCase):
             "implied_volatility": 0.30,
             "open_interest": 500,
             "volume": 100,
-            "score": 90.0,
             "quality_tier": "qualified",
             "profile_type": "monthly",
             "research_only": False,
             "warnings": [],
-            "wheel_decision": {"contract_score": 90.0, "confidence_score": 100},
         }
 
         with (
@@ -332,7 +328,6 @@ class TestRecommendationEngine(unittest.TestCase):
                 "implied_volatility": 0.30,
                 "open_interest": 500,
                 "volume": 100,
-                "score": 70.0,
                 "quality_tier": quality_tier,
                 "cash_required": strike * 100,
                 "recommended_contracts": 1,
@@ -340,7 +335,6 @@ class TestRecommendationEngine(unittest.TestCase):
                 "profile_type": "monthly",
                 "research_only": False,
                 "warnings": [],
-                "wheel_decision": {"contract_score": 70.0, "confidence_score": 100},
             }
 
         # HIGH is marginal but has the best capital return; LOW2 has the worst.
@@ -387,10 +381,8 @@ class TestRecommendationEngine(unittest.TestCase):
             "implied_volatility": 0.35,
             "open_interest": 300,
             "volume": 200,
-            "score": 85.0,
             "profile_type": "monthly",
             "warnings": [],
-            "wheel_decision": {"contract_score": 85.0, "confidence_score": 100},
         }
 
         with (
@@ -406,7 +398,6 @@ class TestRecommendationEngine(unittest.TestCase):
 
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_decision = MagicMock()
-            mock_decision.contract_score = 85.0
             mock_decision.strike = 160
             mock_decision.expiration = "20240315"
             mock_decision.dte = 21
@@ -428,10 +419,8 @@ class TestRecommendationEngine(unittest.TestCase):
             mock_decision.breakeven = 158.0
             mock_decision.breakeven_buffer_pct = 0.05
             mock_decision.cash_required = 16000.0
-            mock_decision.score_details = {}
             mock_decision.rationale = ["Good premium"]
             mock_decision.warnings = []
-            mock_decision.to_dict.return_value = {"score": 85.0}
             mock_score.return_value = mock_decision
 
             result = engine.get_top_recommendations(limit=5)
@@ -452,7 +441,6 @@ class TestRecommendationEngine(unittest.TestCase):
 
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_decision = MagicMock()
-            mock_decision.contract_score = 85.0
             mock_decision.strike = 160
             mock_decision.expiration = "20240315"
             mock_decision.dte = 21
@@ -474,7 +462,6 @@ class TestRecommendationEngine(unittest.TestCase):
             mock_decision.breakeven = 158.0
             mock_decision.breakeven_buffer_pct = 0.05
             mock_decision.cash_required = 16000.0
-            mock_decision.score_details = {}
             mock_decision.rationale = ["Good premium"]
             mock_decision.warnings = []
             mock_decision.to_dict.return_value = {}
@@ -547,7 +534,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "excess_liquidity": 50000.0,
             "short_calls": {},
             "short_puts": {},
-            "vix_regime": {"regime": "normal", "vix": 18.0},
         }
         self.mock_portfolio_context_provider.get_portfolio_context.return_value = self.mock_portfolio_context
         self.mock_watchlist_manager.get_effective_watchlist.return_value = []
@@ -593,7 +579,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
                 "dte": 21,
                 "mid_price": 1.25,
                 "premium_per_contract": 125.0,
-                "score": 88.0,
                 "annualized_return": 21.0,
                 "iv_adjusted_return": 18.0,
                 "otm_pct": 7.5,
@@ -613,7 +598,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
                 "open_interest": 500,
                 "volume": 100,
                 "implied_volatility": 0.32,
-                "score_details": {},
                 "size_fit": 1.0,
                 "expected_move_buffer": 0.0,
                 "wheel_decision": {
@@ -668,7 +652,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "dte": 21,
             "mid_price": 1.25,
             "premium_per_contract": 125.0,
-            "score": 88.0,
             "annualized_return": 21.0,
             "iv_adjusted_return": 18.0,
             "otm_pct": 7.5,
@@ -688,11 +671,9 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "open_interest": 500,
             "volume": 100,
             "implied_volatility": 0.32,
-            "score_details": {},
             "size_fit": 1.0,
             "expected_move_buffer": 0.0,
             "wheel_decision": {
-                "contract_score": 88.0,
                 "confidence_score": 65,
                 "price_source": "yfinance",
                 "chain_source": "yfinance",
@@ -749,7 +730,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "dte": 21,
             "mid_price": 1.25,
             "premium_per_contract": 125.0,
-            "score": 88.0,
             "annualized_return": 21.0,
             "iv_adjusted_return": 18.0,
             "otm_pct": 7.5,
@@ -769,11 +749,9 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             "open_interest": 500,
             "volume": 100,
             "implied_volatility": 0.32,
-            "score_details": {},
             "size_fit": 1.0,
             "expected_move_buffer": 0.0,
             "wheel_decision": {
-                "contract_score": 88.0,
                 "confidence_score": 65,
                 "price_source": "yfinance",
                 "chain_source": "yfinance",
@@ -860,7 +838,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
 
         fake_decision = MagicMock()
         fake_decision.hard_blockers = []
-        fake_decision.contract_score = 75.0
         fake_decision.max_contracts = 1
         fake_decision.recommended_contracts = 1
         fake_decision.strike = 140.0
@@ -887,7 +864,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         fake_decision.size_fit = 1.0
         fake_decision.expected_move_buffer = 0.0
         fake_decision.wheel_decision = {}
-        fake_decision.score_details = {}
         fake_decision.rationale = ["Good premium"]
         fake_decision.warnings = []
         fake_decision.breakeven = 138.45
@@ -966,7 +942,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
 
         fake_decision = MagicMock()
         fake_decision.hard_blockers = []
-        fake_decision.contract_score = 75.0
         fake_decision.max_contracts = 1
         fake_decision.recommended_contracts = 1
         fake_decision.strike = 90.0
@@ -1080,7 +1055,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             target_delta = float(engine._preset_profile.get("csp_target_delta", 0.30) or 0.30)
             d.max_contracts = 3 if target_delta >= 0.35 else 1
             d.recommended_contracts = d.max_contracts
-            d.contract_score = 75.0
             d.strike = 90.0
             d.expiration = future_exp
             d.dte = 35
@@ -1144,7 +1118,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         engine = self._import_engine()
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_decision = MagicMock()
-            mock_decision.contract_score = 85.0
             mock_decision.strike = 160
             mock_decision.expiration = "20240315"
             mock_decision.dte = 21
@@ -1165,10 +1138,8 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             mock_decision.breakeven = 158.0
             mock_decision.breakeven_buffer_pct = 0.05
             mock_decision.cash_required = 16000.0
-            mock_decision.score_details = {}
             mock_decision.rationale = ["Good premium"]
             mock_decision.warnings = []
-            mock_decision.to_dict.return_value = {"score": 85.0}
             mock_score.return_value = mock_decision
 
             result = engine.get_top_recommendations(limit=5)
@@ -1188,7 +1159,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         engine = self._import_engine()
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_decision = MagicMock()
-            mock_decision.contract_score = 85.0
             mock_decision.strike = 160
             mock_decision.expiration = "20240315"
             mock_decision.dte = 21
@@ -1210,10 +1180,8 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             mock_decision.breakeven = 158.0
             mock_decision.breakeven_buffer_pct = 0.05
             mock_decision.cash_required = 16000.0
-            mock_decision.score_details = {}
             mock_decision.rationale = ["Good premium"]
             mock_decision.warnings = []
-            mock_decision.to_dict.return_value = {"score": 85.0}
             mock_score.return_value = mock_decision
 
             result = engine.get_top_recommendations(limit=5)
@@ -1232,7 +1200,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
 
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_decision = MagicMock()
-            mock_decision.contract_score = 85.0
             mock_decision.strike = 160
             mock_decision.expiration = "20240315"
             mock_decision.dte = 21
@@ -1254,10 +1221,8 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             mock_decision.breakeven = 158.0
             mock_decision.breakeven_buffer_pct = 0.05
             mock_decision.cash_required = 16000.0
-            mock_decision.score_details = {}
             mock_decision.rationale = ["Good premium"]
             mock_decision.warnings = []
-            mock_decision.to_dict.return_value = {"score": 85.0}
             mock_score.return_value = mock_decision
 
             result = engine.get_top_recommendations(limit=5)
@@ -1273,7 +1238,6 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         engine = self._import_engine()
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_decision = MagicMock()
-            mock_decision.contract_score = 85.0
             mock_decision.strike = 160
             mock_decision.expiration = "20240315"
             mock_decision.dte = 21
@@ -1295,10 +1259,8 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             mock_decision.breakeven = 158.0
             mock_decision.breakeven_buffer_pct = 0.05
             mock_decision.cash_required = 16000.0
-            mock_decision.score_details = {}
             mock_decision.rationale = ["Good premium"]
             mock_decision.warnings = []
-            mock_decision.to_dict.return_value = {"score": 85.0}
             mock_score.return_value = mock_decision
 
             result = engine.get_top_recommendations(limit=5)
@@ -1392,7 +1354,6 @@ class TestRecommendationEngineDedup(unittest.TestCase):
             "excess_liquidity": 50000.0,
             "short_calls": {},
             "short_puts": {},
-            "vix_regime": {"regime": "normal", "vix": 18.0},
         }
         self.mock_portfolio_context_provider.get_portfolio_context.return_value = self.mock_portfolio_context
         self.mock_watchlist_manager.get_effective_watchlist.return_value = []
@@ -1429,7 +1390,6 @@ class TestRecommendationEngineDedup(unittest.TestCase):
                 "mid_price": 1.55,
                 "premium_per_contract": 155.0,
                 "annualized_return": 35.0,
-                "score": 85.0,
                 "ticker": ticker,
                 "delta": 0.18,
                 "iv_rank": 0.6,
@@ -1439,7 +1399,6 @@ class TestRecommendationEngineDedup(unittest.TestCase):
                 "cash_required": 6000.0,
                 "rationale": ["Good premium"],
                 "warnings": [],
-                "score_details": {},
             }
         ]
 
@@ -1480,7 +1439,6 @@ class TestRecommendationEngineDedup(unittest.TestCase):
             "excess_liquidity": 50000.0,
             "short_calls": {},
             "short_puts": {},
-            "vix_regime": {"regime": "normal", "vix": 18.0},
         }
         engine = self._import_engine()
 
@@ -1489,7 +1447,6 @@ class TestRecommendationEngineDedup(unittest.TestCase):
 
         with patch("api.services.recommendations.score_contract") as mock_score:
             mock_decision = MagicMock()
-            mock_decision.contract_score = 85.0
             mock_decision.strike = 75
             mock_decision.expiration = "20240315"
             mock_decision.dte = 21
@@ -1510,11 +1467,9 @@ class TestRecommendationEngineDedup(unittest.TestCase):
             mock_decision.breakeven = 73.0
             mock_decision.breakeven_buffer_pct = 0.05
             mock_decision.cash_required = 7500.0
-            mock_decision.score_details = {}
             mock_decision.rationale = ["Good premium"]
             mock_decision.warnings = []
             mock_decision.to_dict.return_value = {
-                "score": 85.0,
                 "covered_call_intent": "income",
                 "score_rationale": "",
                 "stress_loss": 0,
@@ -1672,11 +1627,9 @@ class TestRecommendationEngineSignalFields(unittest.TestCase):
         mock_decision.breakeven = 73.0
         mock_decision.breakeven_buffer_pct = 0.05
         mock_decision.cash_required = 7500.0
-        mock_decision.score_details = {}
         mock_decision.rationale = ["Good premium"]
         mock_decision.warnings = []
         mock_decision.to_dict.return_value = {
-            "score": 85.0,
             "covered_call_intent": "income",
             "score_rationale": "Strong growth candidate",
             "stress_loss": 500,
@@ -1795,11 +1748,9 @@ class TestRecommendationEngineSignalFields(unittest.TestCase):
         mock_decision.breakeven = 73.0
         mock_decision.breakeven_buffer_pct = 0.05
         mock_decision.cash_required = 0
-        mock_decision.score_details = {}
         mock_decision.rationale = ["Good call premium"]
         mock_decision.warnings = []
         mock_decision.to_dict.return_value = {
-            "score": 85.0,
             "covered_call_intent": "income",
             "score_rationale": "Strong growth candidate",
             "stress_loss": 300,
@@ -1840,8 +1791,6 @@ class TestRecommendationEngineSignalFields(unittest.TestCase):
                     "implied_volatility": 0.35,
                     "open_interest": 2000,
                     "volume": 1000,
-                    "score": 85.0,
-                    "contract_score": 85.0,
                     "wheel_decision": mock_decision.to_dict(),
                     "cash_required": 0,
                     "breakeven": 155.0,
@@ -1870,7 +1819,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
         from core.wheel_decision import WheelDecision
 
         d = MagicMock(spec=WheelDecision)
-        d.contract_score = 85.0
         d.strike = 160
         d.expiration = "20240315"
         d.dte = 21
@@ -1892,12 +1840,10 @@ class TestRecommendationNonDuplication(unittest.TestCase):
         d.breakeven = 158.0
         d.breakeven_buffer_pct = 0.05
         d.cash_required = 16000.0
-        d.score_details = {}
         d.rationale = ["Good premium"]
         d.warnings = []
         d.quote_quality = "tradable"
         d.blocked_reason_codes = []
-        d.to_dict.return_value = {"score": 85.0, "quote_quality": "tradable", "blocked_reason_codes": []}
         return d
 
     def test_signals_present_then_legacy_fields_absent(self):
@@ -1930,10 +1876,8 @@ class TestRecommendationNonDuplication(unittest.TestCase):
                         "implied_volatility": 0.35,
                         "open_interest": 500,
                         "volume": 200,
-                        "score": 75.0,
                         "profile_type": "monthly",
                         "warnings": [],
-                        "wheel_decision": {"contract_score": 75.0, "confidence_score": 100},
                     }
                 ]
                 result = engine.get_top_recommendations(limit=5)
@@ -2012,7 +1956,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
                         "mid_price": 3.10,
                         "premium_per_contract": 310.0,
                         "annualized_return": 30.0,
-                        "score": 80.0,
                         "ticker": "MSFT",
                         "delta": 0.18,
                         "iv_rank": 0.6,
@@ -2022,8 +1965,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
                         "cash_required": 28000.0,
                         "rationale": ["Good premium"],
                         "warnings": [],
-                        "score_details": {},
-                        "wheel_decision": {"score": 80.0, "quote_quality": "tradable", "blocked_reason_codes": []},
                     }
                 ]
                 result = engine.get_top_recommendations(limit=5)
@@ -2156,7 +2097,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
                     "implied_volatility": 0.35,
                     "open_interest": 500,
                     "volume": 200,
-                    "score": 75.0,
                     "iv_rank": 0.65,
                     "iv_status": "above_avg",
                     "iv_env_adjustment": 5,
@@ -2170,9 +2110,7 @@ class TestRecommendationNonDuplication(unittest.TestCase):
                         "iv_rank": 0.65,
                         "iv_env_adjustment": 5,
                         "iv_status": "above_avg",
-                        "contract_score": 75.0,
                     },
-                    "score_details": {},
                     "cash_reserve_enabled": True,
                     "profile_type": "monthly",
                 }
@@ -2334,8 +2272,8 @@ class TestRecommendationNonDuplication(unittest.TestCase):
         result = engine._find_affordable_csp_strike(100.0, portfolio, strikes)
         self.assertEqual(result[0], 85.0)
 
-    def test_watchlist_csp_scoring_applies_earnings_and_vix_context(self):
-        """Headline CSP scoring should apply earnings risk and pass VIX into profile selection."""
+    def test_watchlist_csp_scoring_applies_earnings_context(self):
+        """Headline CSP scoring should apply earnings risk to the decision."""
         engine = self._import_engine()
         self.mock_iv_earnings.get_earnings_score_impact.return_value = (-30, "earnings soon")
         self.mock_iv_earnings.get_earnings_info.return_value = {
@@ -2367,7 +2305,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
             "broker_buying_power": 50000.0,
             "cash_available_for_csp": 50000.0,
             "account_value": 100000.0,
-            "vix_regime": {"regime": "fear", "vix": 32, "delta_adjustment": -0.03},
         }
 
         decision = engine._score_csp_contract(contract, "AAPL", 100.0, 37, portfolio, {})
@@ -2376,11 +2313,9 @@ class TestRecommendationNonDuplication(unittest.TestCase):
         self.assertEqual(decision.earnings_adjustment, -30)
         self.assertEqual(decision.earnings_date, "2026-07-15")
         self.assertEqual(decision.days_to_earnings, 5)
-        self.assertEqual(decision.vix_regime, "fear")
         self.mock_watchlist_manager.get_screening_profile.assert_called_with(
             "PUT",
             dte=37,
-            vix_regime=portfolio["vix_regime"],
             growth_mode_config=engine._preset_profile,
         )
 
@@ -2480,10 +2415,8 @@ class TestRiskTierRanking(unittest.TestCase):
             "implied_volatility": 0.35,
             "open_interest": 500,
             "volume": 200,
-            "score": 75.0,
             "profile_type": "monthly",
             "warnings": [],
-            "wheel_decision": {"contract_score": 75.0, "confidence_score": 100},
             # earnings metadata missing -> unknown
         }
         known_risk = dict(unknown_risk)

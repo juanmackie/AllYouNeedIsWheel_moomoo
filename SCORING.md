@@ -58,11 +58,15 @@ For CSPs, `capital_base = strike * 100` (secured cash). For covered calls,
 per-contract `premium_velocity_per_day = bid_premium_per_contract / DTE`
 remains visible and breaks capital-velocity ties.
 
-The compact composite uses four secondary explainers: capital efficiency,
-liquidity/quality, delta fit, and event safety. Delta-based POP, expected-value
-proxy, IV adjustment, and Greeks diagnostics remain heuristics, not calibrated
-probabilities, expectancy, or profitability evidence. None can outrank a
-capital-velocity result.
+Delta-based POP, expected-value proxy, IV adjustment, and Greeks diagnostics
+are heuristics, not calibrated probabilities, expectancy, or profitability
+evidence, and none of them can outrank a capital-velocity result.
+
+The compact composite score (and the sub-scores that fed it) was **removed on
+2026-09-20**: it could never gate or reorder a candidate, and a risk-flavoured
+number that cannot affect the outcome only implies influence it does not have.
+Quality/event tiers, delta, IV rank, and the midpoint remain as visible risk
+information; the ordering contract above is unchanged.
 
 ## Deterministic ordering
 
