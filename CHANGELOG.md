@@ -1,3 +1,60 @@
+## 2026-09-20 — Exit rules completed, IV history sample fixed
+
+Three verified gaps closed. No new dependencies, no new data source, and no
+change to the shortlist ranking key.
+
+- **Loss stop added to the exit playbook.** `ExitThresholds.stop_loss_pct`
+  (default -100%, i.e. the mark reached 2x the entry credit) closes a losing
+  short *before* the roll window, so a position already underwater cannot be
+  quietly rolled instead of closed. This required a contract change:
+  `captured_profit_pct_for_short` previously floored losses at 0.0 (with a test
+  pinning that), which made any loss-side rule arithmetically unreachable. It is
+  now signed — negative means the buy-back costs more than the credit taken in —
+  and its pinned test asserts -50.0 instead of 0.0. It had exactly one
+  production consumer (`core/position_scorer.py`).
+- **Ex-dividend early-assignment risk is now modelled for ITM short calls.**
+  `core/exit_playbook.py` had documented this as intentionally unmodelled because
+  "no free-tier dividend feed exists" — but the app has been fetching, caching,
+  persisting (schema v11) and displaying `ex_dividend_date` for some time, and
+  `earnings_info` already reached `_evaluate_position_exit`, which silently read
+  only `days_to_earnings`. New rule 1b closes an ITM short CALL whose ex-div falls
+  before expiry (rolling past ex-div is the stated remedy) and adds a context
+  note for a call within 5% OTM; dividends drive early exercise of calls only, so
+  a short PUT never triggers it. `get_earnings_info` now returns
+  `days_to_ex_dividend` in all three branches, computed on the US market clock
+  per C13. Scope, stated plainly rather than implied: the dividend *date* is
+  modelled, the *amount* is not, so the rule keys on "ITM with ex-div before
+  expiry" instead of the exact extrinsic-vs-dividend test; inventing a payout
+  figure would violate the broker-truth contract.
+- **IV rank no longer measures scan cadence.** `record_iv_data` is called per
+  scored contract, so `iv_history` accumulated dozens of same-day rows carrying
+  each strike's own IV, and `_calculate_iv_rank` min-maxed that pile over 30 days
+  — a number driven by the strike skew and how often the user refreshed. Rank and
+  a new IV percentile now read a one-sample-per-day closest-to-ATM series over a
+  1-year window (`_daily_atm_series`; schema v12 adds the nullable
+  `iv_history.strike` that makes the ATM-most pick possible, with a daily-median
+  fallback for pre-v12 rows). Below 10 daily samples the status is
+  `insufficient_history` and the adjustment is 0, instead of a fabricated
+  neutral 0.5 that rendered as a "moderate" badge. Also fixed: `record_iv_data`
+  seeded `_iv_cache` with a rank computed from one contract's IV, which then
+  served scoring reads for *other* contracts of the same ticker for a full cache
+  TTL.
+
+Two consequences worth stating rather than discovering later. IV history
+retention moves 45 -> 400 days: the 45-day cap was already in
+`DEFAULT_RETENTION_DAYS` and pruned on every database init, so a 1-year window
+was unreachable and history was being silently truncated. And because `iv_rank`
+is display-only (it feeds neither `capital_velocity_per_day`, `quality_tier`,
+`event_tier` nor `confidence_score`), the wider window cannot reorder the
+shortlist even though it does shift ranks toward the middle.
+
+`SCORING.md` records the new rule order, the signed-capture and
+dividend-amount scope notes, and the IV-input definition. `core/`, `api/services/`
+and `db/` DOX files updated.
+
+Verified: 922 backend tests, 93 frontend tests, `ruff check` and
+`ruff format --check` clean.
+
 ## 2026-09-20 — Complexity pass: one profile source, no display-only composite
 
 Deletions, each behaviour-preserving except where stated:

@@ -53,7 +53,7 @@ class TestOptionsDatabase(unittest.TestCase):
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 11)
+        self.assertEqual(cursor.fetchone()[0], 12)
 
         evaluator_tables = {t for t in actual_tables if t.startswith("evaluator_")}
         self.assertEqual(evaluator_tables, set(), f"Evaluator tables should be dropped: {evaluator_tables}")
@@ -179,7 +179,10 @@ class TestOptionsDatabase(unittest.TestCase):
 
     def test_prune_retained_data_removes_expired_operational_history(self):
         """Retention cleanup removes old rows across operational history tables."""
-        old_history = (datetime.now() - timedelta(days=400)).strftime("%Y-%m-%d %H:%M:%S")
+        # Fixed 2000-01-01 rather than "now - N days": iv_history retention is
+        # 400 days (a 1-year IV window needs the headroom), so a 400-day-old row
+        # sits exactly on the cutoff and would flake.
+        old_history = "2000-01-01 00:00:00"
         conn = sqlite3.connect(self.db_path)
         conn.executescript(
             """
@@ -1049,6 +1052,79 @@ class TestPortfolioTransitionAtomic(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIsNone(self.db.get_latest_portfolio_snapshot(env="REAL", account_id="acct1"))
         self.assertEqual(len(self.db.get_trade_events(env="REAL", account_id="acct1")), 0)
+
+
+class TestIvHistoryStrikeMigration(unittest.TestCase):
+    """Schema v12: `iv_history.strike` enables the daily closest-to-ATM series.
+
+    The column is additive and nullable, so an older reader stays valid and a
+    code-only revert leaves the database usable.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "test_iv_migration.db")
+
+    def tearDown(self):
+        close_connection_pool(self.db_path)
+
+    def test_fresh_database_has_strike_column(self):
+        self.db = OptionsDatabase(self.db_path)
+        self.db.close()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(iv_history)")}
+            self.assertIn("strike", cols)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 12)
+        finally:
+            conn.close()
+
+    def test_v11_history_table_gains_strike_and_keeps_rows(self):
+        # Pre-create the v11 shape (no strike) and pin the old version so
+        # migrate_database runs only the v12 block.
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            CREATE TABLE iv_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                implied_volatility REAL NOT NULL,
+                stock_price REAL,
+                option_type TEXT,
+                expiration TEXT,
+                dte INTEGER
+            );
+            INSERT INTO iv_history (ticker, timestamp, implied_volatility, stock_price)
+            VALUES ('AAPL', '2026-01-05 15:30:00', 0.31, 150.0);
+            PRAGMA user_version = 11;
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        migrate_database(self.db_path)
+        migrate_database(self.db_path)  # idempotent: no duplicate-column failure
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(iv_history)")}
+            self.assertIn("strike", cols)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 12)
+            rows = conn.execute("SELECT ticker, implied_volatility, strike FROM iv_history").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], "AAPL")
+            self.assertIsNone(rows[0][2], "pre-existing rows keep an unknown (NULL) moneyness")
+        finally:
+            conn.close()
+
+    def test_save_iv_data_round_trips_strike(self):
+        self.db = OptionsDatabase(self.db_path)
+        self.db.save_iv_data("AAPL", 0.30, stock_price=150.0, option_type="PUT", dte=30, strike=148.0)
+        history = self.db.get_iv_history("AAPL")
+        self.db.close()
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["strike"], 148.0)
 
 
 if __name__ == "__main__":

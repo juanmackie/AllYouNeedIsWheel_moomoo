@@ -666,11 +666,14 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     clone.querySelector('.delta-value').textContent = rec.delta != null ? rec.delta.toFixed(3) : 'N/A';
     const ivRankEl = clone.querySelector('.iv-rank');
     const ivStatus = rec.iv_status || rec.wheel_decision?.iv_status;
-    if (ivStatus === 'unknown' || (rec.iv_rank == null && rec.implied_volatility == null)) {
-        ivRankEl.textContent = 'IV unavailable';
+    if (ivStatus === 'unknown' || ivStatus === 'insufficient_history' || (rec.iv_rank == null && rec.implied_volatility == null)) {
+        ivRankEl.textContent = ivStatus === 'insufficient_history' ? 'IV n/a (insufficient history)' : 'IV unavailable';
         ivRankEl.classList.add('text-muted');
     } else {
-        ivRankEl.textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%` : 'N/A';
+        const percentile = rec.iv_percentile != null && Number.isFinite(Number(rec.iv_percentile))
+            ? ` (%ile ${(Number(rec.iv_percentile) * 100).toFixed(0)})`
+            : '';
+        ivRankEl.textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%${percentile}` : 'N/A';
     }
 
     // Return on deployed capital per day (decimal fraction -> % / day). This is

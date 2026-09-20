@@ -37,10 +37,13 @@ class TestIVEarningsService(unittest.TestCase):
         self.assertFalse(self.service._is_cache_valid(entry, 4))
 
     def test_iv_rank_returns_neutral_without_db(self):
+        # No database means no history at all: the honest status is
+        # insufficient_history, which suppresses any score adjustment. It must
+        # not masquerade as an observed "normal" environment.
         self.service.db = None
         rank, status = self.service._calculate_iv_rank("AAPL", 0.30)
         self.assertEqual(rank, 0.5)
-        self.assertEqual(status, "normal")
+        self.assertEqual(status, "insufficient_history")
 
     def test_iv_rank_unknown_when_zero_iv(self):
         """Zero IV should return unknown status."""
@@ -58,13 +61,7 @@ class TestIVEarningsService(unittest.TestCase):
 
     def test_iv_rank_with_historical_data(self):
         mock_db = MagicMock()
-        mock_db.get_iv_history.return_value = [
-            {"implied_volatility": 0.20},
-            {"implied_volatility": 0.25},
-            {"implied_volatility": 0.30},
-            {"implied_volatility": 0.35},
-            {"implied_volatility": 0.40},
-        ]
+        mock_db.get_iv_history.return_value = _daily_rows(_RANGE_IVS)
         self.service.db = mock_db
         rank, status = self.service._calculate_iv_rank("AAPL", 0.30)
         self.assertAlmostEqual(rank, 0.5, places=2)
@@ -610,6 +607,55 @@ class TestEarningsEventParsing(unittest.TestCase):
         self.assertEqual(info["ex_dividend_source"], "yfinance")
         self.assertIn("provider_status", info)
         self.assertIn("data_age_hours", info)
+        # The date is in the past relative to any realistic run, so the day count
+        # is explicitly None (never a negative count that could fire a rule).
+        self.assertIsNone(info["days_to_ex_dividend"])
+
+    def test_get_earnings_info_counts_days_to_upcoming_ex_dividend(self):
+        mock_db = MagicMock()
+        mock_db.get_earnings_date.return_value = {
+            "ticker": "AAPL",
+            "earnings_date": "2026-11-01",
+            "ex_dividend_date": "2026-10-10",
+            "time_of_day": "post-market",
+            "earnings_source": "yfinance",
+            "fetch_status": "success",
+            "error_message": None,
+            "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        self.service.db = mock_db
+        with patch("api.services.iv_earnings_service.market_now", return_value=datetime(2026, 9, 20, 13, 0)):
+            info = self.service.get_earnings_info("AAPL")
+        self.assertEqual(info["days_to_ex_dividend"], 20)
+
+    def test_get_earnings_info_keeps_ex_dividend_when_earnings_unknown(self):
+        """A dividend-only ticker must still expose the day count."""
+        mock_db = MagicMock()
+        mock_db.get_earnings_date.return_value = {
+            "ticker": "SCHD",
+            "earnings_date": None,
+            "ex_dividend_date": "2026-09-25",
+            "earnings_source": None,
+            "fetch_status": "success",
+            "error_message": None,
+            "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        self.service.db = mock_db
+        with patch("api.services.iv_earnings_service.market_now", return_value=datetime(2026, 9, 20, 13, 0)):
+            info = self.service.get_earnings_info("SCHD")
+        self.assertIsNone(info["earnings_date"])
+        self.assertEqual(info["days_to_ex_dividend"], 5)
+
+    def test_days_to_ex_dividend_handles_unknown_and_past(self):
+        from api.services.iv_earnings_service import IVEarningsService
+
+        now = datetime(2026, 9, 20, 13, 0)
+        self.assertIsNone(IVEarningsService._days_to_ex_dividend(None, now=now))
+        self.assertIsNone(IVEarningsService._days_to_ex_dividend("", now=now))
+        self.assertIsNone(IVEarningsService._days_to_ex_dividend("not-a-date", now=now))
+        self.assertIsNone(IVEarningsService._days_to_ex_dividend("2026-09-19", now=now))
+        self.assertEqual(IVEarningsService._days_to_ex_dividend("2026-09-20", now=now), 0)
+        self.assertEqual(IVEarningsService._days_to_ex_dividend("2026-09-21", now=now), 1)
 
 
 class TestStaleEventContextRefresh(unittest.TestCase):
@@ -740,6 +786,22 @@ class TestWheelRunnerEventContextHook(unittest.TestCase):
         self.assertIsNotNone(snapshot)
 
 
+def _daily_rows(ivs, start_day=1):
+    """One observation per calendar day (the shape the rank reader expects)."""
+    return [
+        {
+            "timestamp": f"2026-08-{start_day + i:02d} 15:30:00",
+            "implied_volatility": iv,
+            "stock_price": 150.0,
+        }
+        for i, iv in enumerate(ivs)
+    ]
+
+
+# Ten daily samples spanning 0.20-0.40, so a 0.30 current IV ranks at the midpoint.
+_RANGE_IVS = [0.20, 0.22, 0.24, 0.26, 0.28, 0.32, 0.34, 0.36, 0.38, 0.40]
+
+
 class TestIVNormalization(unittest.TestCase):
     """Test IV normalization for mixed decimal/percentage history."""
 
@@ -749,13 +811,7 @@ class TestIVNormalization(unittest.TestCase):
 
         mock_db = MagicMock()
         # Repository normalizes on read, so _calculate_iv_rank receives normalized decimals
-        mock_db.get_iv_history.return_value = [
-            {"implied_volatility": 0.20},
-            {"implied_volatility": 0.25},
-            {"implied_volatility": 0.30},
-            {"implied_volatility": 0.35},
-            {"implied_volatility": 0.40},
-        ]
+        mock_db.get_iv_history.return_value = _daily_rows(_RANGE_IVS)
         svc = IVEarningsService(database=mock_db)
         rank, status = svc._calculate_iv_rank("AAPL", 0.30)
         self.assertAlmostEqual(rank, 0.5, places=2)
@@ -766,13 +822,7 @@ class TestIVNormalization(unittest.TestCase):
         from api.services.iv_earnings_service import IVEarningsService
 
         mock_db = MagicMock()
-        mock_db.get_iv_history.return_value = [
-            {"implied_volatility": 0.20},
-            {"implied_volatility": 0.25},
-            {"implied_volatility": 0.30},
-            {"implied_volatility": 0.35},
-            {"implied_volatility": 0.40},
-        ]
+        mock_db.get_iv_history.return_value = _daily_rows(_RANGE_IVS)
         svc = IVEarningsService(database=mock_db)
         rank, status = svc._calculate_iv_rank("AAPL", 0.40)
         self.assertAlmostEqual(rank, 1.0, places=2)
@@ -805,13 +855,8 @@ class TestIVNormalization(unittest.TestCase):
         mock_db = MagicMock()
         # Raw history with mixed decimal and percentage values — _calculate_iv_rank
         # must normalize each before computing rank.
-        mock_db.get_iv_history.return_value = [
-            {"implied_volatility": 0.20},
-            {"implied_volatility": 0.25},
-            {"implied_volatility": 30.0},  # percentage form: 30%
-            {"implied_volatility": 0.35},
-            {"implied_volatility": 40.0},  # percentage form: 40%
-        ]
+        mixed = [0.20, 0.25, 30.0, 0.35, 40.0, 0.22, 0.24, 0.26, 0.28, 32.0]
+        mock_db.get_iv_history.return_value = _daily_rows(mixed)
         svc = IVEarningsService(database=mock_db)
         # 0.30 (decimal) is at the midpoint of the normalized range [0.20, 0.40]
         rank, status = svc._calculate_iv_rank("AAPL", 0.30)
@@ -823,18 +868,107 @@ class TestIVNormalization(unittest.TestCase):
         from api.services.iv_earnings_service import IVEarningsService
 
         mock_db = MagicMock()
-        mock_db.get_iv_history.return_value = [
-            {"implied_volatility": 0.20},
-            {"implied_volatility": 0.25},
-            {"implied_volatility": 0.30},
-            {"implied_volatility": 0.35},
-            {"implied_volatility": 0.40},
-        ]
+        mock_db.get_iv_history.return_value = _daily_rows(_RANGE_IVS)
         svc = IVEarningsService(database=mock_db)
         # current_iv = 30.0 means 30% → normalized to 0.30
         rank, status = svc._calculate_iv_rank("AAPL", 30.0)
         self.assertAlmostEqual(rank, 0.5, places=2)
         self.assertEqual(status, "normal")
+
+
+class TestIvDailyAtmSeries(unittest.TestCase):
+    """The rank/percentile sample must describe the IV regime, not scan cadence.
+
+    Raw rows are written per scored contract, so before this fix a 30-day
+    min-max ran over dozens of same-day, different-strike observations.
+    """
+
+    def setUp(self):
+        from api.services.iv_earnings_service import IVEarningsService
+
+        self.service = IVEarningsService(database=MagicMock())
+
+    def test_intraday_duplicates_collapse_to_one_sample_per_day(self):
+        rows = [
+            {"timestamp": "2026-08-01 09:35:00", "implied_volatility": 0.30, "strike": 100.0, "stock_price": 100.0},
+            {"timestamp": "2026-08-01 11:00:00", "implied_volatility": 0.31, "strike": 105.0, "stock_price": 100.0},
+            {"timestamp": "2026-08-01 14:00:00", "implied_volatility": 0.32, "strike": 95.0, "stock_price": 100.0},
+        ]
+        self.assertEqual(len(self.service._daily_atm_series(rows)), 1)
+
+    def test_closest_to_atm_row_is_the_daily_sample(self):
+        # Each day carries one ATM row (IV ~0.25) and one absurd deep-ITM row
+        # (IV 0.90). If selection works, the 0.90 outliers never enter the series.
+        rows = []
+        for day in range(1, 11):
+            rows.append(
+                {
+                    "timestamp": f"2026-08-{day:02d} 15:30:00",
+                    "implied_volatility": 0.25,
+                    "strike": 100.0,
+                    "stock_price": 100.0,
+                }
+            )
+            rows.append(
+                {
+                    "timestamp": f"2026-08-{day:02d} 15:30:00",
+                    "implied_volatility": 0.90,
+                    "strike": 60.0,
+                    "stock_price": 100.0,
+                }
+            )
+        series = self.service._daily_atm_series(rows)
+        self.assertEqual(series, [0.25] * 10)
+
+    def test_daily_median_fallback_without_strike(self):
+        # Legacy rows (pre-v12) have no strike: the day's median is used, so a
+        # single 0.90 outlier cannot distort the series.
+        rows = []
+        for day in range(1, 11):
+            for iv in (0.10, 0.20, 0.90):
+                rows.append({"timestamp": f"2026-08-{day:02d} 15:30:00", "implied_volatility": iv})
+        self.assertEqual(self.service._daily_atm_series(rows), [0.20] * 10)
+
+    def test_insufficient_history_suppresses_adjustment(self):
+        self.service.db.get_iv_history.return_value = _daily_rows([0.20, 0.25, 0.30])
+        rank, status = self.service._calculate_iv_rank("AAPL", 0.30)
+        self.assertEqual(status, "insufficient_history")
+        self.assertEqual((rank, status), (0.5, "insufficient_history"))
+        score, rank, status = self.service.get_iv_environment_score("AAPL", 0.30)
+        self.assertEqual(score, 0)
+        self.assertEqual(status, "insufficient_history")
+
+    def test_flat_observed_range_is_normal_not_missing(self):
+        # Ten identical daily samples: history WAS observed and has no range.
+        self.service.db.get_iv_history.return_value = _daily_rows([0.30] * 10)
+        rank, status = self.service._calculate_iv_rank("AAPL", 0.30)
+        self.assertEqual(rank, 0.5)
+        self.assertEqual(status, "normal")
+
+    def test_percentile_is_share_of_samples_below_current(self):
+        series = [0.20, 0.20, 0.20, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40]
+        self.assertAlmostEqual(self.service._calculate_iv_percentile(series, 0.30), 0.3, places=4)
+        self.assertIsNone(self.service._calculate_iv_percentile([], 0.30))
+
+    def test_percentile_exposed_and_cleared_when_history_insufficient(self):
+        self.service.db.get_iv_history.return_value = _daily_rows(_RANGE_IVS)
+        self.service.get_iv_environment_score("AAPL", 0.30)
+        self.assertAlmostEqual(self.service.get_iv_percentile("AAPL"), 0.5, places=2)
+
+        fresh = self.service._iv_cache["AAPL"]
+        fresh["iv_status"] = "insufficient_history"
+        self.assertIsNone(self.service.get_iv_percentile("AAPL"))
+
+    def test_record_iv_data_does_not_seed_the_scoring_cache(self):
+        # Seeding it published a rank computed from one contract's IV as the
+        # ticker environment for every other contract until the TTL expired.
+        self.service.record_iv_data("AAPL", 0.30, stock_price=150.0, strike=150.0)
+        self.assertNotIn("AAPL", self.service._iv_cache)
+
+    def test_record_iv_data_passes_strike_through(self):
+        self.service.record_iv_data("AAPL", 0.30, stock_price=150.0, dte=30, strike=148.0)
+        _args, kwargs = self.service.db.save_iv_data.call_args
+        self.assertEqual(kwargs.get("strike"), 148.0)
 
 
 if __name__ == "__main__":

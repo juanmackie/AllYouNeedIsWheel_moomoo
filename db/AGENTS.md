@@ -8,7 +8,7 @@
 
 ## Ownership
 
-- `schema.py` owns `SCHEMA_VERSION`, table creation, and migrations. Schema v10 added `option_fills` and `account_cash_flows` (additive, idempotent).
+- `schema.py` owns `SCHEMA_VERSION`, table creation, and migrations. Schema v10 added `option_fills` and `account_cash_flows` (additive, idempotent). Schema v12 added `iv_history.strike` (additive, nullable) so IV rank/percentile can read a one-sample-per-day closest-to-ATM series instead of every scored contract; a NULL strike means moneyness unknown and the reader falls back to that day's median IV.
 - `database.py` owns the higher-level database facade.
 - Repository modules own focused persistence behavior for their table/domain.
 - `portfolio_snapshots_repository.py` owns one-snapshot-per-run equity history (`portfolio_snapshots`, schema v7); rows join to `run_metadata` via `run_id` and feed `/api/portfolio/history` plus position-diff trade-event inference.

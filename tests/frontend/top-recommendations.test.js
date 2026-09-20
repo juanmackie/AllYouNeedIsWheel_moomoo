@@ -396,6 +396,89 @@ describe('top-recommendations unknown IV status', () => {
     expect(cards[0].querySelector('.cc-details')?.classList.contains('d-none')).toBe(true);
     expect(cards[0].querySelector('.hard-blockers')?.classList.contains('d-none')).toBe(true);
   });
+
+  it('shows the IV percentile beside the rank when history exists', async () => {
+    const { initializeTopRecommendations, cleanupTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+
+    const { fetchRunState } = await import('../../frontend/static/js/dashboard/api-run.js');
+
+    fetchRunState.mockResolvedValue({
+      success: true,
+      count: 1,
+      signals: [
+        {
+          ticker: 'TEST',
+          option_type: 'PUT',
+          strike: 95.0,
+          expiration: '20260515',
+          dte: 21,
+          bid: 2.0,
+          ask: 2.1,
+          mid_price: 2.05,
+          annualized_return: 50.0,
+          iv_rank: 85,
+          iv_status: 'normal',
+          iv_percentile: 0.92,
+          otm_pct: 5.0,
+          delta: -0.25,
+        },
+      ],
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const ivRankEl = document.querySelector('.recommendation-card .iv-rank');
+    expect(ivRankEl.textContent).toBe('85% (%ile 92)');
+  });
+
+  it('reads absent history as insufficient instead of a moderate rank', async () => {
+    const { initializeTopRecommendations, cleanupTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+
+    const { fetchRunState } = await import('../../frontend/static/js/dashboard/api-run.js');
+
+    fetchRunState.mockResolvedValue({
+      success: true,
+      count: 1,
+      signals: [
+        {
+          ticker: 'TEST',
+          option_type: 'PUT',
+          strike: 95.0,
+          expiration: '20260515',
+          dte: 21,
+          bid: 2.0,
+          ask: 2.1,
+          mid_price: 2.05,
+          annualized_return: 50.0,
+          iv_rank: 50,
+          iv_status: 'insufficient_history',
+          iv_percentile: null,
+          otm_pct: 5.0,
+          delta: -0.25,
+        },
+      ],
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await vi.dynamicImportSettled?.();
+    await new Promise(r => setTimeout(r, 50));
+
+    const ivRankEl = document.querySelector('.recommendation-card .iv-rank');
+    expect(ivRankEl.textContent).toBe('IV n/a (insufficient history)');
+    expect(ivRankEl.classList.contains('text-muted')).toBe(true);
+  });
 });
 
 describe('top-recommendations missing-risk badge (display-only event tier)', () => {

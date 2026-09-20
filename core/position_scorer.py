@@ -35,6 +35,7 @@ def score_existing_position(
     iv_env_adjustment: float = 0.0,
     iv_rank: float = 0.0,
     iv_status_str: str = "normal",
+    iv_percentile: float | None = None,
     earnings_adjustment: float = 0.0,
     earnings_info: dict | None = None,
 ) -> WheelDecision:
@@ -97,6 +98,7 @@ def score_existing_position(
         otm_pct=round(otm_pct, 2),
         iv_rank=round(iv_rank * 100, 1),
         iv_status=iv_status_str,
+        iv_percentile=iv_percentile,
         iv_env_adjustment=iv_env_adjustment,
         earnings_adjustment=earnings_adjustment,
     )
@@ -118,6 +120,7 @@ def score_existing_position(
             roll_dte=int(portfolio_context.get("exit_roll_dte", 21) or 21),
             exit_delta=float(portfolio_context.get("exit_delta", 0.65) or 0.65),
             deep_itm_pct=float(portfolio_context.get("exit_deep_itm_pct", 15.0) or 15.0),
+            stop_loss_pct=float(portfolio_context.get("exit_stop_loss_pct", -100.0) or -100.0),
         ),
     )
 
@@ -160,9 +163,10 @@ def _evaluate_position_exit(
 ):
     """Bridge a scored open position into the exit playbook.
 
-    Returns (verdict, reasons). Days-to-earnings prefers the enriched earnings
-    info, then whatever the decision already carries. Entry credit unknown ->
-    profit-take rule cannot fire (explicitly modeled as None).
+    Returns (verdict, reasons). Days-to-earnings and days-to-ex-dividend both
+    prefer the enriched earnings info, then whatever the decision already
+    carries. Entry credit unknown -> profit-take and loss-stop rules cannot fire
+    (explicitly modeled as None).
     """
     days_to_earnings = None
     for source in (
@@ -176,6 +180,15 @@ def _evaluate_position_exit(
             except (TypeError, ValueError):
                 continue
 
+    days_to_ex_dividend = None
+    if isinstance(earnings_info, dict):
+        source = earnings_info.get("days_to_ex_dividend")
+        if source is not None:
+            try:
+                days_to_ex_dividend = int(source)
+            except (TypeError, ValueError):
+                days_to_ex_dividend = None
+
     captured = captured_profit_pct_for_short(
         entry_credit_per_contract=entry_credit_per_contract,
         current_mark_per_contract=decision.mid_price,
@@ -187,6 +200,7 @@ def _evaluate_position_exit(
         otm_pct=float(decision.otm_pct or 0),
         captured_profit_pct=captured,
         days_to_earnings=days_to_earnings,
+        days_to_ex_dividend=days_to_ex_dividend,
         thresholds=thresholds,
     )
     return verdict.verdict, verdict.reasons

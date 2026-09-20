@@ -111,7 +111,8 @@ class WheelDecision:
 
     # -- Environment --------------------------------------------------------
     iv_rank: float = 0.0  # 0-100
-    iv_status: str = "unknown"  # extreme_low | low | normal | high | extreme_high
+    iv_status: str = "unknown"  # extreme_low | low | normal | high | extreme_high | insufficient_history
+    iv_percentile: Optional[float] = None  # 0-1 share of prior daily ATM samples below current IV
     iv_env_adjustment: float = 0.0  # -20 to +20
     earnings_adjustment: float = 0.0  # % score adjustment
     earnings_date: Optional[str] = None
@@ -256,6 +257,7 @@ def score_contract(
     iv_env_adjustment: float = 0.0,
     iv_rank: float = 0.0,
     iv_status_str: str = "normal",
+    iv_percentile: Optional[float] = None,
     earnings_adjustment: float = 0.0,
     earnings_info: dict | None = None,
     growth_profile: dict | None = None,
@@ -496,6 +498,7 @@ def score_contract(
         spread_pct=round(spread_pct, 2),
         iv_rank=round(iv_rank * 100, 1),
         iv_status=iv_status_str,
+        iv_percentile=iv_percentile,
         iv_env_adjustment=iv_env_adjustment,
         earnings_adjustment=earnings_adjustment,
         earnings_date=earnings_info.get("earnings_date"),

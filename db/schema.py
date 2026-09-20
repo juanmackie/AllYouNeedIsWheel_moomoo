@@ -4,7 +4,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def create_tables(conn):
@@ -63,7 +63,8 @@ def create_tables(conn):
             stock_price REAL,
             option_type TEXT,
             expiration TEXT,
-            dte INTEGER
+            dte INTEGER,
+            strike REAL
         )
     """)
 
@@ -595,6 +596,22 @@ def migrate_database(db_path):
                         logger.info("Migration: Adding ex_dividend_date to earnings_calendar")
                         cursor.execute("ALTER TABLE earnings_calendar ADD COLUMN ex_dividend_date TEXT")
                 cursor.execute("PRAGMA user_version = 11")
+                conn.commit()
+
+            if current_version < 12:
+                # IV history strike: enables the one-sample-per-day closest-to-ATM
+                # series (see IVEarningsService._daily_atm_series) so IV rank is a
+                # function of the IV regime, not of how many contracts a scan
+                # happened to score. Additive and nullable; NULL means "moneyness
+                # unknown" and the reader falls back to that day's median.
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='iv_history'")
+                if cursor.fetchone():
+                    cursor.execute("PRAGMA table_info(iv_history)")
+                    iv_cols = {row[1] for row in cursor.fetchall()}
+                    if "strike" not in iv_cols:
+                        logger.info("Migration: Adding strike to iv_history")
+                        cursor.execute("ALTER TABLE iv_history ADD COLUMN strike REAL")
+                cursor.execute("PRAGMA user_version = 12")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

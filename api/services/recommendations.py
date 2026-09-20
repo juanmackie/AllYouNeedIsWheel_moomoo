@@ -126,6 +126,7 @@ def _format_decision_to_candidate(
         "volume": decision.volume,
         "iv_rank": decision.iv_rank,
         "iv_status": decision.iv_status,
+        "iv_percentile": decision.iv_percentile,
         "iv_env_adjustment": decision.iv_env_adjustment,
         "profile_type": decision.profile_type,
         "earnings_date": decision.earnings_date,

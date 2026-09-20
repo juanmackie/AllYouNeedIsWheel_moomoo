@@ -194,6 +194,7 @@ class OptionsDataService:
                 )
                 if option.get("expiration")
                 else 0,
+                strike=option.get("strike"),
             )
 
         iv_env_adjustment, iv_rank, iv_status = self.iv_earnings_service.get_iv_environment_score(
@@ -213,6 +214,7 @@ class OptionsDataService:
             iv_env_adjustment=iv_env_adjustment,
             iv_rank=iv_rank,
             iv_status_str=iv_status,
+            iv_percentile=self.iv_earnings_service.get_iv_percentile(ticker),
             earnings_adjustment=earnings_adjustment,
             earnings_info=earnings_info,
             growth_profile=profile,
@@ -295,6 +297,7 @@ class OptionsDataService:
             "iv_adjusted_return": decision.iv_adjusted_return,
             "iv_rank": decision.iv_rank,
             "iv_status": decision.iv_status,
+            "iv_percentile": decision.iv_percentile,
             "iv_env_adjustment": decision.iv_env_adjustment,
             "profile_type": decision.profile_type,
             "earnings_date": decision.earnings_date,

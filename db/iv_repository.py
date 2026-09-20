@@ -13,7 +13,9 @@ class IVRepository:
     def __init__(self, db_path):
         self.db_path = db_path
 
-    def save_iv_data(self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None):
+    def save_iv_data(
+        self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None, strike=None
+    ):
         try:
             with pooled_connection(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -24,10 +26,10 @@ class IVRepository:
                 cursor.execute(
                     """
                     INSERT INTO iv_history
-                    (ticker, timestamp, implied_volatility, stock_price, option_type, expiration, dte)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (ticker, timestamp, implied_volatility, stock_price, option_type, expiration, dte, strike)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (ticker, timestamp, normalized_iv, stock_price, option_type, expiration, dte),
+                    (ticker, timestamp, normalized_iv, stock_price, option_type, expiration, dte, strike),
                 )
 
                 conn.commit()
@@ -91,7 +93,7 @@ class IVRepository:
             logger.error(f"Error getting latest IV for {ticker}: {str(e)}")
             return None
 
-    def purge_old_iv_data(self, days=45):
+    def purge_old_iv_data(self, days=400):
         try:
             with pooled_connection(self.db_path) as conn:
                 cursor = conn.cursor()

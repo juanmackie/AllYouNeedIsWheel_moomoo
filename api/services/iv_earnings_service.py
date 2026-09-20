@@ -14,12 +14,20 @@ from api.services.alpha_vantage_provider import ALPHA_VANTAGE_FREE_DAILY_ALLOWAN
 from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
 from core.connection_constants import _normalize_iv
 from core.ticker_utils import earnings_underlying_ticker
+from core.utils import market_now
 
 logger = logging.getLogger("api.services.iv_tracking")
 
 # Normalized, UI-facing source tokens (per repo contract: alpha_vantage|yfinance).
 SOURCE_ALPHA_VANTAGE = "alpha_vantage"
 SOURCE_YFINANCE = "yfinance"
+
+# IV history is a one-sample-per-day closest-to-ATM series (see
+# `_daily_atm_series`). Rank and percentile both read the same 1-year window;
+# below IV_RANK_MIN_DAYS daily samples the environment is explicitly
+# "insufficient_history" so no score adjustment fires on absent data.
+IV_RANK_WINDOW_DAYS = 365
+IV_RANK_MIN_DAYS = 10
 
 
 class IVEarningsService:
@@ -173,6 +181,31 @@ class IVEarningsService:
             },
         }
 
+    @staticmethod
+    def _days_to_ex_dividend(ex_dividend_date, now=None) -> Optional[int]:
+        """Calendar days until the ex-dividend date, or None when unknown.
+
+        Uses the US market clock (`core.utils.market_now`) for the reference day,
+        matching the C13 stance applied to position DTE: the Windows host date
+        (e.g. Brisbane) can be a calendar day ahead of the US session, which
+        would understate this count by one.
+
+        A past ex-dividend date returns None: the rule it feeds is about an
+        upcoming ex-div landing inside a contract's life.
+        """
+        if not ex_dividend_date:
+            return None
+        try:
+            ex_div = datetime.strptime(str(ex_dividend_date), "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return None
+        reference = now or market_now()
+        # Compare calendar days, not datetimes: `market_now()` is UTC-offset aware
+        # while the parsed ex-dividend date is naive.
+        today = reference.date() if isinstance(reference, datetime) else reference
+        days = (ex_div.date() - today).days
+        return days if days >= 0 else None
+
     def _is_cache_valid(self, cache_entry, duration_hours):
         """Check if a cache entry is still valid"""
         if not cache_entry or "timestamp" not in cache_entry:
@@ -189,9 +222,17 @@ class IVEarningsService:
         option_type: Optional[str] = None,
         expiration: Optional[str] = None,
         dte: Optional[int] = None,
+        strike: Optional[float] = None,
     ):
         """
-        Record IV data for a ticker
+        Record one raw IV observation for a ticker.
+
+        Writes every observation (they are the strike-level evidence a chain
+        scan actually saw); `_daily_atm_series` collapses them at read time.
+
+        Deliberately does NOT touch `self._iv_cache`: that cache is the scoring
+        read path, and seeding it here would publish a rank computed from *this
+        contract's* IV as the ticker's environment for up to the cache TTL.
 
         Args:
             ticker: Stock ticker symbol
@@ -200,72 +241,132 @@ class IVEarningsService:
             option_type: CALL or PUT
             expiration: Expiration date
             dte: Days to expiration
+            strike: Contract strike, so the daily series can pick the ATM-most sample
         """
         if not self.db:
             return
 
         try:
-            # Normalize IV before saving
             normalized_iv = _normalize_iv(implied_volatility)
-
-            # Save to database
-            self.db.save_iv_data(ticker, normalized_iv, stock_price, option_type, expiration, dte)
-
-            # Calculate IV rank
-            iv_rank, iv_status = self._calculate_iv_rank(ticker, normalized_iv)
-
-            # Update cache
-            self._iv_cache[ticker] = {
-                "iv": normalized_iv,
-                "timestamp": datetime.now(),
-                "iv_rank": iv_rank,
-                "iv_status": iv_status,
-            }
-
-            logger.debug(f"Recorded IV for {ticker}: {normalized_iv:.2%} (rank: {iv_rank:.1%})")
+            self.db.save_iv_data(ticker, normalized_iv, stock_price, option_type, expiration, dte, strike=strike)
+            logger.debug("Recorded IV for %s: %.2f%%", ticker, normalized_iv * 100)
 
         except Exception as e:
             logger.error(f"Error recording IV data for {ticker}: {e}")
 
-    def _calculate_iv_rank(self, ticker: str, current_iv: float, days: int = 30) -> tuple:
+    @staticmethod
+    def _daily_atm_series(rows) -> list:
+        """Collapse raw IV observations into one closest-to-ATM sample per day.
+
+        Raw rows are written per scored contract, so a single scan contributes
+        dozens of observations per ticker, each carrying that strike's IV. Taking
+        a min-max over that pile measures the strike skew and how often the user
+        clicked refresh, not the ticker's IV regime.
+
+        Per calendar day: prefer the observation whose strike is closest to the
+        underlying price (ATM-most). When no row carries usable strike/price
+        (legacy rows predating schema v12, or test fixtures) fall back to that
+        day's median IV. Rows without a timestamp each become their own sample so
+        unstamped history still contributes instead of being dropped.
         """
-        Calculate IV Rank: where current IV falls in 30-day range.
+        by_day = {}
+        for index, row in enumerate(rows or []):
+            if not isinstance(row, dict):
+                continue
+            stamp = str(row.get("timestamp") or "").strip()
+            day = stamp[:10] if stamp else f"__unstamped__{index}"
+            by_day.setdefault(day, []).append(row)
+
+        series = []
+        for day in sorted(by_day):
+            observations = by_day[day]
+            chosen = None
+            best_distance = None
+            for row in observations:
+                try:
+                    strike = float(row.get("strike"))
+                    price = float(row.get("stock_price"))
+                except (TypeError, ValueError):
+                    continue
+                if strike <= 0 or price <= 0:
+                    continue
+                distance = abs(strike - price)
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
+                    chosen = row
+
+            if chosen is not None:
+                iv = _normalize_iv(chosen.get("implied_volatility"))
+            else:
+                values = sorted(v for v in (_normalize_iv(r.get("implied_volatility")) for r in observations) if v > 0)
+                if not values:
+                    continue
+                mid = len(values) // 2
+                iv = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+            if iv > 0:
+                series.append(iv)
+        return series
+
+    @staticmethod
+    def _calculate_iv_percentile(series, current_iv: float) -> Optional[float]:
+        """Share of prior daily ATM samples below the current IV (0-1), or None."""
+        if not series:
+            return None
+        below = sum(1 for value in series if value < current_iv)
+        return round(below / len(series), 4)
+
+    def _calculate_iv_rank(self, ticker: str, current_iv: float, days: int = IV_RANK_WINDOW_DAYS) -> tuple:
+        """
+        Calculate IV Rank over the daily closest-to-ATM series.
 
         Returns (rank, status) where:
         - rank: float 0-1
-        - status: 'normal' | 'unknown'
+        - status: 'normal' | 'insufficient_history' | 'unknown'
 
-        Unknown status when current_iv is 0 or missing.
+        `insufficient_history` (fewer than IV_RANK_MIN_DAYS daily samples, no
+        database, or a read failure) means the environment is genuinely unknown,
+        so no score adjustment may fire. That is distinct from `normal` with a
+        0.5 rank, which means history was observed and the range was flat — real
+        information, namely "no information", which legitimately scores neutral.
         """
         current_iv = _normalize_iv(current_iv)
         if current_iv <= 0:
             return (0.5, "unknown")
 
         if not self.db:
-            return (0.5, "normal")
+            return (0.5, "insufficient_history")
 
         try:
-            # Get historical IV data
-            history = self.db.get_iv_history(ticker, days)
+            series = self._daily_atm_series(self.db.get_iv_history(ticker, days))
 
-            if len(history) < 5:  # Need at least 5 data points
-                return (0.5, "normal")  # Neutral if insufficient data
+            if len(series) < IV_RANK_MIN_DAYS:
+                return (0.5, "insufficient_history")
 
-            iv_values = [_normalize_iv(record["implied_volatility"]) for record in history]
-            iv_values.append(current_iv)  # Include current
-
+            iv_values = [*series, current_iv]
             min_iv = min(iv_values)
             max_iv = max(iv_values)
 
             if max_iv == min_iv:
-                return (0.5, "normal")  # Neutral if no range
+                return (0.5, "normal")  # observed but flat
 
             iv_rank = (current_iv - min_iv) / (max_iv - min_iv)
             return (max(0.0, min(1.0, iv_rank)), "normal")
 
         except Exception as e:
             logger.error(f"Error calculating IV rank for {ticker}: {e}")
-            return (0.5, "normal")
+            return (0.5, "insufficient_history")
+
+    def get_iv_percentile(self, ticker: str) -> Optional[float]:
+        """Cached IV percentile (0-1) for a ticker, or None when unknown.
+
+        Populated as a side effect of `get_iv_environment_score`; kept out of
+        that method's return tuple so existing 3-tuple callers are unaffected.
+        """
+        entry = self._iv_cache.get(ticker)
+        if not entry or entry.get("iv_status") in ("unknown", "insufficient_history"):
+            return None
+        return entry.get("iv_percentile")
 
     def get_iv_environment_score(self, ticker: str, current_iv: float) -> tuple:
         """
@@ -278,8 +379,10 @@ class IVEarningsService:
         Returns:
             tuple: (score_adjustment, iv_rank, status_message)
                 score_adjustment: -20 to +20 percentage points
-                iv_rank: 0-1 (percentile)
-                status_message: 'low', 'neutral', 'high', 'extreme'
+                iv_rank: 0-1, min-max over the daily ATM series
+                status_message: 'extreme_low' | 'low' | 'below_avg' | 'neutral' |
+                    'above_avg' | 'high' | 'extreme_high' | 'insufficient_history'
+                    | 'unknown'
         """
         current_iv = _normalize_iv(current_iv)
         # Check cache first
@@ -289,16 +392,29 @@ class IVEarningsService:
             iv_status_cached = cache_entry.get("iv_status", "normal")
         else:
             iv_rank, iv_status_cached = self._calculate_iv_rank(ticker, current_iv)
+            percentile = None
+            if iv_status_cached == "normal" and self.db:
+                try:
+                    percentile = self._calculate_iv_percentile(
+                        self._daily_atm_series(self.db.get_iv_history(ticker, IV_RANK_WINDOW_DAYS)), current_iv
+                    )
+                except Exception:
+                    percentile = None
             self._iv_cache[ticker] = {
                 "iv": current_iv,
                 "timestamp": datetime.now(),
                 "iv_rank": iv_rank,
                 "iv_status": iv_status_cached,
+                "iv_percentile": percentile,
             }
 
         # Unknown IV: return neutral score
         if iv_status_cached == "unknown":
             return (0, 0.5, "unknown")
+
+        # Not enough daily history: no adjustment, never a fabricated neutral.
+        if iv_status_cached == "insufficient_history":
+            return (0, 0.5, "insufficient_history")
 
         # Determine score adjustment and status
         if iv_rank < 0.20:
@@ -508,6 +624,8 @@ class IVEarningsService:
                 'earnings_date': str or None,
                 'ex_dividend_date': str or None,
                 'days_to_earnings': int or None,
+                'days_to_ex_dividend': int or None (days until the ex-dividend date,
+                    market-clock based; None when unknown or already past),
                 'warning_level': str ('none', 'soon', 'very_soon', 'today', 'error'),
                 'fetch_status': str,
                 'error_message': str or None,
@@ -585,6 +703,7 @@ class IVEarningsService:
             ) = (None, None, None, None, None, None, None, None, None)
 
         data_stale, data_age_hours = self._earnings_data_freshness(last_updated)
+        days_to_ex_dividend = self._days_to_ex_dividend(ex_dividend_date)
 
         if not earnings_date:
             return {
@@ -592,6 +711,7 @@ class IVEarningsService:
                 "ex_dividend_date": ex_dividend_date,
                 "ex_dividend_source": SOURCE_YFINANCE if ex_dividend_date else None,
                 "days_to_earnings": None,
+                "days_to_ex_dividend": days_to_ex_dividend,
                 "warning_level": "none",
                 "fetch_status": "pending" if not self.db else "unknown",
                 "error_message": None,
@@ -629,6 +749,7 @@ class IVEarningsService:
                 "ex_dividend_date": ex_dividend_date,
                 "ex_dividend_source": SOURCE_YFINANCE if ex_dividend_date else None,
                 "days_to_earnings": days_to_earnings,
+                "days_to_ex_dividend": days_to_ex_dividend,
                 "warning_level": warning_level,
                 "fetch_status": "success",
                 "error_message": None,
@@ -649,6 +770,7 @@ class IVEarningsService:
                 "ex_dividend_date": ex_dividend_date,
                 "ex_dividend_source": SOURCE_YFINANCE if ex_dividend_date else None,
                 "days_to_earnings": None,
+                "days_to_ex_dividend": days_to_ex_dividend,
                 "warning_level": "error",
                 "fetch_status": "error",
                 "error_message": str(e),
@@ -865,9 +987,9 @@ class IVEarningsService:
         }
 
     def purge_old_data(self):
-        """Purge old IV history data"""
+        """Purge old IV history data (retention matches the 1-year IV window)."""
         if self.db:
-            deleted = self.db.purge_old_iv_data(days=45)
+            deleted = self.db.purge_old_iv_data(days=400)
             logger.info(f"Purged {deleted} old IV history records")
 
     def get_cache_stats(self) -> Dict:

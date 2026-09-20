@@ -59,7 +59,7 @@ class TestFillsRepository(unittest.TestCase):
             self.assertIn("option_fills", tables)
             self.assertIn("account_cash_flows", tables)
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 11)
+            self.assertEqual(version, 12)
         finally:
             conn.close()
 
@@ -77,7 +77,7 @@ class TestFillsRepository(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 11)
+            self.assertEqual(version, 12)
             cols = {row[1] for row in conn.execute("PRAGMA table_info(option_fills)")}
             self.assertIn("fill_id", cols)
             self.assertIn("fees", cols)

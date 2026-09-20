@@ -99,7 +99,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
 
     iv = float(pos.get("implied_volatility", 0) or 0)
     if iv > 0:
-        iv_earnings_service.record_iv_data(ticker, iv, current_price, option_type, expiration, dte)
+        iv_earnings_service.record_iv_data(ticker, iv, current_price, option_type, expiration, dte, strike=strike)
     iv_env_adj, iv_rank, iv_status = iv_earnings_service.get_iv_environment_score(ticker, iv if iv > 0 else 0.20)
     earnings_adj, _ = iv_earnings_service.get_earnings_score_impact(ticker)
 
@@ -111,6 +111,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service):
         iv_env_adjustment=iv_env_adj,
         iv_rank=iv_rank,
         iv_status_str=iv_status,
+        iv_percentile=iv_earnings_service.get_iv_percentile(ticker),
         earnings_adjustment=earnings_adj,
         earnings_info=iv_earnings_service.get_earnings_info(ticker),
     )

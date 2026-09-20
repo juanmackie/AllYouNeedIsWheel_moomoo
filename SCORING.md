@@ -152,6 +152,35 @@ income at the recommended size (recommended contracts × executable bid),
 cash remaining after the trade, and — when portfolio history exists — what
 percentage of the daily pace to the preset's growth target this trade covers.
 
+## IV rank and percentile (display-only)
+
+Both read the same history series, and that series is the point: `iv_history`
+receives one row per scored contract, so a single scan writes dozens of
+same-day observations carrying each strike's own IV. A rank taken over that pile
+measures the strike skew and how often the user refreshed, not the underlying's
+IV regime. `IVEarningsService._daily_atm_series` therefore collapses raw rows to
+one sample per calendar day — the observation whose strike is closest to the
+underlying price, falling back to that day's median IV when no row carries
+usable strike/price (legacy pre-v12 rows). Rows without a timestamp each count
+as their own sample so older history still contributes.
+
+```text
+iv_rank       = (current - min) / (max - min)   over the daily series + current
+iv_percentile = share of daily samples strictly below current
+window        = IV_RANK_WINDOW_DAYS (365)      minimum = IV_RANK_MIN_DAYS (10)
+```
+
+`iv_status` carries `insufficient_history` when fewer than 10 daily samples
+exist (or there is no database): the score adjustment is then 0 and the UI shows
+"IV n/a — insufficient history" rather than a fabricated neutral 50% rank. That
+is deliberately distinct from `normal` with a 0.5 rank, which means history *was*
+observed and its range was flat — real information, namely "no information".
+The rank and percentile are display-only: neither feeds
+`capital_velocity_per_day`, `quality_tier`, `event_tier`, or `confidence_score`,
+so they cannot reorder the shortlist. IV history retention is 400 days
+(`DEFAULT_RETENTION_DAYS`) — enough headroom for the 1-year window, which the
+previous 45-day cap silently truncated.
+
 ## Exit playbook (open positions)
 
 `core/exit_playbook.py::evaluate_exit` assigns each open short option one
@@ -159,18 +188,39 @@ deterministic verdict — HOLD, TAKE_PROFIT, ROLL, or CLOSE — with ranked
 reasons. First matching rule wins:
 
 1. CLOSE — earnings land before expiry while ITM or within 5% OTM.
+1b. CLOSE — ex-dividend lands before expiry on an ITM short CALL: assignment
+   before ex-div is likely, so the shares are called away before the dividend
+   is captured (roll past ex-div or close). Dividends drive early exercise of
+   calls only, so a short PUT never triggers this rule; a call within 5% OTM
+   gets a context note and no verdict.
 2. CLOSE — deeply ITM beyond the preset threshold (default 15%).
 3. CLOSE — |delta| breaches the exit level (default 0.65).
 4. TAKE_PROFIT — ≥ 50% of entry credit captured (entry credit from Moomoo
-   `avg_cost`; unknown credit disables the rule, never fakes it).
+   `avg_cost`; unknown credit disables this rule and the loss stop, never
+   fakes either).
+4b. CLOSE — loss stop: captured ≤ −100% of the entry credit, i.e. the mark
+   reached 2× the credit taken in. Fires *before* the roll window so a losing
+   position cannot be quietly rolled instead of closed.
 5. ROLL — DTE entered the roll window (default ≤ 21) while safely OTM.
 6. HOLD — otherwise; proximity/decay notes ride along.
 
 Verdicts are computed in `score_existing_position`, serialized on the wheel
 decision, exposed via `/api/portfolio/roll-pressure`, and rendered on the
-position monitor with reasons as tooltips. Early-assignment/dividend risk for
-ITM short calls is intentionally not modeled: no free-tier dividend feed
-exists, and inventing one would violate the broker-truth contract.
+position monitor with reasons as tooltips.
+
+Two deliberate scope notes. "Captured" is **signed**: a negative value is a loss
+on the short, which is what makes the loss stop arithmetically possible (a zero
+floor would make it unreachable). Ex-dividend modelling covers the *date*
+(yfinance, through the earnings enrichment) but not the *amount*, so the rule
+keys on "ITM with ex-div before expiry" rather than the exact
+extrinsic-value-vs-dividend comparison that decides early exercise; fabricating
+a payout figure would violate the broker-truth contract.
+
+Exit thresholds (`exit_profit_take_pct`, `exit_roll_dte`, `exit_delta`,
+`exit_deep_itm_pct`, `exit_stop_loss_pct`) are read from the portfolio context
+when present, but nothing populates those keys today and presets carry no exit
+fields, so the defaults above always apply. Preset-driving them is a known open
+gap, not implemented behaviour.
 
 ## Entry timing guidance
 

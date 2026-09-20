@@ -32,7 +32,9 @@ DEFAULT_RETENTION_DAYS = {
     "option_fills": ("captured_at", 365),
     "account_cash_flows": ("clearing_date", 365),
     "scan_ledger": ("timestamp", 365),
-    "iv_history": ("timestamp", 45),
+    # IV rank/percentile read a 1-year window. The previous 45-day cap made that
+    # window unreachable and silently truncated history on every DB init.
+    "iv_history": ("timestamp", 400),
 }
 
 
@@ -297,9 +299,17 @@ class OptionsDatabase:
 
     # --- IV History ---
 
-    def save_iv_data(self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None):
+    def save_iv_data(
+        self, ticker, implied_volatility, stock_price=None, option_type=None, expiration=None, dte=None, strike=None
+    ):
         return self._iv.save_iv_data(
-            ticker, implied_volatility, stock_price=stock_price, option_type=option_type, expiration=expiration, dte=dte
+            ticker,
+            implied_volatility,
+            stock_price=stock_price,
+            option_type=option_type,
+            expiration=expiration,
+            dte=dte,
+            strike=strike,
         )
 
     def get_iv_history(self, ticker, days=30):
@@ -308,7 +318,7 @@ class OptionsDatabase:
     def get_latest_iv(self, ticker):
         return self._iv.get_latest_iv(ticker)
 
-    def purge_old_iv_data(self, days=45):
+    def purge_old_iv_data(self, days=400):
         return self._iv.purge_old_iv_data(days=days)
 
     # --- Earnings Calendar ---

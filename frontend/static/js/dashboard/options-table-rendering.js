@@ -422,12 +422,33 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
 
     const ivPercent = option.implied_volatility ? option.implied_volatility.toFixed(2) : 'N/A';
 
-    const ivRankBadge = option.iv_rank !== undefined ?
+    const ivStatus = option.iv_status || option.wheel_decision?.iv_status;
+    const ivRankIsUsable = option.iv_rank !== undefined && ivStatus !== 'unknown' && ivStatus !== 'insufficient_history';
+    const ivRankBadge = ivRankIsUsable ?
         `<span class="badge ${option.iv_rank < 30 ? 'bg-danger' : option.iv_rank > 70 ? 'bg-success' : 'bg-secondary'}"
                data-bs-toggle="tooltip"
                data-bs-placement="top"
                title="IV Rank shows if volatility is ${option.iv_rank < 30 ? 'LOW (cheaper options)' : option.iv_rank > 70 ? 'HIGH (expensive options - good for selling)' : 'moderate'} relative to the past year">
             IV Rank: ${option.iv_rank.toFixed(0)}%
+        </span>` : '';
+
+    // IV percentile (display-only): share of the past year's daily closest-to-ATM
+    // IV samples below today's IV. Null means unknown, never a fabricated 0%.
+    const ivPercentileBadge = option.iv_percentile != null && Number.isFinite(Number(option.iv_percentile)) ?
+        `<span class="badge bg-secondary"
+               data-bs-toggle="tooltip"
+               data-bs-placement="top"
+               title="IV Percentile: share of the last year's daily closest-to-ATM IV samples below today's IV">
+            IV %ile: ${(Number(option.iv_percentile) * 100).toFixed(0)}%
+        </span>` : '';
+
+    // Absent history must read as absent, not as a moderate 50% rank.
+    const ivInsufficientBadge = ivStatus === 'insufficient_history' ?
+        `<span class="badge bg-secondary"
+               data-bs-toggle="tooltip"
+               data-bs-placement="top"
+               title="Not enough daily IV history yet (needs at least 10 daily samples); no IV score adjustment is applied">
+            IV n/a - insufficient history
         </span>` : '';
 
     if (optionType === 'CALL') {
@@ -491,7 +512,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle" data-bs-toggle="tooltip" title="Delta: Probability this option finishes in-the-money (0-1 scale). Lower = safer.">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <div data-bs-toggle="tooltip" title="Implied Volatility: Market's expectation of price movement. Higher IV = more premium.">${ivPercent}%</div>
-                <div>${ivRankBadge}</div>
+                <div>${ivRankBadge}${ivPercentileBadge}${ivInsufficientBadge}</div>
             </td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Number of contracts you can sell (1 contract = 100 shares)">${maxContracts}</td>
             <td class="align-middle">
@@ -594,7 +615,7 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
             <td class="align-middle" data-bs-toggle="tooltip" title="Delta: Probability this option finishes in-the-money (0-1 scale). Lower = safer.">${option.delta ? option.delta.toFixed(2) : 'N/A'}</td>
             <td class="align-middle">
                 <div data-bs-toggle="tooltip" title="Implied Volatility: Market's expectation of price movement. Higher IV = more premium.">${ivPercent}%</div>
-                <div>${ivRankBadge}</div>
+                <div>${ivRankBadge}${ivPercentileBadge}${ivInsufficientBadge}</div>
             </td>
             <td class="align-middle" data-bs-toggle="tooltip" title="Number of contracts to sell (1 contract = obligation to buy 100 shares)">
                 <input type="number" class="form-control form-control-sm put-qty-input"

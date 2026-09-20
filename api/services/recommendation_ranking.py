@@ -143,6 +143,7 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "delta": option.get("delta"),
         "iv_rank": option.get("iv_rank"),
         "iv_status": option.get("iv_status"),
+        "iv_percentile": option.get("iv_percentile", wd.get("iv_percentile")),
         "days_to_earnings": option.get("days_to_earnings"),
         "earnings_date": option.get("earnings_date"),
         "warnings": option.get("warnings", []),
