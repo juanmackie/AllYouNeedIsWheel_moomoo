@@ -29,6 +29,7 @@ from core.connection import (
     probe_opend_status,
 )
 from core.connection_constants import _normalize_iv
+from core.wheel_runner import opaque_account_id
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -1254,6 +1255,63 @@ class TestMoomooConnectionAccountResolution(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "not available"):
             conn._resolve_portfolio_account()
+
+    def test_resolve_portfolio_account_reports_cold_context(self):
+        """A never-connected context must not look like a missing account.
+
+        ``_get_available_accounts()`` returns [] when ``trd_ctx`` is None, so the
+        REAL branch used to claim the configured account was absent from OpenD
+        even though the broker had never been asked.
+        """
+        conn = MoomooConnection(account_id="12345", portfolio_env="REAL")
+        self.assertIsNone(conn.trd_ctx)
+
+        with self.assertRaisesRegex(ConnectionError, "not connected"):
+            conn._resolve_portfolio_account()
+
+    def test_resolve_portfolio_identity_connects_when_cold(self):
+        """Regression: identity resolution must connect before listing accounts.
+
+        A cold connection has no trade context, so the account list is empty and
+        identity resolution raised a misleading "account not available in OpenD"
+        ValueError. That is the path fill ingestion takes (FillsService._identity),
+        so POST /api/options/analytics/outcomes/ingest failed with 502 until some
+        other broker read happened to connect the shared instance first.
+        """
+        conn = MoomooConnection(account_id="12345", portfolio_env="REAL")
+        accounts = [{"acc_id": "12345", "trd_env": TrdEnv.REAL, "security_firm": "FUTU"}]
+        connect_calls = []
+
+        def fake_is_connected():
+            return bool(connect_calls)
+
+        def fake_connect():
+            connect_calls.append(True)
+            conn.trd_ctx = self._make_mock_trd_ctx(accounts)
+            conn._connected = True
+            return True
+
+        with (
+            patch.object(conn, "is_connected", side_effect=fake_is_connected),
+            patch.object(conn, "connect", side_effect=fake_connect),
+        ):
+            env_label, opaque = conn.resolve_portfolio_identity()
+
+        self.assertEqual(len(connect_calls), 1)
+        self.assertEqual(env_label, "REAL")
+        self.assertEqual(opaque, opaque_account_id("12345"))
+
+    def test_resolve_portfolio_identity_reports_connection_failure(self):
+        """When OpenD cannot be reached, say so instead of blaming the account."""
+        conn = MoomooConnection(account_id="12345", portfolio_env="REAL")
+        conn.last_error = "Error connecting to moomoo: connection refused"
+
+        with (
+            patch.object(conn, "is_connected", return_value=False),
+            patch.object(conn, "connect", return_value=False),
+        ):
+            with self.assertRaisesRegex(ConnectionError, "OpenD"):
+                conn.resolve_portfolio_identity()
 
     @patch("core.context_factory.OpenQuoteContext")
     @patch("core.context_factory.OpenSecTradeContext")

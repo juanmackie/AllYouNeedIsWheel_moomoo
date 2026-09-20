@@ -367,6 +367,13 @@ class MoomooConnection:
                         f"not {_env_name(desired_env)}."
                     )
                 return desired_env, matched_account.get("acc_id")
+            if self.trd_ctx is None:
+                # No trade context: the account list was never queried, so absence
+                # from it proves nothing. Say that instead of blaming the account.
+                raise ConnectionError(
+                    "OpenD trade context is not connected; cannot verify configured "
+                    f"account_id {self.account_id!r}. Connect to OpenD first."
+                )
             if desired_env == TrdEnv.REAL:
                 raise ValueError(f"Configured REAL account_id {self.account_id!r} is not available in OpenD.")
             return desired_env, self.account_id
@@ -960,11 +967,17 @@ class MoomooConnection:
 
         The opaque id is derived by ``core.wheel_runner.opaque_account_id`` —
         the single place account identities are hashed for storage (C04).
-        Query-only; raises the same errors as the underlying resolution when
-        the configured REAL account is unavailable.
+        Query-only. Connects on demand like every other broker read: the account
+        list only exists once a trade context is established, so resolving the
+        identity before connecting reports a configured account as missing.
+        Raises ``ConnectionError`` when OpenD cannot be reached and ``ValueError``
+        when the configured account genuinely is not exposed by OpenD.
         """
         from core.wheel_runner import opaque_account_id
 
+        if not self.is_connected() and not self.connect():
+            detail = self.last_error or "no broker connection"
+            raise ConnectionError(f"OpenD is not connected, so the portfolio account cannot be resolved ({detail}).")
         trd_env, account_id = self._resolve_portfolio_account()
         return _env_name(trd_env), opaque_account_id(str(account_id or ""))
 

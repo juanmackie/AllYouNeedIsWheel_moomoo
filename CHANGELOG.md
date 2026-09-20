@@ -1,3 +1,23 @@
+## 2026-09-20 — Outcome ingestion works from a cold connection
+
+- **Cold-start account resolution fixed**: `MoomooConnection.resolve_portfolio_identity()`
+  resolved the configured account *before* connecting. With no trade context the account
+  list is empty, so it raised `ValueError: Configured REAL account_id … is not available in
+  OpenD.` whenever no other broker read had connected the shared instance yet — the exact
+  path `FillsService._identity()` takes, so
+  `POST /api/options/analytics/outcomes/ingest` answered **502** on a freshly started app.
+  It now connects on demand, like every other broker read in the class.
+- **Honest failure text**: an unreachable OpenD raises `ConnectionError` naming OpenD and
+  `last_error` instead of blaming the account; `_resolve_portfolio_account()` only reports
+  an account as absent when a trade context actually queried the broker.
+- **Regression tests**: `tests/test_connection.py` covers a cold connect-then-resolve path,
+  the connection-failure message, and the never-connected branch (three new tests; suite
+  907 passing).
+- **Verified live (REAL, read-only)**: `ingest?days=90` returned `seen 45, ingested 45,
+  fees_updated 45`; a repeat call ingested 0 (idempotent); `GET /api/options/analytics/outcomes`
+  reports 15 realized trades with broker-verified net P&L. No schema change, no ranking
+  change, no new endpoint, no execution surface.
+
 ## 2026-09-10 — Earnings / event calendar repair (schema v11)
 
 - **Alpha Vantage provider status surfacing**: the bulk earnings calendar (6h
