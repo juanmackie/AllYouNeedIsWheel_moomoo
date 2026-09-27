@@ -59,8 +59,15 @@ def score_existing_position(
     mid_price = _calculate_mid_price(bid, ask, last)
     premium_per_contract = mid_price * 100
 
-    # Greeks
-    delta = float(position_data.get("delta", 0) or 0)
+    # Greeks: retain a neutral numeric value for calculations, but do not treat
+    # a missing/unparseable broker delta as a real zero in the exit gate.
+    raw_delta = position_data.get("delta")
+    try:
+        delta = float(raw_delta) if raw_delta is not None else 0.0
+    except (TypeError, ValueError):
+        raw_delta = None
+        delta = 0.0
+    delta_available = raw_delta is not None
     theta = float(position_data.get("theta", 0) or 0)
     iv = _normalize_iv(position_data.get("implied_volatility", 0))
 
@@ -103,6 +110,8 @@ def score_existing_position(
         earnings_adjustment=earnings_adjustment,
     )
 
+    decision.greeks_source = position_data.get("greeks_source") or ("broker" if delta_available else "missing")
+
     # Compute roll pressure
     decision.roll_pressure = _compute_roll_pressure(decision)
 
@@ -111,10 +120,13 @@ def score_existing_position(
 
     # Exit playbook verdict (deterministic rules, preset-driven thresholds).
     entry_credit = float(position_data.get("avg_cost", 0) or 0)
-    decision.exit_verdict, decision.exit_reasons = _evaluate_position_exit(
+    exit_verdict = _evaluate_position_exit(
         decision,
         entry_credit_per_contract=entry_credit,
         earnings_info=earnings_info or {},
+        rotation_comparison=position_data.get("rotation_comparison"),
+        roll_target=position_data.get("roll_target"),
+        delta=raw_delta if delta_available else None,
         thresholds=ExitThresholds(
             profit_take_pct=float(portfolio_context.get("exit_profit_take_pct", 50.0) or 50.0),
             roll_dte=int(portfolio_context.get("exit_roll_dte", 21) or 21),
@@ -123,6 +135,9 @@ def score_existing_position(
             stop_loss_pct=float(portfolio_context.get("exit_stop_loss_pct", -100.0) or -100.0),
         ),
     )
+    decision.exit_verdict = exit_verdict.verdict
+    decision.exit_reasons = exit_verdict.reasons
+    decision.roll_target = exit_verdict.roll_target
 
     # Size fit
     decision.size_fit = _compute_size_fit(decision, portfolio_context)
@@ -131,6 +146,8 @@ def score_existing_position(
     decision.expected_move_buffer = _compute_expected_move_buffer(decision)
 
     # Simple warnings
+    if not delta_available:
+        decision.warnings.append("Moomoo delta unavailable; delta-based close protection is not reliable")
     if decision.dte <= 7:
         decision.warnings.append(f"Only {decision.dte} DTE remaining")
     if decision.roll_pressure >= 70:
@@ -159,11 +176,14 @@ def _evaluate_position_exit(
     decision: WheelDecision,
     entry_credit_per_contract: float,
     earnings_info: dict,
+    rotation_comparison: dict | None = None,
+    roll_target: dict | None = None,
     thresholds: ExitThresholds | None = None,
+    delta: float | None = None,
 ):
     """Bridge a scored open position into the exit playbook.
 
-    Returns (verdict, reasons). Days-to-earnings and days-to-ex-dividend both
+    Returns an ``ExitVerdict``. Days-to-earnings and days-to-ex-dividend both
     prefer the enriched earnings info, then whatever the decision already
     carries. Entry credit unknown -> profit-take and loss-stop rules cannot fire
     (explicitly modeled as None).
@@ -196,11 +216,13 @@ def _evaluate_position_exit(
     verdict = evaluate_exit(
         option_type=decision.option_type,
         dte=int(decision.dte or 0),
-        delta=float(decision.delta or 0),
+        delta=delta,
         otm_pct=float(decision.otm_pct or 0),
         captured_profit_pct=captured,
         days_to_earnings=days_to_earnings,
         days_to_ex_dividend=days_to_ex_dividend,
         thresholds=thresholds,
+        rotation_comparison=rotation_comparison,
+        roll_target=roll_target,
     )
-    return verdict.verdict, verdict.reasons
+    return verdict

@@ -80,6 +80,27 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context["short_calls"]["AAPL240315C00200000"], 5)
         self.assertEqual(context["short_puts"]["AAPL240315P00150000"], 3)
 
+    def test_underlying_capital_exposure_counts_stock_value_and_short_put_collateral(self):
+        self.portfolio_service.get_portfolio_summary.return_value = {
+            "available_cash": 50000.0,
+            "account_value": 100000.0,
+        }
+        self.portfolio_service.get_positions.side_effect = [
+            [{"symbol": "US.AAPL", "position": 100, "market_value": 12000.0}],
+            [
+                {
+                    "symbol": "US.AAPL240315P00150000",
+                    "position": -2,
+                    "option_type": "PUT",
+                    "strike": 150.0,
+                }
+            ],
+        ]
+
+        context = self.ctx.get_portfolio_context()
+
+        self.assertEqual(context["underlying_capital_exposure"]["AAPL"], 42000.0)
+
     def test_ignores_long_positions(self):
         self.portfolio_service.get_portfolio_summary.return_value = {"cash_balance": 10000.0, "account_value": 50000.0}
         self.portfolio_service.get_positions.side_effect = lambda t=None: {
@@ -97,7 +118,12 @@ class TestPortfolioContextBuild(unittest.TestCase):
             "account_value": 100000.0,
             "excess_liquidity": 6000.0,
             "positions": {
-                "US.AAPL": {"shares": 100, "security_type": "STK", "avg_cost": 150.0},
+                "US.AAPL": {
+                    "shares": 100,
+                    "security_type": "STK",
+                    "avg_cost": 150.0,
+                    "market_price": 120.0,
+                },
                 "US.AAPL240315P00150000": {
                     "shares": -2,
                     "security_type": "OPT",
@@ -119,6 +145,7 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context["short_puts"]["AAPL240315P00150000"], 2)
         self.assertEqual(context["cash_reserved_for_csp"], 30000.0)
         self.assertEqual(context["cash_available_for_csp"], 0.0)
+        self.assertEqual(context["underlying_capital_exposure"]["AAPL"], 42000.0)
 
 
 class TestPortfolioContextHelpers(unittest.TestCase):
@@ -397,8 +424,8 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         self.assertEqual(diag["broker_buying_power_source"], "excess_liquidity")
         self.assertEqual(diag["excess_liquidity"], 55000.0)
 
-    def test_stock_positions_are_keyed_by_prefixed_and_bare_symbol(self):
-        """Scoring should find held shares for either US.AAPL or AAPL requests."""
+    def test_stock_positions_use_one_bare_canonical_key(self):
+        """Stock positions have one canonical key instead of prefixed aliases."""
         self.portfolio_service.get_portfolio_summary.return_value = {
             "available_cash": 50000.0,
             "account_value": 100000.0,
@@ -413,9 +440,22 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
 
         context = self.ctx.get_portfolio_context()
 
-        self.assertIn("UBER", context["positions"])
-        self.assertIn("US.UBER", context["positions"])
-        self.assertEqual(context["positions"]["UBER"], context["positions"]["US.UBER"])
+        self.assertEqual(set(context["positions"]), {"UBER"})
+        self.assertEqual(context["positions"]["UBER"]["position"], 100)
+
+    def test_cached_stock_aliases_collapse_to_one_canonical_key(self):
+        position = {"security_type": "STK", "position": 100, "avg_cost": 70.0, "market_price": 75.0}
+        cached = {
+            "available_cash": 10000.0,
+            "account_value": 20000.0,
+            "positions": {"US.UBER": position, "UBER": position},
+        }
+
+        context = self.ctx._build_context_from_cached_portfolio(cached)
+
+        self.assertEqual(set(context["positions"]), {"UBER"})
+        self.assertEqual(context["positions"]["UBER"]["position"], 100)
+        self.assertEqual(context["underlying_capital_exposure"]["UBER"], 7500.0)
 
 
 if __name__ == "__main__":

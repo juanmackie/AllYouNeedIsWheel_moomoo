@@ -1,3 +1,102 @@
+# Changelog
+
+## 2026-09-27 — Remove unused recommendation metrics
+
+Removed the misleading IV-adjusted-return and target-gap values from scored
+recommendation payloads and rationale. Covered-call expected value is now
+unavailable rather than equated to premium; assignment-aware EV is not modeled.
+Confidence/data-quality, risk diagnostics, and covered-call intent remain because
+they drive gates, warnings, or required dashboard context. CSP expected value is
+unchanged.
+
+## 2026-09-27 — Owner-confirmed fill-to-run link suggestions and DTE comparison
+
+After broker fills are explicitly imported, the outcomes panel now suggests
+same-ticker/same-option-side short fills within seven days of a published run.
+Each suggestion requires a one-click owner confirmation; no attribution is
+inferred or persisted automatically. The panel also compares owner SELL fills
+at 21–45 DTE with same-run candidates retained in the saved shortlist. Missing
+candidates are shown as unavailable; this limited comparison makes no extra
+OpenD requests and does not claim full-chain ranking. Broker fill import
+remains an explicit operator action.
+
+## 2026-09-27 — Per-ticker candidate cuts use capital return
+
+The per-ticker top-3 CSP and top-5 option candidate cuts now use the same
+capital-return-first ranking key as the global shortlist, preventing a larger
+premium on more deployed capital from displacing a better return rate.
+
+## 2026-09-27 — DTE uses the US market date
+
+Signal scoring, watchlist expiry selection, option expiry endpoints, IV-history
+records, and fallback expiration helpers now calculate dates in
+`America/New_York`, so a host timezone ahead of the US cannot shorten DTE or
+shift expiry-window selection by a day.
+
+## 2026-09-27 — Earnings-before-expiry warning on signal cards
+
+Candidates with verified earnings before expiry now show an explicit high-risk
+warning on the dashboard as well as in copied ticket text. The warning applies
+to all presets and remains display-only: CSP eligibility and ranking are
+unchanged.
+
+## 2026-09-27 — Preset delta bands now hard-gate candidates
+
+Absolute put/call delta outside the selected preset's target ± tolerance is now
+rejected with `outside_delta_band`; endpoints are inclusive. Delta limits affect
+eligibility only, not ranking among qualifying candidates. All three immutable
+presets were versioned from v5 to v6. `SCORING.md` records the exact rule.
+
+## 2026-09-27 — 25% per-underlying CSP exposure cap
+
+Cash-secured puts now hard-block when current stock market value plus existing
+short-put collateral and one proposed contract would exceed 25% of account
+value. Multi-contract recommendations are capped to the remaining room; missing
+account value or broker exposure evidence fails closed. The exposure map is
+built from the existing broker portfolio snapshot in both refreshed and cached
+context paths. Covered calls do not add CSP collateral. All three immutable
+presets were versioned from v6 to v7.
+
+## 2026-09-27 — Watchlist CSP cash-fit warning
+
+Recommendation scans now include a summary of watchlist names with no affordable
+OTM CSP strike at current available CSP cash and the maximum affordable strike.
+The dashboard surfaces it above the signal lanes so the owner can adjust the
+Moomoo watchlist or account funding; it is advisory only and does not change
+candidate ranking or eligibility.
+
+## 2026-09-27 — Capital recovery context for held shares
+
+The `/api/run` snapshot and dashboard now include per-holding call scenarios above
+and below Moomoo average cost, the below-basis loss at current bid, available
+covered-call capacity, and the best eligible watchlist CSP's return/day as an
+opportunity-cost comparison. Historical option credits are excluded because
+fill-history completeness is not verified; cards disclose this conservative
+basis. Call candidates remain comparison-only and are drawn from the existing
+broker strike slice, not an exhaustive option-chain scan. No actionability or
+shortlist-ranking rule changed.
+
+## 2026-09-27 — Named roll targets and fee-gated ROTATE verdict
+
+The position monitor now emits `ROTATE` only when a fresh eligible same-side
+candidate's net return/day is at least 2× the held mark-based rate after
+closing at ask, opening at bid, and subtracting known per-contract fees. Unknown
+fees are never treated as zero; because no prospective fee schedule is
+configured, current scans report the comparison unavailable rather than emit
+ROTATE. A DTE-window `ROLL` is emitted only when a fresh eligible replacement
+contract exists, and both `ROLL` and `ROTATE` name the target in the dashboard
+and manual copy ticket. Targets come only from the latest published scan; no
+additional chain fetch or order execution was added.
+
+## 2026-09-27 — Preserve broker Greeks for held options
+
+Held-option bid/ask/last, IV, delta, and theta now survive the existing batched
+Moomoo market snapshot → portfolio service path and are used by roll diagnostics;
+no additional chain request or computed Greek substitute was introduced. The
+API includes quote timestamps. If Moomoo omits delta, it is returned as `null`,
+marked `greeks_source: missing`, and delta-based close protection is explicitly
+warned/skipped rather than treating missing data as a measured zero.
+
 ## 2026-09-20 — Exit rules completed, IV history sample fixed
 
 Three verified gaps closed. No new dependencies, no new data source, and no

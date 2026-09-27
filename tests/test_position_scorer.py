@@ -86,6 +86,13 @@ class TestExitBridge(unittest.TestCase):
         decision = _score(_position("PUT", 100.0, 95.0, 40, 1.85, 1.95, 1.00, -0.45), 95.0)
         self.assertEqual(decision.exit_verdict, VERDICT_HOLD)
 
+    def test_missing_broker_delta_is_labeled_and_skips_delta_exit(self):
+        decision = _score(_position("CALL", 110.0, 100.0, 40, 0.40, 0.50, 0.0, None), 100.0)
+        self.assertEqual(decision.exit_verdict, VERDICT_HOLD)
+        self.assertEqual(decision.greeks_source, "missing")
+        self.assertTrue(any("delta unavailable" in warning.lower() for warning in decision.warnings))
+        self.assertTrue(any("delta unavailable" in reason.lower() for reason in decision.exit_reasons))
+
     def test_unknown_entry_credit_cannot_trigger_stop_or_profit_take(self):
         decision = _score(_position("PUT", 100.0, 95.0, 40, 1.95, 2.05, 0.0, -0.50), 95.0)
         self.assertNotEqual(decision.exit_verdict, VERDICT_CLOSE)

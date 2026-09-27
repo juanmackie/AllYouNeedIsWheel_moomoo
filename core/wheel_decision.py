@@ -17,7 +17,6 @@ from core.growth_mode import (
     compute_confidence_score,
     compute_risk_budget_used,
     compute_stress_loss,
-    estimate_target_gap,
 )
 from core.scoring_factors import (
     ACCOUNT_VALUE_MIN,
@@ -36,7 +35,9 @@ from core.scoring_factors import (
     premium_velocity_per_day,
     quote_is_stale,
 )
-from core.utils import is_market_open, safe_float
+from core.sizing import remaining_underlying_capital
+from core.ticker_utils import parse_moomoo_symbol
+from core.utils import is_market_open, market_now, safe_float
 from core.utils import normalize_expiration as _normalize_expiration
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,6 @@ class WheelDecision:
     mid_price: float = 0.0
     premium_per_contract: float = 0.0
     annualized_return: float = 0.0
-    iv_adjusted_return: float = 0.0
 
     # -- Greeks -------------------------------------------------------------
     delta: float = 0.0
@@ -95,6 +95,9 @@ class WheelDecision:
     breakeven_buffer_pct: float = 0.0  # PUT only
     cash_required: float = 0.0  # PUT only
     if_called_return: float = 0.0  # CALL only
+    broker_cost_basis: Optional[float] = None  # CALL: conservative Moomoo avg-cost floor
+    if_called_pnl_vs_basis: Optional[float] = None  # CALL: per contract, includes current bid credit
+    basis_source: str = "unknown"
 
     # -- Size / portfolio fit -----------------------------------------------
     size_fit: float = 0.0  # 0-100: how well the contract fits the portfolio
@@ -104,8 +107,9 @@ class WheelDecision:
 
     # -- Roll / hold / close signals (open positions) -----------------------
     roll_pressure: float = 0.0  # 0-100: urgency to roll
-    exit_verdict: str = ""  # HOLD | TAKE_PROFIT | ROLL | CLOSE (exit playbook)
+    exit_verdict: str = ""  # HOLD | TAKE_PROFIT | ROLL | ROTATE | CLOSE (exit playbook)
     exit_reasons: list[str] = field(default_factory=list)  # ranked reasons for the verdict
+    roll_target: Optional[dict] = None  # fresh, eligible same-underlying replacement contract
     extrinsic_remaining: float = 0.0  # Remaining extrinsic value ($)
     profit_target_progress: float = 0.0  # 0-100: how close to profit target
 
@@ -160,7 +164,7 @@ class WheelDecision:
     # -- Score breakdown (for display) --------------------------------------
 
     # -- Expected value -----------------------------------------------------
-    expected_value: float = 0.0
+    expected_value: Optional[float] = None  # CALL value is unavailable without assignment modeling
     pop: float = 0.0  # Probability of profit
 
     # -- Capital efficiency -------------------------------------------------
@@ -171,7 +175,6 @@ class WheelDecision:
     return_on_secured_cash: Optional[float] = None  # PUT: premium / (strike * 100)
 
     # -- Growth-aware metrics (always-on) -----------------------------------
-    remaining_gap_to_target: float = 0.0
     risk_budget_used_pct: float = 0.0
     stress_loss: float = 0.0
     confidence_score: float = 0.0
@@ -272,6 +275,7 @@ def score_contract(
     Returns a WheelDecision with hard_blockers populated if the contract fails hard filters.
     """
     earnings_info = earnings_info or {}
+    ticker = parse_moomoo_symbol(ticker)
 
     # -- Parse inputs -------------------------------------------------------
     strike = float(option.get("strike", 0) or 0)
@@ -288,7 +292,7 @@ def score_contract(
     except ValueError:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Invalid expiration format")
 
-    dte = (expiry_date - datetime.now().date()).days
+    dte = (expiry_date - market_now().date()).days
     if dte <= 0:
         return _create_failed_decision(ticker, option_type, strike, expiration, "Expired or no time value")
 
@@ -437,6 +441,22 @@ def score_contract(
             ["missing_greeks"],
         )
 
+    target_delta = safe_float(profile.get("target_delta"), default=None)
+    delta_tolerance = safe_float(profile.get("delta_tolerance"), default=None)
+    if target_delta is not None and delta_tolerance is not None:
+        lower_delta = max(0.0, target_delta - max(delta_tolerance, 0.0))
+        upper_delta = min(1.0, target_delta + max(delta_tolerance, 0.0))
+        abs_delta = abs(delta)
+        if not lower_delta <= abs_delta <= upper_delta:
+            return _create_failed_decision(
+                ticker,
+                option_type,
+                strike,
+                expiration,
+                f"Delta {abs_delta:.2f} outside preset band [{lower_delta:.2f}, {upper_delta:.2f}]",
+                ["outside_delta_band"],
+            )
+
     # -- Portfolio context ---------------------------------------------------
     position = portfolio_context.get("positions", {}).get(ticker, {})
     shares_owned = float(position.get("position", 0) or 0)
@@ -536,23 +556,17 @@ def score_contract(
     annualized_return_raw = (
         (premium_per_contract / capital_at_risk) * (365 / dte) * 100 if capital_at_risk > 0 and dte > 0 else 0
     )
-    iv_adjusted_return = annualized_return_raw / max(implied_volatility, 0.05)
     decision.annualized_return = round(annualized_return_raw, 2)
     decision.capital_velocity_per_day = round(capital_velocity_per_day(premium_per_contract, capital_at_risk, dte), 8)
-    decision.iv_adjusted_return = round(iv_adjusted_return, 2)
 
     # -- Expected value -----------------------------------------------------
     abs_delta = abs(delta)
     pop = 1 - abs_delta
     if option_type == "CALL":
-        max_loss_estimate = 0
+        decision.expected_value = None  # No assignment-aware CC EV model exists.
     else:
         max_loss_estimate = strike * 100 * PUT_MAX_LOSS_ESTIMATE_PCT
-    if option_type == "CALL":
-        expected_value = premium_per_contract
-    else:
-        expected_value = (pop * premium_per_contract) - ((1 - pop) * max_loss_estimate)
-    decision.expected_value = round(expected_value, 2)
+        decision.expected_value = round((pop * premium_per_contract) - ((1 - pop) * max_loss_estimate), 2)
     decision.pop = round(pop, 4)
     # -- Hard blocker checks ------------------------------------------------
 
@@ -570,6 +584,14 @@ def score_contract(
         if_called_return = (((strike - stock_price) + bid) / stock_price) * 100 if stock_price > 0 else 0
         decision.otm_pct = round(otm_pct, 2)
         decision.if_called_return = round(if_called_return, 2)
+        if avg_cost > 0:
+            decision.broker_cost_basis = avg_cost
+            decision.basis_source = "moomoo_avg_cost"
+            decision.if_called_pnl_vs_basis = round((strike - avg_cost) * 100 + bid * 100, 2)
+            if strike < avg_cost:
+                reason = f"Covered-call strike ${strike:.2f} is below Moomoo cost basis ${avg_cost:.2f}"
+                decision.hard_blockers.append(reason)
+                decision.blocked_reason_codes.append("below_cost_basis")
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
 
         # Warnings
@@ -594,8 +616,8 @@ def score_contract(
 
         # Rationale
         decision.rationale = [
-            f"{decision.annualized_return:.1f}% ann. yield (IV-adj: {iv_adjusted_return:.1f}, rank: {iv_rank * 100:.0f}%)",
-            f"Theta/Delta: {decision._theta_delta_ratio:.4f} | EV: ${expected_value:.2f} | Profile: {profile.get('profile_type', 'monthly')}",
+            f"{decision.annualized_return:.1f}% ann. yield (IV rank: {iv_rank * 100:.0f}%)",
+            f"Theta/Delta: {decision._theta_delta_ratio:.4f} | Profile: {profile.get('profile_type', 'monthly')}",
             f"{otm_pct:.1f}% OTM, {abs_delta:.2f} delta | {open_interest} OI / {volume} vol",
         ]
 
@@ -645,6 +667,27 @@ def score_contract(
                 f"Research-only: requires ${cash_required:.0f} cash, CSP cash available ${cash_available_for_csp:.0f}"
             )
 
+        if "max_account_exposure_pct_per_underlying" in profile:
+            remaining_exposure = remaining_underlying_capital(ticker, portfolio_context, profile)
+            if remaining_exposure is None:
+                return _create_failed_decision(
+                    ticker,
+                    "PUT",
+                    strike,
+                    expiration,
+                    "Per-underlying exposure cannot be verified from the account snapshot",
+                    ["underlying_exposure_unavailable"],
+                )
+            if cash_required > remaining_exposure:
+                return _create_failed_decision(
+                    ticker,
+                    "PUT",
+                    strike,
+                    expiration,
+                    "Existing stock value plus CSP collateral leaves insufficient room under the per-underlying account cap",
+                    ["underlying_exposure_cap"],
+                )
+
         breakeven = strike - bid
         breakeven_buffer_pct = ((stock_price - breakeven) / stock_price) * 100 if stock_price > 0 else 0
         capital_efficiency = 0.0
@@ -684,8 +727,8 @@ def score_contract(
 
         # Rationale
         decision.rationale = [
-            f"{decision.annualized_return:.1f}% ann. yield (IV-adj: {iv_adjusted_return:.1f}, rank: {iv_rank * 100:.0f}%)",
-            f"Theta/Delta: {decision._theta_delta_ratio:.4f} | EV: ${expected_value:.2f} | CapEff: {capital_efficiency:.1f}",
+            f"{decision.annualized_return:.1f}% ann. yield (IV rank: {iv_rank * 100:.0f}%)",
+            f"Theta/Delta: {decision._theta_delta_ratio:.4f} | EV: ${decision.expected_value:.2f} | CapEff: {capital_efficiency:.1f}",
             f"{otm_pct:.1f}% OTM, {breakeven_buffer_pct:.1f}% buffer | Profile: {profile.get('profile_type', 'monthly')}",
         ]
 
@@ -705,6 +748,7 @@ def score_contract(
         and decision.chain_source.lower() in {"broker", "persisted-broker"}
         and not from_yfinance
         and decision.recommended_contracts > 0
+        and not decision.hard_blockers
         and not research_only_mode
     )
     decision.review_only = not decision.copy_eligible
@@ -852,17 +896,6 @@ def _apply_growth_scoring(
             decision.warnings.append("Low-premium CC caps upside without meaningful growth acceleration")
         elif decision.covered_call_intent == "income" and annualized_return_raw < 6:
             decision.warnings.append("Low premium relative to growth target")
-
-    income_per_month = premium_per_contract * 4
-    # Aligned with the active preset's growth objective (defaults to the
-    # project-wide 5x goal when no preset profile is provided).
-    target_multiple = float(growth_obj.get("target_account_multiple", 5.0))
-    decision.remaining_gap_to_target = estimate_target_gap(
-        account_value=max(account_value, cash_balance, ACCOUNT_VALUE_MIN),
-        target_multiple=target_multiple,
-        current_premium_income=income_per_month,
-        projected_months=1,
-    )
 
     rationale_parts = []
     if decision.risk_budget_used_pct > 0:

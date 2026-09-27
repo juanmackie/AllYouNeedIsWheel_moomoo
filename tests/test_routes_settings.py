@@ -5,6 +5,34 @@ from unittest.mock import MagicMock, patch
 
 
 class TestSettingsRoutes(unittest.TestCase):
+    def test_watchlist_group_persists_selected_group(self):
+        from api import create_app
+
+        app = create_app({"TESTING": True})
+        db = MagicMock()
+        app.config["database"] = db
+        client = app.test_client()
+
+        response = client.post("/api/settings/watchlist-group", json={"group": "US"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["active_group"], "US")
+        db.set_setting.assert_called_once_with("moomoo_watchlist_group", "US")
+
+    def test_watchlist_group_rejects_invalid_values(self):
+        from api import create_app
+
+        app = create_app({"TESTING": True})
+        db = MagicMock()
+        app.config["database"] = db
+        client = app.test_client()
+
+        for group in ("", " " * 3, "bad\nname", "x" * 129):
+            with self.subTest(group=group):
+                response = client.post("/api/settings/watchlist-group", json={"group": group})
+                self.assertEqual(response.status_code, 400)
+        db.set_setting.assert_not_called()
+
     def test_preset_propagation_failure_rolls_back_database(self):
         from api import create_app
 

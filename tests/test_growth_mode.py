@@ -413,8 +413,8 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertLess(result.confidence_score, 80, "Stale quote should reduce confidence via is_stale")
 
-    def test_remaining_gap_to_target_is_set(self):
-        """score_contract populates remaining_gap_to_target in growth mode."""
+    def test_risk_diagnostics_remain_available_after_display_only_cleanup(self):
+        """Useful risk diagnostics remain while unused target-gap output is removed."""
         opt = _make_option(strike=85, bid=3.0, ask=3.20, oi=800, vol=400, delta=-0.30, iv=0.35, option_type="PUT")
         result = score_contract(
             "AAPL",
@@ -425,9 +425,8 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
             growth_profile=self.gp,
         )
         self.assertIsNotNone(result)
-        self.assertGreater(
-            result.remaining_gap_to_target, 0, "remaining_gap_to_target should be > 0 when shortfall exists"
-        )
+        self.assertGreater(result.stress_loss, 0)
+        self.assertGreater(result.risk_budget_used_pct, 0)
 
     def test_hard_blockers_block(self):
         blocked, reason = should_block_for_data_quality(
@@ -645,7 +644,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         self.assertTrue(bad_dte_result.hard_blockers)
         self.assertIn("outside_csp_dte_range", bad_dte_result.blocked_reason_codes)
 
-        bad_otm = _make_option(strike=96, bid=1.40, ask=1.60, oi=700, vol=300, delta=-0.12, iv=0.30, option_type="PUT")
+        bad_otm = _make_option(strike=96, bid=1.40, ask=1.60, oi=700, vol=300, delta=-0.20, iv=0.30, option_type="PUT")
         bad_otm["expiration"] = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
         bad_otm_result = score_contract(
             "AAPL",

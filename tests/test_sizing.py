@@ -43,6 +43,19 @@ class TestRecommendedContracts(unittest.TestCase):
         context = {"cash_available_for_csp": 10_000, "account_value": 100_000}
         self.assertEqual(_compute_recommended_contracts(decision, context, {"max_buying_power_pct_per_csp": 100}), 2)
 
+    def test_caps_contracts_to_remaining_per_underlying_account_exposure(self):
+        decision = WheelDecision(ticker="AAPL", option_type="PUT", cash_required=4_000, max_contracts=3)
+        context = {
+            "cash_available_for_csp": 10_000,
+            "account_value": 100_000,
+            "underlying_capital_exposure": {"AAPL": 21_000},
+        }
+        profile = {
+            "max_buying_power_pct_per_csp": 100,
+            "max_account_exposure_pct_per_underlying": 25,
+        }
+        self.assertEqual(_compute_recommended_contracts(decision, context, profile), 1)
+
 
 class TestDeploymentPlan(unittest.TestCase):
     def test_allocates_ranked_affordable_puts_and_tracks_remaining_cash(self):

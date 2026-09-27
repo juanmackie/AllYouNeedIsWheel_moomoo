@@ -13,8 +13,8 @@ import logging
 logger = logging.getLogger("api.services.roll_diagnostics")
 
 
-def build_roll_decisions(portfolio_context, conn):
-    """Build per-position roll diagnostics; never raises."""
+def build_roll_decisions(portfolio_context, conn, fresh_candidates=None):
+    """Build per-position diagnostics, naming only fresh, copy-eligible targets."""
     try:
         option_positions = []
         positions = portfolio_context.get("positions", {}) or {}
@@ -31,7 +31,7 @@ def build_roll_decisions(portfolio_context, conn):
         iv_earnings = get_service("ivearnings")
         decisions = []
         for pos in option_positions:
-            decision = score_position(pos, conn, ctx, iv_earnings)
+            decision = score_position(pos, conn, ctx, iv_earnings, fresh_candidates)
             if decision is None:
                 continue
             decisions.append(
@@ -45,6 +45,9 @@ def build_roll_decisions(portfolio_context, conn):
                     "profit_target_progress": decision.profit_target_progress,
                     "otm_pct": decision.otm_pct,
                     "extrinsic_remaining": decision.extrinsic_remaining,
+                    "exit_verdict": decision.exit_verdict,
+                    "exit_reasons": decision.exit_reasons,
+                    "roll_target": decision.roll_target,
                     "warnings": decision.warnings,
                     "wheel_decision": decision.to_dict(),
                 }

@@ -733,6 +733,45 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
 
         return AccRow(values)
 
+    def test_get_portfolio_preserves_option_greeks_from_moomoo_snapshot(self):
+        conn = self._make_connected_conn()
+        acc_data = MagicMock()
+        acc_data.iloc.__getitem__.return_value = self._make_acc_row({"acc_id": "acct-123", "us_cash": 40000})
+        self.mock_trd_ctx.accinfo_query.return_value = (RET_OK, acc_data)
+        code = "US.AAPL261016C00185000"
+        self.mock_trd_ctx.position_list_query.return_value = (
+            RET_OK,
+            pd.DataFrame([{"code": code, "qty": -1, "average_cost": 1.2, "nominal_price": 1.0, "market_val": -100}]),
+        )
+        self.mock_quote_ctx.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": code,
+                        "option_expiry_date": "2026-10-16",
+                        "option_strike_price": 185.0,
+                        "option_type": "CALL",
+                        "bid_price": 0.9,
+                        "ask_price": 1.1,
+                        "option_implied_volatility": 0.32,
+                        "option_delta": 0.42,
+                        "option_gamma": 0.01,
+                        "option_theta": -0.04,
+                        "option_vega": 0.03,
+                    }
+                ]
+            ),
+        )
+
+        result = conn.get_portfolio()
+
+        position = result["positions"][code]
+        self.assertEqual(position["delta"], 0.42)
+        self.assertEqual(position["implied_volatility"], 0.32)
+        self.assertEqual(position["bid"], 0.9)
+        self.assertEqual(position["ask"], 1.1)
+
     def test_get_portfolio_keeps_cash_and_buying_power_separate(self):
         conn = self._make_connected_conn()
         acc_data = MagicMock()

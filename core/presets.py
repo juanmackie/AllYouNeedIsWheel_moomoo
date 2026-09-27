@@ -45,8 +45,9 @@ class WheelPreset:
     ideal_volume: int
     ideal_spread_pct: float
     max_expirations: int
-    # Sizing cap (per CSP, % of buying power)
+    # Sizing caps (%): per CSP buying power and account capital per underlying.
     max_buying_power_pct_per_csp: float
+    max_account_exposure_pct_per_underlying: float
     # Long-horizon growth objective this preset is tuned for (e.g., 10x capital).
     target_account_multiple: float
 
@@ -85,6 +86,7 @@ class WheelPreset:
             "ideal_spread_pct": self.ideal_spread_pct,
             "max_expirations": self.max_expirations,
             "max_buying_power_pct_per_csp": self.max_buying_power_pct_per_csp,
+            "max_account_exposure_pct_per_underlying": self.max_account_exposure_pct_per_underlying,
             "target_account_multiple": self.target_account_multiple,
             "max_watchlist_tickers": 25,
             "require_cash_fit": True,
@@ -99,7 +101,7 @@ class WheelPreset:
 WHEEL_PRESETS: dict[str, WheelPreset] = {
     "conservative": WheelPreset(
         key="conservative",
-        version=5,
+        version=7,
         label="Conservative",
         description="Stricter liquidity, smaller allocations, farther OTM strikes.",
         target_account_multiple=5.0,
@@ -124,10 +126,11 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         ideal_spread_pct=12.0,
         max_expirations=2,
         max_buying_power_pct_per_csp=50.0,
+        max_account_exposure_pct_per_underlying=25.0,
     ),
     "balanced": WheelPreset(
         key="balanced",
-        version=5,
+        version=7,
         label="Balanced",
         description="Moderate DTE/delta/liquidity and position-size limits (default).",
         target_account_multiple=5.0,
@@ -152,10 +155,11 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         ideal_spread_pct=12.0,
         max_expirations=2,
         max_buying_power_pct_per_csp=80.0,
+        max_account_exposure_pct_per_underlying=25.0,
     ),
     "aggressive": WheelPreset(
         key="aggressive",
-        version=5,
+        version=7,
         label="Aggressive",
         description="Shorter DTE, broader deltas, and larger allocations.",
         target_account_multiple=5.0,
@@ -180,6 +184,7 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         ideal_spread_pct=12.0,
         max_expirations=2,
         max_buying_power_pct_per_csp=90.0,
+        max_account_exposure_pct_per_underlying=25.0,
     ),
 }
 

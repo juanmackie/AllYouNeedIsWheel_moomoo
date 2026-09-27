@@ -899,6 +899,7 @@ class MoomooConnection:
                 position_types = pos_data["code"].apply(_infer_security_type_from_code)
                 option_positions = pos_data[position_types == "OPT"]
                 if not option_positions.empty:
+                    quote_fetched_at_utc = datetime.now(timezone.utc).isoformat()
                     opt_ret, opt_snaps = self.quote_ctx.get_market_snapshot(option_positions["code"].tolist())
                     if opt_ret == RET_OK:
                         opt_snaps_dict = opt_snaps.set_index("code").to_dict("index")
@@ -932,6 +933,14 @@ class MoomooConnection:
                                     snap.get("option_strike_price", (option_metadata or {}).get("strike", 0))
                                 ),
                                 "option_type": "CALL" if snap.get("option_type") == "CALL" else "PUT",
+                                "bid": safe_float(snap.get("bid_price"), None),
+                                "ask": safe_float(snap.get("ask_price"), None),
+                                "last": safe_float(snap.get("last_price"), None),
+                                "implied_volatility": _normalize_iv(snap.get("option_implied_volatility", 0)),
+                                "delta": safe_float(snap.get("option_delta"), None),
+                                "theta": safe_float(snap.get("option_theta"), None),
+                                "quote_fetched_at_utc": quote_fetched_at_utc,
+                                "quote_update_time": str(snap.get("update_time", "") or ""),
                             }
                         )
                     elif sec_type == "OPT" and option_metadata:

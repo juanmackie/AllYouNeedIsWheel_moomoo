@@ -5,6 +5,7 @@ Shared utility functions for the All You Need Is Wheel application
 import logging
 import math
 from datetime import datetime, timedelta
+from typing import Any, overload
 from zoneinfo import ZoneInfo
 
 # Configure logger
@@ -12,7 +13,7 @@ logger = logging.getLogger("ayniwheel.utils")
 
 
 def get_closest_friday():
-    today = datetime.now().date()
+    today = market_now().date()
     weekday = today.weekday()
     if weekday < 4:
         days_to_add = 4 - weekday
@@ -24,7 +25,7 @@ def get_closest_friday():
 
 
 def get_next_monthly_expiration():
-    today = datetime.now().date()
+    today = market_now().date()
     year, month = today.year, today.month
     first_day = datetime(year, month, 1).date()
     weekday = first_day.weekday()
@@ -141,7 +142,15 @@ def format_percentage(value):
     return f"{value:.2f}%"
 
 
-def safe_float(value, default=0.0):
+@overload
+def safe_float(value: object, default: None) -> float | None: ...
+
+
+@overload
+def safe_float(value: object, default: float = 0.0) -> float: ...
+
+
+def safe_float(value: Any, default: float | None = 0.0) -> float | None:
     """Coerce broker/yfinance values to float.
 
     Nulls, empty strings and the NaN spellings brokers emit return `default`

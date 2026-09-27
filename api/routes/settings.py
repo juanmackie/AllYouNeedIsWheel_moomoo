@@ -55,6 +55,28 @@ def get_settings():
     )
 
 
+@bp.route("/watchlist-group", methods=["POST"])
+def set_watchlist_group():
+    """Persist the selected Moomoo watchlist group name for the next scan."""
+    payload = request.get_json(silent=True) or {}
+    raw_group = payload.get("group")
+    if not isinstance(raw_group, str):
+        return jsonify({"success": False, "error": "Group must be a string"}), 400
+    group = raw_group.strip()
+    if not group or len(group) > 128 or any(ord(char) < 32 or ord(char) == 127 for char in group):
+        return jsonify({"success": False, "error": "Invalid watchlist group"}), 400
+
+    db = _get_db()
+    if db is None:
+        return jsonify({"success": False, "error": "Database unavailable"}), 503
+    try:
+        db.set_setting("moomoo_watchlist_group", group)
+    except Exception:
+        logger.exception("Could not persist the selected Moomoo watchlist group")
+        return error_response("Could not save the watchlist group", status_code=503)
+    return jsonify({"success": True, "active_group": group, "applies_on_next_run": True})
+
+
 @bp.route("/preset", methods=["POST"])
 def set_preset():
     """Persist the selected preset. Values themselves are never user-editable."""

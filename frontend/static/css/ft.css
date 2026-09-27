@@ -1238,6 +1238,32 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
 }
 
 /* ── 40. OUTCOME PANEL ──────────────────────────────────── */
+.outcome-link-review {
+  border-top: 1px solid var(--ft-rule);
+  border-bottom: 1px solid var(--ft-rule-soft);
+  padding: 12px 0;
+  margin-top: 16px;
+}
+.outcome-link-review h3 {
+  margin: 0 0 6px;
+  font-family: var(--ft-font-display);
+  font-size: 13px;
+  font-weight: 600;
+}
+.outcome-link-review > p { margin: 0 0 10px; font-size: 12px; }
+.outcome-link-suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  border-top: 1px solid var(--ft-rule-soft);
+  padding: 10px 0;
+  font-family: var(--ft-font-mono);
+  font-size: 12px;
+}
+.outcome-link-suggestion .ft-td-mute { color: var(--ft-ink-mute); }
+.outcome-link-suggestion .ft-btn { flex: 0 0 auto; }
 .outcome-totals-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));

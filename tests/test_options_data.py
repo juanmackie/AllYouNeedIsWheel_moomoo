@@ -5,7 +5,7 @@ Tests for api/services/options_data.py - OptionsDataService candidate handling.
 import os
 import sys
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -142,6 +142,136 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_per_ticker_candidate_cut_uses_capital_return(self):
+        service = self._make_service()
+        options = [
+            {"strike": strike, "option_type": "PUT", "expiration": "20261005"} for strike in [95, 94, 93, 92, 91, 90]
+        ]
+
+        def build_candidate(_ticker, option, _stock_price, _otm, _profile, _portfolio, **_kwargs):
+            strike = option["strike"]
+            premium = 100 - (95 - strike)
+            return {
+                "ticker": "AAPL",
+                "option_type": "PUT",
+                "strike": strike,
+                "dte": 10,
+                "bid_premium_per_contract": premium,
+                "premium_per_contract": premium,
+                "premium_velocity_per_day": premium / 10,
+                "capital_velocity_per_day": premium / (strike * 100 * 10),
+            }
+
+        with patch.object(service, "_build_candidate", side_effect=build_candidate):
+            result = service._process_options_chain(
+                [{"right": "P", "options": options}],
+                "AAPL",
+                100.0,
+                10,
+                {},
+                option_type="PUT",
+            )
+
+        self.assertEqual([candidate["strike"] for candidate in result["puts"]], [90, 91, 92, 93, 94])
+
+    def test_candidate_iv_record_uses_us_market_date_for_dte(self):
+        from zoneinfo import ZoneInfo
+
+        from api.services import options_data
+
+        service = self._make_service()
+        option = {
+            "strike": 90.0,
+            "expiration": "20261005",
+            "option_type": "PUT",
+            "bid": 1.0,
+            "ask": 1.1,
+            "last": 1.05,
+            "implied_volatility": 0.30,
+            "chain_source": "broker",
+        }
+        market_datetime = datetime(2026, 9, 28, 0, 30, tzinfo=ZoneInfo("America/New_York"))
+        with (
+            patch.object(options_data, "market_now", return_value=market_datetime) as market_clock,
+            patch.object(options_data, "score_contract", return_value=None),
+        ):
+            result = service._build_candidate("AAPL", option, 100.0, 5, {}, {})
+
+        self.assertIsNone(result)
+        self.assertEqual(service.iv_earnings_service.record_iv_data.call_args.args[5], 7)
+        market_clock.assert_called_once_with()
+
+    @patch("api.services.options_data.score_contract", return_value=None)
+    def test_malformed_broker_iv_does_not_abort_candidate_scoring(self, mock_score):
+        service = self._make_service()
+        expiration = (date.today() + timedelta(days=21)).strftime("%Y%m%d")
+        option = {
+            "strike": 80.0,
+            "expiration": expiration,
+            "option_type": "PUT",
+            "bid": 1.0,
+            "ask": 1.1,
+            "last": 1.05,
+            "implied_volatility": "not-a-number",
+            "chain_source": "broker",
+            "price_source": "broker",
+        }
+
+        result = service._build_candidate("AAPL", option, 100.0, 5, {}, {})
+
+        self.assertIsNone(result)
+        mock_score.assert_called_once()
+
+    def test_below_basis_call_is_retained_only_for_recovery_analysis(self):
+        service = self._make_service()
+        expiration = (date.today() + timedelta(days=21)).strftime("%Y%m%d")
+        option = {
+            "strike": 95.0,
+            "expiration": expiration,
+            "option_type": "CALL",
+            "bid": 2.0,
+            "ask": 2.1,
+            "last": 2.05,
+            "delta": 0.20,
+            "theta": -0.1,
+            "gamma": 0.01,
+            "vega": 0.05,
+            "implied_volatility": 0.30,
+            "open_interest": 1000,
+            "volume": 200,
+            "chain_source": "broker",
+            "price_source": "broker",
+            "iv_source": "broker",
+            "quote_fetched_at_utc": "2026-09-27T12:00:00+00:00",
+        }
+        profile = {
+            "min_dte": 7,
+            "max_dte": 45,
+            "target_delta": 0.20,
+            "delta_tolerance": 0.15,
+            "min_mid_price": 0.05,
+            "max_spread_pct": 60,
+            "min_premium_per_contract": 10,
+        }
+        portfolio = {"positions": {"AAPL": {"position": 200, "avg_cost": 100.0}}}
+        args = {
+            "ticker": "AAPL",
+            "option": option,
+            "stock_price": 90.0,
+            "desired_otm": 5,
+            "profile": profile,
+            "portfolio_context": portfolio,
+        }
+
+        self.assertIsNone(service._build_candidate(**args))
+        recovery_args = {**args, "include_below_basis_for_recovery": True}
+        analysis_candidate = getattr(service, "_build_candidate")(**recovery_args)
+
+        self.assertIsNotNone(analysis_candidate)
+        self.assertIn("below_cost_basis", analysis_candidate["blocked_reason_codes"])
+        self.assertFalse(analysis_candidate["copy_eligible"])
+        self.assertEqual(analysis_candidate["if_called_pnl_vs_basis"], -300.0)
+
     @patch("api.services.options_data.score_contract")
     def test_direct_candidate_scoring_uses_growth_profile_from_toggle(self, mock_score):
         service = self._make_service(
@@ -192,6 +322,81 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         # targets can be applied by the unified scorer.
         growth_profile = mock_score.call_args.kwargs.get("growth_profile")
         self.assertEqual(growth_profile, {})
+
+    def test_candidate_expiration_window_uses_us_market_date(self):
+        from zoneinfo import ZoneInfo
+
+        from moomoo import RET_OK
+
+        from api.services import options_data
+
+        service = self._make_service()
+        conn = MagicMock()
+        conn.get_option_expiration_dates.return_value = (
+            RET_OK,
+            pd.DataFrame({"expiration_date": ["20261004", "20261005"]}),
+        )
+        market_datetime = datetime(2026, 9, 28, 0, 30, tzinfo=ZoneInfo("America/New_York"))
+        with patch.object(options_data, "market_now", return_value=market_datetime) as market_clock:
+            expirations = service._get_candidate_expirations(
+                conn, "AAPL", {"min_dte": 7, "max_dte": 7, "max_expirations": 5}
+            )
+
+        self.assertEqual(expirations, ["20261005"])
+        market_clock.assert_called_once_with()
+
+    @patch("api.services.options_data.get_closest_friday")
+    def test_candidate_expirations_falls_back_to_next_friday_when_broker_dates_fail(self, closest_friday):
+        from datetime import datetime
+
+        closest_friday.return_value = datetime(2026, 10, 2)
+        service = self._make_service()
+        conn = MagicMock()
+        conn.get_option_expiration_dates.return_value = (-1, None)
+
+        expirations = service._get_candidate_expirations(
+            conn, "AAPL", {"min_dte": 7, "max_dte": 45, "max_expirations": 5}
+        )
+
+        self.assertEqual(expirations, ["20261002"])
+
+    def test_expiration_endpoint_reports_unavailable_broker_dates_without_external_fallback(self):
+        service = self._make_service()
+        conn = MagicMock()
+        conn.get_option_expiration_dates.return_value = (-1, None)
+        service._connection_provider._ensure_connection.return_value = conn
+
+        result = service.get_option_expirations("AAPL", "CALL")
+
+        self.assertIn("error", result)
+        self.assertEqual(result["error"], "Moomoo option expirations unavailable")
+
+    def test_option_expiration_endpoint_uses_us_market_date(self):
+        from zoneinfo import ZoneInfo
+
+        from moomoo import RET_OK
+
+        from api.services import options_data
+
+        service = self._make_service()
+        service._screening_profile_provider.get_screening_profile.return_value = {
+            "min_dte": 7,
+            "max_dte": 7,
+        }
+        conn = MagicMock()
+        conn.get_option_expiration_dates.return_value = (
+            RET_OK,
+            pd.DataFrame({"expiration_date": ["20261004", "20261005"]}),
+        )
+        service._connection_provider._ensure_connection.return_value = conn
+        market_datetime = datetime(2026, 9, 28, 0, 30, tzinfo=ZoneInfo("America/New_York"))
+
+        with patch.object(options_data, "market_now", return_value=market_datetime) as market_clock:
+            result = service.get_option_expirations("AAPL", "PUT")
+
+        self.assertEqual([item["value"] for item in result["expirations"]], ["20261005"])
+        self.assertEqual(result["expirations"][0]["dte"], 7)
+        market_clock.assert_called_once_with()
 
     def test_put_expirations_use_growth_dte_window_when_toggle_enabled(self):
         from moomoo import RET_OK

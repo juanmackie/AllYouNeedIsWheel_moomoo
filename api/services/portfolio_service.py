@@ -253,6 +253,14 @@ class PortfolioService:
                             "expiration": pos.get("expiration", ""),
                             "strike": pos.get("strike", 0),
                             "option_type": pos.get("option_type", ""),
+                            "bid": pos.get("bid"),
+                            "ask": pos.get("ask"),
+                            "last": pos.get("last"),
+                            "implied_volatility": pos.get("implied_volatility"),
+                            "delta": pos.get("delta"),
+                            "theta": pos.get("theta"),
+                            "quote_fetched_at_utc": pos.get("quote_fetched_at_utc"),
+                            "quote_update_time": pos.get("quote_update_time"),
                         }
                     )
 

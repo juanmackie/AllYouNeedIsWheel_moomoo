@@ -53,6 +53,12 @@ def _make_snapshot(status="ready", coverage_complete=True, quote_age_sec=10, err
     )
 
 
+class TestSnapshotCapitalRecovery(unittest.TestCase):
+    def test_legacy_snapshot_serializes_empty_capital_recovery(self):
+        self.assertEqual(_make_snapshot().to_dict()["capital_recovery"], [])
+        self.assertEqual(_make_snapshot().to_dict()["watchlist_cash_fit"], {})
+
+
 class TestOpaqueIdentity(unittest.TestCase):
     def test_opaque_id_is_short_hash(self):
         self.assertEqual(len(opaque_account_id("123456789")), 12)
@@ -146,6 +152,7 @@ class TestSnapshotTradeability(unittest.TestCase):
         snapshot = _make_snapshot().to_dict()
         snapshot["run"]["quote_fetched_at"] = {"AAPL": fetched}
         effective = recompute_effective_snapshot(snapshot, datetime.now(timezone.utc))
+        assert effective is not None
         self.assertFalse(effective["tradeable"])
         self.assertEqual(effective["effective_status"], "stale")
         self.assertEqual(snapshot["run"]["status"], "ready")
@@ -243,8 +250,9 @@ class TestRunnerRollDiagnosticsInjection(unittest.TestCase):
         )
         ctx = {"positions": {"AAPL": {"security_type": "OPT"}}}
         conn = MagicMock()
-        result = runner._build_roll_decisions(ctx, conn)
-        provider.assert_called_once_with(ctx, conn)
+        fresh_candidates = [{"ticker": "AAPL", "option_type": "PUT", "strike": 95}]
+        result = runner._build_roll_decisions(ctx, conn, fresh_candidates)
+        provider.assert_called_once_with(ctx, conn, fresh_candidates)
         self.assertEqual(result, [{"ticker": "AAPL"}])
 
 
@@ -395,6 +403,7 @@ class TestReadTimeEligibility(unittest.TestCase):
 
         persisted = _copy.deepcopy(snapshot)
         view = recompute_effective_snapshot(snapshot, self.now_utc, self.monday_10am_et)
+        assert view is not None
         self.assertEqual(view["eligibility"]["session"]["state"], "open")
         self.assertEqual(view["eligibility"]["coverage"]["truth"], "complete")
         self.assertEqual(view["signals"][0]["eligibility"]["mode"], "live")
@@ -410,6 +419,7 @@ class TestReadTimeEligibility(unittest.TestCase):
             "signals": [self._signal()],
         }
         view = recompute_effective_snapshot(snapshot, self.now_utc, self.saturday_10am_et)
+        assert view is not None
         self.assertEqual(view["eligibility"]["session"]["state"], "closed")
         self.assertEqual(view["signals"][0]["eligibility"]["mode"], "staged")
 
@@ -443,6 +453,7 @@ class TestReadTimeEligibility(unittest.TestCase):
         snapshot = self._lanes_snapshot()
         persisted = _copy.deepcopy(snapshot)
         view = recompute_effective_snapshot(snapshot, self.now_utc, self.monday_10am_et)
+        assert view is not None
         # Every copy-addressable lane carries the same read-time eligibility.
         for lane in ("signals", "csp_picks", "cc_decisions"):
             for candidate in view[lane]:
@@ -459,6 +470,7 @@ class TestReadTimeEligibility(unittest.TestCase):
 
     def test_read_time_capital_view_collateral_and_available_shares(self):
         view = recompute_effective_snapshot(self._lanes_snapshot(), self.now_utc, self.monday_10am_et)
+        assert view is not None
         csp = view["csp_picks"][0]
         self.assertEqual(csp["collateral"], 12000.0)
         self.assertIsNone(csp["available_shares"])
@@ -470,6 +482,7 @@ class TestReadTimeEligibility(unittest.TestCase):
         stale = self._lanes_snapshot()
         stale["csp_picks"][1]["quote_fetched_at_utc"] = ""
         view = recompute_effective_snapshot(stale, self.now_utc, self.monday_10am_et)
+        assert view is not None
         self.assertIsNone(view["csp_picks"][1]["quote_age_sec"])
 
 
@@ -485,7 +498,7 @@ class TestActiveWatchlistSnapshot(unittest.TestCase):
             MagicMock(), MagicMock(), {"portfolio_env": "SIMULATE", "account_id": ""}, max_tradeable_age_sec=120
         )
 
-    def _build(self, active_watchlist, tradeable_run=True):
+    def _build(self, active_watchlist, tradeable_run=True, capital_recovery=None, watchlist_cash_fit=None):
         result = {
             "generated_at": utc_now_iso(),
             "scan_coverage": {"scanned": 2, "total": 2, "complete": True},
@@ -496,6 +509,8 @@ class TestActiveWatchlistSnapshot(unittest.TestCase):
             "signals": [],
             "watchlist_csps": {"signals": []},
             "covered_calls": {"signals": []},
+            "capital_recovery": capital_recovery or [],
+            "watchlist_cash_fit": watchlist_cash_fit or {},
             "active_watchlist": active_watchlist,
         }
         with patch("core.wheel_runner.is_market_open", return_value=True):
@@ -524,6 +539,20 @@ class TestActiveWatchlistSnapshot(unittest.TestCase):
         self.assertEqual(payload["active_watchlist"]["group_name"], "My Watchlist")
         self.assertEqual(len(payload["active_watchlist"]["tickers"]), 2)
         self.assertEqual(payload["active_watchlist"]["holdings_checked"], ["AAPL", "NVDA"])
+
+    def test_capital_recovery_survives_snapshot_build_and_serialization(self):
+        recovery = [{"ticker": "AAPL", "basis_per_share": 100.0}]
+        snapshot = self._build(self._active_watchlist(), capital_recovery=recovery)
+
+        self.assertEqual(snapshot.capital_recovery, tuple(recovery))
+        self.assertEqual(snapshot.to_dict()["capital_recovery"], recovery)
+
+    def test_watchlist_cash_fit_survives_snapshot_build_and_serialization(self):
+        cash_fit = {"unaffordable_count": 4, "total_count": 20, "max_affordable_strike": 83.0}
+        snapshot = self._build(self._active_watchlist(), watchlist_cash_fit=cash_fit)
+
+        self.assertEqual(snapshot.watchlist_cash_fit, cash_fit)
+        self.assertEqual(snapshot.to_dict()["watchlist_cash_fit"], cash_fit)
 
     def test_last_successful_sync_stamped_only_when_group_ok(self):
         healthy = self._build(self._active_watchlist(status="ok"))

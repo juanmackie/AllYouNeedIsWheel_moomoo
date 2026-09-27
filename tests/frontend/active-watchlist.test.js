@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { renderActiveWatchlist } from '../../frontend/static/js/dashboard/active-watchlist.js';
 
@@ -10,8 +10,6 @@ import { renderActiveWatchlist } from '../../frontend/static/js/dashboard/active
  * XSS safety (hostile group/explanation/symbol text rendered via textContent
  * can never inject markup).
  */
-
-const FOOT_IDS = ['active-watchlist-foot', 'active-watchlist-render', 'active-watchlist-sync'];
 
 function setupDOM() {
   const section = document.createElement('section');
@@ -29,7 +27,12 @@ function setupDOM() {
   section.appendChild(render);
   document.body.appendChild(section);
 
-  return { section, sync, render };
+  const blocking = document.createElement('div');
+  blocking.id = 'watchlist-blocking-banner';
+  blocking.className = 'd-none';
+  document.body.appendChild(blocking);
+
+  return { section, sync, render, blocking };
 }
 
 function aw(overrides = {}) {
@@ -72,6 +75,29 @@ describe('renderActiveWatchlist', () => {
     expect(render.textContent).toContain('CC holdings checked: AAPL, NVDA');
     expect(render.textContent).toContain('HK.0700 — not scanned: non-US listing HK.0700.');
     expect(document.getElementById('active-watchlist-sync').textContent).toContain('last sync 2026-09-10 12:00:00Z');
+  });
+
+  it('offers only groups discovered from the active watchlist payload and persists the chosen group', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+    vi.stubGlobal('fetch', fetchMock);
+    renderActiveWatchlist({ active_watchlist: aw({ group_name: 'US', groups_available: ['US', 'Favorites'] }) });
+
+    const select = document.getElementById('watchlist-group-select');
+    expect([...select.options].map((option) => option.value)).toEqual(['US', 'Favorites']);
+    expect(select.value).toBe('US');
+    select.value = 'US';
+    document.getElementById('watchlist-group-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith('/api/settings/watchlist-group', expect.objectContaining({ method: 'POST' }));
+    vi.unstubAllGlobals();
+  });
+
+  it('surfaces an unhealthy CSP group in the blocking signal banner', () => {
+    renderActiveWatchlist({ active_watchlist: aw({ group_status: 'missing_group', explanation: 'Group unavailable', tickers: [] }) });
+    const banner = document.getElementById('watchlist-blocking-banner');
+    expect(banner.className).not.toContain('d-none');
+    expect(banner.textContent).toContain('Group unavailable');
   });
 
   it('shows the distinct missing_group explanation and no success sync', () => {

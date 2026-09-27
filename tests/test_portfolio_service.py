@@ -201,6 +201,33 @@ class TestPortfolioServicePositions(unittest.TestCase):
         self.assertEqual(len(positions), 1)
         self.assertEqual(positions[0]["symbol"], "US.AAPL")
 
+    def test_get_positions_preserves_broker_greeks_and_quotes(self):
+        self.svc._fetch_portfolio.return_value = {
+            "positions": {
+                "US.AAPL261016C00185000": {
+                    "shares": -1,
+                    "security_type": "OPT",
+                    "market_price": 1.0,
+                    "avg_cost": 1.2,
+                    "expiration": "20261016",
+                    "strike": 185.0,
+                    "option_type": "CALL",
+                    "delta": 0.42,
+                    "implied_volatility": 0.32,
+                    "bid": 0.9,
+                    "ask": 1.1,
+                }
+            }
+        }
+
+        positions = self.svc.get_positions("OPT")
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["delta"], 0.42)
+        self.assertEqual(positions[0]["implied_volatility"], 0.32)
+        self.assertEqual(positions[0]["bid"], 0.9)
+        self.assertEqual(positions[0]["ask"], 1.1)
+
     def test_get_positions_opt(self):
         self.svc._fetch_portfolio.return_value = {
             "positions": {

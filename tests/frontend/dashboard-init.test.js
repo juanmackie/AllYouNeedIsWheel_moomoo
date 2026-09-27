@@ -260,4 +260,24 @@ describe('C09 position P&L with unknown marks', () => {
     expect(html).toContain('+83%</span><br><small class="text-muted">$165</small>');
     expect(html).not.toContain('100%');
   });
+
+  it('shows the named fresh roll target beside its verdict', async () => {
+    const html = await renderPositions([{
+      symbol: 'AAPL231215P140', ticker: 'AAPL', option_type: 'PUT', strike: 140, position: -1,
+      exit_verdict: 'ROLL', roll_target: {
+        ticker: 'AAPL', option_type: 'PUT', strike: 95, expiration: '20261016',
+      },
+    }]);
+    expect(html).toContain('ROLL → AAPL PUT 95.00 2026-10-16');
+  });
+
+  it('renders ROTATE as a distinct exit verdict', async () => {
+    const html = await renderPositions([{
+      symbol: 'ORCL261016C185', ticker: 'ORCL', option_type: 'CALL', strike: 185, position: -1,
+      exit_verdict: 'ROTATE', roll_target: {
+        ticker: 'ORCL', option_type: 'CALL', strike: 195, expiration: '20261016',
+      },
+    }]);
+    expect(html).toContain('ROTATE → ORCL CALL 195.00 2026-10-16');
+  });
 });

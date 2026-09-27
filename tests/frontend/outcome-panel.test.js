@@ -14,6 +14,9 @@ function setupDOM() {
         </div>
       </div>
       <div id="outcome-state"></div>
+      <div id="outcome-link-suggestions"></div>
+      <h3>21–45 DTE comparison</h3>
+      <div id="outcome-dte-comparisons"></div>
       <div id="outcome-totals" class="outcome-totals-grid"></div>
       <div id="outcome-groups">
         <div class="outcome-group">
@@ -87,6 +90,8 @@ function samplePayload() {
       ],
       by_event_tier: [{ key: 'earnings', sample_size: 1, measured_count: 1, unknown_count: 0, coverage_pct: 100, net_dollars: 250, capital_days: 40000, owner_efficiency: 0.0063 }],
     },
+    link_suggestions: [],
+    dte_comparisons: [],
     outcomes: [
       {
         identity: 'NVDA|20260619|PUT|150',
@@ -309,6 +314,102 @@ describe('outcome-panel rendering', () => {
     expect(detail.textContent).toContain('2 × $1.18');
   });
 
+  it('shows only the saved 21–45 DTE comparison and an explicit unavailable state', async () => {
+    const payload = samplePayload();
+    payload.dte_comparisons = [{
+      run_id: 'run-1',
+      run_generated_at: '2026-05-09T00:00:00',
+      days_from_run: 1,
+      sample_scope: 'saved_shortlist_only',
+      traded: { ticker: 'NVDA', option_type: 'CALL', expiration: '20260619', strike: 155, dte: 41 },
+      candidate: { ticker: 'NVDA', option_type: 'CALL', expiration: '20260619', strike: 150, dte: 40, saved_sample_rank: 1, capital_velocity_per_day: 0.002 },
+      reason: '',
+    }, {
+      run_id: 'run-2',
+      run_generated_at: '2026-05-10T00:00:00',
+      days_from_run: 0,
+      sample_scope: 'saved_shortlist_only',
+      traded: { ticker: 'AAPL', option_type: 'CALL', expiration: '20260619', strike: 185, dte: 30 },
+      candidate: null,
+      reason: 'no_saved_candidate_in_21_45_dte_window',
+    }];
+    mockFetchOnce(payload);
+
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+
+    const comparison = document.getElementById('outcome-dte-comparisons');
+    expect(document.querySelector('#outcome-panel h3').textContent).toContain('21–45 DTE comparison');
+    expect(comparison.textContent).toContain('NVDA 2026-06-19 Call $155.00');
+    expect(comparison.textContent).toContain('Saved candidate #1');
+    expect(comparison.textContent).toContain('saved shortlist only');
+    expect(comparison.textContent).toContain('AAPL 2026-06-19 Call $185.00');
+    expect(comparison.textContent).toContain('No 21–45 DTE candidate was retained');
+  });
+
+  it('requires one-click confirmation before recording a suggested fill link', async () => {
+    const payload = samplePayload();
+    payload.link_suggestions = [{
+      run_id: 'run-1',
+      run_generated_at: '2026-05-09T00:00:00',
+      days_from_run: 1,
+      recommendation: { ticker: 'NVDA', option_type: 'PUT', expiration: '20260619', strike: 150 },
+      traded: { ticker: 'NVDA', option_type: 'PUT', expiration: '20260619', strike: 145, qty: 1, price: 1.2 },
+      fill_count: 1,
+    }];
+    const refreshed = { ...payload, link_suggestions: [] };
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => payload })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true, ok: true }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => refreshed }));
+
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+
+    const button = document.querySelector('.outcome-link-confirm');
+    expect(button).not.toBeNull();
+    expect(document.getElementById('outcome-link-suggestions').textContent).toContain('Confirm link');
+    button.click();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+
+    const [url, options] = fetch.mock.calls[1];
+    expect(url).toBe('/api/run/taken');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body)).toMatchObject({
+      run_id: 'run-1',
+      ticker: 'NVDA',
+      option_type: 'PUT',
+      expiration: '20260619',
+      strike: 150,
+      traded: { ticker: 'NVDA', option_type: 'PUT', expiration: '20260619', strike: 145, qty: 1, price: 1.2 },
+    });
+    expect(document.getElementById('outcome-link-suggestions').textContent).toContain('No unlinked matching fills');
+  });
+
+  it('keeps the suggestion available when confirming the link fails', async () => {
+    const payload = samplePayload();
+    payload.link_suggestions = [{
+      run_id: 'run-1',
+      run_generated_at: '2026-05-09T00:00:00',
+      days_from_run: 1,
+      recommendation: { ticker: 'NVDA', option_type: 'PUT', expiration: '20260619', strike: 150 },
+      traded: { ticker: 'NVDA', option_type: 'PUT', expiration: '20260619', strike: 145, qty: 1, price: 1.2 },
+      fill_count: 1,
+    }];
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => payload })
+      .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({ success: false, error: 'link failed' }) }));
+
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+    const button = document.querySelector('.outcome-link-confirm');
+    button.click();
+
+    await vi.waitFor(() => expect(document.getElementById('outcome-state').textContent).toContain('link failed'));
+    expect(button.disabled).toBe(false);
+    expect(document.querySelector('.outcome-link-confirm')).not.toBeNull();
+  });
+
   it('shows an error state when the outcome fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
@@ -329,7 +430,7 @@ describe('outcome-panel rendering', () => {
       cash_flows: { ok: true, ingested: 7 },
     };
     mockFetchOnce(ingestResponse);
-    const { ingestBrokerFills, renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    const { ingestBrokerFills } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
     await ingestBrokerFills();
 
     const calls = fetch.mock.calls.map(c => [c[0], c[1] && c[1].method]);

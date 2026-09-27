@@ -41,8 +41,13 @@ export function renderActiveWatchlist(snapshot) {
     if (!renderEl) return;
 
     const syncEl = document.getElementById('active-watchlist-sync');
+    const blockingBanner = document.getElementById('watchlist-blocking-banner');
     const aw = snapshot?.active_watchlist;
     if (!aw) {
+        if (blockingBanner) {
+            blockingBanner.className = 'alert alert-danger d-none mb-3';
+            blockingBanner.textContent = '';
+        }
         renderEl.textContent = snapshot?.run
             ? 'This run carried no active-watchlist payload.'
             : 'Waiting for a run snapshot…';
@@ -53,6 +58,13 @@ export function renderActiveWatchlist(snapshot) {
     const groupName = aw.group_name || 'unknown group';
     const status = aw.group_status || 'ok';
     const clean = status === 'ok';
+
+    if (blockingBanner) {
+        blockingBanner.className = clean ? 'alert alert-danger d-none mb-3' : 'alert alert-danger mb-3';
+        blockingBanner.textContent = clean
+            ? ''
+            : `${GROUP_STATUS_TEXT[status] || status.toUpperCase()}: ${aw.explanation || 'The CSP watchlist could not be read. No CSP signal is actionable.'}`;
+    }
 
     renderEl.innerHTML = '';
 
@@ -67,6 +79,7 @@ export function renderActiveWatchlist(snapshot) {
     statusBadge.textContent = GROUP_STATUS_TEXT[status] || status.toUpperCase();
     groupLine.append(nameSpan, statusBadge);
     renderEl.appendChild(groupLine);
+    renderGroupPicker(renderEl, aw);
 
     if (!clean && aw.explanation) {
         const why = document.createElement('div');
@@ -112,6 +125,62 @@ export function renderActiveWatchlist(snapshot) {
     // empty/offline read mislabeled as success.
     const lastSuccess = aw.last_successful_sync || (clean ? aw.fetched_at || null : null);
     setSyncBadge(syncEl, lastSuccess);
+}
+
+function renderGroupPicker(container, aw) {
+    const groups = Array.isArray(aw.groups_available)
+        ? [...new Set(aw.groups_available.filter((group) => typeof group === 'string' && group.trim()))]
+        : [];
+    if (!groups.length) return;
+
+    const form = document.createElement('form');
+    form.id = 'watchlist-group-form';
+    form.className = 'd-flex flex-wrap align-items-center gap-2 mb-2';
+    const label = document.createElement('label');
+    label.htmlFor = 'watchlist-group-select';
+    label.className = 'small fw-semibold';
+    label.textContent = 'Moomoo watchlist group';
+    const select = document.createElement('select');
+    select.id = 'watchlist-group-select';
+    select.className = 'form-select form-select-sm w-auto';
+    select.setAttribute('aria-label', 'Moomoo watchlist group');
+    for (const group of groups) {
+        const option = document.createElement('option');
+        option.value = group;
+        option.textContent = group;
+        select.appendChild(option);
+    }
+    select.value = aw.group_name || '';
+
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.className = 'btn btn-outline-secondary btn-sm';
+    button.textContent = 'Use group';
+    const message = document.createElement('span');
+    message.className = 'small text-muted';
+    message.setAttribute('role', 'status');
+
+    form.append(label, select, button, message);
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        message.textContent = 'Saving…';
+        try {
+            const response = await fetch('/api/settings/watchlist-group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ group: select.value }),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) throw new Error(result.error || 'Could not save group');
+            message.textContent = 'Saved. Applies on the next refresh.';
+        } catch (error) {
+            message.textContent = error instanceof Error ? error.message : 'Could not save group';
+        } finally {
+            button.disabled = false;
+        }
+    });
+    container.appendChild(form);
 }
 
 function muted(text) {

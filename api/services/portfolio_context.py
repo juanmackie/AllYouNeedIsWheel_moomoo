@@ -4,9 +4,10 @@ Extracted from the monolithic options_service.py for maintainability.
 """
 
 import logging
+from math import isfinite
 
-from core.ticker_utils import parse_moomoo_symbol
-from core.utils import parse_position_qty
+from core.ticker_utils import earnings_underlying_ticker, parse_moomoo_symbol
+from core.utils import parse_position_qty, safe_float
 
 logger = logging.getLogger("api.services.portfolio_context")
 
@@ -56,6 +57,35 @@ def _csp_cash_available(source_value: float, source: str, reserved: float) -> tu
     return max(0.0, source_value - reserved), f"{source_name}_minus_open_short_put_collateral"
 
 
+def _stock_capital_exposure(position: dict, quantity: int) -> float | None:
+    if quantity == 0:
+        return 0.0
+    for field in ("market_value", "market_val"):
+        try:
+            value = float(position.get(field) or 0)
+        except (TypeError, ValueError):
+            continue
+        if isfinite(value) and value != 0:
+            return abs(value)
+    try:
+        market_price = float(position.get("market_price") or 0)
+    except (TypeError, ValueError):
+        return None
+    if isfinite(market_price) and market_price > 0:
+        return abs(quantity * market_price)
+    return None
+
+
+def _add_capital_exposure(exposures: dict, ticker: str, amount: float | None) -> None:
+    if not ticker:
+        return
+    current = exposures.get(ticker, 0.0)
+    if current is None or amount is None:
+        exposures[ticker] = None
+    else:
+        exposures[ticker] = current + amount
+
+
 class PortfolioContext:
     """
     Handles portfolio context building and cash reservation calculations.
@@ -103,6 +133,7 @@ class PortfolioContext:
             "broker_buying_power": 0.0,
             "broker_buying_power_source": "none",
             "open_short_put_collateral": 0.0,
+            "underlying_capital_exposure": {},
         }
 
         if not isinstance(portfolio, dict):
@@ -121,6 +152,7 @@ class PortfolioContext:
         )
 
         cash_reserved = 0.0
+        stock_exposure_seen = set()
         for raw_symbol, position in raw_positions.items():
             raw_symbol = str(raw_symbol or "")
             symbol = parse_moomoo_symbol(raw_symbol)
@@ -139,9 +171,19 @@ class PortfolioContext:
 
             security_type = str(pos.get("security_type", "") or "").upper()
             if security_type == "STK":
-                context["positions"][symbol] = pos
-                if raw_symbol and raw_symbol != symbol:
-                    context["positions"][raw_symbol] = pos
+                # Store stock positions once under the bare canonical ticker.
+                # Prefer an already-bare cached row when legacy snapshots contain
+                # both prefixed and bare aliases for the same holding.
+                if raw_symbol == symbol or symbol not in context["positions"]:
+                    context["positions"][symbol] = pos
+                underlying = earnings_underlying_ticker(raw_symbol).upper()
+                if underlying and underlying not in stock_exposure_seen:
+                    _add_capital_exposure(
+                        context["underlying_capital_exposure"],
+                        underlying,
+                        _stock_capital_exposure(pos, pos_qty),
+                    )
+                    stock_exposure_seen.add(underlying)
             elif security_type == "OPT" and pos_qty < 0:
                 option_type = str(pos.get("option_type", "") or "").upper()
                 contracts = abs(pos_qty)
@@ -149,9 +191,18 @@ class PortfolioContext:
                     context["short_calls"][symbol] = context["short_calls"].get(symbol, 0) + contracts
                 elif option_type == "PUT":
                     context["short_puts"][symbol] = context["short_puts"].get(symbol, 0) + contracts
-                    strike = float(pos.get("strike", 0) or 0)
+                    try:
+                        strike = float(pos.get("strike", 0) or 0)
+                    except (TypeError, ValueError):
+                        strike = 0.0
                     cash_required = strike * 100 * contracts
                     cash_reserved += cash_required
+                    underlying = earnings_underlying_ticker(raw_symbol).upper()
+                    _add_capital_exposure(
+                        context["underlying_capital_exposure"],
+                        underlying,
+                        cash_required if strike > 0 else None,
+                    )
 
         context["cash_reserved_for_csp"] = cash_reserved
         context["open_short_put_collateral"] = cash_reserved
@@ -186,11 +237,11 @@ class PortfolioContext:
             portfolio_service = self._get_portfolio_service()
             option_positions = portfolio_service.get_positions("OPT") or [] if portfolio_service else []
             for position in option_positions:
-                pos_qty = int(position.get("position", 0) or 0)
+                pos_qty = parse_position_qty(position.get("position", 0))
                 option_type = str(position.get("option_type", "") or "").upper()
                 if pos_qty < 0 and option_type == "PUT":
                     ticker = str(position.get("symbol", "") or "").replace("US.", "")
-                    strike = float(position.get("strike", 0) or 0)
+                    strike = safe_float(position.get("strike", 0))
                     contracts = abs(pos_qty)
                     cash_required = strike * 100 * contracts
                     open_puts.append(
@@ -208,15 +259,15 @@ class PortfolioContext:
             logging.getLogger("api.services.portfolio_context").debug(f"Open-put collateral detail unavailable: {exc}")
 
         return {
-            "cash_balance": round(float(context.get("cash_balance", 0) or 0), 2),
-            "cash_reserved": round(float(context.get("cash_reserved_for_csp", 0) or 0), 2),
-            "available_cash": round(float(context.get("available_cash", 0) or 0), 2),
-            "cash_available": round(float(context.get("available_cash", 0) or 0), 2),
-            "cash_available_for_csp": round(float(context.get("cash_available_for_csp", 0) or 0), 2),
-            "cash_reserved_for_csp": round(float(context.get("cash_reserved_for_csp", 0) or 0), 2),
-            "broker_buying_power": round(float(context.get("broker_buying_power", 0) or 0), 2),
+            "cash_balance": round(safe_float(context.get("cash_balance", 0)), 2),
+            "cash_reserved": round(safe_float(context.get("cash_reserved_for_csp", 0)), 2),
+            "available_cash": round(safe_float(context.get("available_cash", 0)), 2),
+            "cash_available": round(safe_float(context.get("available_cash", 0)), 2),
+            "cash_available_for_csp": round(safe_float(context.get("cash_available_for_csp", 0)), 2),
+            "cash_reserved_for_csp": round(safe_float(context.get("cash_reserved_for_csp", 0)), 2),
+            "broker_buying_power": round(safe_float(context.get("broker_buying_power", 0)), 2),
             "broker_buying_power_source": context.get("broker_buying_power_source", "none"),
-            "excess_liquidity": round(float(context.get("excess_liquidity", 0) or 0), 2),
+            "excess_liquidity": round(safe_float(context.get("excess_liquidity", 0)), 2),
             "reserve_enabled": bool(self.config.get("cash_reserve_enabled", True)),
             "open_puts": open_puts,
             "open_puts_count": len(open_puts),
@@ -235,6 +286,7 @@ class PortfolioContext:
             "broker_buying_power": 0.0,
             "broker_buying_power_source": "none",
             "open_short_put_collateral": 0.0,
+            "underlying_capital_exposure": {},
         }
 
         if not refresh:
@@ -277,14 +329,25 @@ class PortfolioContext:
                 summary, true_cash, true_cash_source
             )
 
+            stock_exposure_seen = set()
             for position in stock_positions:
                 raw_symbol = str(position.get("symbol", "") or "")
                 symbol = parse_moomoo_symbol(raw_symbol)
                 if not symbol:
                     continue
+                # Stock lookups use the same single bare key as the cached path.
                 context["positions"][symbol] = position
-                if raw_symbol and raw_symbol != symbol:
-                    context["positions"][raw_symbol] = position
+                underlying = earnings_underlying_ticker(raw_symbol).upper()
+                if underlying and underlying not in stock_exposure_seen:
+                    _add_capital_exposure(
+                        context["underlying_capital_exposure"],
+                        underlying,
+                        _stock_capital_exposure(
+                            position,
+                            parse_position_qty(position.get("position", position.get("shares", 0))),
+                        ),
+                    )
+                    stock_exposure_seen.add(underlying)
 
             for position in option_positions:
                 raw_symbol = str(position.get("symbol", "") or "")
@@ -308,6 +371,12 @@ class PortfolioContext:
                         context["short_calls"][symbol] = context["short_calls"].get(symbol, 0) + contracts
                     elif option_type == "PUT":
                         context["short_puts"][symbol] = context["short_puts"].get(symbol, 0) + contracts
+                        strike = safe_float(position.get("strike"))
+                        _add_capital_exposure(
+                            context["underlying_capital_exposure"],
+                            earnings_underlying_ticker(raw_symbol).upper(),
+                            strike * 100 * contracts if strike > 0 else None,
+                        )
 
             # Calculate cash reserved for existing short puts (diagnostics only)
             cash_reserved = self._calculate_cash_reserved(context, option_positions=option_positions)
@@ -343,7 +412,8 @@ class PortfolioContext:
         return context
 
     def _get_position_snapshot(self, portfolio_context, ticker):
-        return portfolio_context.get("positions", {}).get(ticker, {})
+        symbol = parse_moomoo_symbol(str(ticker or ""))
+        return portfolio_context.get("positions", {}).get(symbol, {})
 
     def _get_fallback_stock_price(self, portfolio_context, ticker):
         position = self._get_position_snapshot(portfolio_context, ticker)

@@ -11,6 +11,8 @@ the signal payload — a server-side duplicate would be waste.
 
 from __future__ import annotations
 
+from math import isfinite
+
 from core.ticker_utils import earnings_underlying_ticker
 
 
@@ -65,6 +67,38 @@ def deployment_plan(candidates: list[dict] | None, cash_available: float, max_pe
         counts[underlying] = counts.get(underlying, 0) + 1
 
     return selected
+
+
+def remaining_underlying_capital(
+    ticker: str,
+    portfolio_context: dict | None,
+    sizing_profile: dict | None,
+) -> float | None:
+    """Return remaining account-capital room for one underlying, or None if unknown/unconfigured.
+
+    ``underlying_capital_exposure`` is produced alongside the broker portfolio
+    snapshot and counts current stock market value plus short-put collateral.
+    A configured cap fails closed when the account value or snapshot exposure
+    is missing or malformed.
+    """
+    profile = sizing_profile or {}
+    if "max_account_exposure_pct_per_underlying" not in profile:
+        return None
+    try:
+        cap_pct = float(profile["max_account_exposure_pct_per_underlying"])
+        account_value = float((portfolio_context or {}).get("account_value"))
+        underlying = earnings_underlying_ticker(str(ticker or "")).upper()
+        exposures = (portfolio_context or {}).get("underlying_capital_exposure")
+        if not underlying or not isinstance(exposures, dict) or not isfinite(cap_pct) or not 0 <= cap_pct <= 100:
+            return None
+        if not isfinite(account_value) or account_value <= 0:
+            return None
+        exposure = float(exposures.get(underlying, 0.0))
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(exposure) or exposure < 0:
+        return None
+    return max(account_value * cap_pct / 100.0 - exposure, 0.0)
 
 
 def existing_short_exposure_by_underlying(portfolio_context: dict | None) -> dict[str, int]:

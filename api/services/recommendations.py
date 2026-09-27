@@ -6,6 +6,7 @@ Extracted from the monolithic options_service.py for maintainability.
 import logging
 import time
 from datetime import datetime
+from math import floor
 
 from api.services.options_data import fetch_option_chain_live_first
 from api.services.recommendation_ranking import (
@@ -20,10 +21,9 @@ from api.services.recommendation_ranking import (
 )
 from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
-from core.scoring_factors import premium_velocity_per_day
 from core.sizing import deployment_plan, existing_short_exposure_by_underlying
-from core.ticker_utils import canonical_underlying
-from core.utils import entry_window_advice, is_market_open
+from core.ticker_utils import canonical_underlying, earnings_underlying_ticker
+from core.utils import entry_window_advice, is_market_open, market_now, safe_float
 from core.wheel_decision import WheelDecision, score_contract
 
 logger = logging.getLogger("api.services.recommendations")
@@ -58,6 +58,91 @@ def _normalize_source(value, fallback=""):
         if cleaned:
             return cleaned
     return fallback
+
+
+def _build_capital_recovery_cards(positions, calls_by_ticker, best_csp, available_contracts_by_ticker=None):
+    """Build read-only recovery context using broker average cost as the safe basis."""
+    calls_by_underlying = {}
+    for ticker, candidates in (calls_by_ticker or {}).items():
+        key = canonical_underlying(ticker).upper()
+        calls_by_underlying.setdefault(key, []).extend(candidates or [])
+
+    available_by_underlying = {
+        canonical_underlying(ticker).upper(): max(0, floor(safe_float(count)))
+        for ticker, count in (available_contracts_by_ticker or {}).items()
+    }
+    csp_rate = safe_float((best_csp or {}).get("capital_velocity_per_day"))
+    csp_summary = None
+    if best_csp and csp_rate > 0:
+        csp_summary = {
+            "ticker": best_csp.get("ticker", ""),
+            "strike": best_csp.get("strike"),
+            "expiration": best_csp.get("expiration", ""),
+            "capital_velocity_per_day": csp_rate,
+        }
+
+    cards = []
+    for ticker, position in (positions or {}).items():
+        key = canonical_underlying(ticker).upper()
+        shares = safe_float((position or {}).get("position"))
+        basis = safe_float((position or {}).get("avg_cost"))
+        basis = basis if basis > 0 else None
+        available = available_by_underlying.get(key, max(0, floor(shares / 100)))
+        above_basis = []
+        below_basis = []
+
+        for candidate in calls_by_underlying.get(key, []):
+            decision = candidate.get("wheel_decision") or {}
+            blocker_codes = candidate.get("blocked_reason_codes") or decision.get("blocked_reason_codes") or []
+            hard_blockers = candidate.get("hard_blockers") or decision.get("hard_blockers") or []
+            is_below_basis_block = set(blocker_codes) == {"below_cost_basis"}
+            if hard_blockers and not is_below_basis_block:
+                continue
+            strike = safe_float(candidate.get("strike"))
+            if basis is None or strike <= 0:
+                continue
+            pnl = candidate.get("if_called_pnl_vs_basis", decision.get("if_called_pnl_vs_basis"))
+            if pnl is None:
+                pnl = (strike - basis + safe_float(candidate.get("bid"))) * 100
+            pnl = safe_float(pnl)
+            summary = {
+                "strike": strike,
+                "expiration": candidate.get("expiration", ""),
+                "bid": safe_float(candidate.get("bid")),
+                "capital_velocity_per_day": safe_float(candidate.get("capital_velocity_per_day")),
+                "if_called_pnl_vs_basis": round(pnl, 2),
+                "loss_if_called": round(max(0.0, -pnl), 2),
+                "loss_if_called_total": round(max(0.0, -pnl) * available, 2),
+                "copy_eligible": bool(candidate.get("copy_eligible", decision.get("copy_eligible", False))),
+            }
+            if is_below_basis_block and strike < basis:
+                below_basis.append(summary)
+            elif not hard_blockers and strike >= basis:
+                above_basis.append(summary)
+
+        best_above = max(above_basis, key=lambda item: item["capital_velocity_per_day"], default=None)
+        best_below = max(below_basis, key=lambda item: item["capital_velocity_per_day"], default=None)
+        cards.append(
+            {
+                "ticker": str(ticker),
+                "shares": shares,
+                "available_contracts": available,
+                "basis_per_share": basis,
+                "basis_source": "moomoo_avg_cost" if basis is not None else None,
+                "basis_notice": (
+                    "Moomoo average cost is the conservative basis; historical option credits excluded "
+                    "because fill-history completeness is unverified."
+                    if basis is not None
+                    else "Moomoo average-cost basis unavailable; no adjusted basis is shown."
+                ),
+                "best_call_at_or_above_basis": best_above,
+                "best_call_below_basis": best_below,
+                "best_csp_opportunity": csp_summary,
+                "opportunity_return_per_day_pct": round(csp_rate * 100, 5) if csp_summary else None,
+            }
+        )
+
+    return sorted(cards, key=lambda item: item["ticker"].upper())
 
 
 def _make_failed_csp_decision(ticker: str, contract: dict, reason: str, reason_codes: list[str]) -> WheelDecision:
@@ -118,7 +203,6 @@ def _format_decision_to_candidate(
         "bid": decision.bid,
         "ask": decision.ask,
         "annualized_return": decision.annualized_return,
-        "iv_adjusted_return": decision.iv_adjusted_return,
         "otm_pct": decision.otm_pct,
         "delta": decision.delta,
         "implied_volatility": decision.implied_volatility,
@@ -231,7 +315,7 @@ class RecommendationEngine:
 
     def _get_cached_watchlist_evidence(self, ticker):
         entry = self._yfinance_cache.get(self._cached_watchlist_evidence_key(ticker))
-        if self._is_cache_valid(entry):
+        if isinstance(entry, dict) and self._is_cache_valid(entry):
             return entry["data"]
         return None
 
@@ -463,7 +547,7 @@ class RecommendationEngine:
                 }
 
             sp = self._preset_profile
-            today = datetime.now()
+            today = market_now()
             pref_dte = int(sp.get("csp_preferred_dte", 35) or 35)
             min_dte = int(sp.get("csp_min_dte", 30) or 30)
             max_dte = int(sp.get("csp_max_dte", 45) or 45)
@@ -645,10 +729,8 @@ class RecommendationEngine:
                         reason_text = (
                             decision.hard_blockers[0] if decision.hard_blockers else "Scored candidate blocked"
                         )
-                        candidates.append((-1, self._make_skip_diagnostic(ticker, reason_code, reason_text)))
+                        candidates.append(self._make_skip_diagnostic(ticker, reason_code, reason_text))
                     continue
-
-                pick_score = premium_velocity_per_day(decision.premium_per_contract, decision.dte)
 
                 result = _format_decision_to_candidate(
                     ticker,
@@ -664,13 +746,12 @@ class RecommendationEngine:
                     )
 
                 result["quote_fetched_at_utc"] = evidence.get("quote_fetched_at_utc", "")
-                candidates.append((pick_score, result))
+                candidates.append(result)
 
         if not candidates:
             return [self._make_skip_diagnostic(ticker, "blocked_by_scoring", "All candidates filtered by scoring")]
 
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return [c for _, c in candidates[:3]]
+        return rank_candidates(candidates)[:3]
 
     def _make_skip_diagnostic(self, ticker, reason_code, reason_text):
         """Create a diagnostic entry for a skipped CSP candidate."""
@@ -866,6 +947,8 @@ class RecommendationEngine:
 
             # ── Lanes ──────────────────────────────────────────────────
             covered_call_candidates = []
+            recovery_call_candidates_by_ticker = {}
+            available_call_contracts_by_ticker = {}
             watchlist_csp_candidates = []
 
             # ── Diagnostics ────────────────────────────────────────────
@@ -1048,13 +1131,31 @@ class RecommendationEngine:
                 if cu not in seen_position_canonical:
                     seen_position_canonical.add(cu)
                     deduped_position_tickers.append(pk)
-            # Pre-check: skip CC lane entirely if no position has 100+ shares
-            has_cc_capacity = any(float(p.get("position", 0) or 0) >= 100 for p in positions.values())
+            existing_short_calls_by_ticker = {}
+            for ticker in deduped_position_tickers:
+                shares_owned = float(positions.get(ticker, {}).get("position", 0) or 0)
+                underlying = earnings_underlying_ticker(ticker).upper()
+                existing_short_calls = 0
+                if isinstance(short_calls, dict):
+                    for symbol, contracts in short_calls.items():
+                        if earnings_underlying_ticker(str(symbol or "")).upper() != underlying:
+                            continue
+                        try:
+                            existing_short_calls += max(int(contracts or 0), 0)
+                        except (TypeError, ValueError):
+                            continue
+                existing_short_calls_by_ticker[ticker] = existing_short_calls
+                available_call_contracts_by_ticker[ticker] = max(0, floor(shares_owned / 100) - existing_short_calls)
+
+            has_cc_capacity = any(available_call_contracts_by_ticker.values())
             if not has_cc_capacity:
-                logger.info("Skipping CC lane: no position with 100+ shares")
+                logger.info("Skipping CC lane: no unencumbered 100-share covered-call capacity")
             if has_cc_capacity:
                 for ticker in deduped_position_tickers:
                     try:
+                        available_calls = available_call_contracts_by_ticker.get(ticker, 0)
+                        if available_calls <= 0:
+                            continue
                         # Get stock price for this ticker
                         stock_price = conn.get_stock_price(ticker)
                         if stock_price is None or stock_price <= 0:
@@ -1069,11 +1170,8 @@ class RecommendationEngine:
                         position_data = positions.get(ticker, {})
                         shares_owned = float(position_data.get("position", 0) or 0)
 
-                        # Calculate available contracts for calls (accounting for existing short calls)
-                        total_possible_calls = int(shares_owned // 100)
-                        existing_short_calls = short_calls.get(ticker, 0)
-                        available_calls = max(0, total_possible_calls - existing_short_calls)
-
+                        total_possible_calls = floor(shares_owned / 100)
+                        existing_short_calls = existing_short_calls_by_ticker.get(ticker, 0)
                         existing_short_puts = short_puts.get(ticker, 0)
 
                         logger.info(
@@ -1104,13 +1202,18 @@ class RecommendationEngine:
                             expiration=None,  # Get all expirations
                             option_type="CALL",  # Covered-call lane only
                             screening_profile=call_profile,
+                            include_recovery_calls=True,
                         )
 
                         if "error" in result:
                             logger.warning(f"Error processing {ticker}: {result['error']}")
                             continue
 
-                        # Process CALLs — covered call lane
+                        recovery_call_candidates_by_ticker[ticker] = result.get(
+                            "recovery_calls", result.get("calls", [])
+                        )
+
+                        # Process eligible CALLs — covered call lane
                         if available_calls > 0:
                             for call in result.get("calls", []):
                                 covered_call_candidates.append(
@@ -1236,6 +1339,13 @@ class RecommendationEngine:
 
             top_covered_calls = _select_top(rank_candidates(eligible_covered_call_candidates), max_per=1)
             top_watchlist_csp = _select_top(rank_candidates(eligible_watchlist_csp_candidates), max_per=2)
+            best_csp_opportunity = next(iter(rank_candidates(eligible_watchlist_csp_candidates)), None)
+            capital_recovery = _build_capital_recovery_cards(
+                positions,
+                recovery_call_candidates_by_ticker,
+                best_csp_opportunity,
+                available_call_contracts_by_ticker,
+            )
 
             # Single ranked signal pipeline combining CSPs and covered calls.
             signals = _select_top(all_candidates, max_per=2)[:limit]
@@ -1388,6 +1498,7 @@ class RecommendationEngine:
                     "signals": formatted_csp,
                     "count": len(formatted_csp),
                 },
+                "capital_recovery": capital_recovery,
                 "deployment_plan": {
                     "signals": formatted_deployment,
                     "count": len(formatted_deployment),
@@ -1397,6 +1508,9 @@ class RecommendationEngine:
                 },
                 "broker_buying_power": round(broker_buying_power, 2),
                 "cash_available_for_csp": round(cash_available_for_csp, 2),
+                "watchlist_cash_fit": _build_watchlist_cash_fit_summary(
+                    effective_watchlist, skipped_csp_diagnostics, cash_available_for_csp
+                ),
                 "cash_reserved_for_csp": round(cash_reserved_for_csp, 2),
                 "cash_diagnostics": portfolio_context.get("_cash_diagnostics", {}),
                 "enrichment": enrichment_hint,
@@ -1558,4 +1672,26 @@ def _build_active_watchlist(
         "tickers": per_ticker,
         "unsupported": wl_unsupported,
         "holdings_checked": sorted(str(t) for t in position_tickers if str(t).strip()),
+    }
+
+
+def _build_watchlist_cash_fit_summary(effective_watchlist: list, skipped_diagnostics: list, csp_cash: float) -> dict:
+    """Summarize watchlist names with no affordable CSP strike in the active OTM range."""
+    symbols = {canonical_underlying(str(ticker)).upper() for ticker in effective_watchlist if str(ticker).strip()}
+    cash = max(0.0, safe_float(csp_cash))
+    unaffordable = set()
+    if cash <= 0:
+        unaffordable = symbols.copy()
+    else:
+        for diagnostic in skipped_diagnostics:
+            if diagnostic.get("reason_code") != "no_cash_fit":
+                continue
+            ticker = canonical_underlying(str(diagnostic.get("ticker") or "")).upper()
+            if ticker in symbols:
+                unaffordable.add(ticker)
+
+    return {
+        "unaffordable_count": len(unaffordable),
+        "total_count": len(symbols),
+        "max_affordable_strike": round(cash / 100, 2),
     }

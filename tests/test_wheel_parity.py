@@ -257,10 +257,8 @@ class TestPresetParity(unittest.TestCase):
     def test_balanced_default_and_versions(self):
         preset = get_preset(None)
         self.assertEqual(preset.key, "balanced")
-        # Version 5: the screener profile became the single threshold source
-        # (call_target_delta / ideal_* / min_volume / max_expirations moved in),
-        # so the immutable preset was versioned up rather than mutated.
-        self.assertEqual(preset.version, 5)
+        # Version 7: preset delta bands and per-underlying exposure are versioned.
+        self.assertEqual(preset.version, 7)
         self.assertTrue(preset.to_screener_profile()["require_cash_fit"])
 
 

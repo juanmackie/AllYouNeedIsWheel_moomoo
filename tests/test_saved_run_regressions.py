@@ -114,6 +114,35 @@ def _skip_diagnostic(ticker, idx):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class TestRedactedSeptemberRun(unittest.TestCase):
+    def test_20260914_run_remains_unactionable_and_counts_contract_keyed_calls(self):
+        import json
+        from pathlib import Path
+
+        from api.services.portfolio_context import PortfolioContext
+        from core.run_model import recompute_effective_snapshot
+        from core.sizing import existing_short_exposure_by_underlying
+
+        fixture_path = Path(__file__).parent / "fixtures" / "saved_run_20260914.json"
+        snapshot = json.loads(fixture_path.read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["run"]["generated_at"][:10], "2026-09-14")
+        self.assertEqual(snapshot["run"]["account_id"], "")
+
+        effective = recompute_effective_snapshot(
+            snapshot,
+            now=datetime(2026, 9, 14, 20, 0, tzinfo=timezone.utc),
+            now_et=_weekday_noon_et(2026, 9, 14),
+        )
+        if not isinstance(effective, dict):
+            self.fail("recomputed saved run must remain a snapshot")
+        self.assertFalse(effective["tradeable"])
+        self.assertEqual(effective["eligibility"]["coverage"]["truth"], "unknown")
+        self.assertEqual(effective["active_watchlist"]["group_status"], "missing_group")
+
+        context = PortfolioContext(MagicMock(), MagicMock())._build_context_from_cached_portfolio(snapshot["portfolio"])
+        self.assertEqual(existing_short_exposure_by_underlying(context), {"TEST": 1})
+
+
 class TestSavedRunReproduction(unittest.TestCase):
     """End-to-end reproduction of the saved run at 3/4/25 counts."""
 

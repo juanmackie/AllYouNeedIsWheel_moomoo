@@ -194,7 +194,10 @@ class WheelRunner:
                     started_at=started,
                 )
             )
-            roll_decisions = self._build_roll_decisions(portfolio_context, conn)
+            fresh_candidates = list(result.get("signals") or [])
+            fresh_candidates.extend((result.get("watchlist_csps") or {}).get("signals", []) or [])
+            fresh_candidates.extend((result.get("covered_calls") or {}).get("signals", []) or [])
+            roll_decisions = self._build_roll_decisions(portfolio_context, conn, fresh_candidates)
 
             snapshot = self._build_snapshot(
                 env=env,
@@ -249,11 +252,11 @@ class WheelRunner:
             )
             raise
 
-    def _build_roll_decisions(self, portfolio_context, conn):
-        """Roll/hold/close diagnostics for actual option positions."""
+    def _build_roll_decisions(self, portfolio_context, conn, fresh_candidates=None):
+        """Roll/hold/close diagnostics using only current scan candidates."""
         if self._roll_diagnostics_provider is None:
             return []
-        return self._roll_diagnostics_provider(portfolio_context, conn)
+        return self._roll_diagnostics_provider(portfolio_context, conn, fresh_candidates or [])
 
     def _build_snapshot(self, env, opaque_account, attempt_started, result, portfolio, roll_decisions):
         generated_at = result.get("generated_at") or utc_now_iso()
@@ -354,6 +357,8 @@ class WheelRunner:
             watchlist_origins=result.get("watchlist_origins", {}) or {},
             signals=tuple(result.get("signals", []) or []),
             active_watchlist=dict(active_watchlist),
+            capital_recovery=tuple(result.get("capital_recovery", []) or []),
+            watchlist_cash_fit=dict(result.get("watchlist_cash_fit") or {}),
         )
 
     def latest(self) -> WheelRunSnapshot | None:

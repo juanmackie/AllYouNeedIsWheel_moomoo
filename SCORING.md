@@ -13,11 +13,15 @@ by executable return on deployed capital so the shortlist reflects the 5x goal.
 - non-positive/one-sided quotes and crossed markets (`ask < bid`);
 - missing, invalid, or stale Moomoo `update_time` while the US market is open;
 - spread, bid premium, liquidity, IV/Greeks, DTE/OTM, cash, or share failures;
+- absolute option delta outside the selected preset's inclusive target ± tolerance band;
 - CSPs that do not fit true available cash after reserved short-put collateral;
+- CSPs that exceed the preset's per-underlying account exposure cap (stock market value plus existing and proposed short-put collateral; the current cap is 25% for every preset);
 - covered calls without unencumbered 100-share lots.
 
 A locked market (`ask == bid`) is valid. Margin buying power is displayed only;
-it never establishes CSP capacity.
+it never establishes CSP capacity. When account value or current underlying
+exposure cannot be verified, the CSP cap fails closed. Multi-contract
+recommendations are reduced to the remaining per-underlying room.
 
 A hard-gate-passing candidate receives:
 
@@ -32,7 +36,9 @@ A hard-gate-passing candidate receives:
 
 ## Canonical math
 
-The executable bid is the only ranking premium:
+The executable bid is the only ranking premium. DTE is whole calendar days from
+the current `America/New_York` market date to the contract expiry, independent
+of the host machine's timezone:
 
 ```text
 bid_premium_per_contract = bid * 100
@@ -65,8 +71,16 @@ evidence, and none of them can outrank a capital-velocity result.
 The compact composite score (and the sub-scores that fed it) was **removed on
 2026-09-20**: it could never gate or reorder a candidate, and a risk-flavoured
 number that cannot affect the outcome only implies influence it does not have.
-Quality/event tiers, delta, IV rank, and the midpoint remain as visible risk
-information; the ordering contract above is unchanged.
+Delta is a qualification gate, but does not affect ranking among candidates that
+pass it. Quality/event tiers, IV rank, and the midpoint remain display-only; the
+ordering contract above is unchanged.
+
+Preset delta qualification uses `abs(delta)` for puts and calls and accepts the
+inclusive interval `[max(0, target_delta - delta_tolerance),
+min(1, target_delta + delta_tolerance)]`. Candidates outside it receive the
+`outside_delta_band` blocker. All immutable preset versions are v7; the delta
+band and per-underlying exposure-cap changes were versioned rather than silently
+changing v5/v6 behavior.
 
 ## Deterministic ordering
 
@@ -83,7 +97,8 @@ descending executable return on deployed capital per day
 
 Quality and event tiers are carried as display-only risk information (visible
 labels/warnings on the surfaced signal); they never gate or reorder the
-shortlist. The midpoint and composite score are never part of the sort key.
+shortlist. Delta controls eligibility only and does not rank qualifying signals.
+The midpoint and composite score are never part of the sort key.
 
 The existing underlying-diversity safeguard is applied after this ordering,
 extended with a portfolio-aware concentration guard: an underlying you already
@@ -142,7 +157,9 @@ a stale/persisted-fallback run can never stage. Only a `ready` run can copy,
 and staging happens only when the market is closed (`SESSION_STAGED_STATES`).
 
 Each allowed ticket surfaces event risk (`earnings_before_expiry`, unknown
-event) as a warning in the clipboard text — never silently dropped.
+event) as a warning in both the dashboard card and clipboard text — never
+silently dropped. The same display-only warning applies to all presets;
+earnings overlap does not hard-block CSPs or affect shortlist ordering.
 
 ## Capital-aware sizing on every pick
 
@@ -184,7 +201,7 @@ previous 45-day cap silently truncated.
 ## Exit playbook (open positions)
 
 `core/exit_playbook.py::evaluate_exit` assigns each open short option one
-deterministic verdict — HOLD, TAKE_PROFIT, ROLL, or CLOSE — with ranked
+deterministic verdict — HOLD, TAKE_PROFIT, ROTATE, ROLL, or CLOSE — with ranked
 reasons. First matching rule wins:
 
 1. CLOSE — earnings land before expiry while ITM or within 5% OTM.
@@ -201,12 +218,31 @@ reasons. First matching rule wins:
 4b. CLOSE — loss stop: captured ≤ −100% of the entry credit, i.e. the mark
    reached 2× the credit taken in. Fires *before* the roll window so a losing
    position cannot be quietly rolled instead of closed.
-5. ROLL — DTE entered the roll window (default ≤ 21) while safely OTM.
+4c. ROTATE — a fresh eligible same-underlying/same-side contract's net return/day
+   is at least 2× the held contract's mark-based return/day, after pricing the
+   close at ask, the new sale at bid, and subtracting known close/open fees.
+   Unknown fees never count as zero: the comparison is reported unavailable and
+   ROTATE is not emitted. The current app has no prospective fee schedule, so
+   this verdict remains unavailable until both per-contract fees are explicitly
+   supplied.
+5. ROLL — DTE entered the roll window (default ≤ 21) while safely OTM, and only
+   when a fresh eligible same-side target exists. The target contract is named;
+   without one, ROLL is suppressed and the position remains HOLD.
 6. HOLD — otherwise; proximity/decay notes ride along.
 
 Verdicts are computed in `score_existing_position`, serialized on the wheel
 decision, exposed via `/api/portfolio/roll-pressure`, and rendered on the
-position monitor with reasons as tooltips.
+position monitor with reasons as tooltips. ROLL/ROTATE targets are also visible
+beside the verdict and included in the manual copy ticket. Fresh candidates come
+only from the latest published run; stale, ineligible, or different-side quotes
+cannot justify a transition. No automatic orders are sent.
+
+Held-position bid/ask/last and Greeks are copied from the Moomoo option market
+snapshot already fetched with the portfolio; no extra option-chain request or
+synthetic Greek estimate is used. The API includes fetch/update timestamps.
+When Moomoo omits delta, it remains `null`, `greeks_source` is `missing`, and
+the position carries an explicit warning; the delta-based close threshold is
+skipped rather than treating missing data as a measured zero.
 
 Two deliberate scope notes. "Captured" is **signed**: a negative value is a loss
 on the short, which is what makes the loss stop arithmetically possible (a zero

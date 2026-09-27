@@ -4,7 +4,7 @@
  */
 import { fetchRunState, refreshRun, revalidateCopy, markRecommendationTaken } from './api-run.js';
 import { initPresetSelector } from './preset-selector.js';
-import { escapeHtml, formatCurrency, formatPercent } from '../utils/formatters.js';
+import { formatCurrency, formatPercent } from '../utils/formatters.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
 import StateModel from '../utils/state-model.js';
 
@@ -287,6 +287,13 @@ function isTaken(rec) {
     return Boolean(key) && takenRecommendedKeys.has(key);
 }
 
+function setButtonIconLabel(btn, iconName, label) {
+    if (!btn) return;
+    const icon = document.createElement('i');
+    icon.className = `bi ${iconName}`;
+    btn.replaceChildren(icon, document.createTextNode(` ${label}`));
+}
+
 function setTakenStatus(statusEl, message, isError = false) {
     if (!statusEl) return;
     statusEl.className = `taken-status small mt-1${isError ? ' text-danger' : ' text-success'}`;
@@ -303,13 +310,13 @@ function renderTakenState(rec, btn, input, statusEl) {
     if (taken) {
         btn.classList.remove('btn-outline-secondary');
         btn.classList.add('btn-success');
-        btn.innerHTML = '<i class="bi bi-bookmark-check"></i> Taken';
+        setButtonIconLabel(btn, 'bi-bookmark-check', 'Taken');
         btn.title = 'Recorded as acted on — outcome attribution links to this recommendation';
         setTakenStatus(statusEl, 'Linked to this recommendation');
     } else {
         btn.classList.add('btn-outline-secondary');
         btn.classList.remove('btn-success');
-        btn.innerHTML = '<i class="bi bi-bookmark"></i> Mark taken';
+        setButtonIconLabel(btn, 'bi-bookmark', 'Mark taken');
         btn.title = 'Record that you acted on this recommendation (no order is placed)';
         setTakenStatus(statusEl, '');
     }
@@ -332,7 +339,7 @@ async function markTaken(rec, btn, input, statusEl) {
         ? { ticker: rec.ticker, option_type: rec.option_type, expiration, strike: tradedStrike }
         : undefined;
 
-    const original = btn.innerHTML;
+    const originalNodes = Array.from(btn.childNodes, (node) => node.cloneNode(true));
     setButtonBusy(btn, 'Saving…');
     const payload = {
         run_id: runId,
@@ -351,7 +358,7 @@ async function markTaken(rec, btn, input, statusEl) {
     } catch (err) {
         btn.disabled = false;
         btn.classList.remove('btn-success');
-        btn.innerHTML = original;
+        btn.replaceChildren(...originalNodes);
         setTakenStatus(statusEl, `Not recorded: ${err && err.message ? err.message : 'request failed'}`, true);
     }
 }
@@ -359,7 +366,9 @@ async function markTaken(rec, btn, input, statusEl) {
 function setButtonBusy(btn, label) {
     if (!btn) return;
     btn.disabled = true;
-    btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> ${label}`;
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner-border spinner-border-sm me-1';
+    btn.replaceChildren(spinner, document.createTextNode(` ${label}`));
 }
 
 function setButtonBlocked(btn, reasons, kind = 'blocked') {
@@ -367,9 +376,7 @@ function setButtonBlocked(btn, reasons, kind = 'blocked') {
     btn.disabled = true;
     btn.classList.add(kind === 'error' ? 'btn-danger' : 'btn-warning');
     btn.classList.remove('btn-success', kind === 'error' ? 'btn-warning' : 'btn-danger');
-    btn.innerHTML = kind === 'error'
-        ? '<i class="bi bi-exclamation-triangle"></i> Not copied'
-        : '<i class="bi bi-eye"></i> Review only';
+    setButtonIconLabel(btn, kind === 'error' ? 'bi-exclamation-triangle' : 'bi-eye', kind === 'error' ? 'Not copied' : 'Review only');
     btn.title = ((reasons || []).filter(Boolean).join(' · ') || 'not copy eligible');
 }
 
@@ -379,11 +386,11 @@ async function copyTicket(rec, btn) {
     // change, re-ranked/replaced contract, review_only outcome, fetch failure,
     // or a market open/close transition all abort the copy (never silently
     // copying a different value) and require a second click after a refresh.
-    const { canCopy, mode: intent, staged } = copyEligibility(rec);
+    const { canCopy, mode: intent } = copyEligibility(rec);
     if (!canCopy) return;
 
     const displayedRunId = (signalsData && signalsData.run && signalsData.run.run_id) || '';
-    const original = btn.innerHTML;
+    const originalNodes = Array.from(btn.childNodes, (node) => node.cloneNode(true));
 
     setButtonBusy(btn, 'Checking…');
 
@@ -448,22 +455,22 @@ async function copyTicket(rec, btn) {
     try {
         await navigator.clipboard.writeText(text);
         btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-check-circle"></i> Copied';
+        setButtonIconLabel(btn, 'bi-check-circle', 'Copied');
         btn.classList.add('btn-success');
     } catch (err) {
         console.error('Clipboard failed:', err);
         btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-x-circle"></i> Copy failed';
+        setButtonIconLabel(btn, 'bi-x-circle', 'Copy failed');
         btn.classList.add('btn-danger');
     }
     setTimeout(() => {
-        btn.innerHTML = original;
+        btn.replaceChildren(...originalNodes);
         btn.disabled = !canCopy;
         btn.classList.remove('btn-success', 'btn-danger', 'btn-warning');
     }, 2000);
 }
 
-function createRecommendationCard(rec, rankedNeighbor = null) {
+function createRecommendationCard(rec) {
     const template = document.getElementById('recommendation-card-template');
     if (!template) {
         throw new Error('Recommendation card template is missing');
@@ -510,7 +517,6 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     // Premium velocity — secondary supporting metric; ranking is based on
     // backend-provided annualized return on deployed capital.
     const velocityEl = clone.querySelector('.premium-velocity');
-    const dte = rec.dte;
     const dailyVelocity = rec.premium_velocity_per_day != null
         ? Number(rec.premium_velocity_per_day)
         : null;
@@ -578,14 +584,24 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
     // Data source + freshness
     const sourceEl = clone.querySelector('.signal-data-source');
     const sourceInfo = getDataSourceInfo(rec);
-    const sourceBadges = sourceInfo.sources.map((item) => {
-        const label = normalizeSourceLabel(item.value);
-        const badgeClass = sourceBadgeClass(item.value);
-        return `<span class="badge ${badgeClass} me-1" title="${escapeHtml(item.label)} source">${escapeHtml(item.label)}: ${escapeHtml(label)}</span>`;
-    }).join('');
-    const freshnessClass = sourceInfo.freshnessClass || 'text-muted';
-    const freshnessHtml = sourceInfo.freshness ? `<span class="badge bg-light text-dark border ${freshnessClass ? 'ms-1' : ''}" title="Data freshness">${escapeHtml(sourceInfo.freshness)}</span>` : '';
-    sourceEl.innerHTML = `<i class="bi ${sourceInfo.icon}"></i> ${sourceBadges}${freshnessHtml}`;
+    sourceEl.replaceChildren();
+    const sourceIcon = document.createElement('i');
+    sourceIcon.className = `bi ${sourceInfo.icon}`;
+    sourceEl.append(sourceIcon, document.createTextNode(' '));
+    sourceInfo.sources.forEach((item) => {
+        const badge = document.createElement('span');
+        badge.className = `badge ${sourceBadgeClass(item.value)} me-1`;
+        badge.title = `${item.label} source`;
+        badge.textContent = `${item.label}: ${normalizeSourceLabel(item.value)}`;
+        sourceEl.append(badge);
+    });
+    if (sourceInfo.freshness) {
+        const freshness = document.createElement('span');
+        freshness.className = `badge bg-light text-dark border ${sourceInfo.freshnessClass ? 'ms-1' : ''}`;
+        freshness.title = 'Data freshness';
+        freshness.textContent = sourceInfo.freshness;
+        sourceEl.append(freshness);
+    }
 
     // Warnings
     const warningsEl = clone.querySelector('.recommendation-warnings');
@@ -597,22 +613,39 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
             !w.includes('EARNINGS TODAY') && !w.includes('extreme risk')
         );
         
-        let warningHtml = '';
+        const warningNodes = [];
         if (criticalWarnings.length > 0) {
-            warningHtml += `<div class="text-danger fw-bold"><i class="bi bi-exclamation-triangle-fill"></i> ${escapeHtml(criticalWarnings[0])}</div>`;
+            const critical = document.createElement('div');
+            critical.className = 'text-danger fw-bold';
+            const icon = document.createElement('i');
+            icon.className = 'bi bi-exclamation-triangle-fill';
+            critical.append(icon, document.createTextNode(` ${criticalWarnings[0]}`));
+            warningNodes.push(critical);
         }
         if (otherWarnings.length > 0) {
-            warningHtml += `<div><i class="bi bi-exclamation-circle"></i> ${escapeHtml(otherWarnings.slice(0, 2).join(' • '))}</div>`;
+            const other = document.createElement('div');
+            const icon = document.createElement('i');
+            icon.className = 'bi bi-exclamation-circle';
+            other.append(icon, document.createTextNode(` ${otherWarnings.slice(0, 2).join(' • ')}`));
+            warningNodes.push(other);
         }
-        warningsEl.innerHTML = warningHtml;
+        warningsEl.replaceChildren(...warningNodes);
     } else {
-        warningsEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> No warnings</span>';
+        const noWarnings = document.createElement('span');
+        noWarnings.className = 'text-success';
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-check-circle';
+        noWarnings.append(icon, document.createTextNode(' No warnings'));
+        warningsEl.replaceChildren(noWarnings);
     }
 
     // Display-only risk note; tiers are informational and no longer affect ranking.
     const riskBadge = clone.querySelector('.missing-risk-badge');
     if (riskBadge && eventTier === 'event_unknown') {
         riskBadge.textContent = 'Earnings unknown — verify before placing';
+        riskBadge.classList.remove('d-none');
+    } else if (riskBadge && eventTier === 'earnings_before_expiry') {
+        riskBadge.textContent = 'Earnings before expiry — high risk, confirm before placing';
         riskBadge.classList.remove('d-none');
     }
 
@@ -764,10 +797,19 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         const ifCalledReturn = rec.wheel_decision?.if_called_return;
         const ifCalledProceeds = rec.strike != null && rec.premium_per_contract != null
             ? (rec.strike * 100) + rec.premium_per_contract : null;
-        const avgCost = rec.wheel_decision?.avg_cost || 0;
+        const avgCost = rec.wheel_decision?.broker_cost_basis ?? rec.avg_cost ?? rec.wheel_decision?.avg_cost ?? 0;
         const costBasisDist = rec.strike != null && avgCost > 0
             ? ((rec.strike - avgCost) / avgCost) * 100 : null;
         const intent = rec.covered_call_intent || rec.wheel_decision?.covered_call_intent || '';
+        const basisPnl = rec.wheel_decision?.if_called_pnl_vs_basis;
+        const mainBasis = clone.querySelector('.cc-main-basis');
+        const mainBasisValue = clone.querySelector('.cc-if-called-pnl-vs-basis');
+        if (mainBasis && mainBasisValue && Number.isFinite(Number(basisPnl))) {
+            const amount = Number(basisPnl);
+            mainBasis.classList.remove('d-none');
+            mainBasisValue.textContent = `${amount < 0 ? '−' : '+'}${formatCurrency(Math.abs(amount))}`;
+            mainBasis.title = `Basis source: ${rec.wheel_decision?.basis_source || 'unknown'}`;
+        }
 
         const availableSharesEl = clone.querySelector('.cc-available-shares');
         if (availableSharesEl) {
@@ -797,10 +839,13 @@ function createRecommendationCard(rec, rankedNeighbor = null) {
         const detailsEl = clone.querySelector('.recommendation-details');
         const existingDiv = document.createElement('div');
         existingDiv.className = 'd-flex justify-content-between text-info fw-bold mt-1';
-        existingDiv.innerHTML = `
-            <span><i class="bi bi-check-circle-fill"></i> Existing ${escapeHtml(rec.option_type)}s:</span>
-            <span>${rec.existing_position} short</span>
-        `;
+        const existingLabel = document.createElement('span');
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-check-circle-fill';
+        existingLabel.append(icon, document.createTextNode(` Existing ${rec.option_type}s:`));
+        const existingCount = document.createElement('span');
+        existingCount.textContent = `${rec.existing_position} short`;
+        existingDiv.append(existingLabel, existingCount);
         detailsEl.appendChild(existingDiv);
     }
     
@@ -857,7 +902,7 @@ function showGenerating() {
         }
         // Schedule retry polling even for toggle-triggered regenerations
         if (!generatingRetryTimer) {
-            const nextRetry = scheduleGeneratingRetry();
+            scheduleGeneratingRetry();
         }
     } else {
         // Don't hide existing content — stale signals remain visible during auto-refresh
@@ -1184,12 +1229,88 @@ function renderBlockedSignals(blocked) {
     const rows = Array.from(grouped.values());
     if (blockedCountEl) blockedCountEl.textContent = rows.reduce((sum, item) => sum + item.count, 0);
     if (!blockedListEl) return;
-    blockedListEl.innerHTML = rows.map(b => `
-        <div class="d-flex justify-content-between align-items-center py-1 border-bottom border-light">
-            <span class="fw-semibold">${escapeHtml((b.tickers && b.tickers.length > 0 ? b.tickers.join(', ') : b.ticker || '?') + (b.count > 1 ? ` (${b.count} tickers)` : ''))}</span>
-            <span class="text-muted small">${escapeHtml(b.reason_text || b.reason_code || 'Unknown')}</span>
-        </div>
-    `).join('');
+    const rowNodes = rows.map((item) => {
+        const row = document.createElement('div');
+        row.className = 'd-flex justify-content-between align-items-center py-1 border-bottom border-light';
+        const tickers = item.tickers && item.tickers.length > 0 ? item.tickers.join(', ') : item.ticker || '?';
+        const tickerLabel = document.createElement('span');
+        tickerLabel.className = 'fw-semibold';
+        tickerLabel.textContent = tickers + (item.count > 1 ? ` (${item.count} tickers)` : '');
+        const reason = document.createElement('span');
+        reason.className = 'text-muted small';
+        reason.textContent = item.reason_text || item.reason_code || 'Unknown';
+        row.append(tickerLabel, reason);
+        return row;
+    });
+    blockedListEl.replaceChildren(...rowNodes);
+}
+
+function renderCapitalRecovery(result) {
+    const section = document.getElementById('capital-recovery-section');
+    const container = document.getElementById('capital-recovery-cards');
+    if (!section || !container) return;
+
+    const cards = Array.isArray(result?.capital_recovery) ? result.capital_recovery : [];
+    if (cards.length === 0) {
+        section.classList.add('d-none');
+        container.replaceChildren();
+        return;
+    }
+
+    const contractLabel = (candidate) => candidate
+        ? `${candidate.strike ?? '—'} ${candidate.expiration ?? ''}`
+        : 'No qualifying contract';
+    const dailyReturn = (candidate) => {
+        const rate = Number(candidate?.capital_velocity_per_day);
+        return Number.isFinite(rate) ? `${formatPercent(rate * 100)}/day` : '—';
+    };
+    const appendLine = (list, label, value) => {
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const description = document.createElement('dd');
+        description.textContent = value;
+        list.append(term, description);
+    };
+
+    const nodes = cards.map((card) => {
+        const above = card.best_call_at_or_above_basis;
+        const below = card.best_call_below_basis;
+        const csp = card.best_csp_opportunity;
+        const opportunityRate = Number(card.opportunity_return_per_day_pct);
+        const opportunityText = csp && Number.isFinite(opportunityRate)
+            ? `${csp.ticker} ${contractLabel(csp)} · ${formatPercent(opportunityRate)}/day`
+            : 'No qualifying CSP opportunity available';
+        const perContractLoss = Number(below?.loss_if_called);
+        const totalLoss = Number(below?.loss_if_called_total);
+        const belowLoss = below
+            ? `${formatCurrency(Number.isFinite(perContractLoss) ? perContractLoss : 0)} per contract${totalLoss > perContractLoss ? `; ${formatCurrency(totalLoss)} at available size` : ''}`
+            : 'No below-basis call found';
+
+        const column = document.createElement('div');
+        column.className = 'col-lg-4';
+        const article = document.createElement('article');
+        article.className = 'border rounded p-3 h-100';
+        const title = document.createElement('h4');
+        title.className = 'fs-6 fw-bold';
+        title.textContent = `${card.ticker || 'Unknown'} · ${card.shares ?? 0} shares`;
+        const basis = document.createElement('div');
+        basis.className = 'small text-muted mb-2';
+        basis.textContent = `Broker basis: ${card.basis_per_share == null ? 'Unavailable' : formatCurrency(Number(card.basis_per_share))} / share · ${card.available_contracts ?? 0} covered-call contracts available`;
+        const notice = document.createElement('p');
+        notice.className = 'small text-warning mb-3';
+        notice.textContent = card.basis_notice || '';
+        const details = document.createElement('dl');
+        details.className = 'small mb-0';
+        appendLine(details, 'Best call at/above basis', `${contractLabel(above)} · ${dailyReturn(above)}`);
+        appendLine(details, 'Best below-basis call (blocked from copy)', `${contractLabel(below)} · loss if called: ${belowLoss}`);
+        appendLine(details, 'Best CSP opportunity cost', opportunityText);
+        article.append(title, basis, notice, details);
+        column.append(article);
+        return column;
+    });
+
+    container.replaceChildren(...nodes);
+    section.classList.remove('d-none');
 }
 
 /**
@@ -1247,6 +1368,32 @@ function updateBuyingPowerIndicator(result) {
 /**
  * Get the display label for a signal type
  */
+function updateWatchlistCashFitWarning(result) {
+    const warning = document.getElementById('watchlist-cash-fit-warning');
+    if (!warning) return;
+
+    const fit = result?.watchlist_cash_fit;
+    const rawTotal = Number(fit?.total_count);
+    const rawUnaffordable = Number(fit?.unaffordable_count);
+    const maxAffordableStrike = Number(fit?.max_affordable_strike);
+    if (!Number.isFinite(rawTotal) || !Number.isFinite(rawUnaffordable) || !Number.isFinite(maxAffordableStrike)) {
+        warning.textContent = '';
+        warning.classList.add('d-none');
+        return;
+    }
+
+    const total = Math.max(0, Math.floor(rawTotal));
+    const unaffordable = Math.min(total, Math.max(0, Math.floor(rawUnaffordable)));
+    if (total === 0 || unaffordable === 0) {
+        warning.textContent = '';
+        warning.classList.add('d-none');
+        return;
+    }
+
+    warning.textContent = `${unaffordable} of ${total} watchlist names currently have no affordable CSP strike. Maximum affordable strike: ${formatCurrency(Math.max(0, maxAffordableStrike))}. Adjust the watchlist or add CSP-eligible cash.`;
+    warning.classList.remove('d-none');
+}
+
 function getSignalType(rec) {
     return rec.signal_type || (rec.option_type === 'CALL' ? 'covered_call' : 'csp');
 }
@@ -1285,7 +1432,7 @@ function renderStrategyRules(result) {
     const sp = preset.screener_profile || {};
     const parts = [];
     if (preset.label) {
-        parts.push(escapeHtml(String(preset.label).toUpperCase()) + (preset.version ? ` v${preset.version}` : ''));
+        parts.push(String(preset.label).toUpperCase() + (preset.version ? ` v${preset.version}` : ''));
     }
     if (sp.csp_target_delta != null) {
         parts.push(`CSP \u0394 ${Number(sp.csp_target_delta).toFixed(2)} \u00b1${Number(sp.csp_delta_tolerance ?? 0).toFixed(2)}`);
@@ -1307,10 +1454,20 @@ function renderStrategyRules(result) {
     if (sp.require_cash_fit) parts.push('cash-fit required');
     if (parts.length === 0) {
         strategyRulesEl.classList.add('d-none');
-        strategyRulesTextEl.innerHTML = '';
+        strategyRulesTextEl.replaceChildren();
         return;
     }
-    strategyRulesTextEl.innerHTML = parts.join(' <span class="text-secondary">\u00b7</span> ');
+    const nodes = [];
+    parts.forEach((part, index) => {
+        if (index > 0) {
+            const separator = document.createElement('span');
+            separator.className = 'text-secondary';
+            separator.textContent = '\u00b7';
+            nodes.push(separator);
+        }
+        nodes.push(document.createTextNode(part));
+    });
+    strategyRulesTextEl.replaceChildren(...nodes);
     strategyRulesEl.classList.remove('d-none');
 }
 
@@ -1420,38 +1577,82 @@ function buildRemainingCandidateRow(rec, kind) {
     const expiryText = rec.expiration ? formatExpiration(rec.expiration) : '';
     const dteText = rec.dte != null ? `\u00b7 ${rec.dte} DTE` : '';
 
-    row.innerHTML = `
-        <div class="col-12 col-md-4">
-            <strong class="me-1">${escapeHtml(rec.ticker)}</strong>
-            <span class="badge ${optionType === 'CALL' ? 'bg-success' : 'bg-danger'}">${escapeHtml(typeLabel)}</span>
-            <span class="ms-1">${escapeHtml(strikeText)}</span>
-            <span class="text-muted"> \u00b7 ${escapeHtml(expiryText)}${escapeHtml(dteText)}</span>
-        </div>
-        <div class="col-6 col-md-2"><span class="text-muted">Bid</span> <strong>${escapeHtml(bid)}</strong></div>
-        <div class="col-6 col-md-2"><span class="text-muted">ROI/day</span> <strong>${escapeHtml(roiDay)}</strong></div>
-        <div class="col-6 col-md-2"><span class="text-muted">${isCsp ? 'Collateral' : 'Shares'}</span> <strong>${escapeHtml(capacityText)}</strong></div>
-        <div class="col-6 col-md-2"><span class="text-muted">Qty</span> <strong>${qty}${maxQty > 0 ? `<small class="text-muted">/${maxQty}</small>` : ''}</strong></div>
-        <div class="col-6 col-md-2"><span class="text-muted">Quote age</span> <strong>${escapeHtml(quoteAge)}</strong></div>
-        <div class="col-6 col-md-2"><span class="text-muted">Event</span> <strong class="${qualityTier === 'qualified' ? 'text-success' : 'text-warning'}">${escapeHtml(qualityTier)} \u00b7 ${escapeHtml(eventTier.replaceAll('_', ' '))}</strong></div>
-        <div class="col-12 col-md-2 text-md-end">
-            <button type="button" class="btn btn-outline-primary btn-sm copy-ticket-btn lane-copy-btn">Copy</button>
-        </div>
-    `;
+    const makeCell = (classes, label, value) => {
+        const cell = document.createElement('div');
+        cell.className = classes;
+        const labelEl = document.createElement('span');
+        labelEl.className = 'text-muted';
+        labelEl.textContent = label;
+        const valueEl = document.createElement('strong');
+        valueEl.textContent = value;
+        cell.append(labelEl, document.createTextNode(' '), valueEl);
+        return cell;
+    };
+    const identityCell = document.createElement('div');
+    identityCell.className = 'col-12 col-md-4';
+    const ticker = document.createElement('strong');
+    ticker.className = 'me-1';
+    ticker.textContent = rec.ticker || '';
+    const type = document.createElement('span');
+    type.className = `badge ${optionType === 'CALL' ? 'bg-success' : 'bg-danger'}`;
+    type.textContent = typeLabel;
+    const strike = document.createElement('span');
+    strike.className = 'ms-1';
+    strike.textContent = strikeText;
+    const expiry = document.createElement('span');
+    expiry.className = 'text-muted';
+    expiry.textContent = ` \u00b7 ${expiryText}${dteText}`;
+    identityCell.append(ticker, type, strike, expiry);
 
-    const btn = row.querySelector('.copy-ticket-btn');
-    if (btn) {
-        const { canCopy, staged, reasons } = copyEligibility(rec);
-        btn.disabled = !canCopy;
-        if (canCopy) {
-            btn.title = staged
-                ? 'Stage ticket \u2014 US market closed; re-validated against OpenD before copy'
-                : 'Copy a manual ticket draft (live broker quote)';
-            btn.innerHTML = staged ? '<i class="bi bi-clock"></i> Stage' : '<i class="bi bi-clipboard"></i> Copy';
-            btn.addEventListener('click', () => copyTicket(rec, btn));
-        } else {
-            btn.title = 'Review only: ' + reasons.join(' \u00b7 ');
-            btn.innerHTML = '<i class="bi bi-eye"></i> Review only';
-        }
+    row.append(
+        identityCell,
+        makeCell('col-6 col-md-2', 'Bid', bid),
+        makeCell('col-6 col-md-2', 'ROI/day', roiDay),
+        makeCell('col-6 col-md-2', isCsp ? 'Collateral' : 'Shares', capacityText),
+    );
+    const qtyCell = document.createElement('div');
+    qtyCell.className = 'col-6 col-md-2';
+    const qtyLabel = document.createElement('span');
+    qtyLabel.className = 'text-muted';
+    qtyLabel.textContent = 'Qty';
+    const qtyValue = document.createElement('strong');
+    qtyValue.append(document.createTextNode(String(qty)));
+    if (maxQty > 0) {
+        const maxValue = document.createElement('small');
+        maxValue.className = 'text-muted';
+        maxValue.textContent = `/${maxQty}`;
+        qtyValue.append(maxValue);
+    }
+    qtyCell.append(qtyLabel, document.createTextNode(' '), qtyValue);
+    row.append(
+        qtyCell,
+        makeCell('col-6 col-md-2', 'Quote age', quoteAge),
+        makeCell('col-6 col-md-2', 'Event', `${qualityTier} \u00b7 ${eventTier.replaceAll('_', ' ')}`),
+    );
+    const actionCell = document.createElement('div');
+    actionCell.className = 'col-12 col-md-2 text-md-end';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-outline-primary btn-sm copy-ticket-btn lane-copy-btn';
+    actionCell.append(btn);
+    row.append(actionCell);
+
+    const { canCopy, staged, reasons } = copyEligibility(rec);
+    btn.disabled = !canCopy;
+    const setButtonLabel = (iconName, text) => {
+        const icon = document.createElement('i');
+        icon.className = `bi ${iconName}`;
+        btn.replaceChildren(icon, document.createTextNode(` ${text}`));
+    };
+    if (canCopy) {
+        btn.title = staged
+            ? 'Stage ticket \u2014 US market closed; re-validated against OpenD before copy'
+            : 'Copy a manual ticket draft (live broker quote)';
+        setButtonLabel(staged ? 'bi-clock' : 'bi-clipboard', staged ? 'Stage' : 'Copy');
+        btn.addEventListener('click', () => copyTicket(rec, btn));
+    } else {
+        btn.title = 'Review only: ' + reasons.join(' \u00b7 ');
+        setButtonLabel('bi-eye', 'Review only');
     }
     return row;
 }
@@ -1516,9 +1717,11 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
     applyPreset(result);
     // Update buying power indicator
     updateBuyingPowerIndicator(result);
+    updateWatchlistCashFitWarning(result);
     // Full rejection explanations stay accessible under "Ticker diagnostics".
     // The served snapshot carries them as `rejected` (engine `blocked_signals`).
     renderBlockedSignals(result?.rejected ?? result?.blocked_signals ?? []);
+    renderCapitalRecovery(result);
 
     // Two always-visible lanes: Top 3 CSP (+ remaining) and Top 3 CC
     // (+ remaining). Fall back to the legacy combined grid only when the
@@ -1531,7 +1734,8 @@ function renderRecommendations(result, timestamp, cacheInfo = null) {
 
     const hasSignals = (result?.signals?.length > 0)
         || (Array.isArray(result?.csp_picks) && result.csp_picks.length > 0)
-        || (Array.isArray(result?.cc_decisions) && result.cc_decisions.length > 0);
+        || (Array.isArray(result?.cc_decisions) && result.cc_decisions.length > 0)
+        || (Array.isArray(result?.capital_recovery) && result.capital_recovery.length > 0);
     if (hasSignals) {
         showContent();
         updateTimestamp(timestamp, cacheInfo);

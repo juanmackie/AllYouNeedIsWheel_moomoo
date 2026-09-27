@@ -4,7 +4,7 @@
  */
 import { loadPortfolioData } from './account.js';
 import { initializeTopRecommendations, loadTopRecommendations, isBackendGenerating } from './top-recommendations.js';
-import { formatCurrency, escapeHtml } from '../utils/formatters.js';
+import { formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api-portfolio.js';
 import { updateCashReserveStatus } from './dashboard-cash.js';
 import { updateIdleCashPanel } from './dashboard-cash.js';
@@ -17,11 +17,6 @@ import { renderWeeklyIncome } from './weekly-income.js';
 import { state as optionsTableState } from './options-table-state.js';
 
 let signalPanelsInitialized = false;
-
-/** Escape a string for safe use inside a double-quoted HTML attribute. */
-function escapeAttr(value) {
-    return escapeHtml(String(value)).replace(/"/g, '&quot;');
-}
 
 /**
  * Initialize the dashboard with progressive loading
@@ -213,134 +208,238 @@ function hideWaveLoading(waveId) {
 }
 
 function copyRollTicket(pos, btn) {
-    const expiry = (pos.expiration || '').replace(/-/g, '');
-    const strike = (pos.strike || 0).toFixed(2);
+    const expiry = String(pos.expiration || '').replace(/-/g, '');
+    const strike = (Number(pos.strike) || 0).toFixed(2);
     const ticker = pos.ticker || '?';
-    const type = pos.option_type === 'PUT' ? 'PUT' : 'CALL';
+    const rawType = String(pos.option_type || '').toUpperCase();
+    const type = rawType === 'PUT' || rawType === 'P' ? 'PUT' : 'CALL';
     const qty = Math.max(1, Math.abs(Number(pos.position || 0)) || 1);
-    const pressure = pos.roll_pressure != null ? pos.roll_pressure.toFixed(0) : '?';
+    const pressure = pos.roll_pressure != null ? Number(pos.roll_pressure).toFixed(0) : '?';
+    const target = pos.roll_target;
+    const targetExpiry = target && /^\d{8}$/.test(String(target.expiration || '')) ? String(target.expiration) : '';
+    const targetStrike = Number(target?.strike);
+    const targetLine = target && target.ticker && target.option_type && targetExpiry && Number.isFinite(targetStrike)
+        ? `STO: ${String(target.option_type).toUpperCase()} ${target.ticker} ${targetExpiry} ${targetStrike.toFixed(2)} x${qty}`
+        : `STO: ${type} ${ticker} <fresh eligible target required> ${strike} x${qty}`;
     const text = [
-        'ROLL — ' + ticker,
-        'BTC: ' + type + ' ' + ticker + ' ' + expiry + ' ' + strike + ' x' + qty,
-        'STO: ' + type + ' ' + ticker + ' <next expiry> ' + strike + ' x' + qty + ' — select next monthly expiry in broker',
-        'Reason: roll pressure ' + pressure + '/100',
+        `${String(pos.exit_verdict || 'ROLL').toUpperCase()} — ${ticker}`,
+        `BTC: ${type} ${ticker} ${expiry} ${strike} x${qty}`,
+        targetLine,
+        `Reason: roll pressure ${pressure}/100`,
         'Source: Moomoo positions (read-only)',
     ].join('\n');
-    const original = btn.innerHTML;
+    const original = btn.textContent;
     navigator.clipboard.writeText(text).then(() => {
-        btn.innerHTML = '<i class="bi bi-check-circle"></i> Copied';
+        btn.textContent = 'Copied';
         btn.classList.add('btn-success');
     }).catch(() => {
-        btn.innerHTML = '<i class="bi bi-x-circle"></i> Failed';
+        btn.textContent = 'Failed';
         btn.classList.add('btn-danger');
     }).finally(() => {
-        setTimeout(() => { btn.innerHTML = original; btn.classList.remove('btn-success', 'btn-danger'); }, 2000);
+        setTimeout(() => { btn.textContent = original; btn.classList.remove('btn-success', 'btn-danger'); }, 2000);
     });
+}
+
+function setPositionMessage(tbody, message, className = 'text-muted') {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 13;
+    cell.className = `text-center ${className}`;
+    cell.textContent = message;
+    row.appendChild(cell);
+    tbody.replaceChildren(row);
+}
+
+function appendPositionCell(row, content, className = '') {
+    const cell = document.createElement('td');
+    if (className) cell.className = className;
+    if (content instanceof Node) cell.appendChild(content);
+    else cell.textContent = String(content);
+    row.appendChild(cell);
+    return cell;
+}
+
+function renderPositionRow(pos) {
+    const row = document.createElement('tr');
+    const expiry = String(pos.expiration || '');
+    const ticker = String(pos.ticker || '');
+    const optionType = String(pos.option_type || '').toUpperCase();
+    const isPut = optionType === 'PUT' || optionType === 'P';
+    const type = isPut ? 'PUT' : 'CALL';
+    const strike = Number(pos.strike) || 0;
+    const qty = Math.abs(Number(pos.position || 0)) || 0;
+    const pressure = Number(pos.roll_pressure || 0) || 0;
+    const profit = Number(pos.profit_target_progress || 0) || 0;
+    const otmPct = Number(pos.otm_pct || 0) || 0;
+    const isItm = otmPct < 0;
+    const deepItm = isItm && Math.abs(otmPct) > 15;
+    const entryCredit = Number(pos.avg_cost ?? pos.wheel_decision?.avg_cost ?? 0) || 0;
+    const mark = Number(pos.mid_price || 0) || 0;
+    const delta = Math.abs(Number(pos.delta || 0)) || null;
+    const daysToEarnings = pos.wheel_decision?.days_to_earnings ?? null;
+    row.setAttribute('data-contract-key', `${ticker} ${expiry} ${isPut ? 'P' : 'C'}${strike.toFixed(2)}`);
+
+    appendPositionCell(row, (() => {
+        const strong = document.createElement('strong');
+        strong.textContent = ticker;
+        return strong;
+    })());
+    const typeCell = document.createElement('td');
+    const typeBadge = document.createElement('span');
+    typeBadge.className = `badge ${isPut ? 'bg-danger' : 'bg-success'}`;
+    typeBadge.setAttribute('aria-label', isPut ? 'Put' : 'Call');
+    typeBadge.textContent = type;
+    typeCell.appendChild(typeBadge);
+    row.appendChild(typeCell);
+
+    const strikeCell = document.createElement('td');
+    strikeCell.appendChild(document.createTextNode(`$${strike.toFixed(2)}`));
+    if (isItm) {
+        const itmBadge = document.createElement('span');
+        itmBadge.className = 'badge bg-danger badge-pill';
+        itmBadge.textContent = 'ITM';
+        strikeCell.appendChild(document.createTextNode(' '));
+        strikeCell.appendChild(itmBadge);
+    }
+    row.appendChild(strikeCell);
+    appendPositionCell(row, expiry.length === 8 ? `${expiry.slice(0, 4)}-${expiry.slice(4, 6)}-${expiry.slice(6, 8)}` : expiry, 'small');
+    appendPositionCell(row, pos.dte ?? '—', 'small');
+    appendPositionCell(row, `-${qty}`, 'small');
+    appendPositionCell(row, entryCredit > 0 ? `$${entryCredit.toFixed(2)}` : '—', 'small');
+    appendPositionCell(row, mark > 0 ? `$${mark.toFixed(2)}` : '—', 'small');
+
+    const pnlCell = document.createElement('td');
+    if (entryCredit > 0 && mark > 0) {
+        const pnlPct = ((entryCredit - mark) / entryCredit) * 100;
+        const pnlDollars = (entryCredit - mark) * 100 * qty;
+        const pnl = document.createElement('span');
+        pnl.className = `${pnlPct >= 0 ? 'text-success' : 'text-danger'} fw-bold`;
+        pnl.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(0)}%`;
+        const detail = document.createElement('small');
+        detail.className = 'text-muted';
+        detail.textContent = `$${pnlDollars >= 0 ? '' : '-'}${Math.abs(pnlDollars).toFixed(0)}`;
+        pnlCell.append(pnl, document.createElement('br'), detail);
+    } else {
+        const unknown = document.createElement('span');
+        unknown.className = 'text-muted';
+        unknown.textContent = '—';
+        pnlCell.appendChild(unknown);
+    }
+    row.appendChild(pnlCell);
+    appendPositionCell(row, delta === null ? '—' : delta.toFixed(2), 'small');
+    appendPositionCell(row, renderEarningsBadge(daysToEarnings), 'small');
+
+    const pressureCell = document.createElement('td');
+    pressureCell.style.minWidth = '80px';
+    const progress = document.createElement('div');
+    progress.className = 'progress';
+    progress.style.height = '6px';
+    progress.setAttribute('role', 'progressbar');
+    progress.setAttribute('aria-valuenow', pressure.toFixed(0));
+    progress.setAttribute('aria-valuemin', '0');
+    progress.setAttribute('aria-valuemax', '100');
+    const bar = document.createElement('div');
+    bar.className = `progress-bar ${pressure >= 70 ? 'bg-warning' : 'bg-secondary'}`;
+    bar.style.width = `${Math.min(pressure, 100)}%`;
+    progress.appendChild(bar);
+    const pressureText = document.createElement('small');
+    pressureText.className = 'text-muted';
+    pressureText.textContent = pressure.toFixed(0);
+    pressureCell.append(progress, pressureText);
+    row.appendChild(pressureCell);
+
+    const reasons = Array.isArray(pos.exit_reasons) ? pos.exit_reasons.join(' • ') : '';
+    const verdict = String(pos.exit_verdict || '').toUpperCase();
+    const target = pos.roll_target;
+    let targetLabel = '';
+    if (target && target.ticker && target.option_type && /^\d{8}$/.test(String(target.expiration || ''))) {
+        const targetStrike = Number(target.strike);
+        if (Number.isFinite(targetStrike)) {
+            const targetExpiry = String(target.expiration);
+            targetLabel = `${String(target.ticker).toUpperCase()} ${String(target.option_type).toUpperCase()} ${targetStrike.toFixed(2)} ${targetExpiry.slice(0, 4)}-${targetExpiry.slice(4, 6)}-${targetExpiry.slice(6, 8)}`;
+        }
+    }
+    let statusBadge, statusClass;
+    if (verdict === 'CLOSE') { statusBadge = 'CLOSE'; statusClass = 'bg-danger'; }
+    else if (verdict === 'TAKE_PROFIT') { statusBadge = 'TAKE PROFIT'; statusClass = 'bg-success'; }
+    else if (verdict === 'ROTATE') { statusBadge = targetLabel ? `ROTATE → ${targetLabel}` : 'ROTATE'; statusClass = 'bg-primary'; }
+    else if (verdict === 'ROLL') { statusBadge = targetLabel ? `ROLL → ${targetLabel}` : 'ROLL'; statusClass = 'bg-warning text-dark'; }
+    else if (verdict === 'HOLD') {
+        if (deepItm) { statusBadge = 'HOLD ⚠'; statusClass = 'bg-danger'; }
+        else { statusBadge = 'HOLD'; statusClass = isItm ? 'bg-secondary' : 'bg-info'; }
+    } else if (profit >= 50) { statusBadge = 'TAKE PROFIT'; statusClass = 'bg-success'; }
+    else if (deepItm) { statusBadge = 'WATCH ⚠'; statusClass = 'bg-danger'; }
+    else if (isItm) { statusBadge = 'HOLD'; statusClass = 'bg-secondary'; }
+    else if (pressure >= 70) { statusBadge = 'ROLL SOON'; statusClass = 'bg-warning text-dark'; }
+    else { statusBadge = 'HOLD'; statusClass = 'bg-info'; }
+
+    const actionCell = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = `badge ${statusClass} position-verdict`;
+    badge.textContent = statusBadge;
+    if (reasons) badge.title = reasons;
+    actionCell.appendChild(badge);
+    actionCell.appendChild(document.createTextNode(' '));
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-outline-secondary btn-sm copy-roll-btn';
+    button.title = 'Copy roll ticket (manual, read-only)';
+    button.textContent = 'Copy roll';
+    button.addEventListener('click', () => copyRollTicket(pos, button));
+    actionCell.appendChild(button);
+    row.appendChild(actionCell);
+    return row;
 }
 
 export async function loadPositionsCommandPanel() {
     const tbody = document.getElementById('position-monitor-body');
     if (!tbody) return;
-    const loadingEl = document.getElementById('position-monitor-loading');
     try {
         const resp = await fetch('/api/portfolio/roll-pressure');
-        if (!resp.ok) { tbody.innerHTML = '<tr><td colspan="13" class="text-center text-muted">Could not load positions</td></tr>'; return; }
+        if (!resp.ok) {
+            setPositionMessage(tbody, 'Could not load positions');
+            return;
+        }
         const data = await resp.json();
         const positions = data.positions || [];
-        if (positions.length === 0) { tbody.innerHTML = '<tr><td colspan="13" class="text-center text-muted">No open short option positions</td></tr>'; return; }
-        tbody.innerHTML = positions.map(pos => {
-            const profit = pos.profit_target_progress || 0;
-            const pressure = pos.roll_pressure || 0;
-            const isItm = (pos.otm_pct || 0) < 0;
-            const deepItm = isItm && Math.abs(pos.otm_pct) > 15;
-            const daysToEarnings = (pos.wheel_decision && pos.wheel_decision.days_to_earnings) ?? null;
-
-            // Live P&L for a short leg: entry credit (avg_cost) vs current mark.
-            const qty = Math.abs(Number(pos.position || 0)) || 0;
-            const entryCredit = Number(pos.avg_cost ?? pos.wheel_decision?.avg_cost ?? 0) || 0;
-            const mark = Number(pos.mid_price || 0) || 0;
-            let pnlPct = null;
-            let pnlDollar = null;
-            // A valid current mark is required to report live P&L: an unknown/zero
-            // mark must not be presented as +100% max profit. (C09)
-            if (entryCredit > 0 && mark > 0) {
-                pnlPct = ((entryCredit - mark) / entryCredit) * 100;
-                pnlDollar = (entryCredit - mark) * 100 * qty;
-            }
-            const pnlHtml = pnlPct === null
-                ? '<span class="text-muted">—</span>'
-                : `<span class="${pnlPct >= 0 ? 'text-success' : 'text-danger'} fw-bold">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(0)}%</span>`
-                    + `<br><small class="text-muted">$${pnlDollar >= 0 ? '' : '-'}${Math.abs(pnlDollar).toFixed(0)}</small>`;
-
-            const deltaVal = Math.abs(Number(pos.delta || 0)) || null;
-            const deltaHtml = deltaVal === null ? '<span class="text-muted">—</span>' : deltaVal.toFixed(2);
-
-            // Exit-playbook verdict from the server (deterministic rules);
-            // fall back to a pressure-based heuristic for stale payloads.
-            let statusBadge, statusClass;
-            const reasons = Array.isArray(pos.exit_reasons) ? pos.exit_reasons.join(' • ') : '';
-            const verdict = String(pos.exit_verdict || '').toUpperCase();
-            if (verdict === 'CLOSE') { statusBadge = 'CLOSE'; statusClass = 'bg-danger'; }
-            else if (verdict === 'TAKE_PROFIT') { statusBadge = 'TAKE PROFIT'; statusClass = 'bg-success'; }
-            else if (verdict === 'ROLL') { statusBadge = 'ROLL'; statusClass = 'bg-warning text-dark'; }
-            else if (verdict === 'HOLD') {
-                if (deepItm) { statusBadge = 'HOLD ⚠'; statusClass = 'bg-danger'; }
-                else { statusBadge = 'HOLD'; statusClass = isItm ? 'bg-secondary' : 'bg-info'; }
-            } else if (profit >= 50) { statusBadge = 'TAKE PROFIT'; statusClass = 'bg-success'; }
-            else if (deepItm) { statusBadge = 'WATCH ⚠'; statusClass = 'bg-danger'; }
-            else if (isItm) { statusBadge = 'HOLD'; statusClass = 'bg-secondary'; }
-            else if (pressure >= 70) { statusBadge = 'ROLL SOON'; statusClass = 'bg-warning text-dark'; }
-            else { statusBadge = 'HOLD'; statusClass = 'bg-info'; }
-
-            const expiry = pos.expiration || '';
-            const expiryDisplay = expiry.length === 8 ? expiry.slice(0,4) + '-' + expiry.slice(4,6) + '-' + expiry.slice(6,8) : expiry;
-            const typeLabel = pos.option_type === 'PUT' ? 'Put' : 'Call';
-            const contractKey = `${pos.ticker} ${expiry} ${typeLabel.charAt(0)}${Number(pos.strike || 0).toFixed(2)}`;
-            // API-fed strings are escaped before HTML interpolation (frontend AGENTS.md).
-            const escTicker = escapeHtml(pos.ticker || '');
-            const escType = escapeHtml(pos.option_type || '');
-            const escExpiry = escapeHtml(expiryDisplay);
-            const escContractKey = escapeAttr(contractKey);
-            return `<tr data-contract-key="${escContractKey}">`
-                + `<td><strong>${escTicker}</strong></td>`
-                + `<td><span class="badge ${pos.option_type === 'PUT' ? 'bg-danger' : 'bg-success'}" aria-label="${typeLabel}">${escType}</span></td>`
-                + `<td>$${(pos.strike || 0).toFixed(2)}${isItm ? ' <span class="badge bg-danger badge-pill">ITM</span>' : ''}</td>`
-                + `<td class="small">${escExpiry}</td>`
-                + `<td class="small">${pos.dte ?? '—'}</td>`
-                + `<td class="small">-${qty}</td>`
-                + `<td class="small">${entryCredit > 0 ? '$' + entryCredit.toFixed(2) : '—'}</td>`
-                + `<td class="small">${mark > 0 ? '$' + mark.toFixed(2) : '—'}</td>`
-                + `<td>${pnlHtml}</td>`
-                + `<td class="small">${deltaHtml}</td>`
-                + `<td class="small">${renderEarningsBadge(daysToEarnings)}</td>`
-                + `<td style="min-width:80px"><div class="progress" style="height:6px" role="progressbar" aria-valuenow="${pressure.toFixed(0)}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar ${pressure >= 70 ? 'bg-warning' : 'bg-secondary'}" style="width:${Math.min(pressure, 100)}%"></div></div><small class="text-muted">${pressure.toFixed(0)}</small></td>`
-                + `<td><span class="badge ${statusClass} position-verdict"${reasons ? ` title="${escapeAttr(reasons)}"` : ''}>${statusBadge}</span> `
-                + `<button type="button" class="btn btn-outline-secondary btn-sm copy-roll-btn" title="Copy roll ticket (manual, read-only)">Copy roll</button></td>`
-                + '</tr>';
-        }).join('');
-        tbody.querySelectorAll('.copy-roll-btn').forEach((btn, index) => {
-            btn.addEventListener('click', () => copyRollTicket(positions[index], btn));
-        });
+        if (positions.length === 0) {
+            setPositionMessage(tbody, 'No open short option positions');
+            return;
+        }
+        tbody.replaceChildren(...positions.map(renderPositionRow));
         const refreshBtn = document.getElementById('refresh-position-monitor');
         if (refreshBtn && !refreshBtn.dataset.bound) {
             refreshBtn.dataset.bound = 'true';
             refreshBtn.onclick = () => loadPositionsCommandPanel();
         }
     } catch (err) {
-        console.error('Error loading position monitor:', err);
-        tbody.innerHTML = '<tr><td colspan="13" class="text-center text-danger">Error loading positions</td></tr>';
+        console.error('Error loading positions:', err);
+        setPositionMessage(tbody, 'Error loading positions', 'text-danger');
     }
 }
 
 function renderEarningsBadge(days) {
-    if (days === null || days === undefined) return '<span class="text-muted">—</span>';
-    if (days <= 0) return '<span class="badge bg-danger">ER TODAY</span>';
-    if (days <= 3) return `<span class="badge bg-warning text-dark">ER ${days}d</span>`;
-    if (days <= 7) return `<span class="badge bg-info text-dark">ER ${days}d</span>`;
-    return `<span class="text-muted small">ER ${days}d</span>`;
+    const badge = document.createElement('span');
+    if (days === null || days === undefined) {
+        badge.className = 'text-muted';
+        badge.textContent = '—';
+    } else if (days <= 0) {
+        badge.className = 'badge bg-danger';
+        badge.textContent = 'ER TODAY';
+    } else if (days <= 3) {
+        badge.className = 'badge bg-warning text-dark';
+        badge.textContent = `ER ${days}d`;
+    } else if (days <= 7) {
+        badge.className = 'badge bg-info text-dark';
+        badge.textContent = `ER ${days}d`;
+    } else {
+        badge.className = 'text-muted small';
+        badge.textContent = `ER ${days}d`;
+    }
+    return badge;
 }
 
-function toggleCashReserve(enabled) {
+function toggleCashReserve(_enabled) {
     updateCashReserveStatus();
 }
 

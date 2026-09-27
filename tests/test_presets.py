@@ -20,7 +20,7 @@ class TestPresetContract(unittest.TestCase):
             self.assertEqual(preset.key, key)
             self.assertGreaterEqual(preset.version, 1)
             with self.assertRaises(Exception):
-                preset.csp_min_dte = 1  # frozen dataclass
+                setattr(preset, "csp_min_dte", 1)  # frozen dataclass
 
     def test_risk_ordering_is_monotonic(self):
         """Conservative <= Balanced <= Aggressive on the risk axes."""
@@ -36,6 +36,12 @@ class TestPresetContract(unittest.TestCase):
         self.assertGreaterEqual(bal.min_open_interest, agg.min_open_interest)
         self.assertGreaterEqual(cons.min_mid_price, bal.min_mid_price)
         self.assertGreaterEqual(bal.min_mid_price, agg.min_mid_price)
+
+    def test_exposure_cap_is_25_percent_in_new_immutable_preset_versions(self):
+        for preset in WHEEL_PRESETS.values():
+            self.assertEqual(preset.version, 7)
+            self.assertEqual(preset.max_account_exposure_pct_per_underlying, 25.0)
+            self.assertEqual(preset.to_screener_profile()["max_account_exposure_pct_per_underlying"], 25.0)
 
     def test_unknown_key_falls_back_to_balanced(self):
         self.assertIs(get_preset("quantum"), get_preset(DEFAULT_PRESET_KEY))

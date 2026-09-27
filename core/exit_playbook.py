@@ -40,10 +40,12 @@ payout figure would violate the broker-truth contract.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 
 VERDICT_HOLD = "HOLD"
 VERDICT_TAKE_PROFIT = "TAKE_PROFIT"
 VERDICT_ROLL = "ROLL"
+VERDICT_ROTATE = "ROTATE"
 VERDICT_CLOSE = "CLOSE"
 
 
@@ -56,26 +58,45 @@ class ExitThresholds:
     exit_delta: float = 0.65  # |delta| at which the position is closed
     deep_itm_pct: float = 15.0  # ITM beyond this % -> close
     stop_loss_pct: float = -100.0  # captured % at or below -> close (-100 = 2x entry credit)
+    rotate_min_multiplier: float = 2.0  # fresh net return/day must be at least 2x held rate
 
 
 @dataclass
 class ExitVerdict:
     verdict: str
     reasons: list[str] = field(default_factory=list)
+    roll_target: dict | None = None
 
     def to_dict(self) -> dict:
-        return {"verdict": self.verdict, "reasons": list(self.reasons)}
+        return {"verdict": self.verdict, "reasons": list(self.reasons), "roll_target": self.roll_target}
+
+
+def _target_label(target: dict | None) -> str:
+    """Format a replacement contract for an owner-facing exit reason."""
+    if not isinstance(target, dict):
+        return "unnamed contract"
+    ticker = str(target.get("ticker") or "?").strip().upper()
+    option_type = str(target.get("option_type") or "?").strip().upper()
+    raw_strike = target.get("strike")
+    try:
+        strike = f"{float(raw_strike):g}" if raw_strike not in (None, "") else "?"
+    except (TypeError, ValueError):
+        strike = "?"
+    expiration = str(target.get("expiration") or "?").strip()
+    return f"{ticker} {option_type} {strike} {expiration}"
 
 
 def evaluate_exit(
     option_type: str,
     dte: int,
-    delta: float,
+    delta: float | None,
     otm_pct: float,
     captured_profit_pct: float | None = None,
     days_to_earnings: int | None = None,
     days_to_ex_dividend: int | None = None,
     thresholds: ExitThresholds | None = None,
+    rotation_comparison: dict | None = None,
+    roll_target: dict | None = None,
 ) -> ExitVerdict:
     """Evaluate exit rules for one open short option position.
 
@@ -91,15 +112,31 @@ def evaluate_exit(
         days_to_ex_dividend: calendar days until the next ex-dividend date, or
             None when unknown. Only meaningful for short CALLs.
         thresholds: preset overrides; defaults when omitted.
+        rotation_comparison: quotes, capital, DTE, and known per-contract fees for the old and fresh contracts.
+        roll_target: a fresh, eligible same-underlying/same-side replacement; absent targets suppress ROLL.
     """
     t = thresholds or ExitThresholds()
-    abs_delta = abs(float(delta or 0))
-    otm = float(otm_pct or 0)
+    try:
+        parsed_delta = float(delta) if delta is not None else None
+    except (TypeError, ValueError):
+        parsed_delta = None
+    if parsed_delta is None or not isfinite(parsed_delta):
+        delta_available = False
+        abs_delta = 0.0
+    else:
+        delta_available = True
+        abs_delta = abs(parsed_delta)
+    try:
+        otm = float(otm_pct or 0)
+    except (TypeError, ValueError):
+        otm = 0.0
+    if not isfinite(otm):
+        otm = 0.0
     is_itm = otm < 0
     reasons: list[str] = []
 
-    def _verdict(verdict: str) -> ExitVerdict:
-        return ExitVerdict(verdict=verdict, reasons=reasons)
+    def _verdict(verdict: str, target: dict | None = None) -> ExitVerdict:
+        return ExitVerdict(verdict=verdict, reasons=reasons, roll_target=target)
 
     # 1. Earnings before expiry while at risk.
     if days_to_earnings is not None and 0 <= days_to_earnings <= max(dte, 0):
@@ -132,9 +169,11 @@ def evaluate_exit(
         return _verdict(VERDICT_CLOSE)
 
     # 3. Delta breached.
-    if abs_delta >= t.exit_delta:
+    if delta_available and abs_delta >= t.exit_delta:
         reasons.append(f"|Delta| {abs_delta:.2f} breached exit level {t.exit_delta:.2f}")
         return _verdict(VERDICT_CLOSE)
+    if not delta_available:
+        reasons.append("Moomoo delta unavailable; delta exit threshold not evaluated")
 
     # 4. Profit target captured.
     if captured_profit_pct is not None and captured_profit_pct >= t.profit_take_pct > 0:
@@ -151,10 +190,64 @@ def evaluate_exit(
         )
         return _verdict(VERDICT_CLOSE)
 
-    # 5. Roll window for a safe OTM position.
+    # 4c. Rotate only when bid/ask execution prices and both per-contract fees
+    # are known. Unknown prospective fees are never treated as zero.
+    if rotation_comparison is not None:
+        comparison = rotation_comparison
+        fee_values = (comparison.get("close_fee"), comparison.get("open_fee"))
+        if any(value is None for value in fee_values):
+            reasons.append("ROTATE comparison unavailable: round-trip fees unknown")
+        else:
+            keys = (
+                "held_mark",
+                "held_capital",
+                "held_dte",
+                "close_ask",
+                "fresh_bid",
+                "fresh_capital",
+                "fresh_dte",
+                "close_fee",
+                "open_fee",
+            )
+            try:
+                values = {key: float(comparison[key]) for key in keys}
+                valid = all(isfinite(value) for value in values.values())
+            except (KeyError, TypeError, ValueError):
+                values, valid = {}, False
+            if (
+                not valid
+                or min(values["held_capital"], values["held_dte"], values["fresh_capital"], values["fresh_dte"]) <= 0
+            ):
+                reasons.append("ROTATE comparison unavailable: incomplete or invalid return inputs")
+            else:
+                held_rate = values["held_mark"] * 100 / (values["held_capital"] * values["held_dte"])
+                fresh_net_credit = (
+                    values["fresh_bid"] * 100 - values["close_ask"] * 100 - values["close_fee"] - values["open_fee"]
+                )
+                fresh_rate = fresh_net_credit / (values["fresh_capital"] * values["fresh_dte"])
+                if held_rate > 0 and fresh_rate >= held_rate * t.rotate_min_multiplier:
+                    target = comparison.get("target")
+                    label = _target_label(target)
+                    reasons.append(
+                        f"Fresh net return/day is {fresh_rate / held_rate:.1f}x held return/day "
+                        f"after bid/ask spread and known fees; rotate to {label}"
+                    )
+                    return _verdict(VERDICT_ROTATE, target)
+                reasons.append(
+                    f"Fresh net return/day does not reach {t.rotate_min_multiplier:.1f}x held return/day "
+                    "after spread and fees"
+                )
+
+    # 5. Roll window for a safe OTM position. Do not issue an unnamed roll.
     if 0 <= dte <= t.roll_dte and not is_itm:
-        reasons.append(f"DTE {dte} entered roll window (<= {t.roll_dte}) while {otm:.1f}% OTM")
-        return _verdict(VERDICT_ROLL)
+        if roll_target:
+            label = _target_label(roll_target)
+            reasons.append(
+                f"DTE {dte} entered roll window (<= {t.roll_dte}) while {otm:.1f}% OTM; fresh target: {label}"
+            )
+            return _verdict(VERDICT_ROLL, roll_target)
+        reasons.append("No fresh eligible same-underlying/same-side contract; suppressing ROLL")
+        return _verdict(VERDICT_HOLD)
 
     # 6. Hold, with context notes.
     if captured_profit_pct is not None:

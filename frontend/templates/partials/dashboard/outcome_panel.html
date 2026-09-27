@@ -15,6 +15,18 @@
 
     <div id="outcome-state"></div>
 
+    <section class="outcome-link-review" aria-labelledby="outcome-link-review-title">
+        <h3 id="outcome-link-review-title">Possible trade links</h3>
+        <p class="ft-td-mute">Suggestions match short fills to same-ticker, same-side signals within 7 days. Review and confirm each link; no attribution is automatic.</p>
+        <div id="outcome-link-suggestions" aria-live="polite"></div>
+    </section>
+
+    <section class="outcome-link-review" aria-labelledby="outcome-dte-comparison-title">
+        <h3 id="outcome-dte-comparison-title">21–45 DTE trade comparison</h3>
+        <p class="ft-td-mute">Comparison-only; uses only candidates retained in each saved scan. Missing chain candidates are shown as unavailable; no extra broker fetch or preset eligibility change.</p>
+        <div id="outcome-dte-comparisons" aria-live="polite"></div>
+    </section>
+
     <div id="outcome-totals" class="outcome-totals-grid" role="group" aria-label="Outcome totals"></div>
 
     <div id="outcome-groups">

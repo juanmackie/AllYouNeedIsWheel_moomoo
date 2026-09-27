@@ -1,0 +1,47 @@
+{
+  "run": {
+    "run_id": "redacted-20260914",
+    "generated_at": "2026-09-14T16:54:09.919636",
+    "published_at": "2026-09-14T16:54:09.919636",
+    "env": "REAL",
+    "account_id": "",
+    "preset_key": "balanced",
+    "preset_version": 4,
+    "market_state": "closed",
+    "status": "partial",
+    "errors": [],
+    "partial_symbols": [],
+    "stale_symbols": [],
+    "quote_fetched_at": {},
+    "max_tradeable_age_sec": 300,
+    "coverage_scanned": 0,
+    "coverage_total": 0,
+    "coverage_complete": false,
+    "schema_version": 2
+  },
+  "active_watchlist": {
+    "group_name": "My Watchlist",
+    "group_status": "missing_group",
+    "tickers": [],
+    "groups_available": []
+  },
+  "portfolio": {
+    "positions": {
+      "US.TEST260918C5000": {
+        "security_type": "OPT",
+        "option_type": "CALL",
+        "position": -1,
+        "market_price": 1.0
+      }
+    },
+    "short_calls": {},
+    "short_puts": {}
+  },
+  "signals": [],
+  "csp_picks": [],
+  "cc_decisions": [],
+  "roll_decisions": [],
+  "rejected": [],
+  "preset": {},
+  "watchlist_origins": {}
+}

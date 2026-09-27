@@ -23,7 +23,7 @@ from api.services.outcome_service import (
 )
 
 
-def _signal(ticker="AAPL", expiration="20260220", option_type="PUT", strike=70.0, **extra):
+def _signal(ticker="AAPL", expiration="20260220", option_type="PUT", strike: float | None = 70.0, **extra):
     base = {
         "ticker": ticker,
         "option_type": option_type,
@@ -48,7 +48,7 @@ def _fill(
     side="SELL",
     qty=1,
     price=1.05,
-    fees=0.0,
+    fees: float | None = 0.0,
     captured_at="2026-01-05T14:30:00",
     **extra,
 ):
@@ -81,6 +81,98 @@ def _snapshot(signals, generated_at="2026-01-02T15:00:00", preset_key="balanced"
 
 
 NOW = datetime(2026, 2, 20, 15, 0, 0)
+
+
+class TestLinkSuggestions(unittest.TestCase):
+    def test_suggests_same_ticker_side_within_inclusive_seven_days_only(self):
+        from api.services.outcome_service import build_link_suggestions
+
+        recommendation = _signal(ticker="AAPL", option_type="PUT", strike=150.0)
+        snapshot = _snapshot([recommendation], generated_at="2026-01-02T15:00:00", run_id="run-1")
+        fills = [
+            _fill(ticker="AAPL", option_type="PUT", strike=145.0, captured_at="2026-01-09T15:00:00"),
+            _fill(ticker="AAPL", option_type="PUT", strike=145.0, captured_at="2026-01-10T15:00:00"),
+            _fill(ticker="AAPL", option_type="CALL", strike=145.0, captured_at="2026-01-03T15:00:00"),
+            _fill(ticker="MSFT", option_type="PUT", strike=145.0, captured_at="2026-01-03T15:00:00"),
+            _fill(ticker="AAPL", option_type="PUT", strike=145.0, side="BUY", captured_at="2026-01-03T15:00:00"),
+        ]
+
+        suggestions = build_link_suggestions([snapshot], fills)
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0]["run_id"], "run-1")
+        self.assertEqual(suggestions[0]["recommendation"]["strike"], 150.0)
+        self.assertEqual(suggestions[0]["traded"]["strike"], 145.0)
+        self.assertEqual(suggestions[0]["days_from_run"], 7.0)
+
+    def test_does_not_repeat_an_existing_owner_link(self):
+        from api.services.outcome_service import build_link_suggestions
+
+        recommendation = _signal(ticker="AAPL", option_type="PUT", strike=150.0)
+        snapshot = _snapshot([recommendation], generated_at="2026-01-02T15:00:00", run_id="run-1")
+        fill = _fill(ticker="AAPL", option_type="PUT", strike=145.0, captured_at="2026-01-03T15:00:00")
+        taken = [{"run_id": "run-1", "recommendation": recommendation}]
+
+        self.assertEqual(build_link_suggestions([snapshot], [fill], taken_links=taken), [])
+
+
+class TestDteComparisons(unittest.TestCase):
+    def test_compares_owner_fill_to_best_saved_candidate_only_in_21_to_45_dte(self):
+        from api.services.outcome_service import build_dte_comparisons
+
+        candidate = _signal(
+            ticker="AAPL",
+            option_type="CALL",
+            strike=150.0,
+            expiration="20260205",
+            dte=30,
+            capital_velocity_per_day=0.002,
+        )
+        short_window = _signal(
+            ticker="AAPL",
+            option_type="CALL",
+            strike=145.0,
+            expiration="20260120",
+            dte=14,
+            capital_velocity_per_day=0.1,
+        )
+        snapshot = _snapshot([candidate, short_window], generated_at="2026-01-02T15:00:00", run_id="run-1")
+        fill = _fill(
+            ticker="AAPL",
+            option_type="CALL",
+            strike=155.0,
+            expiration="20260201",
+            captured_at="2026-01-05T15:00:00",
+        )
+
+        comparisons = build_dte_comparisons([snapshot], [fill])
+
+        self.assertEqual(len(comparisons), 1)
+        self.assertEqual(comparisons[0]["traded"]["dte"], 27)
+        self.assertEqual(comparisons[0]["candidate"]["strike"], 150.0)
+        self.assertEqual(comparisons[0]["candidate"]["dte"], 30)
+        self.assertEqual(comparisons[0]["candidate"]["saved_sample_rank"], 1)
+
+    def test_reports_unavailable_when_saved_run_has_no_candidate_in_window(self):
+        from api.services.outcome_service import build_dte_comparisons
+
+        snapshot = _snapshot(
+            [_signal(ticker="AAPL", option_type="CALL", strike=150.0, dte=11)],
+            generated_at="2026-01-02T15:00:00",
+            run_id="run-1",
+        )
+        fill = _fill(
+            ticker="AAPL",
+            option_type="CALL",
+            strike=155.0,
+            expiration="20260201",
+            captured_at="2026-01-05T15:00:00",
+        )
+
+        comparison = build_dte_comparisons([snapshot], [fill])[0]
+
+        self.assertIsNone(comparison["candidate"])
+        self.assertEqual(comparison["reason"], "no_saved_candidate_in_21_45_dte_window")
 
 
 class TestIdentities(unittest.TestCase):

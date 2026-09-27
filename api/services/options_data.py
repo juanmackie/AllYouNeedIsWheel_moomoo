@@ -7,10 +7,10 @@ import logging
 import time
 from datetime import datetime
 
+from api.services.recommendation_ranking import rank_candidates
 from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
-from core.scoring_factors import premium_velocity_per_day
-from core.utils import get_closest_friday, is_market_open
+from core.utils import get_closest_friday, is_market_open, market_now, safe_float
 from core.utils import normalize_expiration as _normalize_expiration
 from core.wheel_decision import score_contract
 
@@ -161,7 +161,16 @@ class OptionsDataService:
     def _strip_ticker_prefix(self, ticker):
         return clean_yfinance_ticker(ticker)
 
-    def _build_candidate(self, ticker, option, stock_price, desired_otm, profile, portfolio_context):
+    def _build_candidate(
+        self,
+        ticker,
+        option,
+        stock_price,
+        desired_otm,
+        profile,
+        portfolio_context,
+        include_below_basis_for_recovery=False,
+    ):
         """
         Build a scored candidate for a single option contract.
 
@@ -182,23 +191,22 @@ class OptionsDataService:
         # Gather IV / earnings context (macro enrichment is out of scope)
         option["expiration"] = _normalize_expiration(option.get("expiration", ""))
 
-        if option.get("implied_volatility", 0) > 0:
+        implied_volatility = safe_float(option.get("implied_volatility"), default=0.0)
+        if implied_volatility > 0:
+            expiry_date = _parse_expiration_date(option.get("expiration", ""))
+            dte = (expiry_date - market_now().date()).days if expiry_date else 0
             self.iv_earnings_service.record_iv_data(
                 ticker,
-                float(option.get("implied_volatility", 0)),
+                implied_volatility,
                 stock_price,
                 str(option.get("option_type", "") or "").upper(),
                 str(option.get("expiration", "") or ""),
-                int(
-                    (datetime.strptime(str(option.get("expiration", "")), "%Y%m%d").date() - datetime.now().date()).days
-                )
-                if option.get("expiration")
-                else 0,
+                dte,
                 strike=option.get("strike"),
             )
 
         iv_env_adjustment, iv_rank, iv_status = self.iv_earnings_service.get_iv_environment_score(
-            ticker, float(option.get("implied_volatility", 0) or 0.20)
+            ticker, safe_float(option.get("implied_volatility"), default=0.20) or 0.20
         )
         earnings_adjustment, earnings_warning = self.iv_earnings_service.get_earnings_score_impact(ticker)
         earnings_info = self.iv_earnings_service.get_earnings_info(ticker)
@@ -223,7 +231,11 @@ class OptionsDataService:
         if decision is None:
             return None
 
-        if decision and decision.hard_blockers:
+        hard_blockers = getattr(decision, "hard_blockers", []) or []
+        raw_blocked_codes = getattr(decision, "blocked_reason_codes", []) or []
+        blocked_codes = set(raw_blocked_codes) if isinstance(raw_blocked_codes, (list, tuple, set)) else set()
+        below_basis_only = bool(hard_blockers) and blocked_codes == {"below_cost_basis"}
+        if decision and hard_blockers and not (include_below_basis_for_recovery and below_basis_only):
             logger.debug(
                 "Filtered %s %s %s %s due to hard blockers: %s",
                 decision.ticker,
@@ -240,13 +252,17 @@ class OptionsDataService:
             or decision.chain_source == "yfinance"
             or decision.iv_source == "yfinance"
         )
+        confidence_score = safe_float(getattr(decision, "confidence_score", 100) or 0)
         blocked, reason = should_block_for_data_quality(
-            confidence_score=getattr(decision, "confidence_score", 100) or 0,
-            has_blockers=bool(decision.hard_blockers),
+            confidence_score=confidence_score,
+            has_blockers=bool(decision.hard_blockers and not below_basis_only),
             is_from_yfinance=from_yfinance,
             price_source=getattr(decision, "price_source", "broker"),
         )
-        if blocked:
+        basis_only_analysis = (
+            include_below_basis_for_recovery and below_basis_only and confidence_score >= 35 and not from_yfinance
+        )
+        if blocked and not basis_only_analysis:
             logger.debug(
                 "Filtered %s %s %s %s due to data quality gate: %s",
                 decision.ticker,
@@ -257,12 +273,16 @@ class OptionsDataService:
             )
             return None
 
-        # Convert WheelDecision back to legacy dict format for API compatibility
+        # Convert WheelDecision back to legacy dict format for API compatibility.
+        try:
+            strike_symbol = str(int(decision.strike))
+        except (OverflowError, TypeError, ValueError):
+            return None
         candidate = {
             "symbol": decision.ticker
             + decision.expiration
             + ("C" if decision.option_type == "CALL" else "P")
-            + str(int(decision.strike)),
+            + strike_symbol,
             "strike": decision.strike,
             "expiration": decision.expiration,
             "option_type": decision.option_type,
@@ -289,12 +309,14 @@ class OptionsDataService:
             "hard_blockers": decision.hard_blockers,
             "quote_quality": decision.quote_quality,
             "blocked_reason_codes": decision.blocked_reason_codes,
-            "avg_cost": float(portfolio_context.get("positions", {}).get(ticker, {}).get("avg_cost", 0) or 0),
+            "avg_cost": safe_float(portfolio_context.get("positions", {}).get(ticker, {}).get("avg_cost", 0)),
+            "broker_cost_basis": decision.broker_cost_basis,
+            "basis_source": decision.basis_source,
+            "if_called_pnl_vs_basis": decision.if_called_pnl_vs_basis,
             "otm_pct": decision.otm_pct,
             "annualized_return": decision.annualized_return,
             "return_on_underlying": decision.return_on_underlying,
             "return_on_secured_cash": decision.return_on_secured_cash,
-            "iv_adjusted_return": decision.iv_adjusted_return,
             "iv_rank": decision.iv_rank,
             "iv_status": decision.iv_status,
             "iv_percentile": decision.iv_percentile,
@@ -362,14 +384,11 @@ class OptionsDataService:
 
             ret, data = conn.get_option_expiration_dates(ticker)
             if ret != RET_OK or data is None or data.empty:
-                yf_expirations = self._get_yfinance_expiration_dates(ticker, profile)
-                if yf_expirations:
-                    return [value for value, _ in yf_expirations[: profile.get("max_expirations", 5)]]
                 fallback = get_closest_friday().strftime("%Y%m%d")
                 logger.debug(f"get_option_expiration_dates failed for {ticker}: ret={ret}, data empty or None")
                 return [fallback]
 
-            today = datetime.now().date()
+            today = market_now().date()
             filtered = []
             fallback = []
 
@@ -414,9 +433,6 @@ class OptionsDataService:
             return result
         except Exception as exc:
             logger.exception(f"Error loading option expirations for {ticker}: {exc}")
-            yf_expirations = self._get_yfinance_expiration_dates(ticker, profile)
-            if yf_expirations:
-                return [value for value, _ in yf_expirations[: profile.get("max_expirations", 5)]]
             return [get_closest_friday().strftime("%Y%m%d")]
 
     def get_otm_options(self, ticker, otm_percentage=10, option_type=None, expiration=None):
@@ -456,6 +472,7 @@ class OptionsDataService:
         expiration=None,
         option_type=None,
         screening_profile=None,
+        include_recovery_calls=False,
     ):
         result = {
             "symbol": ticker,
@@ -529,7 +546,13 @@ class OptionsDataService:
                 return result
 
             formatted_data = self._process_options_chain(
-                options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type
+                options_chains,
+                ticker,
+                stock_price,
+                otm_percentage,
+                portfolio_context,
+                option_type,
+                include_recovery_calls=include_recovery_calls,
             )
             result.update(formatted_data)
         except Exception as exc:
@@ -539,7 +562,14 @@ class OptionsDataService:
         return result
 
     def _process_options_chain(
-        self, options_chains, ticker, stock_price, otm_percentage, portfolio_context, option_type=None
+        self,
+        options_chains,
+        ticker,
+        stock_price,
+        otm_percentage,
+        portfolio_context,
+        option_type=None,
+        include_recovery_calls=False,
     ):
         try:
             result = {
@@ -576,6 +606,7 @@ class OptionsDataService:
                     growth_mode_config=self._get_config().get("growth_mode", {}),
                 )
                 candidates = []
+                recovery_candidates = []
                 seen_contracts = set()
 
                 for option in grouped_options[side]:
@@ -586,20 +617,24 @@ class OptionsDataService:
                     seen_contracts.add(contract_key)
 
                     candidate = self._build_candidate(
-                        ticker, option, stock_price, otm_percentage, profile, portfolio_context
+                        ticker,
+                        option,
+                        stock_price,
+                        otm_percentage,
+                        profile,
+                        portfolio_context,
+                        include_below_basis_for_recovery=include_recovery_calls and side == "CALL",
                     )
                     if candidate:
+                        if include_recovery_calls and side == "CALL":
+                            recovery_candidates.append(candidate)
+                            if candidate.get("blocked_reason_codes"):
+                                continue
                         candidates.append(candidate)
 
-                candidates.sort(
-                    key=lambda item: (
-                        premium_velocity_per_day(item.get("premium_per_contract", 0), item.get("dte", 0)),
-                        item.get("annualized_return", 0),
-                    ),
-                    reverse=True,
-                )
-
-                result["calls" if side == "CALL" else "puts"] = candidates[:5]
+                result["calls" if side == "CALL" else "puts"] = rank_candidates(candidates)[:5]
+                if include_recovery_calls and side == "CALL":
+                    result["recovery_calls"] = recovery_candidates
 
             return result
         except Exception as exc:
@@ -626,27 +661,7 @@ class OptionsDataService:
 
             ret, data = conn.get_option_expiration_dates(ticker)
             if ret != RET_OK or data is None or data.empty:
-                profile = (
-                    self._screening_profile_provider.get_screening_profile(
-                        option_type,
-                        growth_mode_config=self._get_config().get("growth_mode", {}),
-                    )
-                    if option_type in ["CALL", "PUT"]
-                    else {}
-                )
-                yf_expirations = self._get_yfinance_expiration_dates(ticker, profile)
-                return {
-                    "ticker": ticker,
-                    "expiration_source": "yfinance",
-                    "expirations": [
-                        {
-                            "value": value,
-                            "label": f"{value[0:4]}-{value[4:6]}-{value[6:8]}",
-                            "dte": dte,
-                        }
-                        for value, dte in yf_expirations
-                    ],
-                }
+                return {"error": "Moomoo option expirations unavailable"}
 
             expiration_column = "expiration_date"
             if expiration_column not in data.columns:
@@ -657,9 +672,7 @@ class OptionsDataService:
                 else:
                     return {"error": "No expiration column returned by moomoo"}
 
-            from datetime import date
-
-            today = date.today()
+            today = market_now().date()
 
             if option_type in ["CALL", "PUT"]:
                 profile = self._screening_profile_provider.get_screening_profile(

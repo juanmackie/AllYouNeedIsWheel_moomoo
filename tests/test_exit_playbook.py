@@ -6,6 +6,7 @@ from core.exit_playbook import (
     VERDICT_CLOSE,
     VERDICT_HOLD,
     VERDICT_ROLL,
+    VERDICT_ROTATE,
     VERDICT_TAKE_PROFIT,
     ExitThresholds,
     captured_profit_pct_for_short,
@@ -28,10 +29,52 @@ class TestEvaluateExit(unittest.TestCase):
         verdict = evaluate_exit(option_type="PUT", dte=25, delta=-0.25, otm_pct=6.0, captured_profit_pct=None)
         self.assertNotEqual(verdict.verdict, VERDICT_TAKE_PROFIT)
 
-    def test_roll_window_otm(self):
-        verdict = evaluate_exit(option_type="PUT", dte=18, delta=-0.28, otm_pct=5.0)
+    def test_roll_window_otm_names_fresh_target(self):
+        target = {"ticker": "AAPL", "option_type": "PUT", "strike": 95, "expiration": "20261016"}
+        verdict = evaluate_exit(option_type="PUT", dte=18, delta=-0.28, otm_pct=5.0, roll_target=target)
         self.assertEqual(verdict.verdict, VERDICT_ROLL)
         self.assertTrue(any("roll window" in r for r in verdict.reasons))
+        self.assertTrue(any("AAPL PUT 95" in r for r in verdict.reasons))
+
+    def test_roll_is_suppressed_without_fresh_target(self):
+        verdict = evaluate_exit(option_type="PUT", dte=18, delta=-0.28, otm_pct=5.0)
+        self.assertEqual(verdict.verdict, VERDICT_HOLD)
+        self.assertTrue(any("No fresh" in r for r in verdict.reasons))
+
+    def test_rotate_requires_two_x_net_return_after_spread_and_known_fees(self):
+        comparison = {
+            "held_mark": 1.375,
+            "held_capital": 15000,
+            "held_dte": 32,
+            "close_ask": 1.40,
+            "close_fee": 0.65,
+            "fresh_bid": 4.00,
+            "fresh_capital": 15000,
+            "fresh_dte": 30,
+            "open_fee": 0.65,
+            "target": {"ticker": "ORCL", "option_type": "CALL", "strike": 195, "expiration": "20261016"},
+        }
+        verdict = evaluate_exit(option_type="CALL", dte=32, delta=0.25, otm_pct=8.0, rotation_comparison=comparison)
+        self.assertEqual(verdict.verdict, VERDICT_ROTATE)
+        self.assertTrue(any("2.0x" in reason for reason in verdict.reasons))
+        self.assertTrue(any("ORCL CALL 195" in reason for reason in verdict.reasons))
+
+    def test_rotate_does_not_assume_unknown_fees_are_zero(self):
+        comparison = {
+            "held_mark": 1.375,
+            "held_capital": 15000,
+            "held_dte": 32,
+            "close_ask": 1.40,
+            "close_fee": None,
+            "fresh_bid": 4.00,
+            "fresh_capital": 15000,
+            "fresh_dte": 30,
+            "open_fee": 0.65,
+            "target": {"ticker": "ORCL", "option_type": "CALL", "strike": 195, "expiration": "20261016"},
+        }
+        verdict = evaluate_exit(option_type="CALL", dte=32, delta=0.25, otm_pct=8.0, rotation_comparison=comparison)
+        self.assertNotEqual(verdict.verdict, VERDICT_ROTATE)
+        self.assertTrue(any("fees unknown" in reason.lower() for reason in verdict.reasons))
 
     def test_no_roll_when_itm(self):
         verdict = evaluate_exit(option_type="PUT", dte=10, delta=-0.60, otm_pct=-3.0)

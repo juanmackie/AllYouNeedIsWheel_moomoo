@@ -40,6 +40,7 @@ function setupDOM() {
     <div id="top-recommendations-container">
       <div id="top-recommendations-state"></div>
       <div id="top-recommendations-content" class="d-none">
+        <div id="capital-recovery-section" class="d-none"><div id="capital-recovery-cards"></div></div>
         <div id="top-recommendations-cards"></div>
       </div>
       <div id="top-recs-last-updated" class="d-none"></div>
@@ -50,6 +51,7 @@ function setupDOM() {
         <span id="bp-broker"></span>
         <div id="bp-diagnostics"></div>
       </div>
+      <div id="watchlist-cash-fit-warning" class="d-none" role="status" aria-live="polite"></div>
       <div id="signal-tabs" class="d-none"></div>
       <button id="research-long-options"></button>
       <button id="refresh-top-recommendations"></button>
@@ -97,6 +99,9 @@ function setupDOM() {
           <span class="csp-breakeven-buffer"></span>
           <span class="csp-expected-move"></span>
         </div>
+        <div class="cc-main-basis d-none">
+          <span class="cc-if-called-pnl-vs-basis"></span>
+        </div>
         <div class="cc-details d-none">
           <span class="cc-if-called-return"></span>
           <span class="cc-if-called-proceeds"></span>
@@ -127,6 +132,99 @@ describe('top-recommendations empty state', () => {
 
   afterEach(() => {
     document.body.innerHTML = '';
+  });
+
+  it('renders conservative capital recovery and CSP opportunity details', async () => {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import('../../frontend/static/js/dashboard/api-run.js');
+    fetchRunState.mockResolvedValue({
+      success: true,
+      signals: [],
+      count: 0,
+      capital_recovery: [{
+        ticker: 'AAPL',
+        shares: 200,
+        available_contracts: 2,
+        basis_per_share: 100,
+        basis_notice: 'Moomoo average cost; historical option credits excluded.',
+        best_call_at_or_above_basis: { strike: 110, expiration: '20261218', capital_velocity_per_day: 0.0005 },
+        best_call_below_basis: { strike: 95, expiration: '20261218', loss_if_called: 300 },
+        best_csp_opportunity: { ticker: 'AMD', strike: 80, expiration: '20261218' },
+        opportunity_return_per_day_pct: 0.1,
+        opportunity_daily_dollars: 20,
+      }],
+      generated_at: '2026-09-27T12:00:00',
+    });
+
+    await initializeTopRecommendations();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const cards = document.getElementById('capital-recovery-cards');
+    expect(cards.textContent).toContain('AAPL');
+    expect(cards.textContent).toContain('Moomoo average cost; historical option credits excluded.');
+    expect(cards.textContent).toContain('AMD');
+    expect(cards.textContent).toContain('300');
+    expect(document.getElementById('capital-recovery-section').classList.contains('d-none')).toBe(false);
+  });
+
+  it('shows the watchlist names that cannot fit current CSP cash', async () => {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import('../../frontend/static/js/dashboard/api-run.js');
+    fetchRunState.mockResolvedValue({
+      attempt: {},
+      taken_links: [],
+      snapshot: {
+        signals: [],
+        count: 0,
+        run: { generated_at: '2026-09-27T12:00:00' },
+        cash_available_for_csp: 8300,
+        watchlist_cash_fit: {
+          unaffordable_count: 4,
+          total_count: 20,
+          max_affordable_strike: 83,
+        },
+      },
+    });
+
+    await initializeTopRecommendations();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const warning = document.getElementById('watchlist-cash-fit-warning');
+    expect(warning.classList.contains('d-none')).toBe(false);
+    expect(warning.textContent).toContain('4 of 20');
+    expect(warning.textContent).toContain('$83');
+    expect(warning.textContent.toLowerCase()).toContain('adjust the watchlist');
+  });
+
+  it('hides the watchlist cash-fit warning when all names can fit', async () => {
+    const { initializeTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import('../../frontend/static/js/dashboard/api-run.js');
+    fetchRunState.mockResolvedValue({
+      attempt: {},
+      taken_links: [],
+      snapshot: {
+        signals: [],
+        count: 0,
+        run: { generated_at: '2026-09-27T12:00:00' },
+        cash_available_for_csp: 8300,
+        watchlist_cash_fit: {
+          unaffordable_count: 0,
+          total_count: 20,
+          max_affordable_strike: 83,
+        },
+      },
+    });
+
+    await initializeTopRecommendations();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(document.getElementById('watchlist-cash-fit-warning').classList.contains('d-none')).toBe(true);
   });
 
   it('does not contain market-hours phrasing in empty state when signals are empty', async () => {
@@ -518,6 +616,28 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
     return document.querySelector('.missing-risk-badge');
   }
 
+  it('shows conservative per-contract if-called P&L against broker basis on the main card', async () => {
+    await renderCard({
+      ticker: 'TEST',
+      option_type: 'CALL',
+      signal_type: 'covered_call',
+      strike: 104,
+      expiration: '20260515',
+      dte: 21,
+      bid: 2,
+      ask: 2.1,
+      premium_per_contract: 200,
+      wheel_decision: {
+        broker_cost_basis: 105,
+        basis_source: 'moomoo_avg_cost',
+        if_called_pnl_vs_basis: 100,
+      },
+    });
+    const mainBasis = document.querySelector('.cc-main-basis');
+    expect(mainBasis.classList.contains('d-none')).toBe(false);
+    expect(mainBasis.textContent).toContain('$100.00');
+  });
+
   it('shows "Earnings unknown — verify before placing" when event tier is event_unknown', async () => {
     const riskBadge = await renderCard({
       ticker: 'TEST',
@@ -556,7 +676,7 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
     expect(riskBadge.classList.contains('d-none')).toBe(true);
   });
 
-  it('shows no badge text for earnings_before_expiry', async () => {
+  it('warns when earnings fall before CSP expiry without blocking the signal', async () => {
     const riskBadge = await renderCard({
       ticker: 'TEST',
       option_type: 'PUT',
@@ -570,11 +690,11 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
       event_tier: 'earnings_before_expiry',
     });
     expect(riskBadge).toBeTruthy();
-    expect(riskBadge.textContent).toBe('');
-    expect(riskBadge.classList.contains('d-none')).toBe(true);
+    expect(riskBadge.textContent).toBe('Earnings before expiry — high risk, confirm before placing');
+    expect(riskBadge.classList.contains('d-none')).toBe(false);
   });
 
-  it('shows no badge text when tier comes via wheel_decision as a known tier', async () => {
+  it('warns when earnings tier comes via wheel_decision', async () => {
     const riskBadge = await renderCard({
       ticker: 'TEST',
       option_type: 'PUT',
@@ -588,8 +708,8 @@ describe('top-recommendations missing-risk badge (display-only event tier)', () 
       wheel_decision: { event_tier: 'earnings_before_expiry' },
     });
     expect(riskBadge).toBeTruthy();
-    expect(riskBadge.textContent).toBe('');
-    expect(riskBadge.classList.contains('d-none')).toBe(true);
+    expect(riskBadge.textContent).toBe('Earnings before expiry — high risk, confirm before placing');
+    expect(riskBadge.classList.contains('d-none')).toBe(false);
   });
 });
 

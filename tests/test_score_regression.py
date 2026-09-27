@@ -40,6 +40,15 @@ class TestScoreRegression(unittest.TestCase):
 
     # -- Covered Call scenarios ----------------------------
 
+    def test_cc_rationale_omits_iv_adjusted_return_and_expected_value(self):
+        option, profile, portfolio, _ = get_cc_healthy()
+        result = score_contract("AAPL", option, 155.0, profile, portfolio)
+
+        self.assertIsNotNone(result)
+        rationale = " ".join(result.rationale)
+        self.assertNotIn("IV-adj", rationale)
+        self.assertNotIn("EV:", rationale)
+
     def test_cc_healthy_passes(self):
         """Healthy CC: 200 shares, clean liquidity, good IV."""
         option, profile, portfolio, expected = get_cc_healthy()
@@ -55,17 +64,17 @@ class TestScoreRegression(unittest.TestCase):
         warning_text = " ".join(result.warnings)
         self.assertNotIn("cost basis", warning_text.lower())
 
-    def test_cc_below_cost_basis_warns(self):
-        """CC below cost basis should warn."""
+    def test_cc_below_cost_basis_is_hard_blocked(self):
+        """CC below the conservative broker-cost floor cannot be copied."""
         option, profile, portfolio, expected = get_cc_below_cost_basis()
         stock_price = 150.0
         result = score_contract(
             "AAPL", option, stock_price, profile, portfolio, iv_status_str="extreme_low", iv_rank=0.15
         )
         self.assertIsNotNone(result)
-        self.assertFalse(result.hard_blockers, "a below-cost-basis CC warns, it does not fail gates")
-        warning_text = " ".join(result.warnings).lower()
-        self.assertIn(expected["warning_contains"].lower(), warning_text)
+        self.assertIn("below_cost_basis", result.blocked_reason_codes)
+        self.assertFalse(result.copy_eligible)
+        self.assertEqual(result.broker_cost_basis, 170.0)
 
     # -- Cash-Secured Put scenarios -----------------------
 
@@ -109,6 +118,7 @@ class TestScoreRegression(unittest.TestCase):
     def test_high_iv_clears_gates_and_warns(self):
         """High IV clears the gates and warns about extreme IV."""
         option, profile, portfolio, expected = get_high_iv_scenario()
+        option["delta"] = -0.30  # Keep this IV-only scenario inside the new preset delta band.
         stock_price = 100.0
         result = score_contract(
             "AAPL", option, stock_price, profile, portfolio, iv_status_str="extreme_high", iv_rank=0.60
@@ -224,9 +234,9 @@ class TestScoreRegression(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertGreater(result.annualized_return, 0)
         self.assertFalse(result.hard_blockers)
-        # An unknown IV environment is neutral context: it neither gates the
-        # candidate nor moves a score that no longer exists.
-        self.assertEqual(result.iv_adjusted_return, result.iv_adjusted_return)
+        # An unknown IV environment is neutral context and does not surface a
+        # separate IV-adjusted return that can be mistaken for the ranked metric.
+        self.assertNotIn("IV-adj", " ".join(result.rationale))
 
 
 class TestScoreRankOrder(unittest.TestCase):

@@ -11,6 +11,7 @@ from flask import Blueprint
 
 from api.routes.utils import ensure_opend_available as _ensure_opend_available
 from api.routes.utils import error_response, success_response
+from api.routes.utils import get_db as _get_db
 from api.routes.utils import get_portfolio_service as _get_portfolio_service
 from api.services.portfolio_scoring import build_portfolio_context, score_position
 from core.logging_config import get_logger
@@ -21,6 +22,29 @@ logger = get_logger("api.routes.roll_pressure", "api")
 
 
 bp = Blueprint("roll_pressure", __name__, url_prefix="/api/portfolio")
+
+
+def _load_fresh_roll_candidates():
+    """Read fresh candidates from the latest published broker scan; never fetches a chain."""
+    try:
+        from api.services.config import get_current_identity
+        from core.run_model import recompute_effective_snapshot
+
+        db = _get_db()
+        if db is None:
+            return []
+        env, account_id = get_current_identity()
+        snapshot = db.get_latest_snapshot(env=env, account_id=account_id)
+        view = recompute_effective_snapshot(snapshot)
+        if not isinstance(view, dict):
+            return []
+        candidates = []
+        for lane in ("signals", "csp_picks", "cc_decisions"):
+            candidates.extend(item for item in (view.get(lane) or []) if isinstance(item, dict))
+        return candidates
+    except Exception as exc:
+        logger.warning("Fresh roll targets unavailable: %s", exc)
+        return []
 
 
 @bp.route("/roll-pressure", methods=["GET"])
@@ -44,10 +68,13 @@ def get_roll_pressure():
         portfolio_context, _, _ = build_portfolio_context(option_positions, ps)
         conn = ps._ensure_connection()
         iv_earnings_service = api.get_service("ivearnings")
+        fresh_candidates = _load_fresh_roll_candidates()
 
         scored_positions = []
         for pos in option_positions:
-            decision = score_position(pos, conn, portfolio_context, iv_earnings_service)
+            decision = score_position(
+                pos, conn, portfolio_context, iv_earnings_service, fresh_candidates=fresh_candidates
+            )
             if decision is None:
                 continue
 
@@ -71,7 +98,9 @@ def get_roll_pressure():
                     "mid_price": decision.mid_price,
                     "avg_cost": _safe_float(pos.get("avg_cost", 0)),
                     "implied_volatility": decision.implied_volatility,
-                    "delta": decision.delta,
+                    "delta": _safe_float(pos.get("delta"), None),
+                    "quote_fetched_at_utc": pos.get("quote_fetched_at_utc"),
+                    "quote_update_time": pos.get("quote_update_time"),
                     "roll_pressure": decision.roll_pressure,
                     "extrinsic_remaining": decision.extrinsic_remaining,
                     "profit_target_progress": decision.profit_target_progress,
@@ -80,6 +109,7 @@ def get_roll_pressure():
                     "expected_move_buffer": decision.expected_move_buffer,
                     "exit_verdict": decision.exit_verdict,
                     "exit_reasons": decision.exit_reasons,
+                    "roll_target": decision.roll_target,
                     "warnings": decision.warnings,
                     "wheel_decision": decision.to_dict(),
                 }

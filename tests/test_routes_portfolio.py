@@ -290,7 +290,7 @@ class TestScorePositionExitInputs(unittest.TestCase):
         base.update(overrides)
         return base
 
-    def _score(self, pos, earnings_info=None):
+    def _score(self, pos, earnings_info=None, fresh_candidates=None):
         from api.services.portfolio_scoring import score_position
 
         conn = MagicMock()
@@ -307,7 +307,76 @@ class TestScorePositionExitInputs(unittest.TestCase):
             "short_puts": {"AAPL": 1},
             "short_calls": {},
         }
-        return score_position(pos, conn, portfolio_context, iv)
+        return score_position(pos, conn, portfolio_context, iv, fresh_candidates=fresh_candidates)
+
+    def test_moomoo_last_is_used_when_bid_ask_are_missing(self):
+        pos = self._pos(bid=0, ask=0, last=2.0, market_price=1.0, avg_cost=0)
+        decision = self._score(pos)
+        self.assertEqual(decision.mid_price, 2.0)
+
+    def test_missing_moomoo_delta_is_reported_as_unavailable(self):
+        pos = self._pos(delta=None, avg_cost=0)
+        decision = self._score(pos)
+        self.assertEqual(decision.delta, 0)
+        self.assertTrue(any("delta unavailable" in warning.lower() for warning in decision.warnings))
+
+    def test_roll_verdict_names_fresh_same_side_candidate(self):
+        from datetime import datetime, timedelta
+
+        held_expiry = datetime.now() + timedelta(days=18)
+        pos = self._pos(expiration=held_expiry.strftime("%Y%m%d"), avg_cost=0)
+        target = {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": 92.0,
+            "expiration": (held_expiry + timedelta(days=30)).strftime("%Y%m%d"),
+            "dte": 48,
+            "bid": 1.50,
+            "ask": 1.60,
+            "copy_eligible": True,
+            "capital_velocity_per_day": 0.001,
+            "quote_fetched_at_utc": datetime.now().astimezone().isoformat(),
+        }
+        decision = self._score(pos, fresh_candidates=[target])
+        self.assertEqual(decision.exit_verdict, "ROLL")
+        self.assertEqual(decision.roll_target["strike"], 92.0)
+        self.assertTrue(any("AAPL PUT 92" in reason for reason in decision.exit_reasons))
+
+    def test_stale_roll_candidate_is_not_selected(self):
+        from datetime import datetime, timedelta
+
+        held_expiry = datetime.now() + timedelta(days=18)
+        pos = self._pos(expiration=held_expiry.strftime("%Y%m%d"), avg_cost=0)
+        stale = {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": 92.0,
+            "expiration": (held_expiry + timedelta(days=30)).strftime("%Y%m%d"),
+            "copy_eligible": True,
+            "capital_velocity_per_day": 0.001,
+            "quote_fetched_at_utc": (datetime.now().astimezone() - timedelta(minutes=10)).isoformat(),
+        }
+        decision = self._score(pos, fresh_candidates=[stale])
+        self.assertEqual(decision.exit_verdict, "HOLD")
+        self.assertIsNone(decision.roll_target)
+
+    def test_malformed_roll_candidate_is_ignored(self):
+        from datetime import datetime, timedelta
+
+        held_expiry = datetime.now() + timedelta(days=18)
+        pos = self._pos(expiration=held_expiry.strftime("%Y%m%d"), avg_cost=0)
+        malformed = {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": "not-a-strike",
+            "expiration": (held_expiry + timedelta(days=30)).strftime("%Y%m%d"),
+            "copy_eligible": True,
+            "capital_velocity_per_day": "NaN",
+            "quote_fetched_at_utc": datetime.now().astimezone().isoformat(),
+        }
+        decision = self._score(pos, fresh_candidates=[malformed])
+        self.assertEqual(decision.exit_verdict, "HOLD")
+        self.assertIsNone(decision.roll_target)
 
     def test_entry_credit_reaches_profit_take_rule(self):
         # Short PUT sold for $2.00 credit; mark now ~$0.35 -> ~82% captured.

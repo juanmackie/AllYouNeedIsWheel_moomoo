@@ -7,7 +7,10 @@ All functions are stateless helpers with no service dependencies.
 
 import logging
 from datetime import datetime, timezone
+from math import floor, isfinite
 from zoneinfo import ZoneInfo
+
+from core.sizing import remaining_underlying_capital
 
 logger = logging.getLogger(__name__)
 
@@ -131,8 +134,11 @@ def classify_event_tier(earnings_info: dict | None, dte: float, security_type: s
         return "event_unknown"
     if earnings_info.get("data_stale") or earnings_info.get("fetch_status") not in {"success"}:
         return "event_unknown"
+    days_to_earnings = earnings_info.get("days_to_earnings")
+    if days_to_earnings is None:
+        return "event_unknown"
     try:
-        days = int(earnings_info.get("days_to_earnings"))
+        days = int(days_to_earnings)
         days_to_expiry = int(dte)
     except (TypeError, ValueError):
         return "event_unknown"
@@ -286,34 +292,47 @@ def _compute_recommended_contracts(decision, portfolio_context: dict, sizing_pro
     ``max_buying_power_pct_per_csp``. Missing or invalid sizing configuration
     fails closed at zero contracts. Covered calls use available lots.
     """
-    max_contracts = max(int(decision.max_contracts or 0), 0)
+    try:
+        max_contracts = max(int(decision.max_contracts or 0), 0)
+        cash_required = max(float(decision.cash_required or 0), 0.0)
+        cash_available = max(
+            float(
+                portfolio_context.get(
+                    "cash_available_for_csp",
+                    portfolio_context.get("available_cash", portfolio_context.get("cash_balance", 0)),
+                )
+                or 0
+            ),
+            0.0,
+        )
+    except (TypeError, ValueError):
+        return 0
     if max_contracts <= 0:
         return 0
-
     if decision.option_type == "CALL":
         return max_contracts
-
-    cash_required = max(float(decision.cash_required or 0), 0.0)
-    cash_available = max(
-        float(
-            portfolio_context.get(
-                "cash_available_for_csp",
-                portfolio_context.get("available_cash", portfolio_context.get("cash_balance", 0)),
-            )
-            or 0
-        ),
-        0.0,
-    )
-    if cash_required <= 0 or cash_available <= 0:
+    if (
+        not all(isfinite(value) for value in (cash_required, cash_available))
+        or cash_required <= 0
+        or cash_available <= 0
+    ):
         return 0
 
     profile = sizing_profile or {}
     try:
-        max_pct = max(0.0, min(float(profile.get("max_buying_power_pct_per_csp", 0)), 100.0))
+        raw_max_pct = float(profile.get("max_buying_power_pct_per_csp", 0))
     except (TypeError, ValueError):
-        max_pct = 0.0
+        return 0
+    if not isfinite(raw_max_pct):
+        return 0
+    max_pct = max(0.0, min(raw_max_pct, 100.0))
     position_budget = cash_available * (max_pct / 100.0)
-    by_budget = int(position_budget // cash_required)
+    by_budget = floor(position_budget / cash_required)
+    if "max_account_exposure_pct_per_underlying" in profile:
+        remaining_exposure = remaining_underlying_capital(decision.ticker, portfolio_context, profile)
+        if remaining_exposure is None:
+            return 0
+        by_budget = min(by_budget, floor(remaining_exposure / cash_required))
     return min(by_budget, max_contracts)
 
 

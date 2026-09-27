@@ -4,6 +4,7 @@ Extracted from the monolithic options_service.py for maintainability.
 """
 
 import logging
+from typing import Any
 
 try:
     from moomoo import RET_ERROR, RET_OK
@@ -173,7 +174,9 @@ class WatchlistManager:
         """
         from datetime import datetime, timezone
 
-        conn = self._get_moomoo_connection()
+        # The SDK connection is created lazily to keep broker imports optional;
+        # its runtime methods are checked at the boundary below.
+        conn: Any = self._get_moomoo_connection()
         if conn is None:
             return self._empty_status(
                 GROUP_STATUS_CONNECTION,
@@ -205,6 +208,13 @@ class WatchlistManager:
             )
 
         group_name = str(self.config.get("moomoo_watchlist_group", "My Watchlist") or "My Watchlist")
+        if self._db is not None:
+            try:
+                persisted_group = self._db.get_setting("moomoo_watchlist_group")
+                if isinstance(persisted_group, str) and persisted_group.strip():
+                    group_name = persisted_group.strip()
+            except Exception:
+                logger.debug("Could not read persisted Moomoo watchlist group; using config default", exc_info=True)
         groups_available = self._list_moomoo_groups(conn)
         if groups_available and group_name not in groups_available:
             available = ", ".join(sorted(groups_available)) or "(none)"
@@ -251,7 +261,7 @@ class WatchlistManager:
             if not isinstance(record, dict):
                 continue
             kind, canonical, entry = self._classify_symbol(record.get("code", ""))
-            if kind == "us" and canonical:
+            if kind == "us" and canonical and entry:
                 if canonical not in tickers:
                     tickers.append(canonical)
                 raw_codes[canonical] = entry["raw"]

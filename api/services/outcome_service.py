@@ -54,6 +54,7 @@ import logging
 from collections import deque
 from datetime import datetime, timedelta
 
+from api.services.recommendation_ranking import rank_candidates
 from api.services.taken_links import read_taken_links
 from core.outcome_attribution import (
     broker_price_to_contract_credit,
@@ -80,6 +81,7 @@ _DTE_BUCKET_EDGES = (
 )
 
 _UNTIERED = "untiered"
+TRADE_LINK_SUGGESTION_WINDOW_DAYS = 7
 
 # Explicit owner evidence that a manual trade came from a recommendation
 # (``api.services.taken_links``) — distinct from the temporal "inferred" match.
@@ -141,6 +143,223 @@ def fill_identity(fill) -> tuple | None:
     if not ticker or option_type not in ("CALL", "PUT") or len(expiration) != 8 or strike is None:
         return None
     return (ticker, expiration, option_type, round(strike, 4))
+
+
+def build_link_suggestions(
+    run_snapshots, option_fills, taken_links=None, window_days=TRADE_LINK_SUGGESTION_WINDOW_DAYS
+):
+    """Suggest, but never record, links for nearby same-ticker/side short fills.
+
+    A human must confirm each suggestion through the existing owner-link route.
+    Missing timestamps, non-option fills, non-SELL fills, and existing links are
+    excluded rather than guessed. Partial fills of the same contract are grouped.
+    """
+    try:
+        window = max(0.0, float(window_days))
+    except (TypeError, ValueError):
+        return []
+    already_linked = set()
+    for link in taken_links or []:
+        if not isinstance(link, dict):
+            continue
+        identity = signal_identity(link.get("recommendation"))
+        run_id = str(link.get("run_id") or "").strip()
+        if identity is not None and run_id:
+            already_linked.add((run_id, identity))
+
+    candidate_runs = []
+    for snapshot in run_snapshots or []:
+        if not isinstance(snapshot, dict):
+            continue
+        run = snapshot.get("run") or {}
+        run_id = str(run.get("run_id") or "").strip()
+        generated_at = str(run.get("generated_at") or "")
+        run_time = parse_timestamp(generated_at)
+        if not run_id or run_time is None:
+            continue
+        candidates = {}
+        for lane in ("signals", "csp_picks", "cc_decisions"):
+            signals = snapshot.get(lane)
+            if not isinstance(signals, list):
+                continue
+            for signal in signals:
+                identity = signal_identity(signal)
+                if identity is not None and (run_id, identity) not in already_linked:
+                    candidates.setdefault(identity, signal)
+        if candidates:
+            candidate_runs.append((run_id, generated_at, run_time, candidates))
+
+    grouped = {}
+    for fill in option_fills or []:
+        identity = fill_identity(fill)
+        if identity is None or str(fill.get("side") or "").upper() != "SELL":
+            continue
+        fill_time = parse_timestamp(fill.get("captured_at"))
+        if fill_time is None:
+            continue
+        ticker, _expiration, option_type, _strike = identity
+        for run_id, generated_at, run_time, candidates in candidate_runs:
+            delta_days = (fill_time.date() - run_time.date()).days
+            if abs(delta_days) > window:
+                continue
+            for recommendation_identity, recommendation in candidates.items():
+                if (recommendation_identity[0], recommendation_identity[2]) != (ticker, option_type):
+                    continue
+                if recommendation_identity == identity:
+                    continue
+                key = (run_id, recommendation_identity, identity)
+                suggestion = grouped.setdefault(
+                    key,
+                    {
+                        "run_id": run_id,
+                        "run_generated_at": generated_at,
+                        "recommendation": {
+                            "ticker": recommendation_identity[0],
+                            "expiration": recommendation_identity[1],
+                            "option_type": recommendation_identity[2],
+                            "strike": recommendation_identity[3],
+                        },
+                        "traded": {
+                            "ticker": identity[0],
+                            "expiration": identity[1],
+                            "option_type": identity[2],
+                            "strike": identity[3],
+                        },
+                        "fill_count": 0,
+                        "_qty": 0.0,
+                        "_weighted_price": 0.0,
+                        "_best_distance": None,
+                    },
+                )
+                qty = abs(safe_float(fill.get("qty"), 0.0))
+                price = safe_float(fill.get("price"), 0.0)
+                suggestion["fill_count"] += 1
+                suggestion["_qty"] += qty
+                suggestion["_weighted_price"] += qty * price
+                if suggestion["_best_distance"] is None or abs(delta_days) < abs(suggestion["_best_distance"]):
+                    suggestion["_best_distance"] = delta_days
+
+    results = []
+    for suggestion in grouped.values():
+        qty = suggestion.pop("_qty")
+        weighted_price = suggestion.pop("_weighted_price")
+        delta_days = suggestion.pop("_best_distance") or 0.0
+        if qty > 0:
+            suggestion["traded"]["qty"] = qty
+            suggestion["traded"]["price"] = weighted_price / qty
+        suggestion["days_from_run"] = round(delta_days, 2)
+        results.append(suggestion)
+    return sorted(
+        results,
+        key=lambda item: (
+            abs(item["days_from_run"]),
+            item["run_generated_at"],
+            item["recommendation"]["ticker"],
+            item["recommendation"]["option_type"],
+            item["recommendation"]["expiration"],
+            item["recommendation"]["strike"],
+        ),
+    )
+
+
+def build_dte_comparisons(run_snapshots, option_fills, window_days=TRADE_LINK_SUGGESTION_WINDOW_DAYS) -> list[dict]:
+    """Compare recent owner short fills with saved 21–45 DTE candidates.
+
+    This uses only candidates retained in each published snapshot; it never
+    fetches chains or claims to rank against contracts the run did not retain.
+    A missing saved candidate is returned explicitly as unavailable.
+    """
+    try:
+        window = max(0, int(window_days))
+    except (TypeError, ValueError):
+        return []
+
+    comparisons = []
+    seen = set()
+    for fill in option_fills or []:
+        identity = fill_identity(fill)
+        if identity is None or str(fill.get("side") or "").upper() != "SELL":
+            continue
+        fill_time = parse_timestamp(fill.get("captured_at"))
+        if fill_time is None:
+            continue
+        try:
+            expiration_date = datetime.strptime(identity[1], "%Y%m%d").date()
+        except ValueError:
+            continue
+        traded_dte = (expiration_date - fill_time.date()).days
+        if not 21 <= traded_dte <= 45:
+            continue
+
+        for snapshot in run_snapshots or []:
+            if not isinstance(snapshot, dict):
+                continue
+            run = snapshot.get("run") or {}
+            run_id = str(run.get("run_id") or "").strip()
+            generated_at = str(run.get("generated_at") or "")
+            run_time = parse_timestamp(generated_at)
+            if not run_id or run_time is None:
+                continue
+            days_from_run = (fill_time.date() - run_time.date()).days
+            if abs(days_from_run) > window:
+                continue
+            fill_key = (run_id, identity)
+            if fill_key in seen:
+                continue
+            seen.add(fill_key)
+
+            candidates_by_identity = {}
+            for lane in ("signals", "csp_picks", "cc_decisions"):
+                candidates = snapshot.get(lane)
+                if not isinstance(candidates, list):
+                    continue
+                for candidate in candidates:
+                    candidate_identity = signal_identity(candidate)
+                    if candidate_identity is not None:
+                        candidates_by_identity.setdefault(candidate_identity, candidate)
+
+            matching = []
+            ticker, _expiration, option_type, _strike = identity
+            for candidate in candidates_by_identity.values():
+                candidate_dte = safe_float(candidate.get("dte"), default=None)
+                if (
+                    str(candidate.get("ticker") or "").upper() == ticker
+                    and str(candidate.get("option_type") or "").upper() == option_type
+                    and candidate_dte is not None
+                    and 21 <= candidate_dte <= 45
+                ):
+                    matching.append(candidate)
+            ranked = rank_candidates(matching)
+            best = None
+            if ranked:
+                candidate = ranked[0]
+                best = {
+                    "ticker": str(candidate.get("ticker") or "").upper(),
+                    "option_type": str(candidate.get("option_type") or "").upper(),
+                    "expiration": normalize_expiration_key(candidate.get("expiration")),
+                    "strike": safe_float(candidate.get("strike"), default=0.0),
+                    "dte": int(safe_float(candidate.get("dte"), default=0.0)),
+                    "saved_sample_rank": 1,
+                    "capital_velocity_per_day": safe_float(candidate.get("capital_velocity_per_day"), default=None),
+                }
+            comparisons.append(
+                {
+                    "run_id": run_id,
+                    "run_generated_at": generated_at,
+                    "days_from_run": days_from_run,
+                    "traded": {
+                        "ticker": ticker,
+                        "option_type": option_type,
+                        "expiration": identity[1],
+                        "strike": identity[3],
+                        "dte": traded_dte,
+                    },
+                    "candidate": best,
+                    "reason": "" if best else "no_saved_candidate_in_21_45_dte_window",
+                    "sample_scope": "saved_shortlist_only",
+                }
+            )
+    return sorted(comparisons, key=lambda item: (item["run_generated_at"], item["traded"]["ticker"]))
 
 
 def quoted_credit_per_contract(signal):
@@ -315,12 +534,13 @@ def _select_candidate(candidates, fills) -> tuple[dict | None, str]:
       (fills precede any recommendation). Unattributed runs are surfaced as
       matched evidence only, exactly like the unmatched path.
     """
-    if not candidates:
+    candidate_dicts = [candidate for candidate in candidates if isinstance(candidate, dict)]
+    if not candidate_dicts:
         return None, "unattributed"
     if not fills:
-        return min(candidates, key=lambda c: str(c.get("generated_at", "") or "")), ""
+        return min(candidate_dicts, key=lambda c: str(c.get("generated_at", "") or "")), ""
     first_ts = min((str(f.get("captured_at", "") or "") for f in fills), default="")
-    qualifiers = [c for c in candidates if _recommendation_precedes_first_fill(c, first_ts)]
+    qualifiers = [c for c in candidate_dicts if _recommendation_precedes_first_fill(c, first_ts)]
     if len(qualifiers) == 1:
         return qualifiers[0], "inferred"
     return None, "unattributed"
@@ -772,6 +992,12 @@ class OutcomeService:
         )
         snapshots = self._db.get_run_snapshots(env=env, account_id=account_id, limit=max(1, int(snapshot_limit)))
         taken_links = read_taken_links(self._db, env, account_id)
+        link_suggestions = build_link_suggestions(snapshots, fills, taken_links=taken_links)
+        dte_comparisons = build_dte_comparisons(snapshots, fills)
+        if ticker:
+            ticker_filter = str(ticker).upper()
+            link_suggestions = [item for item in link_suggestions if item["recommendation"]["ticker"] == ticker_filter]
+            dte_comparisons = [item for item in dte_comparisons if item["traded"]["ticker"] == ticker_filter]
         records = build_outcome_records(snapshots, fills, taken_links=taken_links)
         records = filter_records(
             records, ticker=ticker, preset=preset, event_tier=event_tier, dte_bucket_filter=dte_bucket
@@ -783,6 +1009,8 @@ class OutcomeService:
         return {
             "generated_at": datetime.now().isoformat(),
             "taken_link_count": len(taken_links),
+            "link_suggestions": link_suggestions,
+            "dte_comparisons": dte_comparisons,
             "filters": {
                 "ticker": ticker or "",
                 "preset": preset or "",

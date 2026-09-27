@@ -443,6 +443,43 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result.hard_blockers)
 
+    def test_call_below_broker_cost_basis_is_blocked_and_reports_if_called_pnl(self):
+        future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        option = dict(
+            self.base_option,
+            option_type="CALL",
+            strike=104.0,
+            expiration=future_date,
+            delta=0.20,
+            bid=2.0,
+            ask=2.5,
+        )
+        portfolio = dict(self.base_portfolio, positions={"AAPL": {"position": 200, "avg_cost": 105.0}})
+
+        result = score_contract("AAPL", option, 100.0, self.base_profile, portfolio)
+
+        self.assertIn("below_cost_basis", result.blocked_reason_codes)
+        self.assertFalse(result.copy_eligible)
+        self.assertEqual(result.broker_cost_basis, 105.0)
+        self.assertEqual(result.if_called_pnl_vs_basis, 100.0)
+
+    def test_preset_delta_bands_are_hard_limits_for_puts_and_calls(self):
+        future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        cases = [
+            (dict(self.base_option, delta=-0.36), 100.0, self.base_portfolio),
+            (
+                dict(self.base_option, option_type="CALL", strike=110.0, expiration=future_date, delta=0.36),
+                100.0,
+                dict(self.base_portfolio, positions={"AAPL": {"position": 200, "avg_cost": 100.0}}),
+            ),
+        ]
+        for option, stock_price, portfolio in cases:
+            with self.subTest(option_type=option.get("option_type", "PUT")):
+                option.setdefault("expiration", future_date)
+                result = score_contract("AAPL", option, stock_price, self.base_profile, portfolio)
+                self.assertIn("outside_delta_band", result.blocked_reason_codes)
+                self.assertFalse(result.copy_eligible)
+
     def test_score_contract_call_successful(self):
         """score_contract returns valid WheelDecision for valid CALL"""
         future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
@@ -823,6 +860,25 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         self.assertTrue(result.hard_blockers)
         self.assertTrue(any("Insufficient cash" in b for b in result.hard_blockers))
 
+    def test_account_exposure_cap_blocks_an_overconcentrated_underlying(self):
+        profile = dict(self.base_profile, max_account_exposure_pct_per_underlying=25)
+        portfolio = {
+            "cash_available_for_csp": 50_000.0,
+            "account_value": 100_000.0,
+            # Existing stock plus open-PUT collateral already exceeds $25k.
+            "underlying_capital_exposure": {"AAPL": 26_000.0},
+        }
+        result = score_contract(
+            ticker="AAPL",
+            option=self.base_option,
+            stock_price=100.0,
+            profile=profile,
+            portfolio_context=portfolio,
+        )
+        self.assertIn("underlying_exposure_cap", result.blocked_reason_codes)
+        self.assertTrue(result.hard_blockers)
+        self.assertFalse(result.copy_eligible)
+
     def test_sufficient_csp_buying_power_passes(self):
         """When cash_available_for_csp is sufficient, the PUT should score normally."""
         portfolio = {
@@ -999,6 +1055,17 @@ class TestQuoteFreshness(unittest.TestCase):
             "iv_source": "broker",
         }
 
+    def test_dte_uses_us_market_date_not_host_local_date(self):
+        from zoneinfo import ZoneInfo
+
+        market_datetime = datetime(2026, 9, 28, 0, 30, tzinfo=ZoneInfo("America/New_York"))
+        option = dict(self.base, expiration="20261005")
+        with patch.object(_wd_module, "market_now", return_value=market_datetime) as market_clock:
+            result = score_contract("AAPL", option, 100.0, self.profile, self.portfolio)
+
+        self.assertEqual(result.dte, 7)
+        market_clock.assert_called_once_with()
+
     @patch.object(_wd_module, "is_market_open", return_value=True)
     def test_fresh_quote_passes_when_market_open(self, _mock_open):
         opt = dict(
@@ -1109,6 +1176,22 @@ class TestCopyEligibility(TestQuoteFreshness):
         self.assertTrue(res.copy_eligible)
         self.assertFalse(res.review_only)
         self.assertTrue(any("EVENT RISK" in r for r in res.rationale))
+
+    @patch.object(_wd_module, "is_market_open", return_value=True)
+    def test_earnings_before_expiry_warns_without_blocking_csp(self, _mock_open):
+        opt = dict(self.base, ask=2.10, update_time=self.fresh_ts)
+        res = score_contract(
+            "AAPL",
+            opt,
+            100.0,
+            self.profile,
+            self.portfolio,
+            earnings_info={"fetch_status": "success", "data_stale": False, "days_to_earnings": 7},
+        )
+        self.assertEqual(res.event_tier, "earnings_before_expiry")
+        self.assertFalse(res.hard_blockers)
+        self.assertTrue(res.copy_eligible)
+        self.assertTrue(any("EVENT RISK: earnings before expiry" in line for line in res.rationale))
 
     @patch.object(_wd_module, "is_market_open", return_value=True)
     def test_marginal_quality_is_copy_eligible(self, _mock_open):

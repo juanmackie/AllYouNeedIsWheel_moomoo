@@ -18,6 +18,73 @@ from api.services.recommendations import RecommendationEngine
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+class TestCapitalRecoveryCards(unittest.TestCase):
+    def test_selects_best_calls_by_capital_velocity_and_discloses_conservative_basis(self):
+        from api.services import recommendations
+
+        _build_capital_recovery_cards = getattr(recommendations, "_build_capital_recovery_cards")
+        positions = {"AAPL": {"position": 200, "avg_cost": 100.0}}
+        calls = {
+            "AAPL": [
+                {
+                    "strike": 105.0,
+                    "expiration": "20261218",
+                    "capital_velocity_per_day": 0.0005,
+                    "if_called_pnl_vs_basis": 700.0,
+                    "hard_blockers": [],
+                    "blocked_reason_codes": [],
+                },
+                {
+                    "strike": 110.0,
+                    "expiration": "20261218",
+                    "capital_velocity_per_day": 0.0007,
+                    "if_called_pnl_vs_basis": 1700.0,
+                    "hard_blockers": [],
+                    "blocked_reason_codes": [],
+                },
+                {
+                    "strike": 95.0,
+                    "expiration": "20261218",
+                    "capital_velocity_per_day": 0.0008,
+                    "if_called_pnl_vs_basis": -300.0,
+                    "hard_blockers": ["Below Moomoo basis"],
+                    "blocked_reason_codes": ["below_cost_basis"],
+                },
+            ]
+        }
+        best_csp = {
+            "ticker": "AMD",
+            "strike": 80.0,
+            "expiration": "20261218",
+            "capital_velocity_per_day": 0.001,
+        }
+
+        cards = _build_capital_recovery_cards(positions, calls, best_csp)
+
+        self.assertEqual(len(cards), 1)
+        card = cards[0]
+        self.assertEqual(card["best_call_at_or_above_basis"]["strike"], 110.0)
+        self.assertEqual(card["best_call_below_basis"]["strike"], 95.0)
+        self.assertEqual(card["best_call_below_basis"]["loss_if_called"], 300.0)
+        self.assertEqual(card["basis_per_share"], 100.0)
+        self.assertEqual(card["basis_source"], "moomoo_avg_cost")
+        self.assertIn("historical option credits excluded", card["basis_notice"].lower())
+        self.assertEqual(card["best_csp_opportunity"]["ticker"], "AMD")
+        self.assertEqual(card["opportunity_return_per_day_pct"], 0.1)
+
+    def test_no_basis_or_call_capacity_is_presented_without_inventing_calls(self):
+        from api.services import recommendations
+
+        _build_capital_recovery_cards = getattr(recommendations, "_build_capital_recovery_cards")
+        cards = _build_capital_recovery_cards({"XYZ": {"position": 50, "avg_cost": 0}}, {}, None)
+
+        self.assertEqual(cards[0]["available_contracts"], 0)
+        self.assertIsNone(cards[0]["basis_per_share"])
+        self.assertIsNone(cards[0]["best_call_at_or_above_basis"])
+        self.assertIsNone(cards[0]["best_call_below_basis"])
+        self.assertIsNone(cards[0]["best_csp_opportunity"])
+
+
 class TestRecommendationEngine(unittest.TestCase):
     """Test RecommendationEngine with fully mocked context."""
 
@@ -102,6 +169,95 @@ class TestRecommendationEngine(unittest.TestCase):
             self.mock_cash_calculator,
         )
 
+    def test_watchlist_csp_expiry_selection_uses_us_market_date(self):
+        from zoneinfo import ZoneInfo
+
+        from moomoo import RET_OK
+
+        from api.services import recommendations
+
+        engine = self._import_engine()
+        engine._preset_profile = {
+            "csp_preferred_dte": 7,
+            "csp_min_dte": 7,
+            "csp_max_dte": 7,
+            "csp_default_otm_pct": 10,
+            "csp_min_otm_pct": 5,
+            "csp_max_otm_pct": 15,
+        }
+        self.mock_conn.get_cached_stock_price.return_value = None
+        self.mock_conn.get_stock_price.return_value = 100.0
+        self.mock_conn.get_option_expiration_dates.return_value = (
+            RET_OK,
+            pd.DataFrame({"expiration_date": ["20261005"]}),
+        )
+        market_datetime = datetime(2026, 9, 28, 0, 30, tzinfo=ZoneInfo("America/New_York"))
+        with (
+            patch.object(recommendations, "market_now", return_value=market_datetime) as market_clock,
+            patch.object(
+                recommendations,
+                "fetch_option_chain_live_first",
+                return_value={"options": [{"strike": 90.0, "option_type": "PUT", "bid": 1, "ask": 1.1}]},
+            ) as fetch_chain,
+        ):
+            evidence = engine._collect_watchlist_csp_evidence("AAPL", self.mock_portfolio_context)
+
+        self.assertTrue(evidence["ok"])
+        self.assertEqual(evidence["chains"][0]["dte"], 7)
+        fetch_chain.assert_called_once()
+        self.assertEqual(fetch_chain.call_args.args[4], "20261005")
+        market_clock.assert_called_once_with()
+
+    def test_watchlist_per_ticker_cut_uses_capital_return(self):
+        from types import SimpleNamespace
+
+        from api.services import recommendations
+
+        engine = self._import_engine()
+        engine._preset_profile = {
+            "csp_min_otm_pct": 5,
+            "csp_max_otm_pct": 15,
+            "min_csp_buying_power": 0,
+        }
+        options = [
+            {"strike": strike, "bid": premium / 100, "ask": premium / 100, "last": premium / 100}
+            for strike, premium in [(95, 100), (90, 90), (86, 88), (85, 89)]
+        ]
+
+        def score_contract(contract, _ticker, _price, dte, *_args, **_kwargs):
+            return SimpleNamespace(
+                strike=contract["strike"],
+                premium_per_contract=contract["bid"] * 100,
+                dte=dte,
+                hard_blockers=[],
+            )
+
+        def format_candidate(ticker, stock_price, decision, **_kwargs):
+            premium = decision.premium_per_contract
+            return {
+                "ticker": ticker,
+                "option_type": "PUT",
+                "strike": decision.strike,
+                "dte": decision.dte,
+                "stock_price": stock_price,
+                "bid_premium_per_contract": premium,
+                "capital_velocity_per_day": premium / (decision.strike * 100 * decision.dte),
+                "premium_velocity_per_day": premium / decision.dte,
+            }
+
+        evidence = {
+            "stock_price": 100.0,
+            "quote_fetched_at_utc": "2026-09-27T12:00:00+00:00",
+            "chains": [{"dte": 10, "exp_str": "20261005", "options": options}],
+        }
+        with (
+            patch.object(engine, "_score_csp_contract", side_effect=score_contract),
+            patch.object(recommendations, "_format_decision_to_candidate", side_effect=format_candidate),
+        ):
+            candidates = engine._score_watchlist_csp_evidence(evidence, "AAPL", self.mock_portfolio_context)
+
+        self.assertEqual([candidate["strike"] for candidate in candidates], [95, 85, 86])
+
     def test_init_stores_context(self):
         engine = self._import_engine()
         self.assertIs(engine._connection_provider, self.mock_connection_provider)
@@ -184,6 +340,61 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertEqual(by_symbol["BBB"]["status"], "scanned")
         # Holdings checked for covered calls come from Moomoo positions.
         self.assertIn("AAPL", active["holdings_checked"])
+
+    def test_watchlist_cash_fit_summary_counts_unaffordable_names(self):
+        tickers = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": True,
+            "watchlist_size": len(tickers),
+            "estimated_scan_sec": 30.0,
+            "freshness_window_sec": 300,
+            "chain_calls": 6,
+            "chain_quota_ok": True,
+            "recommended_max_size": 12,
+        }
+        portfolio = dict(self.mock_portfolio_context, cash_available_for_csp=8300.0, cash_reserved_for_csp=0.0)
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
+        engine = self._import_engine()
+
+        def no_fit(ticker):
+            return [
+                {
+                    "_skip_diagnostic": True,
+                    "ticker": ticker,
+                    "reason_code": "no_cash_fit",
+                    "reason_text": "No CSP strike fits buying power",
+                }
+            ]
+
+        with (
+            patch.object(
+                engine, "_fetch_watchlist_ticker_csp", side_effect=[no_fit("AAA"), [], no_fit("CCC"), [], [], []]
+            ),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            result["watchlist_cash_fit"],
+            {"unaffordable_count": 2, "total_count": 6, "max_affordable_strike": 83.0},
+        )
+
+    def test_zero_csp_cash_marks_entire_watchlist_unaffordable(self):
+        tickers = ["AAA", "BBB", "CCC"]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        portfolio = dict(self.mock_portfolio_context, cash_available_for_csp=0.0, cash_reserved_for_csp=0.0)
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
+        engine = self._import_engine()
+
+        with patch("api.services.recommendations.is_market_open", return_value=True):
+            result = engine.get_top_recommendations(limit=5)
+
+        self.assertEqual(
+            result["watchlist_cash_fit"],
+            {"unaffordable_count": 3, "total_count": 3, "max_affordable_strike": 0.0},
+        )
 
     def test_broken_group_skips_csp_lane_keeps_cc_positions(self):
         """A missing/empty group skips the CSP lane with an explicit lane
@@ -604,6 +815,8 @@ class TestRecommendationEngineSignals(unittest.TestCase):
                     "price_source": "broker",
                     "chain_source": "yfinance",
                     "iv_source": "yfinance",
+                    "iv_adjusted_return": 212.0,
+                    "remaining_gap_to_target": 1200.0,
                 },
                 "from_watchlist": True,
                 "held_position": False,
@@ -638,6 +851,10 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertEqual(rec["chain_source"], "yfinance")
         self.assertEqual(rec["iv_source"], "yfinance")
         self.assertTrue(rec["from_yfinance"])
+        self.assertNotIn("iv_adjusted_return", rec)
+        self.assertNotIn("remaining_gap_to_target", rec)
+        self.assertNotIn("iv_adjusted_return", rec["wheel_decision"])
+        self.assertNotIn("remaining_gap_to_target", rec["wheel_decision"])
 
     def test_get_top_recommendations_keeps_low_confidence_yfinance_candidates_as_research_only(self):
         engine = self._import_engine()
@@ -1806,10 +2023,22 @@ class TestRecommendationEngineSignalFields(unittest.TestCase):
             engine = self._import_engine()
             result = engine.get_top_recommendations(limit=5)
 
-        for rec in result.get("signals", []):
-            if rec.get("option_type") == "CALL":
-                self.assertEqual(rec["signal_type"], "covered_call")
-                self.assertFalse(rec["research_only"], msg="Covered calls should have research_only=False")
+        call_signals = [rec for rec in result.get("signals", []) if rec.get("option_type") == "CALL"]
+        self.assertTrue(call_signals)
+        for rec in call_signals:
+            self.assertEqual(rec["signal_type"], "covered_call")
+            self.assertFalse(rec["research_only"], msg="Covered calls should have research_only=False")
+
+        # Moomoo's option position symbol is broker-shaped (OCC-like), not a
+        # bare underlying. One short call already covers one of three lots.
+        context = self.mock_portfolio_context_provider.get_portfolio_context.return_value
+        context["short_calls"] = {"US.AAPL260510C155000": 1}
+        with patch("api.services.recommendations.score_contract") as mock_score:
+            mock_score.return_value = mock_decision
+            result = self._import_engine().get_top_recommendations(limit=5)
+        call_signals = [rec for rec in result.get("signals", []) if rec.get("option_type") == "CALL"]
+        self.assertTrue(call_signals)
+        self.assertTrue(all(rec["max_contracts"] == 2 for rec in call_signals))
 
 
 class TestRecommendationNonDuplication(unittest.TestCase):

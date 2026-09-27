@@ -15,6 +15,7 @@ Pure helpers extracted from RecommendationEngine (F-S1).
 from __future__ import annotations
 
 from core.scoring_factors import capital_velocity_per_day, premium_velocity_per_day
+from core.utils import safe_float
 
 
 def candidate_field(candidate: dict, field: str, default=None):
@@ -36,7 +37,8 @@ def rank_velocity(candidate: dict) -> float:
     if bid_premium is None:
         bid = candidate_field(candidate, "bid", 0) or 0
         bid_premium = float(bid) * 100
-    return premium_velocity_per_day(bid_premium, candidate_field(candidate, "dte", 0))
+    dte = safe_float(candidate_field(candidate, "dte", 0), default=0.0) or 0.0
+    return premium_velocity_per_day(safe_float(bid_premium, default=0.0) or 0.0, dte)
 
 
 def rank_capital_velocity(candidate: dict) -> float:
@@ -62,10 +64,11 @@ def rank_capital_velocity(candidate: dict) -> float:
         bid = candidate_field(candidate, "bid", 0) or 0
         bid_premium = float(bid) * 100
     option_type = str(candidate_field(candidate, "option_type", "")).upper()
-    capital_base = candidate_field(candidate, "strike", 0) * 100
+    capital_base = safe_float(candidate_field(candidate, "strike", 0), default=0.0) * 100
     if option_type == "CALL":
-        capital_base = candidate_field(candidate, "stock_price", 0) * 100
-    return capital_velocity_per_day(bid_premium, capital_base, candidate_field(candidate, "dte", 0))
+        capital_base = safe_float(candidate_field(candidate, "stock_price", 0), default=0.0) * 100
+    dte = safe_float(candidate_field(candidate, "dte", 0), default=0.0) or 0.0
+    return capital_velocity_per_day(safe_float(bid_premium, default=0.0) or 0.0, capital_base, dte)
 
 
 def rank_key(candidate: dict):
@@ -116,6 +119,9 @@ def option_uses_yfinance(option: dict, wheel_decision: dict | None = None) -> bo
 def format_recommendation(option: dict, rank: int = 0) -> dict:
     """Format a raw option dict into a standardized recommendation dict (signal-only)."""
     wd = option.get("wheel_decision", {})
+    if not isinstance(wd, dict):
+        wd = {}
+    wd = {key: value for key, value in wd.items() if key not in {"iv_adjusted_return", "remaining_gap_to_target"}}
     opt_type = option.get("option_type", "")
     is_csp = opt_type == "PUT" and not option.get("held_position", False)
     is_cc = opt_type == "CALL" and option.get("max_contracts", 0) > 0
@@ -138,7 +144,6 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "premium_velocity_per_day": option.get("premium_velocity_per_day", wd.get("premium_velocity_per_day")),
         "capital_velocity_per_day": option.get("capital_velocity_per_day", wd.get("capital_velocity_per_day")),
         "annualized_return": option.get("annualized_return"),
-        "iv_adjusted_return": option.get("iv_adjusted_return"),
         "otm_pct": option.get("otm_pct"),
         "delta": option.get("delta"),
         "iv_rank": option.get("iv_rank"),
@@ -161,7 +166,7 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "implied_volatility": option.get("implied_volatility"),
         "size_fit": option.get("size_fit", 0),
         "expected_move_buffer": option.get("expected_move_buffer", 0),
-        "wheel_decision": option.get("wheel_decision", {}),
+        "wheel_decision": wd,
         "from_watchlist": option.get("from_watchlist", False),
         "held_position": option.get("held_position", False),
         # CSP-specific fields
@@ -170,7 +175,6 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "breakeven_buffer_pct": option.get("breakeven_buffer_pct"),
         # Growth-aware fields (always-on)
         "score_rationale": wd.get("score_rationale", ""),
-        "remaining_gap_to_target": wd.get("remaining_gap_to_target", 0),
         "risk_budget_used_pct": wd.get("risk_budget_used_pct", 0),
         "stress_loss": wd.get("stress_loss", 0),
         "confidence_score": wd.get("confidence_score", 100),

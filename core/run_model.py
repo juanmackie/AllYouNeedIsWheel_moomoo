@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from core.utils import market_now
+from core.utils import market_now, safe_float
 
 ACTIONABLE_STATES = ("ready",)
 
@@ -213,11 +213,7 @@ def _attach_candidate_capital_view(candidate: dict, now_utc: datetime) -> None:
     if str(candidate.get("option_type", "")).upper() == "CALL":
         candidate["available_shares"] = None
         candidate["collateral"] = None
-        max_contracts = candidate.get("max_contracts")
-        try:
-            contracts = float(max_contracts)
-        except (TypeError, ValueError):
-            contracts = 0.0
+        contracts = safe_float(candidate.get("max_contracts"))
         if contracts > 0:
             candidate["available_shares"] = round(contracts * 100, 2)
     else:
@@ -352,6 +348,10 @@ class WheelRunSnapshot:
     # symbols, and the holdings checked for covered calls. Never contains
     # archived config/app additions. Default {} keeps old snapshots loadable.
     active_watchlist: dict = field(default_factory=dict)
+    # Read-only portfolio recovery scenarios; default keeps pre-field snapshots loadable.
+    capital_recovery: tuple[dict, ...] = ()
+    # Per-watchlist cash-fit summary; default keeps pre-field snapshots loadable.
+    watchlist_cash_fit: dict = field(default_factory=dict)
 
     @property
     def tradeable(self) -> bool:
@@ -402,6 +402,8 @@ class WheelRunSnapshot:
             "watchlist_origins": self.watchlist_origins,
             "signals": list(self.signals),
             "active_watchlist": dict(self.active_watchlist or {}),
+            "capital_recovery": list(self.capital_recovery),
+            "watchlist_cash_fit": dict(self.watchlist_cash_fit or {}),
         }
 
 
