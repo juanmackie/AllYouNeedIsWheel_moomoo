@@ -1400,6 +1400,98 @@ class TestBrokerEvidence(unittest.TestCase):
         conn.quote_ctx.get_market_snapshot.assert_called_once()
         self.assertEqual(conn.get_security_type("SPY"), "etf")
 
+    def test_price_snapshot_preserves_broker_fields_and_seeds_valid_last_price(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": "US.AAPL",
+                        "last_price": 201.25,
+                        "prev_close_price": 199.5,
+                        "highest52weeks_price": 237.49,
+                        "lowest52weeks_price": 164.08,
+                        "dividend_ttm": 1.04,
+                        "update_time": "2026-09-30 10:15:00",
+                    }
+                ]
+            ),
+        )
+
+        result = conn.get_price_snapshot(["AAPL"])
+
+        self.assertEqual(
+            result,
+            {
+                "US.AAPL": {
+                    "last_price": 201.25,
+                    "prev_close_price": 199.5,
+                    "highest52weeks_price": 237.49,
+                    "lowest52weeks_price": 164.08,
+                    "dividend_ttm": 1.04,
+                    "update_time": "2026-09-30 10:15:00",
+                }
+            },
+        )
+        self.assertEqual(conn._get_cached_stock_price("US.AAPL"), 201.25)
+        conn.quote_ctx.get_market_snapshot.assert_called_once_with(["US.AAPL"])
+
+    def test_price_snapshot_keeps_missing_values_unknown_and_unreturned_codes(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": "US.AAPL",
+                        "last_price": None,
+                        "prev_close_price": pd.NA,
+                        "highest52weeks_price": float("inf"),
+                        "dividend_ttm": float("nan"),
+                    }
+                ]
+            ),
+        )
+
+        result = conn.get_price_snapshot(["AAPL", "MSFT"])
+
+        unknown_row = {
+            "last_price": None,
+            "prev_close_price": None,
+            "highest52weeks_price": None,
+            "lowest52weeks_price": None,
+            "dividend_ttm": None,
+            "update_time": None,
+        }
+        self.assertEqual(result, {"US.AAPL": unknown_row, "US.MSFT": unknown_row})
+        self.assertIsNone(conn._get_cached_stock_price("US.AAPL"))
+
+    def test_price_snapshot_batches_no_more_than_400_codes_per_request(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+
+        def snapshots(codes):
+            return RET_OK, pd.DataFrame([{"code": code, "last_price": index + 1} for index, code in enumerate(codes)])
+
+        conn.quote_ctx.get_market_snapshot.side_effect = snapshots
+        conn._rate_limiter.check_rate_limit = MagicMock()
+        symbols = [f"TICKER{index}" for index in range(401)]
+
+        result = conn.get_price_snapshot(symbols)
+
+        self.assertEqual(len(result), 401)
+        self.assertEqual(conn.quote_ctx.get_market_snapshot.call_count, 2)
+        first_batch, second_batch = [call.args[0] for call in conn.quote_ctx.get_market_snapshot.call_args_list]
+        self.assertEqual(len(first_batch), 400)
+        self.assertEqual(len(second_batch), 1)
+        self.assertEqual(conn._rate_limiter.check_rate_limit.call_count, 2)
+
     def test_option_chain_carries_broker_time_and_fetch_time(self):
         conn = MoomooConnection()
         conn.quote_ctx = MagicMock()

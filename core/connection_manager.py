@@ -6,6 +6,7 @@ option chains, watchlist groups). There is no order/unlock surface;
 readonly=False is rejected at construction (see core/broker_protocol.py).
 """
 
+import math
 import os
 import threading
 import time
@@ -597,6 +598,81 @@ class MoomooConnection:
             logger.error(f"Error getting stock price for {symbol}: {str(e)}")
             self._pending_requests.complete(request_key, None)
             return None
+
+    def get_price_snapshot(self, symbols):
+        """Return broker quote fields for requested Moomoo codes in batches.
+
+        The result is keyed by fully formatted Moomoo code (for example,
+        ``US.AAPL``). Missing codes and missing broker fields remain ``None``;
+        this method does not infer a security type or synthesize quote values.
+        """
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        requested = []
+        seen = set()
+        for symbol in symbols or []:
+            if not isinstance(symbol, str) or not symbol.strip():
+                continue
+            code = self._format_symbol(symbol.strip())
+            if code not in seen:
+                seen.add(code)
+                requested.append(code)
+
+        fields = (
+            "last_price",
+            "prev_close_price",
+            "highest52weeks_price",
+            "lowest52weeks_price",
+            "dividend_ttm",
+            "update_time",
+        )
+        unknown = dict.fromkeys(fields)
+        result = {code: unknown.copy() for code in requested}
+        if not requested:
+            return result
+
+        try:
+            if not self._ensure_quote_context():
+                return result
+
+            for offset in range(0, len(requested), 400):
+                batch = requested[offset : offset + 400]
+                self._rate_limiter.check_rate_limit()
+                ret, data = self.quote_ctx.get_market_snapshot(batch)
+                if ret != RET_OK or data is None or getattr(data, "empty", True):
+                    continue
+
+                for _, row in data.iterrows():
+                    code = row.get("code")
+                    if not isinstance(code, str) or code not in result:
+                        continue
+
+                    snapshot = {}
+                    for field in fields[:-1]:
+                        try:
+                            parsed = safe_float(row.get(field), default=None)
+                            snapshot[field] = parsed if parsed is not None and math.isfinite(parsed) else None
+                        except (TypeError, ValueError):
+                            snapshot[field] = None
+                    update_time = row.get("update_time")
+                    if isinstance(update_time, str):
+                        snapshot["update_time"] = update_time.strip() or None
+                    elif update_time is None:
+                        snapshot["update_time"] = None
+                    else:
+                        try:
+                            snapshot["update_time"] = None if update_time != update_time else str(update_time)
+                        except (TypeError, ValueError):
+                            snapshot["update_time"] = None
+
+                    result[code] = snapshot
+                    last_price = snapshot["last_price"]
+                    if last_price is not None and last_price > 0:
+                        self._cache_stock_price(code, last_price)
+        except Exception as exc:
+            logger.error("Error getting price snapshot for %s: %s", requested, str(exc))
+
+        return result
 
     def _ensure_quote_context(self):
         if self.quote_ctx is not None and self.is_connected():
