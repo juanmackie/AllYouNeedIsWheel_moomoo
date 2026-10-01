@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-01 — Visible run failure and quota warnings
+
+The dashboard now shows the failure reason and recovery step directly below
+the run strip for failed refreshes (including the first run), rejected refresh
+requests, API outages, and quota-blocked CSP scans. Previous completed results
+remain visible. Shared polling warns on communication failures and clears the
+warning on recovery; complete closed-market planning is not treated as an error.
+Quota warnings preserve review-only covered calls and existing copy gates.
+
+## 2026-10-01 — Budget CSP chains after broker cash-fit assessment
+
+Large watchlists no longer fail quota preflight solely because unaffordable
+symbols are charged three chain calls each. Batched Moomoo prices resolve
+cash-fit rejections before estimating remaining uncached chain work, preserving
+complete coverage and per-symbol diagnostics. Unknown/stale live prices remain
+conservatively budgeted. Genuinely infeasible CSP work retains covered-call
+analysis in a planning run with incomplete coverage and copy blocked; zero CSP
+cash bypasses CSP preflight. Quota capacity now also bounds the suggested maximum
+watchlist size. Broker quotas, ranking, and read-only gates are unchanged.
+
 ## 2026-09-27 — Remove unused recommendation metrics
 
 Removed the misleading IV-adjusted-return and target-gap values from scored

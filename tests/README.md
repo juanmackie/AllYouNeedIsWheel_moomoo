@@ -26,6 +26,17 @@ recommendations), the read-only signal is visible, and no execution-capable
 controls exist. It does not require broker data — panels may show empty/error
 states when OpenD is unavailable. Set `E2E_BASE_URL` to target another port.
 
+Fixture-backed journeys start their own temporary database and test broker:
+
+```bash
+npm run test:e2e -- tests/e2e/preset-and-refresh.spec.js
+```
+
+These cover visible failure/quota reasons and recovery actions, retained
+last-good results, a failed first refresh, API outages, rejected refresh requests,
+and quota warnings on a narrow screen. No live OpenD or production database is
+used by these fixtures.
+
 Focused shortlist checks:
 
 ```bash
@@ -41,12 +52,20 @@ npm test -- tests/frontend/top-recommendations.test.js
 2. Toggle dark and light modes and confirm text, signals, warnings, and the
    OpenD connection indicator remain readable.
 3. Confirm the effective watchlist is the complete canonical union. A feasible
-   refresh scans every symbol; an infeasible union publishes `planning` rather
-   than a silently partial top three.
+   refresh assesses every symbol: broker-proven cash-fit rejections appear in
+   coverage without requiring option chains. Compare those rejections with
+   Moomoo prices and available CSP cash. An infeasible CSP lane publishes
+   `planning` with incomplete coverage and a quota warning directly below the
+   run strip, with the reason and suggested recovery step; covered
+   calls remain visible for review, and copy stays blocked on all cards.
 4. Refresh `/api/run` from the dashboard. Confirm one immutable last-good
-   snapshot remains visible while a refresh is in flight or fails. When the US
-   market is closed, confirm the scan still produces CSP and covered-call
-   candidates from fresh OpenD last-session chains (or persisted broker fallback)
+   snapshot remains visible while a refresh is in flight or fails. If a
+   refresh fails, confirm its error and retry guidance are visible above the
+   signals, including before the first completed run. Recover OpenD and refresh;
+   confirm the failure warning clears. Interrupt the app/API connection and
+   confirm a communication warning appears while displayed cards remain.
+   When the US market is closed, confirm the scan still produces CSP and
+   covered-call candidates from fresh OpenD last-session chains (or persisted broker fallback)
    and labels the run `planning`.
 5. Compare each card's executable bid, bid premium velocity, midpoint
    **limit target—not guaranteed**, DTE, spread, OI/volume, cycle/annualized

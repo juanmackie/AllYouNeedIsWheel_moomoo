@@ -21,7 +21,7 @@
  */
 
 import { fetchWithTimeout, readJsonSafely } from './api-core.js';
-import { renderRunStrip } from './run-strip.js';
+import { renderRunStrip, renderRunCommunicationError } from './run-strip.js';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -87,7 +87,8 @@ async function tick() {
     if (!running) return;
 
     if (!payload) {
-        // Transient failure — retry on the next tick without changing state.
+        // Keep retained results, visibly warn, and retry on the next tick.
+        renderRunCommunicationError();
         scheduleNext();
         return;
     }

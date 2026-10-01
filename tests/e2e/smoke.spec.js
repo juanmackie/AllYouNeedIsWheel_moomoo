@@ -32,6 +32,8 @@ test.describe('dashboard smoke', () => {
   test('core panels are present', async ({ page }) => {
     await page.goto(BASE_URL);
 
+    // Market data is intentionally collapsed; verify the owner's opening flow.
+    await page.locator('details:has(#options-table-container) > summary').click();
     await expect(page.locator('#options-table-container')).toBeVisible();
     await expect(page.locator('#position-monitor')).toBeVisible();
     await expect(page.locator('#top-recommendations-container')).toBeVisible();

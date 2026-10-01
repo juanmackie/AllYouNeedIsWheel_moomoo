@@ -38,10 +38,9 @@
 - Service changes: run the matching `tests/test_*service*.py` or feature-specific tests.
 - If blueprint registration or service registry changes, run `pytest tests/test_import_side_effects.py tests/test_api_health.py`.
 - If secret-key or CORS configuration changes, run `pytest tests/test_api_config.py`.
-- Security: enforce controls by implementation, not guidance alone (V10 §6); readonly contract is structural; verify packages and APIs (V10 §3); apply the closeout format (V10 §9).
+- Security: enforce controls by implementation, not guidance alone; readonly contract is structural. Verify packages and APIs; report changes, verification, assumptions, and risks.
 
 ## Child DOX Index
 
 - `routes/AGENTS.md` - HTTP route blueprints and request/response contracts.
 - `services/AGENTS.md` - Application services, external providers, recommendations, and signal orchestration.
-

@@ -5,8 +5,8 @@ Extracted from the monolithic options_service.py for maintainability.
 
 import logging
 import time
-from datetime import datetime
-from math import floor
+from datetime import datetime, timezone
+from math import floor, isfinite
 
 from api.services.options_data import fetch_option_chain_live_first
 from api.services.recommendation_ranking import (
@@ -21,6 +21,7 @@ from api.services.recommendation_ranking import (
 )
 from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
+from core.scoring_factors import parse_broker_timestamp, quote_is_stale
 from core.sizing import deployment_plan, existing_short_exposure_by_underlying
 from core.ticker_utils import canonical_underlying, earnings_underlying_ticker
 from core.utils import entry_window_advice, is_market_open, market_now, safe_float
@@ -389,6 +390,54 @@ class RecommendationEngine:
         # Check if any strike in the range is affordable
         affordable_strike = min(max_strike, cash_available_for_csp / 100)
         return affordable_strike >= min_strike
+
+    def _precheck_watchlist_cash_fit(self, conn, tickers, portfolio_context):
+        """Reject provably unaffordable names with one batched broker price read.
+
+        Unknown, invalid, or stale live prices stay in the chain budget. Only
+        actual Moomoo reads supply coverage evidence; cached portfolio marks and
+        external prices cannot prune the scan universe.
+        """
+        get_prices = getattr(conn, "get_price_snapshot", None)
+        if not callable(get_prices):
+            return [], {}
+        try:
+            snapshots = get_prices(tickers)
+        except Exception:
+            logger.debug("Broker price precheck unavailable; budgeting every symbol", exc_info=True)
+            return [], {}
+        if not isinstance(snapshots, dict):
+            return [], {}
+
+        fetched_at = datetime.now(timezone.utc)
+        market_open = is_market_open()
+        skipped = []
+        quote_fetched_at = {}
+        for ticker in tickers:
+            snapshot = snapshots.get(f"US.{ticker}", snapshots.get(ticker))
+            if not isinstance(snapshot, dict):
+                continue
+            price = safe_float(snapshot.get("last_price"))
+            if price <= 0 or not isfinite(price):
+                continue
+            if market_open:
+                broker_time = parse_broker_timestamp(snapshot.get("update_time"))
+                if (
+                    broker_time is None
+                    or broker_time > fetched_at
+                    or quote_is_stale(snapshot.get("update_time"), as_of_utc=fetched_at)
+                ):
+                    continue
+            quote_fetched_at[ticker] = fetched_at.isoformat()
+            if not self._has_any_affordable_otm_strike(price, portfolio_context):
+                skipped.append(
+                    self._make_skip_diagnostic(
+                        ticker,
+                        "no_cash_fit",
+                        f"No CSP strike fits buying power (${portfolio_context.get('cash_available_for_csp', 0):.0f})",
+                    )
+                )
+        return skipped, quote_fetched_at
 
     def _score_csp_contract(
         self, contract, ticker, stock_price, dte, portfolio_context, research_only_mode: bool = False
@@ -974,13 +1023,27 @@ class RecommendationEngine:
             # from Moomoo positions. Config/app symbols are never substituted.
             scan_universe_ok = bool(effective_watchlist) and wl_group_status == "ok"
 
-            # ── Scan feasibility preflight ────────────────────────────────
-            # Every actionable run must scan the COMPLETE scan universe. If it
-            # cannot fit the OpenD quota + freshness window, we publish planning
-            # diagnostics and direct the user to reduce the Moomoo group. We
-            # never silently truncate and still claim a global top three.
-            if scan_universe_ok:
-                preflight = self._watchlist_provider.preflight_scan_feasibility(len(effective_watchlist))
+            scan_watchlist = effective_watchlist
+            preflight = None
+            planning = False
+            planning_message = ""
+            # Resolve cash-fit coverage before budgeting remaining chain work.
+            # Infeasible work stays explicitly incomplete, with no truncation.
+            if scan_universe_ok and cash_available_for_csp > 0:
+                prechecked, scan_quote_fetched_at = self._precheck_watchlist_cash_fit(
+                    conn, effective_watchlist, portfolio_context
+                )
+                skipped_csp_diagnostics.extend(prechecked)
+                for diagnostic in prechecked:
+                    scan_status_by_ticker[diagnostic["ticker"]] = "skipped"
+                scan_watchlist = [ticker for ticker in effective_watchlist if ticker not in scan_status_by_ticker]
+
+                chain_symbol_count = sum(
+                    self._get_cached_watchlist_evidence(ticker) is None for ticker in scan_watchlist
+                )
+                preflight = self._watchlist_provider.preflight_scan_feasibility(
+                    len(effective_watchlist), chain_symbol_count=chain_symbol_count
+                )
                 if not isinstance(preflight, dict):
                     # Mock/stub providers in tests: assume feasible.
                     preflight = {
@@ -999,42 +1062,18 @@ class RecommendationEngine:
                         preflight["estimated_scan_sec"],
                         preflight["freshness_window_sec"],
                     )
-                    return {
-                        "success": True,
-                        "count": 0,
-                        "total_scored": 0,
-                        "generated_at": datetime.now().isoformat(),
-                        "signals": [],
-                        "broker_buying_power": broker_buying_power,
-                        "cash_available_for_csp": cash_available_for_csp,
-                        "cash_reserved_for_csp": cash_reserved_for_csp,
-                        "blocked_signals": [],
-                        "blocked_reason_counts": {},
-                        "state": "planning",
-                        "scan_coverage": {"scanned": 0, "total": len(effective_watchlist), "complete": False},
-                        "preflight": preflight,
-                        "watchlist_origins": watchlist_origins,
-                        "active_watchlist": _build_active_watchlist(
-                            wl_group_name=wl_group_name,
-                            wl_group_status=wl_group_status,
-                            wl_explanation=wl_explanation,
-                            wl_groups_available=wl_groups_available,
-                            wl_unsupported=wl_unsupported,
-                            wl_raw_codes=wl_raw_codes,
-                            effective_watchlist=effective_watchlist,
-                            scan_status_by_ticker={},
-                            position_tickers=list(positions.keys()),
-                            quote_fetched_at={},
-                            fetched_at=wl_fetched_at,
-                        ),
-                        "message": (
-                            f"Full watchlist scan is infeasible within the freshness window "
-                            f"({preflight['watchlist_size']} tickers, est {preflight['estimated_scan_sec']:.0f}s "
-                            f"vs {preflight['freshness_window_sec']}s). Reduce the Moomoo watchlist group "
-                            f"to at most {preflight['recommended_max_size']} symbols "
-                            f"for actionable top-three results."
-                        ),
-                    }
+                    planning = True
+                    planning_message = (
+                        f"Full watchlist CSP scan is infeasible within the freshness window "
+                        f"({chain_symbol_count} symbols still need chains, est {preflight['estimated_scan_sec']:.0f}s "
+                        f"vs {preflight['freshness_window_sec']}s). Reduce the Moomoo watchlist group "
+                        f"to at most {preflight['recommended_max_size']} symbols at current cash capacity. "
+                        f"Covered calls remain visible for review; incomplete coverage blocks copy."
+                    )
+                    skipped_csp_diagnostics.append(
+                        self._make_skip_diagnostic("__lane__", "scan_infeasible", planning_message)
+                    )
+                    scan_watchlist = []
             elif wl_group_status != "ok":
                 logger.warning(
                     "Watchlist CSP lane skipped: group '%s' status=%s (%d positions still scanned for CC)",
@@ -1050,10 +1089,9 @@ class RecommendationEngine:
                     )
                 )
 
-            # Scan the COMPLETE scan universe. The preflight above already
-            # guaranteed feasibility (or we returned `planning`). We never
-            # silently truncate and still claim a global top three.
-            scan_watchlist = effective_watchlist
+            # Every symbol is assessed: proven cash-fit rejections above plus
+            # all remaining chain reads below. An infeasible CSP lane remains
+            # explicitly incomplete; it never aborts covered-call diagnostics.
 
             if cash_available_for_csp <= 0:
                 logger.info(
@@ -1483,8 +1521,14 @@ class RecommendationEngine:
             except Exception:
                 logger.debug("Scan ledger write skipped", exc_info=True)
 
+            scanned_count = sum(
+                status in {"scanned", "skipped", "skipped_no_cash"} for status in scan_status_by_ticker.values()
+            )
             return {
                 "success": True,
+                "state": "planning" if planning else None,
+                "message": planning_message,
+                "preflight": preflight,
                 "count": len(formatted_signals),
                 "total_scored": len(all_candidates),
                 "generated_at": datetime.now().isoformat(),
@@ -1517,10 +1561,9 @@ class RecommendationEngine:
                 "blocked_signals": blocked_signals,
                 "blocked_reason_counts": dict(sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)),
                 "scan_coverage": {
-                    "scanned": max(0, len(scan_watchlist) - watchlist_errors),
+                    "scanned": scanned_count,
                     "total": len(effective_watchlist),
-                    "complete": len(scan_watchlist) > 0
-                    and (len(scan_watchlist) - watchlist_errors) >= len(effective_watchlist),
+                    "complete": bool(effective_watchlist) and scanned_count >= len(effective_watchlist),
                 },
                 "watchlist_origins": watchlist_origins,
                 "active_watchlist": _build_active_watchlist(

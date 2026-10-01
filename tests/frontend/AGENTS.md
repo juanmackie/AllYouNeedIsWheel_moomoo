@@ -21,6 +21,7 @@
 
 - Prefer focused module tests over broad brittle DOM snapshots.
 - Add regression tests for any bug that could hide, mis-rank, or mislabel a signal.
+- `run-strip.test.js` exercises visible failure/quota warnings, first-refresh failure, safe reason text, rejected refresh requests, and recovery with a real jsdom DOM. `run-notifier.test.js` covers communication warnings without duplicate polls or publish events.
 - `dashboard-safety.test.js` verifies that API-fed content is rendered through `escapeHtml` instead of raw `innerHTML` assignment.
 - `outcome-panel.test.js` covers the outcome panel rendering (totals/groups/records, empty + error states, XSS escaping of contract/strategy/group text, expandable supporting-fills drill-down, and the read-only ingest trigger).
 
@@ -31,4 +32,3 @@
 ## Child DOX Index
 
 No child DOX files yet.
-

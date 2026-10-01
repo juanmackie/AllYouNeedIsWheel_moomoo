@@ -23,6 +23,12 @@ There is no order, unlock, or trading-password endpoint.
 - `POST /api/run/refresh` — start one background refresh (202; 409 if running); failed attempts never overwrite the last-good snapshot
 - `POST /api/run/taken` — validate and persist an owner-confirmed recommendation/trade link for a published run; never places or modifies an order.
 
+A quota-infeasible CSP lane retains covered-call diagnostics in the published
+planning snapshot. Its `rejected` list includes `scan_infeasible`, coverage stays
+incomplete, and every signal is review-only. CSP feasibility follows broker
+cash-fit assessment; proven unaffordable names remain in coverage with
+`no_cash_fit` and appear in `watchlist_cash_fit`.
+
 ### Settings
 - `GET /api/settings` — presets, active key, effective read-only values
 - `POST /api/settings/preset` — persist `{preset: conservative|balanced|aggressive}`

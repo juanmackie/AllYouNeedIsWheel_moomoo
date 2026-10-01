@@ -128,7 +128,7 @@ test('scan longer than 60s keeps REFRESHING over the retained run until adoption
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
 });
 
-test('failure after success keeps last-good results visible with a FAILED badge, then recovers', async ({ page }) => {
+test('failure after success shows the reason, retains results, then recovers', async ({ page }, testInfo) => {
     test.setTimeout(60_000);
     await server.publish('complete_closed');
     await page.goto('/');
@@ -150,10 +150,94 @@ test('failure after success keeps last-good results visible with a FAILED badge,
     await expect(page.locator('#run-last-success')).toHaveText(lastSuccessBefore);
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
     await expect(page.locator('#run-coverage')).toContainText('coverage 2/2');
+    const warning = page.locator('#run-warning-banner');
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText('simulated engine failure (e2e)');
+    await expect(warning).toContainText('Previous successful results are still shown');
+    await expect(warning).toContainText('Refresh run');
+    await page.screenshot({ path: testInfo.outputPath('refresh-failure.png') });
 
     // Recovery: a fast refresh returns to PLANNING with a newer publish.
     await server.control('/__e2e/refresh', { mode: 'fast', duration_ms: 600 });
     await page.locator('#run-refresh-btn').click();
     await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
+    await expect(warning).toBeHidden();
+});
+
+test('a failed first refresh has a visible reason and a retry recovers', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#run-status')).toContainText('NO RUN');
+    await server.control('/__e2e/refresh', {
+        mode: 'fail', duration_ms: 400, fail_message: 'OpenD login required (e2e)',
+    });
+    await page.locator('#run-refresh-btn').click();
+    await expect(page.locator('#run-status')).toContainText('FAILED', { timeout: 20000 });
+    await expect(page.locator('#run-warning-banner')).toBeVisible();
+    await expect(page.locator('#run-warning-banner')).toContainText('OpenD login required (e2e)');
+    await expect(page.locator('#run-warning-banner')).toContainText('No completed results are available');
+    await server.control('/__e2e/refresh', { mode: 'fast', duration_ms: 600 });
+    await page.locator('#run-refresh-btn').click();
+    await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
+    await expect(page.locator('#run-warning-banner')).toBeHidden();
+});
+
+test('quota warning is visible above review-only covered calls and clears on complete coverage', async ({ page }, testInfo) => {
+    await server.publish('quota_partial');
+    await page.goto('/');
+    const warning = page.locator('#run-warning-banner');
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText('CSP scan blocked by OpenD quota');
+    await expect(warning).toContainText('180s');
+    await expect(warning).toContainText('Reduce the watchlist union to 1 ticker');
+    await expect(warning).toContainText('Copy actions stay blocked');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
+    await expect(cards).toHaveCount(1);
+    await expect(cards.first()).toContainText('TSLA');
+    await expect(cards.first().locator('.copy-ticket-btn')).toBeDisabled();
+    // Warning and its next action are also readable on a narrow screen.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(warning).toBeVisible();
+    const warningBounds = await warning.boundingBox();
+    expect(warningBounds.x).toBeGreaterThanOrEqual(0);
+    expect(warningBounds.x + warningBounds.width).toBeLessThanOrEqual(390);
+    expect(await warning.evaluate((el) => el.scrollWidth)).toBeLessThanOrEqual(warningBounds.width);
+    await page.screenshot({ path: testInfo.outputPath('quota-warning-mobile.png') });
+    await server.control('/__e2e/refresh', { mode: 'fast', duration_ms: 600 });
+    await page.locator('#run-refresh-btn').click();
+    await expect(page.locator('#run-coverage')).toContainText('coverage 2/2', { timeout: 20000 });
+    await expect(warning).toBeHidden();
+    await expect(cards).toHaveCount(2);
+});
+
+test('periodic API failure warns without losing cards and clears when reachable', async ({ page }) => {
+    await server.publish('complete_closed');
+    await page.goto('/');
+    const cards = page.locator('#top-recommendations-content .recommendation-card');
+    await expect(cards).toHaveCount(2);
+    await page.route('**/api/run', (route) => route.fulfill({ status: 503, json: { error: 'app unavailable' } }));
+    await expect(page.locator('#run-status')).toContainText('COMM ERROR', { timeout: 20000 });
+    await expect(page.locator('#run-warning-banner')).toBeVisible();
+    await expect(page.locator('#run-warning-banner')).toContainText('retry automatically');
+    await expect(cards).toHaveCount(2);
+    await page.unroute('**/api/run');
+    await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
+    await expect(page.locator('#run-warning-banner')).toBeHidden();
+});
+
+test('rejected refresh POST warns until an accepted retry', async ({ page }) => {
+    await server.publish('complete_closed');
+    await page.goto('/');
+    await expect(page.locator('#run-status')).toContainText('PLANNING');
+    await page.route('**/api/run/refresh', (route) => route.fulfill({ status: 503, json: { error: 'OpenD unavailable (e2e)' } }));
+    await page.locator('#run-refresh-btn').click();
+    await expect(page.locator('#run-warning-banner')).toBeVisible();
+    await expect(page.locator('#run-warning-banner')).toContainText('OpenD unavailable (e2e)');
+    await expect(page.locator('#run-refresh-btn')).toBeEnabled();
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
+    await page.unroute('**/api/run/refresh');
+    await server.control('/__e2e/refresh', { mode: 'fast', duration_ms: 600 });
+    await page.locator('#run-refresh-btn').click();
+    await expect(page.locator('#run-warning-banner')).toBeHidden({ timeout: 20000 });
+    await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
 });

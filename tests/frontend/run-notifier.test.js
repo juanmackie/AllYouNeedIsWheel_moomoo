@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../frontend/static/js/dashboard/run-strip.js', () => ({
   renderRunStrip: vi.fn(),
+  renderRunCommunicationError: vi.fn(),
   initRunStrip: vi.fn(),
   loadRunStrip: vi.fn(),
 }));
@@ -186,10 +187,26 @@ describe('shared run-state poll (P1b)', () => {
     failNext = true;
     await settleTimers(POLL_INTERVAL_MS); // transient failure tick
     expect(published).toHaveBeenCalledTimes(1);
+    const { renderRunCommunicationError, renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    expect(renderRunCommunicationError).toHaveBeenCalledTimes(1);
 
     await settleTimers(POLL_INTERVAL_MS); // recovery tick
     expect(published).toHaveBeenCalledTimes(1); // no duplicate publish
     expect(countRunReads()).toBeGreaterThanOrEqual(3); // poll survived the failure
+    expect(renderRunStrip).toHaveBeenLastCalledWith(RUN('aaa', 'refreshing').attempt, RUN('aaa', 'refreshing').snapshot);
+  });
+
+  it.each([503, 'malformed'])('warns on a bad poll response (%s) and continues polling', async (failure) => {
+    const { startRunStatePoll } = await loadModule();
+    vi.stubGlobal('fetch', vi.fn(async () => failure === 'malformed'
+      ? { ok: true, json: async () => null }
+      : { ok: false, status: failure }));
+    startRunStatePoll();
+    await settleTimers(0);
+    const { renderRunCommunicationError } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    expect(renderRunCommunicationError).toHaveBeenCalledTimes(1);
+    await settleTimers(POLL_INTERVAL_MS);
+    expect(countRunReads()).toBe(2);
   });
 
   it('stops after confirmed idle (fresh install) and restarts on refresh', async () => {

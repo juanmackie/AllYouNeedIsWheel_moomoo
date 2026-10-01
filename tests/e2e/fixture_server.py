@@ -424,7 +424,7 @@ def build_stub_registry(db, config):
         db=db,
         options_service=options,
         config=config,
-        roll_diagnostics_provider=lambda pc, conn: [],
+        roll_diagnostics_provider=lambda pc, conn, candidates: [],
     )
     return {
         "options": options,
@@ -475,7 +475,7 @@ def _seed_run(db, scene, preset_key="balanced"):
         quote_fetched_at = {t: ts for t in tickers}
         chain_source = "broker"
         market_state = "closed"
-    elif scene == "planning_partial":
+    elif scene in ("planning_partial", "quota_partial"):
         status = "planning"
         coverage = {"scanned": 1, "total": 2, "complete": False}
         quote_fetched_at = {t: ts for t in tickers}
@@ -515,6 +515,18 @@ def _seed_run(db, scene, preset_key="balanced"):
             sig["wheel_decision"]["quote_fetched_at_utc"] = ""
         signals.append(sig)
 
+    rejected = ()
+    if scene == "quota_partial":
+        signals = [s for s in signals if s["option_type"] == "CALL"]
+        rejected = (
+            {
+                "ticker": "__lane__",
+                "option_type": "PUT",
+                "reason_code": "scan_infeasible",
+                "reason_text": "CSP scan needs 180s; scan budget is 120s. Reduce the watchlist union to 1 ticker.",
+            },
+        )
+
     published_at = now.isoformat()
     run = RunMetadata(
         run_id=run_id,
@@ -545,7 +557,7 @@ def _seed_run(db, scene, preset_key="balanced"):
         csp_picks=tuple(s for s in signals if s["option_type"] == "PUT"),
         cc_decisions=tuple(s for s in signals if s["option_type"] == "CALL"),
         roll_decisions=(),
-        rejected=(),
+        rejected=rejected,
         preset=result["preset"],
         watchlist_origins=result["watchlist_origins"],
         signals=tuple(signals),

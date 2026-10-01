@@ -396,6 +396,255 @@ class TestRecommendationEngine(unittest.TestCase):
             {"unaffordable_count": 3, "total_count": 3, "max_affordable_strike": 0.0},
         )
 
+    def test_scan_budget_counts_only_cash_fit_names_but_covers_whole_watchlist(self):
+        from api.services.watchlist_manager import WatchlistManager
+
+        tickers = [f"TICK{i}" for i in range(69)]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.side_effect = WatchlistManager(
+            self.mock_config_provider
+        ).preflight_scan_feasibility
+        portfolio = dict(self.mock_portfolio_context, cash_available_for_csp=8300.0)
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
+        self.mock_conn.get_price_snapshot.return_value = {
+            f"US.{ticker}": {"last_price": 50.0 if index < 9 else 150.0} for index, ticker in enumerate(tickers)
+        }
+        engine = self._import_engine()
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]) as fetch_csp,
+            patch("api.services.recommendations.is_market_open", return_value=False),
+        ):
+            result = engine.get_top_recommendations()
+
+        self.assertEqual(result["scan_coverage"], {"scanned": 69, "total": 69, "complete": True})
+        self.assertEqual([call.args[0] for call in fetch_csp.call_args_list], tickers[:9])
+        self.assertEqual(result["preflight"]["chain_calls"], 27)
+        self.assertEqual(result["preflight"]["watchlist_size"], 69)
+        self.assertEqual(result["watchlist_cash_fit"]["unaffordable_count"], 60)
+        self.mock_conn.get_price_snapshot.assert_called_once_with(tickers)
+        self.mock_options_data._process_ticker_for_otm.assert_called_once()
+        self.assertEqual(set(result["quote_fetched_at"]), set(tickers))
+        self.assertTrue(all(result["quote_fetched_at"].values()))
+
+    def test_infeasible_csp_scan_retains_covered_calls_and_explicit_quota_blocker(self):
+        tickers = [f"TICK{i}" for i in range(69)]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": False,
+            "watchlist_size": 69,
+            "estimated_scan_sec": 621.0,
+            "freshness_window_sec": 300,
+            "chain_calls": 207,
+            "chain_quota_ok": False,
+            "recommended_max_size": 33,
+        }
+        engine = self._import_engine()
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp") as fetch_csp,
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations()
+
+        self.assertEqual(result["state"], "planning")
+        self.assertEqual(result["scan_coverage"], {"scanned": 0, "total": 69, "complete": False})
+        self.assertTrue(result["covered_calls"]["signals"])
+        self.mock_options_data._process_ticker_for_otm.assert_called_once()
+        fetch_csp.assert_not_called()
+        self.assertIn("scan_infeasible", result["blocked_reason_counts"])
+        self.assertTrue(result["preset"])
+
+        from core.run_model import recompute_effective_snapshot
+        from core.wheel_runner import WheelRunner
+
+        snapshot = WheelRunner(self.mock_db, MagicMock(), {})._build_snapshot(
+            "SIMULATE", "test-account", result["generated_at"], result, {}, []
+        )
+        effective = recompute_effective_snapshot(snapshot.to_dict())
+        self.assertFalse(effective["tradeable"])
+        self.assertTrue(effective["cc_decisions"])
+        self.assertTrue(
+            all(candidate["eligibility"]["mode"] == "review_only" for candidate in effective["cc_decisions"])
+        )
+
+    def test_cash_fit_budget_reaches_broker_adapter_scoring_and_snapshot(self):
+        from datetime import timezone
+
+        from moomoo import RET_OK
+
+        from api.services.watchlist_manager import WatchlistManager
+        from core.connection_manager import MoomooConnection
+        from core.utils import market_now
+        from core.wheel_runner import WheelRunner
+
+        tickers = [f"TICK{i}" for i in range(69)]
+        affordable_codes = {f"US.{ticker}" for ticker in tickers[:9]}
+        market_time = market_now()
+        expirations = [(market_time.date() + timedelta(days=dte)).strftime("%Y%m%d") for dte in (14, 21, 45)]
+        option_rows = {}
+        conn = MoomooConnection()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx = MagicMock()
+        conn._rate_limiter.check_rate_limit = MagicMock()
+        conn._option_chain_rate_limiter.check_rate_limit = MagicMock()
+        conn.quote_ctx.get_option_expiration_date.return_value = (
+            RET_OK,
+            pd.DataFrame({"expiration_date": expirations}),
+        )
+
+        def get_chain(code, start, end, option_type):
+            option_code = f"{code}{start.replace('-', '')}P45000"
+            option_rows[option_code] = {
+                "code": option_code,
+                "option_strike_price": 45.0,
+                "option_expiry_date": start,
+                "option_type": "PUT",
+                "bid_price": 1.0,
+                "ask_price": 1.05,
+                "last_price": 1.0,
+                "volume": 100,
+                "option_open_interest": 500,
+                "option_implied_volatility": 30.0,
+                "option_delta": -0.30,
+                "update_time": market_time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            return RET_OK, pd.DataFrame([{"code": option_code, "strike_price": 45.0}])
+
+        def get_prices(codes):
+            return RET_OK, pd.DataFrame(
+                [
+                    option_rows[code]
+                    if code in option_rows
+                    else {
+                        "code": code,
+                        "last_price": 50.0 if code in affordable_codes else 250.0,
+                        "update_time": market_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    for code in codes
+                ]
+            )
+
+        conn.quote_ctx.get_option_chain.side_effect = get_chain
+        conn.quote_ctx.get_market_snapshot.side_effect = get_prices
+        self.mock_connection_provider._ensure_connection.return_value = conn
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.side_effect = WatchlistManager(
+            self.mock_config_provider
+        ).preflight_scan_feasibility
+        engine = self._import_engine()
+        self.mock_watchlist_manager.get_screening_profile.side_effect = lambda *args, **kwargs: engine._preset_profile
+        portfolio = dict(
+            self.mock_portfolio_context,
+            cash_available_for_csp=10000.0,
+            account_value=100000.0,
+            underlying_capital_exposure={"AAPL": 30000.0},
+        )
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
+
+        with patch("api.services.recommendations.is_market_open", return_value=False):
+            result = engine.get_top_recommendations()
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["scan_coverage"], {"scanned": 69, "total": 69, "complete": True})
+        self.assertEqual(result["preflight"]["chain_calls"], 27)
+        self.assertEqual(conn.quote_ctx.get_option_chain.call_count, 27)
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(result["watchlist_csps"]["count"], 18, result["blocked_reason_counts"])
+        self.assertEqual(result["watchlist_cash_fit"]["unaffordable_count"], 60)
+        self.assertTrue(
+            all(candidate["recommended_contracts"] > 0 for candidate in result["watchlist_csps"]["signals"])
+        )
+        with patch("core.wheel_runner.is_market_open", return_value=False):
+            snapshot = WheelRunner(self.mock_db, MagicMock(), {})._build_snapshot(
+                "SIMULATE", "test-account", datetime.now(timezone.utc).isoformat(), result, portfolio, []
+            )
+        self.assertTrue(snapshot.run.coverage_complete)
+        self.assertEqual(len(snapshot.csp_picks), 18)
+        self.assertEqual(snapshot.run.status, "planning")
+
+    def test_zero_csp_cash_does_not_preflight_or_suppress_covered_calls(self):
+        tickers = [f"TICK{i}" for i in range(69)]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.side_effect = AssertionError("no CSP chain calls needed")
+        portfolio = dict(self.mock_portfolio_context, cash_available_for_csp=0.0)
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
+        engine = self._import_engine()
+
+        with patch("api.services.recommendations.is_market_open", return_value=True):
+            result = engine.get_top_recommendations()
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["covered_calls"]["signals"])
+        self.assertEqual(result["watchlist_cash_fit"]["unaffordable_count"], 69)
+        self.mock_conn.get_price_snapshot.assert_not_called()
+        self.mock_watchlist_manager.preflight_scan_feasibility.assert_not_called()
+
+    def test_unknown_or_stale_batch_prices_never_remove_names_from_chain_budget(self):
+        from datetime import timezone
+
+        for quote in (
+            {},
+            {"last_price": 150.0},
+            {"last_price": 150.0, "update_time": "2020-01-01 10:00:00"},
+            {"last_price": float("inf")},
+            {"last_price": float("nan")},
+            {"last_price": 150.0, "update_time": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()},
+        ):
+            with self.subTest(quote=quote):
+                self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(["AAA", "BBB"])
+                self.mock_conn.get_price_snapshot.return_value = {"US.AAA": quote}
+                portfolio = dict(self.mock_portfolio_context, cash_available_for_csp=8300.0)
+                self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
+                engine = self._import_engine()
+                with (
+                    patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]) as fetch_csp,
+                    patch("api.services.recommendations.is_market_open", return_value=True),
+                ):
+                    result = engine.get_top_recommendations()
+                self.assertTrue(result["success"])
+                self.assertEqual([call.args[0] for call in fetch_csp.call_args_list], ["AAA", "BBB"])
+                self.mock_watchlist_manager.preflight_scan_feasibility.assert_called_with(2, chain_symbol_count=2)
+
+    def test_live_price_cash_fit_precheck_keeps_the_affordability_boundary(self):
+        from datetime import timezone
+
+        broker_time = datetime.now(timezone.utc).isoformat()
+        self.mock_conn.get_price_snapshot.return_value = {
+            "US.EXACT": {"last_price": 100.0, "update_time": broker_time},
+            "US.OVER": {"last_price": 100.01, "update_time": broker_time},
+        }
+        portfolio = dict(self.mock_portfolio_context, cash_available_for_csp=8500.0)
+        engine = self._import_engine()
+
+        with patch("api.services.recommendations.is_market_open", return_value=True):
+            skipped, evidence = engine._precheck_watchlist_cash_fit(self.mock_conn, ["EXACT", "OVER"], portfolio)
+
+        self.assertEqual([diagnostic["ticker"] for diagnostic in skipped], ["OVER"])
+        self.assertEqual(set(evidence), {"EXACT", "OVER"})
+
+    def test_warm_evidence_does_not_spend_cold_chain_budget(self):
+        from api.services.watchlist_manager import WatchlistManager
+
+        tickers = [f"TICK{i}" for i in range(69)]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.side_effect = WatchlistManager(
+            self.mock_config_provider
+        ).preflight_scan_feasibility
+        engine = self._import_engine()
+        for ticker in tickers:
+            engine._set_cached_watchlist_evidence(ticker, {"stock_price": 50.0, "chains": []})
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]) as fetch_csp,
+            patch("api.services.recommendations.is_market_open", return_value=False),
+        ):
+            result = engine.get_top_recommendations()
+
+        self.assertEqual(result["scan_coverage"], {"scanned": 69, "total": 69, "complete": True})
+        self.assertEqual(fetch_csp.call_count, 69)
+        self.assertEqual(result["preflight"]["chain_calls"], 0)
+
     def test_broken_group_skips_csp_lane_keeps_cc_positions(self):
         """A missing/empty group skips the CSP lane with an explicit lane
         diagnostic and an empty scan universe; owned shares are still assessed

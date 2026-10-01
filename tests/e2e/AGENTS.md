@@ -21,6 +21,8 @@
 
 - Prefer smoke tests for the dashboard one-screen flow: run strip, top recommendations, position monitor, and OpenD-state visibility.
 - Keep selectors stable and user-oriented.
+- The dashboard smoke opens the collapsed Market data section before asserting options-table visibility.
+- `preset-and-refresh.spec.js` verifies failure, quota, API outage, and rejected-refresh warnings remain visible above retained results and clear on recovery, including a narrow viewport. `fixture_server.py` supplies persisted test-only run scenes (`quota_partial` retains a covered call with incomplete coverage); production data paths stay unmodified.
 
 ## Verification
 
@@ -29,4 +31,3 @@
 ## Child DOX Index
 
 No child DOX files yet.
-

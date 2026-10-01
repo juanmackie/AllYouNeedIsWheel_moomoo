@@ -69,6 +69,31 @@ class TestPreflightScanFeasibility(unittest.TestCase):
         self.assertEqual(result["chain_rate_limit_max_requests"], 30)
         self.assertEqual(result["chain_min_request_spacing_sec"], 1.0)
 
+    def test_cash_fit_budget_does_not_charge_chain_calls_for_rejected_symbols(self):
+        result = self.manager.preflight_scan_feasibility(69, chain_symbol_count=9)
+
+        self.assertTrue(result["feasible"])
+        self.assertEqual(result["watchlist_size"], 69)
+        self.assertEqual(result["chain_symbol_count"], 9)
+        self.assertEqual(result["chain_calls"], 27)
+        self.assertEqual(result["estimated_scan_sec"], 81.0)
+
+    def test_no_chain_work_is_feasible_for_a_large_fully_assessed_watchlist(self):
+        result = self.manager.preflight_scan_feasibility(69, chain_symbol_count=0)
+
+        self.assertTrue(result["feasible"])
+        self.assertEqual(result["chain_calls"], 0)
+        self.assertEqual(result["estimated_scan_sec"], 0.0)
+
+    def test_recommended_capacity_accounts_for_quota_as_well_as_spacing(self):
+        self.mock_context.config = {"chain_min_request_spacing_sec": 1.0}
+
+        result = self.manager.preflight_scan_feasibility(69)
+
+        self.assertFalse(result["feasible"])
+        self.assertEqual(result["recommended_max_size"], 33)
+        self.assertGreater(result["estimated_scan_sec"], result["freshness_window_sec"])
+
 
 class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
     """Test get_effective_watchlist behavior."""

@@ -24,6 +24,8 @@
 - Keep calculations that affect displayed signal decisions aligned with backend services and tests.
 - Prefer service-vetted executable-bid fields (`annualized_return`, `capital_velocity_per_day`, `bid_premium_per_contract`, `premium_velocity_per_day`) for signal display. Midpoint is a separately labelled, non-guaranteed limit target; do not recompute backend ranking in the browser.
 - Preserve loading, empty, error, and stale states for networked widgets.
+- `dashboard/run-strip.js` owns the visible run warning: failed attempts (including no snapshot), rejected refresh requests, API communication failures, and persisted `scan_infeasible` quota diagnostics. Render API reasons with `textContent`; retain previous results and clear warnings when their failure recovers. Complete closed-market planning alone is not an error.
+- `dashboard/run-notifier.js` feeds both status and communication warnings from its single shared poll; warning rendering must not trigger another scan or an extra status request.
 - Outcome panel reads `/api/options/analytics/outcomes` (local SQLite, no OpenD gate) and renders it through `escapeHtml`; the only broker action is the explicit `Pull broker fills` button (query-only `POST /api/options/analytics/outcomes/ingest`).
 - Empty states for signal panels should surface the dominant blockers or scan diagnostics when the payload provides them.
 - Do not add hidden trading execution calls from UI controls.

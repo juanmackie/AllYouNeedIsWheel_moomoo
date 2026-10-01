@@ -46,6 +46,17 @@ manual copy-to-ticket suggestions for your broker UI.
   canonicalized and source-labelled. If the union cannot fit the OpenD quota
   and freshness window, the run is **planning** and directs you to reduce a
   source list — it never silently truncates and claims a global top three.
+- CSP quota estimates follow a batched Moomoo price check. Symbols with no
+  affordable strike in the preset's OTM range remain in coverage with an
+  explicit cash-fit rejection; reusable raw evidence also avoids new chain
+  calls. Missing prices and stale live broker timestamps remain conservatively
+  budgeted. If the remaining CSP work is infeasible, covered-call diagnostics
+  still appear in a planning run with incomplete coverage and copy blocked.
+- Failed refreshes, rejected refresh requests, unreachable run status, and
+  quota-blocked CSP scans show a visible warning above the signals with the
+  reason and recovery step. Previous completed results remain displayed;
+  warnings clear on recovery. Complete closed-market planning previews do not
+  trigger a failure warning.
 - Each hard-gate-passing candidate is classified as `qualified` or `marginal`,
   then receives an event tier (`event_safe`, `event_not_applicable`,
   `earnings_before_expiry`, or `event_unknown`) as visible risk information.

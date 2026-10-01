@@ -307,6 +307,21 @@ must be verified against the live quote before a manual Moomoo order is placed.
 
 ## Evidence and freshness
 
+CSP scan feasibility is calculated after a batched Moomoo underlying-price read
+and the existing cash-fit gate. A symbol proven unable to afford any strike in
+the preset's OTM range counts as assessed coverage with `no_cash_fit`; it needs
+no option-chain request. Unknown/nonfinite prices and missing/invalid/stale
+broker timestamps during an open session remain in the conservative chain
+budget. Valid cached raw chain evidence is rescored for the current preset and
+portfolio without charging new chain calls. Zero CSP cash skips CSP preflight.
+The estimate considers both configured spacing and quota capacity; it does not
+change broker limits or guarantee scan latency.
+
+If the remaining CSP work cannot fit, the run retains covered-call analysis and
+an explicit `scan_infeasible` rejection. Unassessed CSP symbols stay outside
+coverage, the run is `planning`, and every signal remains review-only. There is
+no partial CSP scan presented as the global top three.
+
 Moomoo's `update_time` is preserved verbatim and parsed as
 `America/New_York`. The adapter records a separate UTC fetch time for the
 snapshot. Missing or invalid evidence fails closed while the market is open.

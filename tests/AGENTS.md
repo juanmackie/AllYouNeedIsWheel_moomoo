@@ -28,7 +28,8 @@
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
 - `test_recommendations.py` verifies complete watchlist-union scanning and deterministic capital-return-on-deployed-capital ordering with executable-bid velocity as tie-break (quality/event tiers are display-only risk info and never order); infeasible unions publish `planning` rather than truncating.
-- Testing approach aligns with V10 §5: Arrange-Act-Assert when conventional; cover success/failure/boundary; report skipped/flaky/blockers explicitly; close with brief changed/verified/assumptions/risks (V10 §9).
+- Scan-budget regressions exercise the real broker adapter and scorer with synthetic query-only SDK responses: large watchlists with cash-fit rejections retain complete coverage and picks, genuinely infeasible CSP lanes retain covered-call diagnostics without enabling copy, and unknown/stale prices remain in the chain budget.
+- Use Arrange-Act-Assert when conventional; cover success/failure/boundary; report skipped/flaky/blockers explicitly, alongside changes, verification, assumptions, and risks.
 
 ## Verification
 
@@ -41,4 +42,3 @@
 - `frontend/AGENTS.md` - Vitest browser-module tests.
 - `e2e/AGENTS.md` - Browser smoke tests.
 - `fixtures/AGENTS.md` - Shared deterministic scenarios.
-

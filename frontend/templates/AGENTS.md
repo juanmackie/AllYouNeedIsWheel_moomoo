@@ -26,6 +26,7 @@
 
 - Keep templates presentation-focused; route/service layers should provide data contracts.
 - Preserve accessibility basics: labels, button text, modal semantics, and readable empty/error states.
+- `partials/dashboard/run_strip.html` keeps `#run-warning-banner` directly below the operational strip, outside collapsible details. Its title, reason, and recovery action use stable `run-warning-*` IDs and an atomic alert role. Visible alerts require the existing `.show` shim; `.d-none` hides recovered warnings.
 - Signal cards use `<details>` to collapse `.recommendation-details` (metrics detail rows); hero/reward/warnings/source remain visible. Preserve `.recommendation-card`, `.copy-ticket-btn`, `.signal-data-source`, `.missing-risk-badge`, `.d-none` visibility contracts.
 - Keep script/style dependencies consistent with `base.html`.
 - Do not alter class names that frontend tests (`tests/frontend/`) depend on (e.g. `.recommendation-card`, `.ticker-badge`, `.table-responsive`).
