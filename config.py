@@ -28,6 +28,7 @@ DEFAULT_CONNECTION_CONFIG = {
     "chain_rate_limit_max_requests": 10,
     "chain_rate_limit_window_sec": 30,
     "chain_min_request_spacing_sec": 3.0,
+    "scan_discovery_budget_sec": 900,
     "watchlist": _parse_watchlist_env(os.environ.get("WATCHLIST")),
     # Versioned wheel risk preset (conservative | balanced | aggressive).
     # The UI persists the selection in the settings table; this is only the default.

@@ -895,10 +895,18 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         errors = []
         results = []
 
-        mock_chain_df = pd.DataFrame({"code": ["US.AAPL230616C00150000"], "strike_price": [150.0]})
+        mock_chain_df = pd.DataFrame(
+            {
+                "code": ["US.AAPL230616C00150000"],
+                "strike_price": [150.0],
+                "strike_time": ["2023-06-16"],
+                "option_type": ["CALL"],
+            }
+        )
         mock_snap_df = pd.DataFrame(
             [
                 {
+                    "code": "US.AAPL230616C00150000",
                     "option_expiry_date": "2023-06-16",
                     "option_type": "CALL",
                     "option_strike_price": 150.0,
@@ -1498,13 +1506,23 @@ class TestBrokerEvidence(unittest.TestCase):
         conn.is_connected = MagicMock(return_value=True)
         conn.quote_ctx.get_option_chain.return_value = (
             RET_OK,
-            pd.DataFrame([{"code": "US.AAPL240101P00100000"}]),
+            pd.DataFrame(
+                [
+                    {
+                        "code": "US.AAPL240101P00100000",
+                        "strike_price": 100,
+                        "strike_time": "2024-01-01",
+                        "option_type": "PUT",
+                    }
+                ]
+            ),
         )
         conn.quote_ctx.get_market_snapshot.return_value = (
             RET_OK,
             pd.DataFrame(
                 [
                     {
+                        "code": "US.AAPL240101P00100000",
                         "option_expiry_date": "2024-01-01",
                         "option_type": "PUT",
                         "option_strike_price": 100,

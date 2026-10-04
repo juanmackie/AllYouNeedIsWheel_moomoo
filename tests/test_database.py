@@ -39,6 +39,23 @@ class TestOptionsDatabase(unittest.TestCase):
             os.remove(self.db_path)
         os.rmdir(self.temp_dir)
 
+    def test_v13_directory_migration_is_additive_idempotent_and_scoped(self):
+        self.db.set_setting("preserve", "yes")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DROP TABLE option_contracts")
+            conn.execute("PRAGMA user_version = 12")
+        conn.close()
+        migrate_database(self.db_path)
+        migrate_database(self.db_path)
+        contracts = [{"code": "US.TEST", "strike": 90, "expiration": "2026-10-16", "option_type": "PUT"}]
+        self.db.save_contracts("US.AAPL", "2026-10-03", "2026-10-10", "2026-11-07", contracts)
+        self.assertEqual(self.db.get_contracts("US.AAPL", "2026-10-03", "2026-10-16", "2026-10-16"), contracts)
+        self.assertIsNone(self.db.get_contracts("US.AAPL", "2026-10-04", "2026-10-16", "2026-10-16"))
+        self.assertIsNone(self.db.get_contracts("US.AAPL", "2026-10-03", "2026-10-01", "2026-11-07"))
+        self.db.save_contracts("US.EMPTY", "2026-10-03", "2026-10-10", "2026-11-07", [])
+        self.assertEqual(self.db.get_contracts("US.EMPTY", "2026-10-03", "2026-10-10", "2026-11-07"), [])
+        self.assertEqual(self.db.get_setting("preserve"), "yes")
+
     def test_database_creation(self):
         """Test that database and tables are created"""
         self.assertTrue(os.path.exists(self.db_path))
@@ -53,7 +70,7 @@ class TestOptionsDatabase(unittest.TestCase):
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 12)
+        self.assertEqual(cursor.fetchone()[0], 13)
 
         evaluator_tables = {t for t in actual_tables if t.startswith("evaluator_")}
         self.assertEqual(evaluator_tables, set(), f"Evaluator tables should be dropped: {evaluator_tables}")
@@ -1075,7 +1092,7 @@ class TestIvHistoryStrikeMigration(unittest.TestCase):
         try:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(iv_history)")}
             self.assertIn("strike", cols)
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 13)
         finally:
             conn.close()
 
@@ -1110,7 +1127,7 @@ class TestIvHistoryStrikeMigration(unittest.TestCase):
         try:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(iv_history)")}
             self.assertIn("strike", cols)
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 13)
             rows = conn.execute("SELECT ticker, implied_volatility, strike FROM iv_history").fetchall()
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0][0], "AAPL")

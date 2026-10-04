@@ -189,7 +189,7 @@ test('quota warning is visible above review-only covered calls and clears on com
     await expect(warning).toBeVisible();
     await expect(warning).toContainText('CSP scan blocked by OpenD quota');
     await expect(warning).toContainText('180s');
-    await expect(warning).toContainText('Reduce the watchlist union to 1 ticker');
+    await expect(warning).toContainText('discovery budget is 120s');
     await expect(warning).toContainText('Copy actions stay blocked');
     const cards = page.locator('#top-recommendations-content .recommendation-card');
     await expect(cards).toHaveCount(1);

@@ -22,12 +22,20 @@ class TestWatchlistManagerInit(unittest.TestCase):
         manager = WatchlistManager(mock_context)
         self.assertIs(manager._config_provider, mock_context)
 
+    def test_option_contracts_are_unsupported_underlyings(self):
+        manager = WatchlistManager({})
+        for code in ("US.SOXS260828P35000", "US.SOXL260911P105000"):
+            kind, ticker, diagnostic = manager._classify_symbol(code)
+            self.assertEqual(kind, "unsupported")
+            self.assertIsNone(ticker)
+            self.assertEqual(diagnostic["reason"], "option contract, not an underlying")
+
 
 class TestPreflightScanFeasibility(unittest.TestCase):
-    """Freshness-window contract: a full canonical-union scan must be feasible
-    at the configured window. The default must accommodate the shipped
-    27-symbol union; a regression to the old 120s window silently published
-    planning/0 for every refresh."""
+    """Discovery budget charges only missing same-date contract ranges.
+
+    Quote freshness is enforced separately; oversized discovery remains planning.
+    """
 
     def setUp(self):
         self.mock_context = MagicMock()
@@ -37,21 +45,21 @@ class TestPreflightScanFeasibility(unittest.TestCase):
     def test_default_window_fits_27_symbol_union(self):
         result = self.manager.preflight_scan_feasibility(27)
         self.assertTrue(result["feasible"], result)
-        self.assertEqual(result["freshness_window_sec"], 300)
-        self.assertEqual(result["estimated_scan_sec"], 243.0)
+        self.assertEqual(result["discovery_budget_sec"], 900)
+        self.assertEqual(result["estimated_scan_sec"], 81.0)
         self.assertTrue(result["chain_quota_ok"])
 
     def test_explicit_config_override_is_respected(self):
-        self.mock_context.config = {"max_tradeable_quote_age_sec": 120}
+        self.mock_context.config = {"scan_discovery_budget_sec": 60}
         result = self.manager.preflight_scan_feasibility(27)
         self.assertFalse(result["feasible"])
-        self.assertEqual(result["freshness_window_sec"], 120)
+        self.assertEqual(result["discovery_budget_sec"], 60)
 
     def test_oversized_union_stays_infeasible(self):
         """Complete-union-or-planning still gates genuinely oversized lists."""
-        result = self.manager.preflight_scan_feasibility(60)
+        result = self.manager.preflight_scan_feasibility(301)
         self.assertFalse(result["feasible"])
-        self.assertEqual(result["estimated_scan_sec"], 540.0)
+        self.assertEqual(result["estimated_scan_sec"], 903.0)
 
     def test_configured_chain_quota_drives_estimate_and_capacity(self):
         self.mock_context.config = {
@@ -63,20 +71,20 @@ class TestPreflightScanFeasibility(unittest.TestCase):
         result = self.manager.preflight_scan_feasibility(27)
 
         self.assertTrue(result["feasible"], result)
-        self.assertEqual(result["estimated_scan_sec"], 81.0)
-        self.assertEqual(result["chain_calls"], 81)
+        self.assertEqual(result["estimated_scan_sec"], 27.0)
+        self.assertEqual(result["chain_calls"], 27)
         self.assertTrue(result["chain_quota_ok"])
         self.assertEqual(result["chain_rate_limit_max_requests"], 30)
         self.assertEqual(result["chain_min_request_spacing_sec"], 1.0)
 
-    def test_cash_fit_budget_does_not_charge_chain_calls_for_rejected_symbols(self):
+    def test_cached_directories_do_not_consume_discovery_budget(self):
         result = self.manager.preflight_scan_feasibility(69, chain_symbol_count=9)
 
         self.assertTrue(result["feasible"])
         self.assertEqual(result["watchlist_size"], 69)
         self.assertEqual(result["chain_symbol_count"], 9)
-        self.assertEqual(result["chain_calls"], 27)
-        self.assertEqual(result["estimated_scan_sec"], 81.0)
+        self.assertEqual(result["chain_calls"], 9)
+        self.assertEqual(result["estimated_scan_sec"], 27.0)
 
     def test_no_chain_work_is_feasible_for_a_large_fully_assessed_watchlist(self):
         result = self.manager.preflight_scan_feasibility(69, chain_symbol_count=0)
@@ -88,11 +96,11 @@ class TestPreflightScanFeasibility(unittest.TestCase):
     def test_recommended_capacity_accounts_for_quota_as_well_as_spacing(self):
         self.mock_context.config = {"chain_min_request_spacing_sec": 1.0}
 
-        result = self.manager.preflight_scan_feasibility(69)
+        result = self.manager.preflight_scan_feasibility(301)
 
         self.assertFalse(result["feasible"])
-        self.assertEqual(result["recommended_max_size"], 33)
-        self.assertGreater(result["estimated_scan_sec"], result["freshness_window_sec"])
+        self.assertEqual(result["recommended_max_size"], 300)
+        self.assertGreater(result["estimated_scan_sec"], result["discovery_budget_sec"])
 
 
 class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):

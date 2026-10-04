@@ -4,7 +4,7 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def create_tables(conn):
@@ -612,6 +612,21 @@ def migrate_database(db_path):
                         logger.info("Migration: Adding strike to iv_history")
                         cursor.execute("ALTER TABLE iv_history ADD COLUMN strike REAL")
                 cursor.execute("PRAGMA user_version = 12")
+                conn.commit()
+
+            if current_version < 13:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS option_contracts (
+                        symbol TEXT NOT NULL,
+                        market_date TEXT NOT NULL,
+                        window_start TEXT NOT NULL,
+                        window_end TEXT NOT NULL,
+                        contracts_json TEXT NOT NULL,
+                        fetched_at TEXT NOT NULL,
+                        PRIMARY KEY (symbol, market_date, window_start, window_end)
+                    )
+                """)
+                cursor.execute("PRAGMA user_version = 13")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

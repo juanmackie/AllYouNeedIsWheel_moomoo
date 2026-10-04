@@ -352,6 +352,7 @@ class WheelRunSnapshot:
     capital_recovery: tuple[dict, ...] = ()
     # Per-watchlist cash-fit summary; default keeps pre-field snapshots loadable.
     watchlist_cash_fit: dict = field(default_factory=dict)
+    preflight: dict = field(default_factory=dict)
 
     @property
     def tradeable(self) -> bool:
@@ -404,6 +405,7 @@ class WheelRunSnapshot:
             "active_watchlist": dict(self.active_watchlist or {}),
             "capital_recovery": list(self.capital_recovery),
             "watchlist_cash_fit": dict(self.watchlist_cash_fit or {}),
+            "preflight": dict(self.preflight or {}),
         }
 
 

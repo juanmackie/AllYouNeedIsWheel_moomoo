@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-03 ? Whole-watchlist discovery and batched quotes
+
+Refresh discovers all contracts across the preset expiry window and then quotes
+selected puts in batches of 400. A same-US-date directory persists across
+restarts (additive schema v13); closed-market quote refreshes reuse static
+metadata. Discovery has a separate 900-second budget with visible progress.
+Zero cash no longer skips CSP assessment: unaffordable picks remain visible
+review-only with zero contracts and copy blocked. Net broker cash is no longer
+reduced twice for put collateral. Option codes leave the underlying universe;
+successful empty windows count as assessed. Cash-fitting CSPs precede review-only
+CSPs with the same ranking key in each partition. Quote gates, complete coverage,
+immutable runs, configured quotas, and the query-only broker boundary remain.
+
 ## 2026-10-01 — Visible run failure and quota warnings
 
 The dashboard now shows the failure reason and recovery step directly below

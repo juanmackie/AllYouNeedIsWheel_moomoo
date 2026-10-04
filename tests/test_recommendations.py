@@ -10,10 +10,11 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from api.services.recommendation_ranking import format_recommendation, rank_candidates
 from api.services.recommendations import RecommendationEngine
+from core.quote_cache import OptionChainCache
+from core.ticker_utils import format_symbol
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -93,6 +94,7 @@ class TestRecommendationEngine(unittest.TestCase):
         self.mock_config_provider = MagicMock()
         self.mock_config_provider.config = {"cash_reserve_enabled": True}
         self.mock_db = MagicMock()
+        self.mock_db.get_contracts.return_value = None
         self.mock_iv_earnings = MagicMock()
         self.mock_portfolio_context_provider = MagicMock()
         self.mock_portfolio_service_provider = MagicMock()
@@ -104,6 +106,11 @@ class TestRecommendationEngine(unittest.TestCase):
         self.mock_iv_earnings.get_earnings_info.return_value = {}
 
         self.mock_conn = MagicMock()
+        self.mock_conn._quote_cache = OptionChainCache()
+        self.mock_conn._format_symbol.side_effect = format_symbol
+        self.mock_conn._option_chain_rate_limiter.get_stats.return_value = {"api_calls_count": 0}
+        self.mock_conn.get_option_contracts.return_value = []
+        self.mock_conn.get_option_quotes.return_value = {}
         self.mock_conn.get_stock_price.return_value = 150.0
         self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
 
@@ -192,21 +199,20 @@ class TestRecommendationEngine(unittest.TestCase):
             pd.DataFrame({"expiration_date": ["20261005"]}),
         )
         market_datetime = datetime(2026, 9, 28, 0, 30, tzinfo=ZoneInfo("America/New_York"))
+        self.mock_conn.get_option_quotes.return_value = {"option-code": {"strike": 90, "bid": 1, "ask": 1.1}}
         with (
-            patch.object(recommendations, "market_now", return_value=market_datetime) as market_clock,
+            patch.object(recommendations, "market_now", return_value=market_datetime),
             patch.object(
                 recommendations,
-                "fetch_option_chain_live_first",
-                return_value={"options": [{"strike": 90.0, "option_type": "PUT", "bid": 1, "ask": 1.1}]},
-            ) as fetch_chain,
+                "get_contract_directory",
+                return_value=[{"code": "option-code", "strike": 90, "expiration": "2026-10-05", "option_type": "PUT"}],
+            ) as directory,
         ):
-            evidence = engine._collect_watchlist_csp_evidence("AAPL", self.mock_portfolio_context)
-
+            engine._collect_watchlist_csp_evidence_batch(self.mock_conn, ["AAPL"], {"AAPL": {"last_price": 100}}, {})
+            evidence = engine._get_cached_watchlist_evidence("AAPL")
         self.assertTrue(evidence["ok"])
         self.assertEqual(evidence["chains"][0]["dte"], 7)
-        fetch_chain.assert_called_once()
-        self.assertEqual(fetch_chain.call_args.args[4], "20261005")
-        market_clock.assert_called_once_with()
+        self.assertEqual(directory.call_args.args[3:5], ("2026-10-05", "2026-10-05"))
 
     def test_watchlist_per_ticker_cut_uses_capital_return(self):
         from types import SimpleNamespace
@@ -396,7 +402,7 @@ class TestRecommendationEngine(unittest.TestCase):
             {"unaffordable_count": 3, "total_count": 3, "max_affordable_strike": 0.0},
         )
 
-    def test_scan_budget_counts_only_cash_fit_names_but_covers_whole_watchlist(self):
+    def test_scan_budget_counts_all_names_regardless_of_cash(self):
         from api.services.watchlist_manager import WatchlistManager
 
         tickers = [f"TICK{i}" for i in range(69)]
@@ -418,8 +424,8 @@ class TestRecommendationEngine(unittest.TestCase):
             result = engine.get_top_recommendations()
 
         self.assertEqual(result["scan_coverage"], {"scanned": 69, "total": 69, "complete": True})
-        self.assertEqual([call.args[0] for call in fetch_csp.call_args_list], tickers[:9])
-        self.assertEqual(result["preflight"]["chain_calls"], 27)
+        self.assertEqual([call.args[0] for call in fetch_csp.call_args_list], tickers)
+        self.assertEqual(result["preflight"]["chain_calls"], 138)
         self.assertEqual(result["preflight"]["watchlist_size"], 69)
         self.assertEqual(result["watchlist_cash_fit"]["unaffordable_count"], 60)
         self.mock_conn.get_price_snapshot.assert_called_once_with(tickers)
@@ -468,105 +474,10 @@ class TestRecommendationEngine(unittest.TestCase):
             all(candidate["eligibility"]["mode"] == "review_only" for candidate in effective["cc_decisions"])
         )
 
-    def test_cash_fit_budget_reaches_broker_adapter_scoring_and_snapshot(self):
-        from datetime import timezone
-
-        from moomoo import RET_OK
-
-        from api.services.watchlist_manager import WatchlistManager
-        from core.connection_manager import MoomooConnection
-        from core.utils import market_now
-        from core.wheel_runner import WheelRunner
-
-        tickers = [f"TICK{i}" for i in range(69)]
-        affordable_codes = {f"US.{ticker}" for ticker in tickers[:9]}
-        market_time = market_now()
-        expirations = [(market_time.date() + timedelta(days=dte)).strftime("%Y%m%d") for dte in (14, 21, 45)]
-        option_rows = {}
-        conn = MoomooConnection()
-        conn.is_connected = MagicMock(return_value=True)
-        conn.quote_ctx = MagicMock()
-        conn._rate_limiter.check_rate_limit = MagicMock()
-        conn._option_chain_rate_limiter.check_rate_limit = MagicMock()
-        conn.quote_ctx.get_option_expiration_date.return_value = (
-            RET_OK,
-            pd.DataFrame({"expiration_date": expirations}),
-        )
-
-        def get_chain(code, start, end, option_type):
-            option_code = f"{code}{start.replace('-', '')}P45000"
-            option_rows[option_code] = {
-                "code": option_code,
-                "option_strike_price": 45.0,
-                "option_expiry_date": start,
-                "option_type": "PUT",
-                "bid_price": 1.0,
-                "ask_price": 1.05,
-                "last_price": 1.0,
-                "volume": 100,
-                "option_open_interest": 500,
-                "option_implied_volatility": 30.0,
-                "option_delta": -0.30,
-                "update_time": market_time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            return RET_OK, pd.DataFrame([{"code": option_code, "strike_price": 45.0}])
-
-        def get_prices(codes):
-            return RET_OK, pd.DataFrame(
-                [
-                    option_rows[code]
-                    if code in option_rows
-                    else {
-                        "code": code,
-                        "last_price": 50.0 if code in affordable_codes else 250.0,
-                        "update_time": market_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }
-                    for code in codes
-                ]
-            )
-
-        conn.quote_ctx.get_option_chain.side_effect = get_chain
-        conn.quote_ctx.get_market_snapshot.side_effect = get_prices
-        self.mock_connection_provider._ensure_connection.return_value = conn
-        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
-        self.mock_watchlist_manager.preflight_scan_feasibility.side_effect = WatchlistManager(
-            self.mock_config_provider
-        ).preflight_scan_feasibility
-        engine = self._import_engine()
-        self.mock_watchlist_manager.get_screening_profile.side_effect = lambda *args, **kwargs: engine._preset_profile
-        portfolio = dict(
-            self.mock_portfolio_context,
-            cash_available_for_csp=10000.0,
-            account_value=100000.0,
-            underlying_capital_exposure={"AAPL": 30000.0},
-        )
-        self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
-
-        with patch("api.services.recommendations.is_market_open", return_value=False):
-            result = engine.get_top_recommendations()
-
-        self.assertTrue(result["success"], result)
-        self.assertEqual(result["scan_coverage"], {"scanned": 69, "total": 69, "complete": True})
-        self.assertEqual(result["preflight"]["chain_calls"], 27)
-        self.assertEqual(conn.quote_ctx.get_option_chain.call_count, 27)
-        self.assertEqual(result["count"], 3)
-        self.assertEqual(result["watchlist_csps"]["count"], 18, result["blocked_reason_counts"])
-        self.assertEqual(result["watchlist_cash_fit"]["unaffordable_count"], 60)
-        self.assertTrue(
-            all(candidate["recommended_contracts"] > 0 for candidate in result["watchlist_csps"]["signals"])
-        )
-        with patch("core.wheel_runner.is_market_open", return_value=False):
-            snapshot = WheelRunner(self.mock_db, MagicMock(), {})._build_snapshot(
-                "SIMULATE", "test-account", datetime.now(timezone.utc).isoformat(), result, portfolio, []
-            )
-        self.assertTrue(snapshot.run.coverage_complete)
-        self.assertEqual(len(snapshot.csp_picks), 18)
-        self.assertEqual(snapshot.run.status, "planning")
-
-    def test_zero_csp_cash_does_not_preflight_or_suppress_covered_calls(self):
+    def test_zero_csp_cash_preflights_without_suppressing_covered_calls(self):
         tickers = [f"TICK{i}" for i in range(69)]
         self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
-        self.mock_watchlist_manager.preflight_scan_feasibility.side_effect = AssertionError("no CSP chain calls needed")
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {"feasible": True}
         portfolio = dict(self.mock_portfolio_context, cash_available_for_csp=0.0)
         self.mock_portfolio_context_provider.get_portfolio_context.return_value = portfolio
         engine = self._import_engine()
@@ -577,8 +488,8 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertTrue(result["covered_calls"]["signals"])
         self.assertEqual(result["watchlist_cash_fit"]["unaffordable_count"], 69)
-        self.mock_conn.get_price_snapshot.assert_not_called()
-        self.mock_watchlist_manager.preflight_scan_feasibility.assert_not_called()
+        self.mock_conn.get_price_snapshot.assert_called_once_with(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.assert_called_once()
 
     def test_unknown_or_stale_batch_prices_never_remove_names_from_chain_budget(self):
         from datetime import timezone
@@ -604,7 +515,9 @@ class TestRecommendationEngine(unittest.TestCase):
                     result = engine.get_top_recommendations()
                 self.assertTrue(result["success"])
                 self.assertEqual([call.args[0] for call in fetch_csp.call_args_list], ["AAA", "BBB"])
-                self.mock_watchlist_manager.preflight_scan_feasibility.assert_called_with(2, chain_symbol_count=2)
+                self.mock_watchlist_manager.preflight_scan_feasibility.assert_called_with(
+                    2, chain_symbol_count=2, ranges_per_symbol=2, chain_calls=4
+                )
 
     def test_live_price_cash_fit_precheck_keeps_the_affordability_boundary(self):
         from datetime import timezone
@@ -634,6 +547,8 @@ class TestRecommendationEngine(unittest.TestCase):
         engine = self._import_engine()
         for ticker in tickers:
             engine._set_cached_watchlist_evidence(ticker, {"stock_price": 50.0, "chains": []})
+            start, end = engine._csp_discovery_window()
+            self.mock_conn._quote_cache.cache_contracts(f"US.{ticker}", start, end, [])
 
         with (
             patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]) as fetch_csp,
@@ -966,6 +881,7 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.mock_config_provider = MagicMock()
         self.mock_config_provider.config = {"cash_reserve_enabled": True}
         self.mock_db = MagicMock()
+        self.mock_db.get_contracts.return_value = None
         self.mock_iv_earnings = MagicMock()
         self.mock_portfolio_context_provider = MagicMock()
         self.mock_portfolio_service_provider = MagicMock()
@@ -977,6 +893,11 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.mock_iv_earnings.get_earnings_info.return_value = {}
 
         self.mock_conn = MagicMock()
+        self.mock_conn._quote_cache = OptionChainCache()
+        self.mock_conn._format_symbol.side_effect = format_symbol
+        self.mock_conn._option_chain_rate_limiter.get_stats.return_value = {"api_calls_count": 0}
+        self.mock_conn.get_option_contracts.return_value = []
+        self.mock_conn.get_option_quotes.return_value = {}
         self.mock_conn.get_stock_price.return_value = 150.0
         self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
 
@@ -1260,98 +1181,46 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertEqual(result["blocked_signals"][0]["reason_text"], "Hard blockers present")
         self.assertTrue(result["blocked_signals"][0]["from_yfinance"])
 
-    def test_zero_cash_watchlist_csp_skips_before_chain(self):
-        engine = self._import_engine()
-        self.mock_portfolio_context["positions"] = {}
-        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
-        self.mock_portfolio_context["cash_available_for_csp"] = 0.0
-        moomoo = pytest.importorskip("moomoo")
-        future_exp = (datetime.now() + timedelta(days=35)).strftime("%Y%m%d")
+    def test_zero_cash_cached_csp_is_review_only(self):
+        from core.wheel_decision import WheelDecision
 
-        class FakeConnection:
-            def is_connected(self):
-                return True
-
-            def get_cached_stock_price(self, ticker):
-                return 150.0
-
-            def get_stock_price(self, ticker):
-                return 150.0
-
-            def get_option_expiration_dates(self, ticker):
-                return moomoo.RET_OK, pd.DataFrame({"expiration_date": [future_exp]})
-
-            def get_option_chain(self, ticker, exp_str, right, target_strike=None):
-                return {
-                    "options": [
-                        {
-                            "strike": 140.0,
-                            "expiration": exp_str,
-                            "option_type": "PUT",
-                            "dte": 35,
-                            "bid": 1.5,
-                            "ask": 1.6,
-                            "last": 1.55,
-                            "open_interest": 300,
-                            "volume": 200,
-                            "delta": -0.18,
-                            "gamma": 0.02,
-                            "theta": -0.03,
-                            "vega": 0.04,
-                        }
-                    ]
-                }
-
-        fake_decision = MagicMock()
-        fake_decision.hard_blockers = []
-        fake_decision.max_contracts = 1
-        fake_decision.recommended_contracts = 1
-        fake_decision.strike = 140.0
-        fake_decision.expiration = future_exp
-        fake_decision.dte = 21
-        fake_decision.mid_price = 1.55
-        fake_decision.premium_per_contract = 155.0
-        fake_decision.bid = 1.5
-        fake_decision.ask = 1.6
-        fake_decision.annualized_return = 18.0
-        fake_decision.iv_adjusted_return = 16.0
-        fake_decision.otm_pct = 6.7
-        fake_decision.delta = -0.18
-        fake_decision.implied_volatility = 0.32
-        fake_decision.open_interest = 300
-        fake_decision.volume = 200
-        fake_decision.iv_rank = 50.0
-        fake_decision.iv_status = "normal"
-        fake_decision.iv_env_adjustment = 0
-        fake_decision.profile_type = "monthly"
-        fake_decision.earnings_date = None
-        fake_decision.days_to_earnings = None
-        fake_decision.earnings_adjustment = 0
-        fake_decision.size_fit = 1.0
-        fake_decision.expected_move_buffer = 0.0
-        fake_decision.wheel_decision = {}
-        fake_decision.rationale = ["Good premium"]
-        fake_decision.warnings = []
-        fake_decision.breakeven = 138.45
-        fake_decision.breakeven_buffer_pct = 1.0
-        fake_decision.cash_required = 14000.0
-        fake_decision.from_yfinance = False
-        fake_decision.price_source = "broker"
-        fake_decision.chain_source = "broker"
-        fake_decision.iv_source = "broker"
-        fake_decision.data_source = "broker"
-        fake_decision.to_dict.return_value = {}
-
-        with (
-            patch.object(engine, "_get_connection", return_value=FakeConnection()),
-            patch.object(engine, "_score_csp_contract", return_value=fake_decision),
-            patch("api.services.recommendations.is_market_open", return_value=True),
-        ):
-            result = engine._fetch_watchlist_csp_moomoo("AAPL", self.mock_portfolio_context)
-
-        self.assertIsInstance(result, list)
-        self.assertTrue(result[0].get("_skip_diagnostic"))
-        self.assertEqual(result[0].get("reason_code"), "no_cash_fit")
+        engine = (
+            self._import_engine()
+            if hasattr(self, "_import_engine")
+            else RecommendationEngine(
+                self.mock_connection_provider,
+                self.mock_config_provider,
+                self.mock_db,
+                self.mock_iv_earnings,
+                self.mock_portfolio_context_provider,
+                self.mock_portfolio_service_provider,
+                self.mock_watchlist_manager,
+                self.mock_options_data,
+                self.mock_cash_calculator,
+            )
+        )
+        evidence = {
+            "stock_price": 100,
+            "chains": [{"exp_str": "20261106", "dte": 35, "options": [{"strike": 90, "bid": 1, "ask": 1.1}]}],
+        }
+        decision = WheelDecision(
+            ticker="AAPL",
+            option_type="PUT",
+            strike=90,
+            expiration="20261106",
+            dte=35,
+            cash_required=9000,
+            max_contracts=1,
+            recommended_contracts=1,
+            copy_eligible=True,
+        )
+        with patch.object(engine, "_score_csp_contract", return_value=decision) as scorer:
+            result = engine._score_watchlist_csp_evidence(evidence, "AAPL", {"cash_available_for_csp": 0})
+        self.assertTrue(scorer.call_args.kwargs["research_only_mode"])
+        self.assertTrue(result[0]["research_only"])
+        self.assertFalse(result[0]["copy_eligible"])
+        self.assertEqual(result[0]["max_contracts"], 0)
+        self.assertIn("requires $9000 cash", result[0]["warnings"][-1])
 
     def test_c01_cache_holds_raw_evidence_and_rescores_on_cash_change(self):
         """C01: the watchlist cache stores raw broker evidence, never scored
@@ -1360,49 +1229,9 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         refetching the underlying chain.
         """
         engine = self._import_engine()
-        moomoo = pytest.importorskip("moomoo")
         future_exp = (datetime.now() + timedelta(days=35)).strftime("%Y%m%d")
 
-        chain_fetch_count = {"n": 0}
-
-        class FakeConnection:
-            def is_connected(self):
-                return True
-
-            def get_cached_stock_price(self, ticker):
-                return None  # force the live-price path
-
-            def get_stock_price(self, ticker):
-                return 100.0
-
-            def get_option_expiration_dates(self, ticker):
-                return moomoo.RET_OK, pd.DataFrame({"expiration_date": [future_exp]})
-
-            def get_option_chain(self, ticker, exp_str, right, target_strike=None):
-                chain_fetch_count["n"] += 1
-                # One affordable OTM PUT at strike 90 (cost $9000) on a $100 name.
-                return {
-                    "options": [
-                        {
-                            "strike": 90.0,
-                            "expiration": exp_str,
-                            "option_type": "PUT",
-                            "dte": 35,
-                            "bid": 1.5,
-                            "ask": 1.6,
-                            "last": 1.55,
-                            "open_interest": 300,
-                            "volume": 200,
-                            "delta": -0.18,
-                            "gamma": 0.02,
-                            "theta": -0.03,
-                            "vega": 0.04,
-                        }
-                    ]
-                }
-
         engine._connection_provider = MagicMock()
-        engine._connection_provider._ensure_connection.return_value = FakeConnection()
         engine._watchlist_provider = MagicMock()
         engine._watchlist_provider.get_screening_profile.return_value = {}
 
@@ -1440,6 +1269,31 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         rich_context = dict(self.mock_portfolio_context, cash_available_for_csp=10000.0)
         thin_context = dict(self.mock_portfolio_context, cash_available_for_csp=8000.0)
 
+        engine._set_cached_watchlist_evidence(
+            "AAPL",
+            {
+                "ok": True,
+                "stock_price": 100.0,
+                "quote_fetched_at_utc": "2026-10-03T00:00:00Z",
+                "chains": [
+                    {
+                        "exp_str": future_exp,
+                        "dte": 35,
+                        "options": [
+                            {
+                                "strike": 90,
+                                "bid": 1.5,
+                                "ask": 1.6,
+                                "last": 1.55,
+                                "delta": -0.18,
+                                "implied_volatility": 0.3,
+                                "expiration": future_exp,
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
         with patch("api.services.recommendations.is_market_open", return_value=True):
             rich_result = engine._fetch_watchlist_csp_moomoo("AAPL", rich_context)
             thin_result = engine._fetch_watchlist_csp_moomoo("AAPL", thin_context)
@@ -1456,14 +1310,13 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertIn("stock_price", payload)
         self.assertNotIn("wheel_decision", payload)
 
-        # At $8k the $9000 strike is no longer affordable -> the re-qualified
-        # outcome is a skip diagnostic, never the stale $10k scored candidate.
-        self.assertTrue(thin_result and any(r.get("reason_code") == "no_cash_fit" for r in thin_result))
-        self.assertFalse(any(r.get("ticker") == "AAPL" and r.get("strike") == 90.0 for r in thin_result))
+        # At $8k the same contract remains visible, with execution capacity blocked.
+        self.assertTrue(thin_result[0]["research_only"])
+        self.assertFalse(thin_result[0]["copy_eligible"])
+        self.assertEqual(thin_result[0]["strike"], 90.0)
 
-        # The chain was fetched only once: the second call reused cached raw
-        # evidence and recomputed the decision against the new cash level.
-        self.assertEqual(chain_fetch_count["n"], 1)
+        # Pure rescoring never requests broker evidence at the per-ticker seam.
+        engine._connection_provider._ensure_connection.assert_not_called()
 
     def test_c01_preset_switch_rescores_cached_evidence(self):
         """C01: switching the active preset must recompute the scored decision
@@ -1471,45 +1324,9 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         under the previous preset.
         """
         engine = self._import_engine()
-        moomoo = pytest.importorskip("moomoo")
         future_exp = (datetime.now() + timedelta(days=35)).strftime("%Y%m%d")
 
-        class FakeConnection:
-            def is_connected(self):
-                return True
-
-            def get_cached_stock_price(self, ticker):
-                return None
-
-            def get_stock_price(self, ticker):
-                return 100.0
-
-            def get_option_expiration_dates(self, ticker):
-                return moomoo.RET_OK, pd.DataFrame({"expiration_date": [future_exp]})
-
-            def get_option_chain(self, ticker, exp_str, right, target_strike=None):
-                return {
-                    "options": [
-                        {
-                            "strike": 90.0,
-                            "expiration": exp_str,
-                            "option_type": "PUT",
-                            "dte": 35,
-                            "bid": 1.5,
-                            "ask": 1.6,
-                            "last": 1.55,
-                            "open_interest": 300,
-                            "volume": 200,
-                            "delta": -0.18,
-                            "gamma": 0.02,
-                            "theta": -0.03,
-                            "vega": 0.04,
-                        }
-                    ]
-                }
-
         engine._connection_provider = MagicMock()
-        engine._connection_provider._ensure_connection.return_value = FakeConnection()
         engine._watchlist_provider = MagicMock()
         engine._watchlist_provider.get_screening_profile.return_value = {}
 
@@ -1549,6 +1366,31 @@ class TestRecommendationEngineSignals(unittest.TestCase):
 
         engine._score_csp_contract = MagicMock(side_effect=make_decision)
 
+        engine._set_cached_watchlist_evidence(
+            "AAPL",
+            {
+                "ok": True,
+                "stock_price": 100.0,
+                "quote_fetched_at_utc": "2026-10-03T00:00:00Z",
+                "chains": [
+                    {
+                        "exp_str": future_exp,
+                        "dte": 35,
+                        "options": [
+                            {
+                                "strike": 90,
+                                "bid": 1.5,
+                                "ask": 1.6,
+                                "last": 1.55,
+                                "delta": -0.18,
+                                "implied_volatility": 0.3,
+                                "expiration": future_exp,
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
         with patch("api.services.recommendations.is_market_open", return_value=True):
             engine.set_active_preset("balanced")  # csp_target_delta 0.30
             before = engine._fetch_watchlist_csp_moomoo("AAPL", context)
@@ -1769,21 +1611,46 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             f"Should not have watchlist_csp_skipped_low_buying_power blocked signal, got: {blocked}",
         )
 
-    def test_moomoo_csp_preflight_skips_chain_when_no_strike_can_fit_cash(self):
-        """Use quote-before-chain to avoid spending option-chain calls on impossible CSPs."""
-        engine = self._import_engine()
-        portfolio_context = dict(self.mock_portfolio_context)
-        portfolio_context["cash_available_for_csp"] = 1209.66
-        self.mock_conn.get_cached_stock_price.return_value = None
-        self.mock_conn.get_stock_price.return_value = 982.0
+    def test_unaffordable_csp_is_scored_in_research_mode(self):
+        from core.wheel_decision import WheelDecision
 
-        with patch("api.services.recommendations.is_market_open", return_value=True):
-            result = engine._fetch_watchlist_csp_moomoo("COST", portfolio_context)
-
-        self.assertEqual(result[0]["reason_code"], "no_cash_fit")
-        self.mock_conn.get_stock_price.assert_called_once_with("COST")
-        self.mock_conn.get_option_expiration_dates.assert_not_called()
-        self.mock_conn.get_option_chain.assert_not_called()
+        engine = (
+            self._import_engine()
+            if hasattr(self, "_import_engine")
+            else RecommendationEngine(
+                self.mock_connection_provider,
+                self.mock_config_provider,
+                self.mock_db,
+                self.mock_iv_earnings,
+                self.mock_portfolio_context_provider,
+                self.mock_portfolio_service_provider,
+                self.mock_watchlist_manager,
+                self.mock_options_data,
+                self.mock_cash_calculator,
+            )
+        )
+        evidence = {
+            "stock_price": 100,
+            "chains": [{"exp_str": "20261106", "dte": 35, "options": [{"strike": 90, "bid": 1, "ask": 1.1}]}],
+        }
+        decision = WheelDecision(
+            ticker="COST",
+            option_type="PUT",
+            strike=90,
+            expiration="20261106",
+            dte=35,
+            cash_required=9000,
+            max_contracts=1,
+            recommended_contracts=1,
+            copy_eligible=True,
+        )
+        with patch.object(engine, "_score_csp_contract", return_value=decision) as scorer:
+            result = engine._score_watchlist_csp_evidence(evidence, "COST", {"cash_available_for_csp": 1209.66})
+        self.assertTrue(scorer.call_args.kwargs["research_only_mode"])
+        self.assertTrue(result[0]["research_only"])
+        self.assertFalse(result[0]["copy_eligible"])
+        self.assertEqual(result[0]["max_contracts"], 0)
+        self.assertIn("requires $9000 cash", result[0]["warnings"][-1])
 
 
 class TestRecommendationEngineDedup(unittest.TestCase):
@@ -1794,6 +1661,7 @@ class TestRecommendationEngineDedup(unittest.TestCase):
         self.mock_config_provider = MagicMock()
         self.mock_config_provider.config = {"cash_reserve_enabled": True}
         self.mock_db = MagicMock()
+        self.mock_db.get_contracts.return_value = None
         self.mock_iv_earnings = MagicMock()
         self.mock_portfolio_context_provider = MagicMock()
         self.mock_portfolio_service_provider = MagicMock()
@@ -1802,6 +1670,11 @@ class TestRecommendationEngineDedup(unittest.TestCase):
         self.mock_cash_calculator = MagicMock()
 
         self.mock_conn = MagicMock()
+        self.mock_conn._quote_cache = OptionChainCache()
+        self.mock_conn._format_symbol.side_effect = format_symbol
+        self.mock_conn._option_chain_rate_limiter.get_stats.return_value = {"api_calls_count": 0}
+        self.mock_conn.get_option_contracts.return_value = []
+        self.mock_conn.get_option_quotes.return_value = {}
         self.mock_conn.get_stock_price.return_value = 70.0
         self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
 
@@ -1979,6 +1852,7 @@ class TestRecommendationEngineCashFields(unittest.TestCase):
         self.mock_config_provider = MagicMock()
         self.mock_config_provider.config = {"cash_reserve_enabled": True}
         self.mock_db = MagicMock()
+        self.mock_db.get_contracts.return_value = None
         self.mock_iv_earnings = MagicMock()
         self.mock_portfolio_context_provider = MagicMock()
         self.mock_portfolio_service_provider = MagicMock()
@@ -1987,6 +1861,11 @@ class TestRecommendationEngineCashFields(unittest.TestCase):
         self.mock_cash_calculator = MagicMock()
 
         self.mock_conn = MagicMock()
+        self.mock_conn._quote_cache = OptionChainCache()
+        self.mock_conn._format_symbol.side_effect = format_symbol
+        self.mock_conn._option_chain_rate_limiter.get_stats.return_value = {"api_calls_count": 0}
+        self.mock_conn.get_option_contracts.return_value = []
+        self.mock_conn.get_option_quotes.return_value = {}
         self.mock_conn.get_stock_price.return_value = 150.0
         self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
 
@@ -2038,6 +1917,7 @@ class TestRecommendationEngineSignalFields(unittest.TestCase):
         self.mock_config_provider = MagicMock()
         self.mock_config_provider.config = {"cash_reserve_enabled": True}
         self.mock_db = MagicMock()
+        self.mock_db.get_contracts.return_value = None
         self.mock_iv_earnings = MagicMock()
         self.mock_portfolio_context_provider = MagicMock()
         self.mock_portfolio_service_provider = MagicMock()
@@ -2046,6 +1926,11 @@ class TestRecommendationEngineSignalFields(unittest.TestCase):
         self.mock_cash_calculator = MagicMock()
 
         self.mock_conn = MagicMock()
+        self.mock_conn._quote_cache = OptionChainCache()
+        self.mock_conn._format_symbol.side_effect = format_symbol
+        self.mock_conn._option_chain_rate_limiter.get_stats.return_value = {"api_calls_count": 0}
+        self.mock_conn.get_option_contracts.return_value = []
+        self.mock_conn.get_option_quotes.return_value = {}
         self.mock_conn.get_stock_price.return_value = 150.0
         self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
 
@@ -2605,44 +2490,53 @@ class TestRecommendationNonDuplication(unittest.TestCase):
         wd = sig.get("wheel_decision", {})
         self.assertEqual(wd.get("iv_rank"), 0.65)
 
-    def test_cash_prefilter_runs_in_research_only_mode(self):
-        """With low cash, research_only_mode still avoids impossible chain fetches."""
-        self.mock_iv_earnings.get_iv_environment_score.return_value = (0, 0.5, "neutral")
+    def test_low_cash_labels_candidate_without_filtering_it(self):
+        from core.wheel_decision import WheelDecision
 
-        from api.services.recommendations import RecommendationEngine
-
-        engine = RecommendationEngine(
-            self.mock_connection_provider,
-            self.mock_config_provider,
-            self.mock_db,
-            self.mock_iv_earnings,
-            self.mock_portfolio_context_provider,
-            self.mock_portfolio_service_provider,
-            self.mock_watchlist_manager,
-            self.mock_options_data,
-            self.mock_cash_calculator,
+        engine = (
+            self._import_engine()
+            if hasattr(self, "_import_engine")
+            else RecommendationEngine(
+                self.mock_connection_provider,
+                self.mock_config_provider,
+                self.mock_db,
+                self.mock_iv_earnings,
+                self.mock_portfolio_context_provider,
+                self.mock_portfolio_service_provider,
+                self.mock_watchlist_manager,
+                self.mock_options_data,
+                self.mock_cash_calculator,
+            )
         )
-
-        # Set very low buying power: $200 -> even deep OTM put on $5 stock needs $250
-        portfolio = dict(
-            self.mock_portfolio_context, cash_available_for_csp=200.0, available_cash=200.0, broker_buying_power=200.0
+        evidence = {
+            "stock_price": 100,
+            "chains": [{"exp_str": "20261106", "dte": 35, "options": [{"strike": 90, "bid": 1, "ask": 1.1}]}],
+        }
+        decision = WheelDecision(
+            ticker="CHEAP",
+            option_type="PUT",
+            strike=90,
+            expiration="20261106",
+            dte=35,
+            cash_required=9000,
+            max_contracts=1,
+            recommended_contracts=1,
+            copy_eligible=True,
         )
-
-        # Mock cached stock price to return None so it falls through to live price check
-        self.mock_conn.get_cached_stock_price.return_value = None
-
-        with patch("api.services.recommendations.is_market_open", return_value=True):
-            result = engine._fetch_watchlist_csp_moomoo("CHEAP", portfolio)
-
-        self.assertEqual(result[0]["reason_code"], "no_cash_fit")
-        self.mock_conn.get_option_expiration_dates.assert_not_called()
-        self.mock_conn.get_option_chain.assert_not_called()
+        with patch.object(engine, "_score_csp_contract", return_value=decision) as scorer:
+            result = engine._score_watchlist_csp_evidence(evidence, "CHEAP", {"cash_available_for_csp": 200})
+        self.assertTrue(scorer.call_args.kwargs["research_only_mode"])
+        self.assertTrue(result[0]["research_only"])
+        self.assertFalse(result[0]["copy_eligible"])
+        self.assertEqual(result[0]["max_contracts"], 0)
+        self.assertIn("requires $9000 cash", result[0]["warnings"][-1])
 
     def setUp(self):
         self.mock_connection_provider = MagicMock()
         self.mock_config_provider = MagicMock()
         self.mock_config_provider.config = {"cash_reserve_enabled": True}
         self.mock_db = MagicMock()
+        self.mock_db.get_contracts.return_value = None
         self.mock_iv_earnings = MagicMock()
         self.mock_portfolio_context_provider = MagicMock()
         self.mock_portfolio_service_provider = MagicMock()
@@ -2651,6 +2545,11 @@ class TestRecommendationNonDuplication(unittest.TestCase):
         self.mock_cash_calculator = MagicMock()
 
         self.mock_conn = MagicMock()
+        self.mock_conn._quote_cache = OptionChainCache()
+        self.mock_conn._format_symbol.side_effect = format_symbol
+        self.mock_conn._option_chain_rate_limiter.get_stats.return_value = {"api_calls_count": 0}
+        self.mock_conn.get_option_contracts.return_value = []
+        self.mock_conn.get_option_quotes.return_value = {}
         self.mock_conn.get_stock_price.return_value = 100.0
         self.mock_connection_provider._ensure_connection.return_value = self.mock_conn
 
@@ -2840,6 +2739,7 @@ class TestRiskTierRanking(unittest.TestCase):
         self.mock_config_provider = MagicMock()
         self.mock_config_provider.config = {"cash_reserve_enabled": True}
         self.mock_db = MagicMock()
+        self.mock_db.get_contracts.return_value = None
         self.mock_iv_earnings = MagicMock()
         self.mock_portfolio_context_provider = MagicMock()
         self.mock_portfolio_service_provider = MagicMock()

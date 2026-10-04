@@ -179,7 +179,22 @@ class WheelRunner:
                     started_at=started,
                 )
             )
-            result = self._options_service.recommendation_engine.get_top_recommendations(limit=3)
+
+            def progress(stage, completed, total):
+                self._persist_attempt(
+                    RefreshAttempt(
+                        attempt_id=attempt_id,
+                        run_id=None,
+                        state="refreshing",
+                        stage=stage,
+                        progress=0.35 + 0.35 * completed / max(1, total),
+                        started_at=started,
+                    )
+                )
+
+            result = self._options_service.recommendation_engine.get_top_recommendations(
+                limit=3, progress_callback=progress
+            )
 
             if "error" in result:
                 raise RuntimeError(result["error"])
@@ -359,6 +374,7 @@ class WheelRunner:
             active_watchlist=dict(active_watchlist),
             capital_recovery=tuple(result.get("capital_recovery", []) or []),
             watchlist_cash_fit=dict(result.get("watchlist_cash_fit") or {}),
+            preflight=dict(result.get("preflight") or {}),
         )
 
     def latest(self) -> WheelRunSnapshot | None:

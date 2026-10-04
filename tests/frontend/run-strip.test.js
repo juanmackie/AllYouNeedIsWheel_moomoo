@@ -244,7 +244,8 @@ describe('visible run warnings and recovery', () => {
     expect(els['run-warning-banner'].className).toContain('alert-warning');
     expect(els['run-warning-title'].textContent).toMatch(/CSP.*quota/i);
     expect(els['run-warning-reason'].textContent).toBe('CSP scan needs 180s; budget is 120s.');
-    expect(els['run-warning-action'].textContent).toMatch(/copy.*blocked/i);
+      expect(els['run-warning-action'].textContent).toMatch(/copy.*blocked/i);
+      expect(els['run-warning-action'].textContent).toMatch(/contract discovery/i);
     renderRunStrip({ state: 'refreshing', progress: 0.5 }, quotaSnapshot);
     expect(els['run-warning-banner'].classList.contains('d-none')).toBe(false);
     renderRunStrip({ state: 'succeeded' }, GOOD_SNAPSHOT);

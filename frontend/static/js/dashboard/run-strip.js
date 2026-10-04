@@ -80,7 +80,7 @@ function renderRunWarning(attempt, snapshot) {
         setRunWarning({
             title: 'CSP scan blocked by OpenD quota',
             reason: quota.reason_text || 'The full watchlist cannot be scanned within the current OpenD quota and scan budget.',
-            action: 'Reduce a source list in the watchlist union to the suggested size, then select Refresh run. Copy actions stay blocked until coverage is complete; covered-call results are review only.',
+            action: 'Contract discovery needs more time than the configured scan budget. Review the discovery estimate, then select Refresh run. Copy actions stay blocked until coverage is complete; covered-call results are review only.',
             tone: 'warning',
         });
         return;

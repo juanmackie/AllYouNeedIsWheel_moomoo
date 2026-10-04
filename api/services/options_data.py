@@ -10,11 +10,35 @@ from datetime import datetime
 from api.services.recommendation_ranking import rank_candidates
 from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality
+from core.quote_cache import contract_windows
 from core.utils import get_closest_friday, is_market_open, market_now, safe_float
 from core.utils import normalize_expiration as _normalize_expiration
 from core.wheel_decision import score_contract
 
 logger = logging.getLogger("api.services.options_data")
+
+
+def get_contract_directory(conn, db, symbol, start, end, *, discover=True):
+    """Read through today's directory; only services persist broker metadata."""
+    code = conn._format_symbol(symbol)
+    market_date = market_now().date().isoformat()
+    contracts = {}
+    for first, last in contract_windows(start, end):
+        rows = conn._quote_cache.get_contracts(code, first, last)
+        if rows is None and db is not None:
+            rows = db.get_contracts(code, market_date, first, last)
+            if rows is not None:
+                conn._quote_cache.cache_contracts(code, first, last, rows)
+        if rows is None:
+            if not discover:
+                return None
+            rows = conn.get_option_contracts(code, first, last)
+            if rows is None:
+                return None
+            if db is not None:
+                db.save_contracts(code, market_date, first, last, rows)
+        contracts.update({row["code"]: row for row in rows})
+    return list(contracts.values())
 
 
 def _parse_expiration_date(expiration):
@@ -65,6 +89,11 @@ def fetch_option_chain_live_first(conn, db, config, ticker, expiration, right, t
     market_closed = not is_market_open()
     right = str(right or "C").upper()
     try:
+        # Hydrate the connection directory from SQLite before a legacy chain
+        # caller asks for fresh quotes. Quote force-refresh never invalidates it.
+        exp_date = _parse_expiration_date(expiration)
+        if exp_date is not None and hasattr(conn, "get_option_contracts"):
+            get_contract_directory(conn, db, ticker, exp_date.isoformat(), exp_date.isoformat())
         try:
             chain = conn.get_option_chain(
                 ticker,

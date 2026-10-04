@@ -278,7 +278,7 @@ class StubRecommendationEngine:
             self._db.set_setting("wheel_preset", key)
         return True
 
-    def get_top_recommendations(self, limit=3):
+    def get_top_recommendations(self, limit=3, progress_callback=None):
         fixture = _snapshot_fixture()
         refresh = fixture.get("refresh", {})
         mode = refresh.get("mode", "fast")
@@ -523,7 +523,7 @@ def _seed_run(db, scene, preset_key="balanced"):
                 "ticker": "__lane__",
                 "option_type": "PUT",
                 "reason_code": "scan_infeasible",
-                "reason_text": "CSP scan needs 180s; scan budget is 120s. Reduce the watchlist union to 1 ticker.",
+                "reason_text": "Contract discovery needs 180s; discovery budget is 120s. Incomplete coverage blocks copy.",
             },
         )
 

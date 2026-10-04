@@ -25,9 +25,17 @@ There is no order, unlock, or trading-password endpoint.
 
 A quota-infeasible CSP lane retains covered-call diagnostics in the published
 planning snapshot. Its `rejected` list includes `scan_infeasible`, coverage stays
-incomplete, and every signal is review-only. CSP feasibility follows broker
-cash-fit assessment; proven unaffordable names remain in coverage with
-`no_cash_fit` and appear in `watchlist_cash_fit`.
+incomplete, and every signal is review-only. CSP feasibility charges uncached contract-directory ranges against a separate
+900-second discovery budget, independently of quote freshness and free cash.
+`GET /api/run` snapshot `preflight` includes `chain_calls`, `chain_symbol_count`,
+`ranges_per_symbol`, `estimated_scan_sec`, `discovery_budget_sec`, quota/spacing
+configuration, feasibility, and estimated capacity. `freshness_window_sec` is
+retired. `RefreshAttempt.stage="discover"` reports discovery progress.
+Unaffordable names appear in `watchlist_cash_fit`, but still get discovery and
+scoring; their published picks have zero contracts and review-only eligibility.
+Successful empty contract windows count as assessed (`no_contracts_in_window`).
+Option-contract watchlist entries are listed as unsupported and excluded from
+the underlying coverage total.
 
 ### Settings
 - `GET /api/settings` — presets, active key, effective read-only values

@@ -28,8 +28,9 @@
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
 - `test_recommendations.py` verifies complete watchlist-union scanning and deterministic capital-return-on-deployed-capital ordering with executable-bid velocity as tie-break (quality/event tiers are display-only risk info and never order); infeasible unions publish `planning` rather than truncating.
-- Scan-budget regressions exercise the real broker adapter and scorer with synthetic query-only SDK responses: large watchlists with cash-fit rejections retain complete coverage and picks, genuinely infeasible CSP lanes retain covered-call diagnostics without enabling copy, and unknown/stale prices remain in the chain budget.
+- `test_full_watchlist_discovery.py` exercises the real broker adapter, SQLite directory, and scorer with synthetic query-only SDK responses: 69-symbol cold/warm/restart coverage, zero-cash review-only picks, fitting-first lane order, empty successful discovery, 400-code batches, date/window boundaries, and over-budget planning. Unknown/stale prices never prune discovery. `test_portfolio_context.py` covers net cash provenance through live and cached contexts.
 - Use Arrange-Act-Assert when conventional; cover success/failure/boundary; report skipped/flaky/blockers explicitly, alongside changes, verification, assumptions, and risks.
+- `test_probe_option_chain_cost.py` verifies the manual discovery/quote capability gate using synthetic query-only frames: missing quote fields and broker failures cannot produce a go, and fewer than 400 codes leaves capacity unmeasured.
 
 ## Verification
 

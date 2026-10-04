@@ -1,18 +1,19 @@
 # Windows/OpenD Acceptance Runbook — Staging → Copy → Reconcile
 
-## Status: Sessions 1–3 UNEXECUTED · two measurement read-rounds executed 2026-09-20
+## Status: Session 1 automated scan measurements executed 2026-10-03 · owner checks and Sessions 2–3 pending
 
-> **Sessions 1–3 below are still UNEXECUTED.** They require a live Moomoo/OpenD login and a
-> REAL account; they cannot be executed from CI, a sandbox, or any machine without OpenD.
-> No S1–S3 result cell is filled in by anyone but the owner during a real session. Any
-> number in this document is a config default, a recorded broker result, or prior
-> historical data clearly labeled `[Historical]` — never a fabricated session result.
+> **Session 1's automated query-only scan checks ran on the owner's Windows machine
+> against the configured REAL account on 2026-10-03.** Owner comparison of cards against
+> the Moomoo UI, manual copying, and Sessions 2–3 remain pending. Recorded cells identify
+> measured broker results; unmeasured values stay `unknown`. These live checks cannot
+> be replaced by CI or a machine without OpenD.
 >
-> **Executed instead, and recorded below:** two measurement read-rounds on 2026-09-20 —
+> **Earlier measurements, recorded below:** two read-rounds on 2026-09-20 —
 > the outcome-ingestion verification ("First real read") and the attribution round
 > ("Second read"). Both ran against the owner's live REAL OpenD using query-only broker
-> calls. They cover the outcome/attribution half of acceptance; staging, copying, latency,
-> and position/collateral reconciliation remain unexercised.
+> calls. They cover outcome/attribution; the new Session-1 measurements cover scan
+> latency and backend staging eligibility. Manual copying and position/collateral
+> reconciliation remain unexercised.
 
 Purpose: accept the daily wheel workflow on the owner's Windows + local OpenD setup,
 measure real scan latency and OpenD limiter behavior, and record honest, broker-verified
@@ -66,8 +67,8 @@ outcomes — in exactly three sessions:
 | Metric | Source |
 |---|---|
 | Complete-coverage % | `GET /api/run` → `run.coverage_scanned / run.coverage_total`; 100 % + no errors is required for a staged/live copy ticket. Run strip shows coverage live. |
-| Cold vs warm scan duration | `[TIMING]` lines in console/log: `Get connection`, `Portfolio context`, `Watchlist CSP scan`, `Covered call scan`, `Scoring & ranking`, `Total`. Cold = first refresh after app/OpenD start; warm = immediate subsequent refresh reusing ticker cache + broker cache. |
-| Per-lane attribution | `[TIMING] …CSP scan` vs `[TIMING] …Covered call scan`. Closed-market CC timings are artificially low when `broker_cache_after_hours=true` serves persisted chains — attribute, don't extrapolate. |
+| Cold vs warm scan duration | Refresh-attempt elapsed time plus `[TIMING]` phases, including `Contract discovery` and `Option quotes`. Cold = missing today's contract directory; warm = same-US-date directory reused, including after an app restart. Quote snapshots are refreshed in either case. |
+| Per-lane attribution | `[TIMING] …CSP scan` vs `[TIMING] …Covered call scan`. Record directory hits separately from fresh quote requests; closed-market results do not establish live-session latency or actionability. |
 | OpenD request counts | `GET /api/options/connection-status` → `rate_limit_stats.api_calls_count`, `rate_limit_events` (quote limiter) and `option_chain_rate_limit_stats.api_calls_count`, `rate_limit_events` (chain limiter). |
 | Limiter waits | `option_chain_rate_limit_stats.rate_limit_waits`, `current_queue_length`, `min_request_spacing`, `adapted`; effective values in `option_chain_rate_limit_config` (`max_requests_per_window`, `rate_limit_window`, `min_request_spacing`). |
 | Run state | `GET /api/run` → `state` / `effective_status` (`ready` | `planning` | `stale` | `partial`), `tradeable`, `market_state`, `errors`. |
@@ -89,6 +90,19 @@ Ticket semantics (from the app, not this runbook's choices):
 
 ## Session 1 — Australian-evening staging session
 
+**Contract-directory redesign prerequisite (2026-10-03):** run
+`.venv/Scripts/python tools/probe_option_chain_cost.py --group All` with OpenD
+logged in and the US market closed. A `go` requires successful ranged discovery
+of both option types and multiple expiries, a successful 400-code snapshot, and
+usable bid/ask/delta/IV/broker timestamps. Preserve the report's field-population
+counts; this probe does not establish full-union coverage or shortlist quality.
+
+| Step-0 attempt | OpenD reachable | Ranged-chain measurements | 400-code snapshot measurements | Decision |
+|---|---|---|---|---|
+| 2026-10-03, initial configured-endpoint attempt | No (`ConnectionRefusedError`) | Unmeasured | Unmeasured | Blocked at this attempt |
+| 2026-10-03 07:01:09 UTC, retry after OpenD started, US market closed | Yes | WMT: 378 rows / 1.619 s; AXP: 466 / 1.620 s; V: 476 / 1.582 s. One ALL query each, four expiries (Oct 16/23/30, Nov 6), both rights | 400/400 returned in 0.477 s; bid 305, ask 394, delta 362, IV 362, update_time 400 populated; 273 usable across all fields | Go; measured prerequisite passed |
+
+
 Goal: one complete union scan in the owner's evening (US market likely closed), producing
 the full shortlist where every card is either a staged ticket or a visible blocker; record
 cold/warm latency and limiter metrics at the **current** `connection.json` values.
@@ -103,18 +117,18 @@ cold/warm latency and limiter metrics at the **current** `connection.json` value
 3. Immediately repeat → warm refresh; capture the same `[TIMING]` lines.
 4. After each: `GET /api/run` (state, coverage %, freshness, errors) and
    `GET /api/options/connection-status` (request counts, limiter waits) into the log.
-5. For the top-3 cards, confirm ordering is descending executable return on deployed
+5. For the top-3 cards, confirm cash-fitting CSPs precede research-only CSPs; within
+   each partition, ordering is descending executable return on deployed
    capital per day, then executable-bid premium velocity per day tie-break, then
    ticker/expiry/strike/option-type; quality/event tiers, midpoint, and composite score
    must not reorder cards.
-6. For every card record the ticket branch: **staged** (complete coverage, persisted-`ready`
-   market closes in-window) or **visible blocker** with its exact reason text. A
-   closed-market run that persists `planning` yields blocked/review-only tickets — that is
-   an expected branch to record, not a failure (unless a card shows a blocker that shouldn't
-   apply, e.g. coverage < 100 % on a complete scan).
-7. Do **not** present any closed-market timing as full-scanner latency: CSP lanes may be
-   skipped or served last-session chains when closed. Full CSP + tradeable-path timing is
-   Session 2's job.
+6. For every card record the ticket branch: **staged** (complete coverage and usable
+   last-session broker evidence) or **visible blocker** with its exact reason text.
+   A complete closed-market run persists `planning` and can have staged tickets;
+   incomplete coverage, missing quotes, or insufficient capacity keep tickets review-only.
+7. Closed-market timings measure complete discovery and quote scanning, including CSPs
+   at zero cash. Fresh live-session quote checks and tradeable-path timing remain Session
+   2's job.
 
 **Compare against Moomoo** (per card, against the Moomoo app / chain): ticker, expiry,
 strike; executable bid premium per contract vs Moomoo's last quote; midpoint limit target
@@ -128,11 +142,24 @@ per-lane s, warm total s and per-lane s, OpenD quote + chain request counts,
 `rate_limit_waits` / queue depth / effective spacing / `adapted`, run state, and the
 staged-vs-blocked branch per card.
 
-**Session-1 log (UNEXECUTED — owner fills)**
+**Session-1 log (automated scan checks measured; owner card comparison pending)**
 
 | # | connection.json values | union size | market_state | run state | cold total (s) | warm total (s) | CSP lane (s) | CC lane (s) | coverage % | quote reqs | chain reqs | limiter waits | adapted | staged | blocked (reason) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| S1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| S1 automated, 2026-10-03, All / aggressive | Existing quota 10/30 s; spacing 1.0 s; discovery budget 900 s; no quota changes | 67 supported underlyings | closed | planning, complete | 234.04 | 8.93 | 4.44 (final warm verification) | 1.18 (final warm verification) | 100%, no errors | Final: 9 option batches / 3,287 codes; other quote requests unknown | Cold 67; immediate warm 0; restart 0 | unknown | unknown | Final: 4 CSP + 1 CC | Final: 6 CSP review-only; 4 unaffordable, 2 other capacity gates |
+
+The cold and immediate warm runs measured the new discovery path before a quote-source
+provenance defect was corrected. Final verification with that correction took **11.76 s**
+after restart, still made **zero new chain calls**, and published **10 CSPs and one covered
+call**. `GET /api/run` reported `coverage_complete: true`, 67/67, and no errors. Available
+CSP cash was the broker's net **$1,082.39**, rather than zero. Every unaffordable CSP had
+zero contracts, review-only eligibility, and copy blocked. The current group contained
+one expired option code, `US.SOXL260911P105000`, listed as unsupported with reason
+`option contract, not an underlying`; it was excluded from the denominator. Parser tests
+also cover the second expired code present in the earlier September evidence.
+
+These are real broker/API measurements, not owner confirmation of displayed prices,
+manual copy behavior, or market-open `ready` status. Those checks remain pending.
 
 ---
 
@@ -157,8 +184,9 @@ quantity/collateral checks. This is **the only session that may exercise a live 
      warning line on the ticket.
    - `recommended_contracts` quantity vs max affordable by cash (100 × strike per contract)
      and vs 100-share owned for covered calls.
-   - Cash required vs `cash_available_for_csp` minus reserved short-put collateral; margin
-     buying power is display-only.
+   - Cash required vs `cash_available_for_csp`; gross broker cash subtracts reserved
+     short-put collateral once, while net available-cash fields are used directly.
+     Margin buying power is display-only.
 4. Copy the live draft and paste into Moomoo order entry; verify action (SELL TO OPEN
    CSP / SELL TO OPEN COVERED CALL), ticker, expiry, strike, x qty, limit. If Session 1's
    staging branch is in effect at this moment (closed market), the ticket is staged and must
@@ -228,7 +256,8 @@ Session-2 tickets are measured vs unsupported.
 
 ## First real read — 2026-09-20 (ingest verification; **NOT** Session 3)
 
-This is not the three-session acceptance run. Sessions 1–3 are still UNEXECUTED. What was
+This historical section is not the three-session acceptance run. At that date, Sessions
+1–3 were still UNEXECUTED. What was
 executed is the outcome-ingestion path against a live REAL OpenD connection, to find out
 whether the measurement loop produces honest numbers at all.
 

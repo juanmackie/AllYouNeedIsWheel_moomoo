@@ -209,7 +209,7 @@ class PortfolioContext:
         # CSP affordability uses TRUE available cash minus reserved collateral.
         # Margin buying power is display-only context.
         context["cash_available_for_csp"], csp_cash_source_label = _csp_cash_available(
-            context["available_cash"], true_cash_source, cash_reserved
+            context["available_cash"], summary.get("available_cash_source") or true_cash_source, cash_reserved
         )
         context["_cash_diagnostics"] = {
             "raw_summary_fields": {
@@ -387,7 +387,7 @@ class PortfolioContext:
             # short-put collateral. Margin buying power remains display-only
             # context and must never feed CSP capacity.
             context["cash_available_for_csp"], csp_cash_source_label = _csp_cash_available(
-                context["available_cash"], true_cash_source, cash_reserved
+                context["available_cash"], summary.get("available_cash_source") or true_cash_source, cash_reserved
             )
 
             # Diagnostics: expose raw summary fields for debugging

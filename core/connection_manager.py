@@ -11,7 +11,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 try:
@@ -54,7 +54,7 @@ from core.logging_config import get_logger
 from core.quote_cache import OptionChainCache, PendingRequestCoordinator
 from core.rate_limiter import RateLimiter
 from core.ticker_utils import TickerCache, format_symbol
-from core.utils import safe_float
+from core.utils import market_now, safe_float
 
 logger = get_logger("ayniwheel.connection", "moomoo")
 
@@ -795,7 +795,129 @@ class MoomooConnection:
             logger.error(f"Error getting owner plate for {symbol}: {str(e)}")
             return RET_ERROR, None
 
+    def get_option_contracts(self, symbol, start_date, end_date):
+        """Discover both rights in one bounded query; directory data is not a quote."""
+        first, last = date.fromisoformat(start_date), date.fromisoformat(end_date)
+        if not 0 <= (last - first).days <= 29:
+            raise ValueError("Contract discovery requires an inclusive window of at most 30 days")
+        symbol = self._format_symbol(symbol)
+        if not self._ensure_quote_context():
+            return None
+        self._acquire_option_chain_gate(f"contracts:{symbol}:{start_date}:{end_date}")
+        try:
+            cached = self._quote_cache.get_contracts(symbol, start_date, end_date)
+            if cached is not None:
+                return cached
+            self._option_chain_rate_limiter.check_rate_limit()
+            ret, data = self.quote_ctx.get_option_chain(
+                code=symbol, start=start_date, end=end_date, option_type=OptionType.ALL
+            )
+            if ret != RET_OK or data is None:
+                if _is_rate_limit_response(data):
+                    self._option_chain_rate_limiter.record_rate_limit(_safe_str(data))
+                return None
+            contracts = []
+            for _, row in data.iterrows():
+                expiration = str(row.get("strike_time", ""))[:10]
+                strike = safe_float(row.get("strike_price"), default=None)
+                right = str(row.get("option_type", ""))
+                if not row.get("code") or strike is None or not math.isfinite(strike) or strike <= 0:
+                    raise ValueError("Invalid broker contract metadata")
+                if not start_date <= expiration <= end_date or right not in {"CALL", "PUT"}:
+                    raise ValueError("Unexpected broker contract window or right")
+                contracts.append(
+                    {"code": str(row["code"]), "strike": strike, "expiration": expiration, "option_type": right}
+                )
+            self._quote_cache.cache_contracts(symbol, start_date, end_date, contracts)
+            return contracts
+        except Exception as exc:
+            if _is_rate_limit_response(exc):
+                self._option_chain_rate_limiter.record_rate_limit(_safe_str(exc))
+            logger.warning("Contract discovery failed for %s: %s", symbol, _safe_str(exc))
+            return None
+        finally:
+            MoomooConnection._option_chain_gate.release()
+
+    @staticmethod
+    def _option_from_snapshot(row, fetched_at):
+        """Preserve broker fields and timestamps; missing values never become evidence."""
+        return {
+            "strike": safe_float(row.get("option_strike_price")),
+            "expiration": str(row.get("option_expiry_date", "") or row.get("strike_time", "")).replace("-", ""),
+            "option_type": str(row.get("option_type", "")),
+            "bid": safe_float(row.get("bid_price")),
+            "ask": safe_float(row.get("ask_price")),
+            "last": safe_float(row.get("last_price")),
+            "volume": int(safe_float(row.get("volume"))),
+            "open_interest": int(safe_float(row.get("option_open_interest", row.get("open_interest")))),
+            "implied_volatility": _normalize_iv(row.get("option_implied_volatility", 0)),
+            "delta": safe_float(row.get("option_delta")),
+            "gamma": safe_float(row.get("option_gamma")),
+            "theta": safe_float(row.get("option_theta")),
+            "vega": safe_float(row.get("option_vega")),
+            "update_time": str(row.get("update_time", "") or ""),
+            "quote_fetched_at_utc": fetched_at,
+        }
+
+    def get_option_quotes(self, codes):
+        """Fetch option snapshots in unique batches of at most 400 codes."""
+        requested = list(dict.fromkeys(codes or []))
+        quotes = {}
+        for offset in range(0, len(requested), 400):
+            batch = requested[offset : offset + 400]
+            ret, data = self.get_market_snapshot(batch)
+            if ret != RET_OK or data is None:
+                continue
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            for _, row in data.iterrows():
+                code = row.get("code")
+                if code in batch:
+                    try:
+                        quotes[code] = self._option_from_snapshot(row, fetched_at)
+                    except (ValueError, TypeError, OverflowError):
+                        logger.warning("Invalid option snapshot for %s", code)
+        return quotes
+
     def get_option_chain(
+        self, symbol, expiration=None, right="C", target_strike=None, data_filter=None, force_refresh=False
+    ):
+        if data_filter is not None:
+            return self._get_filtered_option_chain(symbol, expiration, right, target_strike, data_filter, force_refresh)
+        symbol = self._format_symbol(symbol)
+        if not force_refresh:
+            cached = self._quote_cache.get_option_chain(symbol, expiration, right)
+            if cached is not None:
+                return cached
+        if expiration:
+            first = datetime.strptime(str(expiration).replace("-", ""), "%Y%m%d").date()
+            last = first
+        else:
+            first = market_now().date()
+            last = first + timedelta(days=29)
+        contracts = self.get_option_contracts(symbol, first.isoformat(), last.isoformat())
+        if contracts is None:
+            return None
+        option_type = "CALL" if right == "C" else "PUT"
+        contracts = [row for row in contracts if row["option_type"] == option_type]
+        if target_strike:
+            contracts = sorted(contracts, key=lambda row: abs(row["strike"] - float(target_strike)))[:20]
+        quotes = self.get_option_quotes([row["code"] for row in contracts])
+        if any(row["code"] not in quotes for row in contracts):
+            return None
+        options = [quotes[row["code"]] for row in contracts]
+        result = {
+            "symbol": symbol.split(".")[-1],
+            "expiration": str(expiration or "").replace("-", ""),
+            "stock_price": None,
+            "right": right,
+            "options": options,
+        }
+        if not result["expiration"] and options:
+            result["expiration"] = options[0]["expiration"]
+        self._quote_cache.cache_option_chain(symbol, expiration, right, result)
+        return result
+
+    def _get_filtered_option_chain(
         self, symbol, expiration=None, right="C", target_strike=None, data_filter=None, force_refresh=False
     ):
         symbol = self._format_symbol(symbol)
@@ -875,29 +997,7 @@ class MoomooConnection:
                 quote_fetched_at_utc = datetime.now(timezone.utc).isoformat()
                 if ret == RET_OK:
                     for _, row in snap_data.iterrows():
-                        opt_expiry = row.get("option_expiry_date", "") or row.get("strike_time", "")
-                        if opt_expiry:
-                            opt_expiry = opt_expiry.replace("-", "")
-
-                        option_data = {
-                            "strike": float(row.get("option_strike_price", 0)),
-                            "expiration": opt_expiry,
-                            "option_type": "CALL" if row.get("option_type") == "CALL" else "PUT",
-                            "bid": float(row.get("bid_price", 0)),
-                            "ask": float(row.get("ask_price", 0)),
-                            "last": float(row.get("last_price", 0)),
-                            "volume": int(row.get("volume", 0)),
-                            "open_interest": int(row.get("option_open_interest", row.get("open_interest", 0)) or 0),
-                            "implied_volatility": _normalize_iv(row.get("option_implied_volatility", 0)),
-                            "delta": float(row.get("option_delta", 0)),
-                            "gamma": float(row.get("option_gamma", 0)),
-                            "theta": float(row.get("option_theta", 0)),
-                            "vega": float(row.get("option_vega", 0)),
-                            # Broker quote timestamp — preserved verbatim so the
-                            # decision layer can fail closed on stale quotes.
-                            "update_time": str(row.get("update_time", "") or ""),
-                            "quote_fetched_at_utc": quote_fetched_at_utc,
-                        }
+                        option_data = self._option_from_snapshot(row, quote_fetched_at_utc)
                         result["options"].append(option_data)
             finally:
                 MoomooConnection._option_chain_gate.release()

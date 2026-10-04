@@ -1390,7 +1390,7 @@ function updateWatchlistCashFitWarning(result) {
         return;
     }
 
-    warning.textContent = `${unaffordable} of ${total} watchlist names currently have no affordable CSP strike. Maximum affordable strike: ${formatCurrency(Math.max(0, maxAffordableStrike))}. Adjust the watchlist or add CSP-eligible cash.`;
+    warning.textContent = `${unaffordable} of ${total} watchlist names currently have no affordable CSP strike. Maximum affordable strike: ${formatCurrency(Math.max(0, maxAffordableStrike))}. Every name is assessed; unaffordable picks are review only with copy blocked.`;
     warning.classList.remove('d-none');
 }
 

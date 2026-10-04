@@ -46,18 +46,34 @@ npm test -- tests/frontend/top-recommendations.test.js
 
 ## Manual Windows/OpenD smoke
 
+Before implementing the contract-directory scan redesign, run the query-only
+capability gate with OpenD logged in during a closed US market:
+
+```powershell
+.venv/Scripts/python tools/probe_option_chain_cost.py --group All
+```
+
+It measures one 7–35 DTE ranged chain query per sampled underlying (2–3 group
+members), then exactly one snapshot request for 400 distinct option codes.
+Record row counts, expiries, elapsed times, populated quote fields, and the
+decision in `docs/acceptance-runbook.md`. Exit 0 means the measured gate passed;
+exit 1 means no-go; exit 2 means blocked/unmeasured. An open-market pass cannot
+establish closed-market capability. No account balances or orders are queried.
+
+
 1. Start OpenD, log in, launch the app, and confirm the operational strip shows
    the environment, read-only state, market state, run status, coverage, and
    quote age.
 2. Toggle dark and light modes and confirm text, signals, warnings, and the
    OpenD connection indicator remain readable.
-3. Confirm the effective watchlist is the complete canonical union. A feasible
-   refresh assesses every symbol: broker-proven cash-fit rejections appear in
-   coverage without requiring option chains. Compare those rejections with
-   Moomoo prices and available CSP cash. An infeasible CSP lane publishes
-   `planning` with incomplete coverage and a quota warning directly below the
-   run strip, with the reason and suggested recovery step; covered
-   calls remain visible for review, and copy stays blocked on all cards.
+3. Confirm the effective watchlist is the complete supported canonical union,
+   with option codes listed as unsupported. A feasible refresh assesses every
+   underlying at any cash balance. Compare cold/warm chain-call counts; a warm
+   same-US-date refresh should use zero new discovery calls. Successful empty
+   windows count as assessed; broker failures keep coverage incomplete.
+   Unaffordable CSP picks show required versus available cash with zero
+   contracts and copy blocked. Over-budget discovery publishes planning,
+   retains covered-call diagnostics, and explains the discovery budget.
 4. Refresh `/api/run` from the dashboard. Confirm one immutable last-good
    snapshot remains visible while a refresh is in flight or fails. If a
    refresh fails, confirm its error and retry guidance are visible above the
@@ -70,7 +86,8 @@ npm test -- tests/frontend/top-recommendations.test.js
 5. Compare each card's executable bid, bid premium velocity, midpoint
    **limit target—not guaranteed**, DTE, spread, OI/volume, cycle/annualized
    yield, source, broker timestamp, and UTC fetch time against Moomoo.
-6. Confirm ordering is descending executable capital return per deployed dollar
+6. Confirm cash-fitting CSPs precede research-only CSPs; within each partition,
+   ordering is descending executable capital return per deployed dollar
    per day, then bid premium velocity and ticker/expiry/strike/option-type;
    quality/event tiers, midpoint, and composite score cannot reorder cards.
 7. Confirm any copy_eligible card (qualified or marginal, Moomoo-sourced, positive
@@ -82,8 +99,8 @@ npm test -- tests/frontend/top-recommendations.test.js
    capacity, and research-only mode. Copied quantity is the backend
    `recommended_contracts`. A closed-market ticket is staged for manual placement
    before/at the US open; verify the live quote before placing it in Moomoo.
-8. Confirm true available cash minus reserved short-put collateral controls CSP
-   affordability; margin buying power is display-only.
+8. Confirm net broker available cash controls CSP affordability directly; gross
+   cash subtracts reserved short-put collateral once. Margin buying power is display-only.
 9. Confirm the Outcomes panel (below the growth panel) renders from local SQLite
    without an OpenD gate: totals (sample size, coverage %, measured/unknown/pending
    counts, net outcome, capital-days, owner $/day, avg slippage), the four

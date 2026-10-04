@@ -29,6 +29,8 @@
 - Decision helpers for read-only panels should prefer plain-English blockers/rationale and preserve the ability to surface research-only outcomes.
 - Avoid import-time network calls, thread starts, or DB writes.
 - Reuse `ticker_utils`, `rate_limiter`, and logging helpers instead of local one-off versions.
+- `MoomooConnection.get_option_contracts` discovers both option rights in inclusive ranges of at most 30 days through the chain limiter and gate. `OptionChainCache` reuses covered ranges only on the exact US market date; quote force-refresh never invalidates this metadata. `get_option_quotes` batches fresh snapshots at 400 codes and preserves broker timestamps. Core never persists directories; services supply SQLite read-through.
+- `WheelRunner` persists discovery progress separately from its immutable published snapshot; snapshot `preflight` reports discovery-budget arithmetic independently of quote freshness.
 - Cross-layer composition (e.g. roll diagnostics needing registered services) is injected as a provider callable at factory time (`api/__init__.py` → `WheelRunner(roll_diagnostics_provider=...)`); never import `api` from `core`.
 
 ## Verification

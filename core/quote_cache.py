@@ -10,10 +10,22 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import date, timedelta
 
-from core.utils import is_market_open
+from core.utils import is_market_open, market_now
 
 logger = logging.getLogger("core.quote_cache")
+
+
+def contract_windows(start, end):
+    """Split an inclusive expiry window into SDK-compatible 30-day ranges."""
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    if last < first:
+        raise ValueError("Contract window end precedes start")
+    while first <= last:
+        stop = min(first + timedelta(days=29), last)
+        yield first.isoformat(), stop.isoformat()
+        first = stop + timedelta(days=1)
 
 
 class OptionChainCache:
@@ -28,10 +40,42 @@ class OptionChainCache:
     def __init__(self, chain_ttl: int = 180, expiration_ttl: int = 300, broker_cache_after_hours: bool = True):
         self._chain_cache: dict = {}
         self._expiration_cache: dict = {}
+        self._contract_directory: dict = {}
         self._lock = threading.Lock()
         self._chain_ttl = int(chain_ttl)
         self._expiration_ttl = int(expiration_ttl)
         self.broker_cache_after_hours = bool(broker_cache_after_hours)
+
+    def get_contracts(self, symbol, start, end):
+        """Return covered directory rows for today, including an empty success."""
+        market_date = market_now().date().isoformat()
+        with self._lock:
+            entries = self._contract_directory.get((symbol, market_date), [])
+            through = date.fromisoformat(start)
+            last = date.fromisoformat(end)
+            rows = {}
+            for window_start, window_end, contracts in sorted(entries, key=lambda entry: entry[:2]):
+                if date.fromisoformat(window_start) > through:
+                    break
+                if date.fromisoformat(window_end) < through:
+                    continue
+                for contract in contracts:
+                    if start <= contract["expiration"] <= end:
+                        rows[contract["code"]] = dict(contract)
+                through = date.fromisoformat(window_end) + timedelta(days=1)
+                if through > last:
+                    return list(rows.values())
+        return None
+
+    def cache_contracts(self, symbol, start, end, contracts):
+        market_date = market_now().date().isoformat()
+        with self._lock:
+            self._contract_directory = {
+                key: value for key, value in self._contract_directory.items() if key[1] == market_date
+            }
+            entries = self._contract_directory.setdefault((symbol, market_date), [])
+            entries[:] = [entry for entry in entries if entry[:2] != (start, end)]
+            entries.append((start, end, [dict(row) for row in contracts]))
 
     def get_option_chain(self, symbol, expiration, right):
         cache_key = f"{symbol}_{expiration}_{right}"

@@ -24,6 +24,7 @@ logger = logging.getLogger("db.database")
 
 
 DEFAULT_RETENTION_DAYS = {
+    "option_contracts": ("fetched_at", 7),
     "option_chain_snapshots": ("as_of", 14),
     "run_metadata": ("published_at", 365),
     "refresh_attempts": ("created_at", 365),
@@ -518,6 +519,12 @@ class OptionsDatabase:
 
     def get_option_chain_snapshot(self, ticker, expiration, right):
         return self._option_chains.get_snapshot(ticker, expiration, right)
+
+    def save_contracts(self, symbol, market_date, start, end, contracts):
+        return self._option_chains.save_contracts(symbol, market_date, start, end, contracts)
+
+    def get_contracts(self, symbol, market_date, start, end):
+        return self._option_chains.get_contracts(symbol, market_date, start, end)
 
     def get_latest_option_chain(self, ticker, right, max_age_hours=168):
         return self._option_chains.get_latest_for_ticker(ticker, right, max_age_hours=max_age_hours)

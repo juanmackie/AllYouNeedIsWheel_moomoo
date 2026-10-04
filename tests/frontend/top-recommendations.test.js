@@ -197,7 +197,8 @@ describe('top-recommendations empty state', () => {
     expect(warning.classList.contains('d-none')).toBe(false);
     expect(warning.textContent).toContain('4 of 20');
     expect(warning.textContent).toContain('$83');
-    expect(warning.textContent.toLowerCase()).toContain('adjust the watchlist');
+    expect(warning.textContent.toLowerCase()).toContain('every name is assessed');
+    expect(warning.textContent.toLowerCase()).toContain('copy blocked');
   });
 
   it('hides the watchlist cash-fit warning when all names can fit', async () => {

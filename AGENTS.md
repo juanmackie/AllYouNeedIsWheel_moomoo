@@ -17,6 +17,7 @@ AllYouNeedIsWheel scans the user's Moomoo watchlist for the top 3 cash-secured p
 - `db/` — SQLite schema, migrations, pooling, repositories.
 - `frontend/` — Jinja templates, CSS, static assets, browser JS for the one-screen dashboard.
 - `tests/` — Python, frontend, fixture, and e2e verification.
+- `tools/probe_option_chain_cost.py` — manual query-only Step-0 capability gate for ranged contract discovery and 400-code option snapshots; no scan redesign proceeds until its closed-market measurements pass.
 - `.github/` — GitHub Actions workflows.
 - `core/scheduler.py` and out-of-scope features (LLM, macro, catalyst, dynamic screening, long options) were removed in the 2026-08-02 consolidation; Docker packaging was also removed (Windows/loopback single-process only); see `docs/migration-ledger.md`.
 - `README.md`, `API.md`, `SCORING.md`, `CHANGELOG.md`, and `OVERARCHING GOAL.txt` are durable human docs; update only when their public contracts or user-facing behavior change.

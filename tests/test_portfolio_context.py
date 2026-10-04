@@ -52,6 +52,29 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context["account_value"], 0.0)
         self.assertEqual(context["positions"], {})
 
+    def test_net_broker_cash_is_not_reduced_twice_live_and_cached(self):
+        summary = {
+            "available_cash": 1075.66,
+            "available_cash_source": "us_avl_withdrawal_cash",
+            "cash_balance": 17075.66,
+        }
+        put = {
+            "symbol": "US.TEST261016P80000",
+            "position": -2,
+            "strike": 80,
+            "option_type": "PUT",
+            "security_type": "OPT",
+        }
+        self.portfolio_service.get_portfolio_summary.return_value = summary
+        self.portfolio_service.get_positions.side_effect = lambda kind: [put] if kind == "OPT" else []
+        live = self.ctx.get_portfolio_context()
+        cached = self.ctx._build_context_from_cached_portfolio(dict(summary, positions={put["symbol"]: put}))
+        for context in (live, cached):
+            self.assertEqual(context["cash_reserved_for_csp"], 16000)
+            self.assertEqual(context["cash_available_for_csp"], 1075.66)
+        summary.update(available_cash=17075.66, available_cash_source="us_cash")
+        self.assertAlmostEqual(self.ctx.get_portfolio_context()["cash_available_for_csp"], 1075.66)
+
     def test_populates_cash_and_account_value(self):
         self.portfolio_service.get_portfolio_summary.return_value = {
             "available_cash": 5000.0,

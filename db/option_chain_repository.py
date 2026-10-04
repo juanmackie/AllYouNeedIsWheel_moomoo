@@ -1,7 +1,7 @@
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .sqlite_pool import pooled_connection
 
@@ -13,6 +13,39 @@ class OptionChainRepository:
 
     def __init__(self, db_path):
         self.db_path = db_path
+
+    def save_contracts(self, symbol, market_date, start, end, contracts):
+        """Persist a successfully discovered range, including an empty directory."""
+        with pooled_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO option_contracts VALUES (?, ?, ?, ?, ?, ?)",
+                (symbol, market_date, start, end, json.dumps(contracts), datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+
+    def get_contracts(self, symbol, market_date, start, end):
+        """Read only ranges covering the request on this exact US market date."""
+        with pooled_connection(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT window_start, window_end, contracts_json FROM option_contracts "
+                "WHERE symbol = ? AND market_date = ? AND window_start <= ? AND window_end >= ? "
+                "ORDER BY window_start, window_end",
+                (symbol, market_date, end, start),
+            ).fetchall()
+        through = start
+        contracts = {}
+        for window_start, window_end, payload in rows:
+            if window_start > through:
+                break
+            if window_end < through:
+                continue
+            for contract in json.loads(payload):
+                if start <= contract["expiration"] <= end:
+                    contracts[contract["code"]] = contract
+            through = (date.fromisoformat(window_end) + timedelta(days=1)).isoformat()
+            if through > end:
+                return list(contracts.values())
+        return None
 
     def save_snapshot(self, ticker, expiration, right, stock_price, chain_dict, source="broker", as_of=None):
         """Persist or update an option chain snapshot, keyed by (ticker, expiration, right)."""

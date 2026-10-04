@@ -28,6 +28,7 @@
 - `dashboard/run-notifier.js` feeds both status and communication warnings from its single shared poll; warning rendering must not trigger another scan or an extra status request.
 - Outcome panel reads `/api/options/analytics/outcomes` (local SQLite, no OpenD gate) and renders it through `escapeHtml`; the only broker action is the explicit `Pull broker fills` button (query-only `POST /api/options/analytics/outcomes/ingest`).
 - Empty states for signal panels should surface the dominant blockers or scan diagnostics when the payload provides them.
+- CSP cash-fit warnings are display-only: every underlying is assessed, unaffordable picks are review-only, and quota warnings refer to the contract-discovery budget rather than quote freshness.
 - Do not add hidden trading execution calls from UI controls.
 
 ## Work Guidance

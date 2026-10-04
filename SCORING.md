@@ -307,15 +307,31 @@ must be verified against the live quote before a manual Moomoo order is placed.
 
 ## Evidence and freshness
 
-CSP scan feasibility is calculated after a batched Moomoo underlying-price read
-and the existing cash-fit gate. A symbol proven unable to afford any strike in
-the preset's OTM range counts as assessed coverage with `no_cash_fit`; it needs
-no option-chain request. Unknown/nonfinite prices and missing/invalid/stale
-broker timestamps during an open session remain in the conservative chain
-budget. Valid cached raw chain evidence is rescored for the current preset and
-portfolio without charging new chain calls. Zero CSP cash skips CSP preflight.
-The estimate considers both configured spacing and quota capacity; it does not
-change broker limits or guarantee scan latency.
+Every refresh assesses the complete supported watchlist union, even with zero
+free CSP cash. Option-contract codes are unsupported underlying symbols and do
+not enter the coverage denominator. Successful discovery with no contracts in
+the expiry/OTM window counts as assessed (`no_contracts_in_window`); broker
+failures keep coverage incomplete.
+
+Contract discovery requests both option types in inclusive ranges of at most
+30 days, once per symbol/range per US market date. Memory and SQLite reuse only
+that exact date and covered window, including empty successful discoveries.
+The preflight charges only missing ranges against `scan_discovery_budget_sec`
+(default 900 seconds); quote freshness does not constrain static discovery.
+Configured chain quota, spacing, single-flight gate, and adaptive back-off are
+unchanged. Estimates do not guarantee latency. Fresh option snapshots follow
+all discovery, in batches of at most 400 codes.
+
+CSP scoring considers every expiry and every strike inside the preset DTE/OTM
+window, replacing three-expiry sampling and the 20-strike target slice. Cash fit
+labels candidates instead of pruning discovery or scoring: unaffordable picks
+show required cash versus available cash, zero contracts, and review-only
+eligibility. Cash-fitting CSPs form the first lane partition; unaffordable CSPs
+follow. Each partition uses the unchanged capital-return-first `rank_key`.
+Quality/event tiers, score, and midpoint never influence ordering. Portfolio
+recovery comparisons use the best qualifying CSP across the full ranked set.
+Net broker cash fields are already reduced for collateral and are not reduced
+again; gross cash still subtracts open short-put collateral.
 
 If the remaining CSP work cannot fit, the run retains covered-call analysis and
 an explicit `scan_infeasible` rejection. Unassessed CSP symbols stay outside

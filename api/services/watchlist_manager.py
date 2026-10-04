@@ -91,11 +91,13 @@ class WatchlistManager:
         otherwise, and ``entry`` is the per-ticker dict to merge into the
         scan universe (``raw_codes`` / ``unsupported``).
         """
-        from core.ticker_utils import canonical_underlying
+        from core.ticker_utils import canonical_underlying, earnings_underlying_ticker
 
         raw = str(code or "").strip()
         if not raw:
             return None, None, None
+        if earnings_underlying_ticker(raw) != canonical_underlying(raw).upper():
+            return "unsupported", None, {"symbol": raw, "reason": "option contract, not an underlying"}
         if "." in raw:
             market, _, rest = raw.partition(".")
             market = market.upper()
@@ -352,37 +354,44 @@ class WatchlistManager:
             for ticker, origins in sorted(merged.items())
         ]
 
-    def preflight_scan_feasibility(self, watchlist_size: int, *, chain_symbol_count: int | None = None) -> dict:
-        """Estimate whether a full watchlist scan fits the quota + freshness budget.
+    def preflight_scan_feasibility(
+        self,
+        watchlist_size: int,
+        *,
+        chain_symbol_count: int | None = None,
+        ranges_per_symbol: int = 1,
+        chain_calls: int | None = None,
+    ) -> dict:
+        """Estimate discovery against its own budget, independently of quote age.
 
-        Budget up to three chains for each symbol still requiring broker chain
-        reads. Cash-fit rejections and reusable raw evidence remain part of full
-        coverage but do not consume chain quota. Without a resolved count, budget
-        every symbol conservatively. This is an estimate; the broker limiter and
-        per-candidate freshness gates remain authoritative.
+        Charge only missing same-US-date directory ranges. Cash capacity never
+        removes discovery work. This is an estimate; the adaptive broker limiter
+        and per-candidate quote-freshness gates remain authoritative.
         """
         chain_symbols = (
             watchlist_size if chain_symbol_count is None else max(0, min(watchlist_size, chain_symbol_count))
         )
-        freshness_window = max(1, int(self.config.get("max_tradeable_quote_age_sec", 300) or 300))
+        discovery_budget = max(1, int(self.config.get("scan_discovery_budget_sec", 900) or 900))
         max_requests = max(1, int(self.config.get("chain_rate_limit_max_requests", 10) or 10))
         rate_window = max(1.0, float(self.config.get("chain_rate_limit_window_sec", 30) or 30))
         chain_spacing_sec = max(0.0, float(self.config.get("chain_min_request_spacing_sec", 3.0) or 0))
-        per_symbol_chain_sec = 3 * chain_spacing_sec
-        chain_calls = chain_symbols * 3
+        ranges_per_symbol = max(1, int(ranges_per_symbol))
+        per_symbol_chain_sec = ranges_per_symbol * chain_spacing_sec
+        chain_calls = chain_symbols * ranges_per_symbol if chain_calls is None else max(0, int(chain_calls))
         estimated_scan_sec = max(chain_calls * chain_spacing_sec, chain_calls * rate_window / max_requests)
-        quota_windows = max(1, int(freshness_window // rate_window))
+        quota_windows = max(1, int(discovery_budget // rate_window))
         chain_quota_ok = chain_calls <= max_requests * quota_windows
-        feasible = watchlist_size > 0 and estimated_scan_sec <= freshness_window and chain_quota_ok
-        quota_capacity = int(max_requests * quota_windows // 3)
-        spacing_capacity = int(freshness_window // per_symbol_chain_sec) if per_symbol_chain_sec else quota_capacity
+        feasible = watchlist_size > 0 and estimated_scan_sec <= discovery_budget and chain_quota_ok
+        quota_capacity = int(max_requests * quota_windows // ranges_per_symbol)
+        spacing_capacity = int(discovery_budget // per_symbol_chain_sec) if per_symbol_chain_sec else quota_capacity
         recommended_max_size = watchlist_size - chain_symbols + min(quota_capacity, spacing_capacity)
         return {
             "feasible": feasible,
             "watchlist_size": watchlist_size,
             "chain_symbol_count": chain_symbols,
             "estimated_scan_sec": round(estimated_scan_sec, 1),
-            "freshness_window_sec": freshness_window,
+            "discovery_budget_sec": discovery_budget,
+            "ranges_per_symbol": ranges_per_symbol,
             "chain_calls": chain_calls,
             "chain_quota_ok": chain_quota_ok,
             "chain_rate_limit_max_requests": max_requests,

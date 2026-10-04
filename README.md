@@ -44,14 +44,17 @@ manual copy-to-ticket suggestions for your broker UI.
 - The scan universe is the **complete canonical union** of the named Moomoo
   watchlist group + app-managed SQLite symbols (+ legacy config list),
   canonicalized and source-labelled. If the union cannot fit the OpenD quota
-  and freshness window, the run is **planning** and directs you to reduce a
-  source list — it never silently truncates and claims a global top three.
-- CSP quota estimates follow a batched Moomoo price check. Symbols with no
-  affordable strike in the preset's OTM range remain in coverage with an
-  explicit cash-fit rejection; reusable raw evidence also avoids new chain
-  calls. Missing prices and stale live broker timestamps remain conservatively
-  budgeted. If the remaining CSP work is infeasible, covered-call diagnostics
-  still appear in a planning run with incomplete coverage and copy blocked.
+  and discovery budget, the run is **planning** with an explicit reason — it
+  never silently truncates and claims a global top three. Option-contract
+  codes are unsupported underlyings and leave the coverage denominator.
+- Every refresh assesses every supported underlying, including at zero cash.
+  Contract directories cover every expiry in the preset window, persist across
+  restarts, and are reusable only on the same US market date. Discovery uses
+  a separate 900-second budget; selected puts then receive fresh Moomoo quotes
+  in batches of 400. Successful empty windows count as assessed. Unaffordable
+  CSP picks remain visible review-only with zero contracts and copy blocked.
+  Cash-fitting CSPs precede review-only CSPs; each group keeps capital-return
+  ordering. Net broker cash is not reduced twice for put collateral.
 - Failed refreshes, rejected refresh requests, unreachable run status, and
   quota-blocked CSP scans show a visible warning above the signals with the
   reason and recovery step. Previous completed results remain displayed;
