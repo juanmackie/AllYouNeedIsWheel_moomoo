@@ -35,5 +35,6 @@
 
 - Prefer small named functions and module exports that Vitest can import.
 - Reuse existing formatting helpers for currency, percentages, dates, and alert display.
+- Route alert/banner tone and visibility through `utils/status-alert.js` (`setAlertState`, `setTextIfChanged`); never assign banner `className` directly and never use `data-bs-dismiss` for dismiss.
 - Keep DOM selectors stable when tests depend on them.
 - Avoid large cross-feature files; place behavior near the feature folder that owns it.

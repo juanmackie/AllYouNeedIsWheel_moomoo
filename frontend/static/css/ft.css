@@ -615,7 +615,10 @@ code { font-family: var(--ft-font-mono); font-size: 0.9em; background: var(--ft-
 .alert .btn-close { position: absolute; top: 8px; right: 8px; }
 .alert.fade { transition: opacity 0.3s cubic-bezier(0.22, 0.61, 0.36, 1); }
 .alert.show { opacity: 1; }
-.alert:not(.show) { display: none; }
+/* Plain-alert visibility is driven by .d-none (see setAlertState in
+   utils/status-alert.js); .show only gates the .fade transition, matching
+   Bootstrap behavior. Never hide stale/error states with CSS-only rules. */
+.alert.fade:not(.show) { display: none; }
 #opend-status-banner { margin: 16px 0; }
 #opend-status-banner.d-none { display: none; }
 #opend-status-meta { font-size: 11px; }

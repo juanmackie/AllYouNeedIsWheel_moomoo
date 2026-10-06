@@ -2,6 +2,23 @@
  * All You Need Is Wheel — shared frontend bootstrap (OpenD banner, footer year)
  */
 
+function setBannerState(banner, tone, visible) {
+    // Mirrors utils/status-alert.js setAlertState (main.js is a classic
+    // script and cannot import the ES module). classList only, so layout
+    // classes on the banner are never wiped by tone changes.
+    const tones = ['alert-danger', 'alert-warning', 'alert-info', 'alert-success'];
+    banner.classList.add('alert');
+    for (const cls of tones) banner.classList.remove(cls);
+    banner.classList.add(`alert-${tone}`);
+    if (visible) {
+        banner.classList.remove('d-none');
+        banner.classList.add('show');
+    } else {
+        banner.classList.add('d-none');
+        banner.classList.remove('show');
+    }
+}
+
 function updateOpenDStatusBanner(status) {
     const banner = document.getElementById('opend-status-banner');
     const title = document.getElementById('opend-status-title');
@@ -16,31 +33,31 @@ function updateOpenDStatusBanner(status) {
     document.dispatchEvent(new CustomEvent('opend-status-changed', { detail: status || {} }));
 
     if (!status || status.status === 'connected') {
-        banner.className = 'alert alert-warning d-none';
+        setBannerState(banner, 'warning', false);
         title.textContent = 'OpenD status';
         message.textContent = 'OpenD is connected.';
         meta.textContent = '';
         return;
     }
 
-    let bannerClass = 'alert alert-warning';
+    let tone = 'warning';
     let heading = 'OpenD needs attention';
 
     if (status.status === 'unavailable') {
-        bannerClass = 'alert alert-danger';
+        tone = 'danger';
         heading = 'OpenD is not running';
     } else if (status.status === 'login_required') {
-        bannerClass = 'alert alert-warning';
+        tone = 'warning';
         heading = 'OpenD login required';
     } else if (status.status === 'real_account_unavailable') {
-        bannerClass = 'alert alert-warning';
+        tone = 'warning';
         heading = 'Real account unavailable in OpenD';
     } else if (status.status === 'error') {
-        bannerClass = 'alert alert-danger';
+        tone = 'danger';
         heading = 'OpenD status error';
     }
 
-    banner.className = bannerClass;
+    setBannerState(banner, tone, true);
     title.textContent = heading;
     message.textContent = status.message || 'OpenD is not ready yet.';
     meta.textContent = status.host && status.port ? `${status.host}:${status.port}` : '';

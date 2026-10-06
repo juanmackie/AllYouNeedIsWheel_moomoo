@@ -16,6 +16,7 @@
 import { fetchWithTimeout, readJsonSafely } from './api-core.js';
 import { renderActiveWatchlist } from './active-watchlist.js';
 import { refreshRun } from './api-run.js';
+import { setAlertState, setTextIfChanged } from '../utils/status-alert.js';
 
 // A healthy status read of the same run does not resolve a rejected refresh.
 let refreshRequestError = null;
@@ -45,14 +46,10 @@ function setRunWarning(warning) {
     const banner = document.getElementById('run-warning-banner');
     if (!banner) return;
     for (const field of ['title', 'reason', 'action']) {
-        const el = document.getElementById(`run-warning-${field}`);
-        const text = warning?.[field] || '';
         // API errors are plain text, and unchanged polls must not re-announce them.
-        if (el && el.textContent !== text) el.textContent = text;
+        setTextIfChanged(document.getElementById(`run-warning-${field}`), warning?.[field] || '');
     }
-    banner.className = warning
-        ? `alert alert-${warning.tone || 'danger'} show mb-3`
-        : 'alert d-none mb-3';
+    setAlertState(banner, { tone: warning?.tone || 'danger', visible: Boolean(warning) });
 }
 
 function renderRunWarning(attempt, snapshot) {

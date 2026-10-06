@@ -26,6 +26,8 @@ const STATUS_BADGE = {
     skipped: 'bg-warning text-dark',
 };
 
+import { setAlertState } from '../utils/status-alert.js';
+
 const GROUP_STATUS_TEXT = {
     ok: 'group ok',
     missing_group: 'GROUP MISSING',
@@ -45,7 +47,7 @@ export function renderActiveWatchlist(snapshot) {
     const aw = snapshot?.active_watchlist;
     if (!aw) {
         if (blockingBanner) {
-            blockingBanner.className = 'alert alert-danger d-none mb-3';
+            setAlertState(blockingBanner, { tone: 'danger', visible: false });
             blockingBanner.textContent = '';
         }
         renderEl.textContent = snapshot?.run
@@ -60,7 +62,7 @@ export function renderActiveWatchlist(snapshot) {
     const clean = status === 'ok';
 
     if (blockingBanner) {
-        blockingBanner.className = clean ? 'alert alert-danger d-none mb-3' : 'alert alert-danger mb-3';
+        setAlertState(blockingBanner, { tone: 'danger', visible: !clean });
         blockingBanner.textContent = clean
             ? ''
             : `${GROUP_STATUS_TEXT[status] || status.toUpperCase()}: ${aw.explanation || 'The CSP watchlist could not be read. No CSP signal is actionable.'}`;
@@ -86,6 +88,7 @@ export function renderActiveWatchlist(snapshot) {
         why.className = 'alert alert-warning py-1 px-2 mb-2';
         why.setAttribute('role', 'status');
         why.textContent = aw.explanation;
+        setAlertState(why, { tone: 'warning', visible: true });
         renderEl.appendChild(why);
     }
 

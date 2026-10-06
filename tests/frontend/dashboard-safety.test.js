@@ -107,6 +107,64 @@ describe('dashboard rendering safety', () => {
     expect(alert.className).toContain('alert-info');
     expect(alert.className).not.toContain('onmouseover');
   });
+
+  it('renders transient alert text as text and dismisses without Bootstrap JS', async () => {
+    document.body.innerHTML = '<main class="content-container"></main>';
+
+    const { showAlert } = await import('../../frontend/static/js/utils/alerts.js');
+    showAlert('<img src=x onerror=alert(1)>', 'warning', 5000);
+
+    const alert = document.querySelector('.alert');
+    expect(alert.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(alert.querySelector('img')).toBeNull();
+    expect(alert.className).toContain('show');
+    expect(alert.classList.contains('d-none')).toBe(false);
+
+    alert.querySelector('.btn-close').click();
+    expect(alert.classList.contains('d-none')).toBe(true);
+    await vi.waitFor(() => expect(document.querySelector('.alert')).toBeNull());
+  });
+});
+
+describe('shared alert helper (status-alert)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('toggles tone and visibility without wiping layout classes', async () => {
+    const { setAlertState } = await import('../../frontend/static/js/utils/status-alert.js');
+    document.body.innerHTML = '<div id="b" class="alert alert-danger d-none mb-3 custom"></div>';
+    const banner = document.getElementById('b');
+
+    setAlertState(banner, { tone: 'warning', visible: true });
+    expect(banner.className).toContain('alert-warning');
+    expect(banner.className).not.toContain('alert-danger');
+    expect(banner.className).toContain('mb-3');
+    expect(banner.className).toContain('custom');
+    expect(banner.classList.contains('d-none')).toBe(false);
+    expect(banner.classList.contains('show')).toBe(true);
+
+    setAlertState(banner, { tone: 'danger', visible: false });
+    expect(banner.className).toContain('alert-danger');
+    expect(banner.className).toContain('mb-3');
+    expect(banner.classList.contains('d-none')).toBe(true);
+    expect(banner.classList.contains('show')).toBe(false);
+  });
+
+  it('falls back to info for unknown tones', async () => {
+    const { normalizeAlertTone } = await import('../../frontend/static/js/utils/status-alert.js');
+    expect(normalizeAlertTone('danger" onmouseover="alert(1)')).toBe('info');
+    expect(normalizeAlertTone('warning')).toBe('warning');
+  });
+
+  it('sets banner text as text, never markup', async () => {
+    const { setTextIfChanged } = await import('../../frontend/static/js/utils/status-alert.js');
+    document.body.innerHTML = '<div id="t"></div>';
+    const el = document.getElementById('t');
+    setTextIfChanged(el, '<img src=x onerror=alert(1)>');
+    expect(el.textContent).toBe('<img src=x onerror=alert(1)>');
+    expect(el.querySelector('img')).toBeNull();
+  });
 });
 
 describe('options-table rendering safety', () => {
