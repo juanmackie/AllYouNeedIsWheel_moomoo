@@ -45,6 +45,40 @@
             </div>
         </div>
 
+        <div class="mt-3">
+            <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+                <p class="summary-metric-label mb-0">Expected trajectory (Monte Carlo · Moomoo-calibrated)</p>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Projection horizon">
+                    <button type="button" class="btn btn-outline-secondary" data-mc-horizon="365">1y</button>
+                    <button type="button" class="btn btn-outline-secondary" data-mc-horizon="730">2y</button>
+                    <button type="button" class="btn btn-outline-secondary active" data-mc-horizon="1460">4y</button>
+                </div>
+            </div>
+            <div class="summary-metrics-grid" role="group" aria-label="Monte Carlo projection">
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label">Median at horizon</p>
+                    <h3 class="summary-metric-value" id="mc-median">—</h3>
+                </div>
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label">P10 – P90 range</p>
+                    <h3 class="summary-metric-value" id="mc-range">—</h3>
+                </div>
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label">P(reach target)</p>
+                    <h3 class="summary-metric-value" id="mc-prob">—</h3>
+                </div>
+                <div class="summary-metric-cell">
+                    <p class="summary-metric-label">Median ETA</p>
+                    <h3 class="summary-metric-value" id="mc-eta">—</h3>
+                </div>
+            </div>
+            <div id="mc-chart" class="growth-equity-curve text-muted small" aria-live="polite">
+                Loading projection…
+            </div>
+            <p class="text-muted small mt-1 mb-0" id="mc-meta"></p>
+            <p class="text-muted small mt-1 mb-0" id="mc-fills-note"></p>
+        </div>
+
         <div class="summary-metrics-grid mt-3" role="group" aria-label="Trade journal">
             <div class="summary-metric-cell">
                 <p class="summary-metric-label">Win rate</p>

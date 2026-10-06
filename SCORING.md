@@ -275,6 +275,25 @@ toward the active preset's 5x `target_account_multiple`, annualized pace from
 realized NAV change, ETA to target, required premium/day, and an on-track
 verdict derived from realized pace — never a promised date.
 
+## Expected trajectory (Monte Carlo, Moomoo-calibrated)
+
+`GET /api/portfolio/projection` extends the same snapshot history into a
+forward fan chart. `core/monte_carlo.py::project_nav` collapses bursts to one
+point per calendar day, drops zero/negative-NAV rows from failed broker reads
+(counted, not hidden), fits a geometric Brownian motion with exact
+inter-observation gaps (MLE drift/vol), and simulates daily log increments
+under a deterministic default seed — identical inputs always draw identical
+bands. The payload reports P10/P50/P90 bands, end-horizon and ever-hit
+probabilities for the 5x target, median first-hit ETA, calibration
+(mu/vol, sample size, window, seed), broker-fill corroboration as option-leg
+totals only (gross collected vs. buybacks vs. known fees; zero-price
+assignment/expiry movements counted separately), and warnings. Attributed
+per-trade P&L with unknowns stays on `/api/options/analytics/outcomes`.
+Below 4 daily points spanning 7 days the endpoint returns `insufficient`
+with the reason instead of a fabricated curve. Like pace, this is NAV
+change — market moves plus any deposits/withdrawals — not strategy return
+alone, and a projection is never a promise.
+
 ## Actionability
 
 One manual refresh creates one immutable `WheelRunSnapshot`. `/api/run` returns

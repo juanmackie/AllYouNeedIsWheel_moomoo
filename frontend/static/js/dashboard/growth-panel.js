@@ -37,6 +37,189 @@ async function fetchJournal() {
     }
 }
 
+let mcHorizonDays = 1460;
+
+async function fetchProjection(horizonDays) {
+    try {
+        const resp = await fetch(`/api/portfolio/projection?horizon_days=${horizonDays}&paths=2000`);
+        if (!resp.ok) return null;
+        return await resp.json();
+    } catch (err) {
+        console.error('Growth panel: projection fetch failed:', err);
+        return null;
+    }
+}
+
+function _fmtEtaDays(days) {
+    if (days === null || days === undefined || !Number.isFinite(Number(days))) return '—';
+    const total = Number(days);
+    if (total <= 0) return 'Reached';
+    if (total > 365.25 * 40) return '>40y';
+    const years = Math.floor(total / 365.25);
+    const months = Math.round((total % 365.25) / 30.44);
+    return years > 0 ? `~${years}y ${months}m` : `~${months}m`;
+}
+
+function renderMcChart(container, bands, targetNav) {
+    container.innerHTML = '';
+    if (!bands || bands.length < 2) {
+        container.textContent = 'Not enough projection data.';
+        return;
+    }
+    const width = Math.min(720, Math.max(280, container.clientWidth || 480));
+    const height = 180;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', height);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', `Monte Carlo NAV fan chart over ${bands[bands.length - 1].day} days`);
+
+    const allValues = [];
+    for (const band of bands) {
+        allValues.push(band.p10, band.p50, band.p90);
+    }
+    if (Number.isFinite(targetNav)) allValues.push(targetNav);
+    let lo = Math.min(...allValues);
+    let hi = Math.max(...allValues);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
+        container.textContent = 'Projection collapsed — no finite values.';
+        return;
+    }
+    const pad = (hi - lo) * 0.05 || 1;
+    lo -= pad;
+    hi += pad;
+    const maxDay = bands[bands.length - 1].day || 1;
+    const x = (day) => (day / maxDay) * width;
+    const y = (value) => height - 8 - ((value - lo) / (hi - lo)) * (height - 16);
+
+    const upper = bands.map((band) => `${x(band.day).toFixed(1)},${y(band.p90).toFixed(1)}`).join(' ');
+    const lower = bands
+        .slice()
+        .reverse()
+        .map((band) => `${x(band.day).toFixed(1)},${y(band.p10).toFixed(1)}`)
+        .join(' ');
+    const bandPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    bandPoly.setAttribute('points', `${upper} ${lower}`);
+    bandPoly.setAttribute('fill', '#0d6efd');
+    bandPoly.setAttribute('opacity', '0.15');
+
+    const medianLine = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    medianLine.setAttribute(
+        'points',
+        bands.map((band) => `${x(band.day).toFixed(1)},${y(band.p50).toFixed(1)}`).join(' '),
+    );
+    medianLine.setAttribute('fill', 'none');
+    medianLine.setAttribute('stroke', '#0d6efd');
+    medianLine.setAttribute('stroke-width', '2');
+
+    svg.appendChild(bandPoly);
+    svg.appendChild(medianLine);
+
+    if (Number.isFinite(targetNav) && targetNav >= lo && targetNav <= hi) {
+        const targetLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        targetLine.setAttribute('x1', '0');
+        targetLine.setAttribute('x2', String(width));
+        targetLine.setAttribute('y1', y(targetNav).toFixed(1));
+        targetLine.setAttribute('y2', y(targetNav).toFixed(1));
+        targetLine.setAttribute('stroke', '#198754');
+        targetLine.setAttribute('stroke-dasharray', '6 4');
+        targetLine.setAttribute('stroke-width', '1.5');
+        svg.appendChild(targetLine);
+    }
+    container.appendChild(svg);
+
+    const caption = document.createElement('p');
+    caption.className = 'mb-0 mt-1 text-muted small';
+    caption.textContent =
+        `Blue band P10–P90 · line P50 median · dashed green 5x target · ` +
+        `${maxDay}-day horizon`;
+    container.appendChild(caption);
+}
+
+function renderProjection(payload) {
+    const chart = document.getElementById('mc-chart');
+    const medianEl = document.getElementById('mc-median');
+    const rangeEl = document.getElementById('mc-range');
+    const probEl = document.getElementById('mc-prob');
+    const etaEl = document.getElementById('mc-eta');
+    const metaEl = document.getElementById('mc-meta');
+    const fillsEl = document.getElementById('mc-fills-note');
+    if (!chart && !medianEl) return; // panel not present in this DOM
+
+    const projection = payload?.projection;
+    const fills = payload?.fills;
+    if (fillsEl) {
+        if (fills) {
+            fillsEl.textContent =
+                `Broker fills corroboration (option-leg only): ` +
+                `${formatCurrency(fills.gross_sell_premium ?? 0)} collected − ` +
+                `${formatCurrency(fills.gross_buyback_cost ?? 0)} buybacks − ` +
+                `${formatCurrency(fills.fees_known_total ?? 0)} fees across ` +
+                `${fills.n_option_fills ?? 0} fills / ${fills.n_contract_identities ?? 0} contracts. ` +
+                `Zero-price movements: ${fills.zero_price_movement_count ?? 0}. ` +
+                `Full per-trade attribution with unknowns: Outcomes panel.`;
+        } else {
+            fillsEl.textContent = '';
+        }
+    }
+    if (!projection || (projection.status !== 'ok' && projection.status !== 'reached')) {
+        const reason = projection?.reason || 'Projection unavailable.';
+        if (chart) chart.textContent = reason;
+        if (medianEl) medianEl.textContent = '—';
+        if (rangeEl) rangeEl.textContent = '—';
+        if (probEl) probEl.textContent = '—';
+        if (etaEl) etaEl.textContent = '—';
+        if (metaEl) metaEl.textContent = '';
+        return;
+    }
+    if (medianEl) medianEl.textContent = formatCurrency(projection.final?.p50 ?? 0);
+    if (rangeEl) {
+        rangeEl.textContent =
+            `${formatCurrency(projection.final?.p10 ?? 0)} – ${formatCurrency(projection.final?.p90 ?? 0)}`;
+    }
+    if (probEl) {
+        const pct = (Number(projection.prob_target_ever ?? 0) * 100).toFixed(0);
+        probEl.textContent = `${pct}%`;
+    }
+    if (etaEl) etaEl.textContent = _fmtEtaDays(projection.median_eta_days);
+    if (chart) renderMcChart(chart, projection.bands, Number(projection.target_nav));
+    if (metaEl) {
+        const calib = projection.calibration || {};
+        const bits = [
+            `Calibrated on ${projection.daily_points} daily NAV points over ${projection.elapsed_days} days`,
+            `${projection.n_paths} paths · seed ${projection.seed}`,
+            calib.annualized_median_growth !== undefined
+                ? `median drift ${(Number(calib.annualized_median_growth) * 100).toFixed(1)}%/yr`
+                : null,
+            calib.annualized_vol !== undefined
+                ? `vol ${(Number(calib.annualized_vol) * 100).toFixed(1)}%/yr`
+                : null,
+        ].filter(Boolean);
+        const warningText = (projection.warnings || []).join(' ');
+        metaEl.textContent = `${bits.join(' · ')}. ${warningText} Projection only — not a promise.`.trim();
+    }
+}
+
+function wireMcHorizonButtons() {
+    const buttons = document.querySelectorAll('[data-mc-horizon]');
+    buttons.forEach((button) => {
+        if (button.dataset.mcWired) return;
+        button.dataset.mcWired = '1';
+        button.addEventListener('click', async () => {
+            const next = Number(button.dataset.mcHorizon) || 1460;
+            mcHorizonDays = next;
+            buttons.forEach((other) => other.classList.toggle('active', other === button));
+            const payload = await fetchProjection(mcHorizonDays);
+            renderProjection(payload);
+        });
+    });
+    buttons.forEach((button) => {
+        button.classList.toggle('active', Number(button.dataset.mcHorizon) === mcHorizonDays);
+    });
+}
+
 function renderEquityCurve(container, series) {
     container.innerHTML = '';
     if (!series || series.length < 2) {
@@ -211,13 +394,19 @@ function renderJournal(payload) {
 }
 
 export async function renderGrowthPanel() {
-    const [historyPayload, journalPayload] = await Promise.all([fetchHistory(), fetchJournal()]);
+    const [historyPayload, journalPayload, projectionPayload] = await Promise.all([
+        fetchHistory(),
+        fetchJournal(),
+        fetchProjection(mcHorizonDays),
+    ]);
     const series = historyPayload ? historyPayload.series : [];
 
     const curveContainer = document.getElementById('growth-equity-curve');
     if (curveContainer) renderEquityCurve(curveContainer, series);
     renderPace(historyPayload, series);
     renderJournal(journalPayload);
+    wireMcHorizonButtons();
+    renderProjection(projectionPayload);
 
     const snapshotCount = document.getElementById('journal-snapshots');
     if (snapshotCount && historyPayload) snapshotCount.textContent = String(historyPayload.count || 0);

@@ -57,6 +57,7 @@ the underlying coverage total.
 - `GET /api/portfolio/positions?type=STK|OPT` — open option rows include Moomoo snapshot bid/ask/last, IV, delta and theta, plus local fetch and broker update timestamps. Missing delta stays `null` rather than being represented as a measured zero.
 - `GET /api/portfolio/weekly-income`
 - `GET /api/portfolio/history` — persisted portfolio snapshot history (one per completed run) plus 5x growth pace
+- `GET /api/portfolio/projection?horizon_days=1460&paths=2000&seed=` — Moomoo-calibrated Monte Carlo NAV trajectory (local SQLite only, no OpenD gate). GBM fitted to daily-collapsed snapshot history with the active preset's target multiple; returns P10/P50/P90 bands, hit probabilities, median ETA, calibration stats, and option-leg fill corroboration. Deterministic default seed; horizons clamp to 30..1825 days, paths to 200..5000. Projection only — never a promise.
 - `GET /api/portfolio/roll-pressure` — roll/hold/close/rotate diagnostics for option positions. Held-option Greeks and bid/ask/last come from the existing Moomoo position market snapshot; missing delta is returned as `null` and accompanied by a warning that delta-based close protection is unavailable. `ROLL` and `ROTATE` include a named `roll_target` only from a fresh, eligible same-underlying/same-side candidate in the latest published run; `ROLL` is suppressed when no target exists. `ROTATE` requires a 2× net return/day hurdle after close-at-ask, open-at-bid, and known per-contract fees; unknown fees explicitly suppress it.
 - `GET /api/portfolio/alerts`
 

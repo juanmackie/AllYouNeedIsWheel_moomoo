@@ -216,3 +216,92 @@ def get_portfolio_history():
 
 # roll-pressure and alerts endpoints extracted to
 # api/routes/roll_pressure.py and api/routes/alerts.py (F008)
+
+
+@bp.route("/projection", methods=["GET"])
+def get_portfolio_projection():
+    """
+    Moomoo-calibrated Monte Carlo NAV trajectory (projection, not a promise).
+
+    Reads persisted per-run portfolio snapshots plus ingested broker fills from
+    local SQLite only — no live OpenD gate. The simulation is a geometric
+    Brownian motion fitted to daily-collapsed NAV history (see
+    ``core.monte_carlo.project_nav``); trade fills corroborate as option-leg
+    totals while attributed per-trade P&L stays on /analytics/outcomes.
+
+    Query Parameters:
+        horizon_days: Forward window in days. Default 1460, clamped 30..1825.
+        paths: Simulated trajectories. Default 2000, clamped 200..5000.
+        seed: Integer RNG seed for reproducibility. Default deterministic.
+    """
+    try:
+        db = current_app.config.get("database")
+        if not db:
+            return error_response("Database not available", status_code=503)
+
+        raw_horizon = request.args.get("horizon_days", "1460")
+        raw_paths = request.args.get("paths", "2000")
+        raw_seed = request.args.get("seed")
+        try:
+            horizon_days = int(raw_horizon)
+        except (TypeError, ValueError):
+            return error_response("Invalid horizon_days — must be an integer", status_code=400)
+        try:
+            n_paths = int(raw_paths)
+        except (TypeError, ValueError):
+            return error_response("Invalid paths — must be an integer", status_code=400)
+        seed = None
+        if raw_seed is not None and str(raw_seed).strip() != "":
+            try:
+                seed = int(raw_seed)
+            except (TypeError, ValueError):
+                return error_response("Invalid seed — must be an integer", status_code=400)
+
+        # Clamp before simulating so extreme values degrade to bounds, not 500s.
+        horizon_days = min(max(horizon_days, 30), 1825)
+        n_paths = min(max(n_paths, 200), 5000)
+
+        from api.services.config import get_current_identity
+        from core.monte_carlo import DEFAULT_SEED, project_nav, summarize_option_fills
+        from core.presets import WHEEL_PRESETS, get_preset
+
+        identity_env, identity_account = get_current_identity()
+        target_multiple = 5.0
+        try:
+            persisted = db.get_setting("wheel_preset")
+            key = persisted if persisted in WHEEL_PRESETS else None
+            target_multiple = float(get_preset(key).target_account_multiple or 5.0)
+        except Exception:
+            pass
+
+        history = db.get_portfolio_history(unbounded=True, env=identity_env, account_id=identity_account)
+        try:
+            fills_getter = getattr(db, "get_fills", None)
+            fills = (
+                fills_getter(env=identity_env, account_id=identity_account, security_type="OPT", limit=5000)
+                if callable(fills_getter)
+                else []
+            )
+        except Exception:
+            fills = []
+
+        projection = project_nav(
+            history,
+            target_multiple=target_multiple,
+            horizon_days=horizon_days,
+            n_paths=n_paths,
+            seed=DEFAULT_SEED if seed is None else seed,
+        )
+        payload = {
+            "target_multiple": target_multiple,
+            "horizon_days": horizon_days,
+            "n_paths": n_paths,
+            "projection": projection,
+            "fills": summarize_option_fills(fills),
+        }
+        return jsonify(attach_source_policy(payload, build_account_source_policy("portfolio_projection"))), 200
+    except ValueError as exc:
+        return error_response(str(exc), status_code=400)
+    except Exception as e:
+        logger.error("Error building portfolio projection: %s", e)
+        return error_response(str(e), status_code=500)
