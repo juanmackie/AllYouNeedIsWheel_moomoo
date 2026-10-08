@@ -125,7 +125,7 @@ class IVEarningsService:
             if not candidates:
                 return None, None
             candidates.sort()
-            today = datetime.now().date()
+            today = market_now().date()
             upcoming = [d for d in candidates if d >= today]
             chosen = (upcoming or candidates)[0]
             return chosen.strftime("%Y-%m-%d"), None
@@ -727,8 +727,8 @@ class IVEarningsService:
             }
 
         try:
-            earnings_dt = datetime.strptime(earnings_date, "%Y-%m-%d")
-            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            earnings_dt = datetime.strptime(earnings_date, "%Y-%m-%d").date()
+            today = market_now().date()
             days_to_earnings = (earnings_dt - today).days
 
             if days_to_earnings < 0:

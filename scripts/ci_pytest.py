@@ -14,6 +14,8 @@ def main() -> int:
     import pytest
 
     code = pytest.main(sys.argv[1:] or ["tests/", "-q"])
+    sys.stdout.flush()
+    sys.stderr.flush()
     os._exit(code)  # noqa: PLR1722 - intentional: skip non-daemon thread join
 
 

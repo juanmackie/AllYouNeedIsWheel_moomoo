@@ -12,13 +12,186 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from api.services.recommendation_ranking import format_recommendation, rank_candidates
+from api.services.recommendation_ranking import (
+    attach_readonly_trade_diagnostics,
+    format_recommendation,
+    matching_working_orders,
+    rank_candidates,
+)
 from api.services.recommendations import RecommendationEngine
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class TestCapitalRecoveryCards(unittest.TestCase):
+    def test_iv_vs_hv_is_attached_after_selection_and_never_changes_rank_order(self):
+        from unittest.mock import Mock
+
+        from api.services.recommendations import _attach_iv_vs_hv_diagnostics
+
+        signals = [
+            {
+                "ticker": ticker,
+                "rank": rank,
+                "implied_volatility": 0.54,
+                "chain_source": "broker",
+                "iv_source": "broker",
+            }
+            for rank, ticker in enumerate(("AAPL", "MSFT", "NVDA", "META"), start=1)
+        ]
+        connection = Mock()
+        connection.get_historical_volatility.return_value = {
+            "status": "available",
+            "source": "moomoo_adjusted_daily_close",
+            "sample_sessions": 20,
+            "historical_volatility_pct": 32.5,
+            "as_of_date": "2026-09-29",
+            "falling_knife": {
+                "status": "available",
+                "decline_pct": -18.25,
+                "below_moving_average": True,
+                "flagged": True,
+            },
+        }
+        order_before = [(row["ticker"], row["rank"]) for row in signals]
+
+        _attach_iv_vs_hv_diagnostics(signals, connection)
+
+        self.assertEqual([(row["ticker"], row["rank"]) for row in signals], order_before)
+        self.assertEqual(connection.get_historical_volatility.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in connection.get_historical_volatility.call_args_list],
+            ["AAPL", "MSFT", "NVDA"],
+        )
+        self.assertEqual(
+            signals[0]["iv_vs_hv"],
+            {
+                "status": "available",
+                "source": "moomoo_adjusted_daily_close",
+                "window_sessions": 20,
+                "sample_sessions": 20,
+                "implied_volatility_pct": 54.0,
+                "historical_volatility_pct": 32.5,
+                "spread_percentage_points": 21.5,
+                "as_of_date": "2026-09-29",
+                "reason": None,
+            },
+        )
+        self.assertEqual(signals[0]["falling_knife"]["status"], "available")
+        self.assertEqual(signals[0]["falling_knife"]["decline_pct"], -18.25)
+        self.assertTrue(signals[0]["falling_knife"]["flagged"])
+        self.assertNotIn("iv_vs_hv", signals[3])
+
+    def test_iv_vs_hv_skips_non_broker_volatility_sources(self):
+        from api.services.recommendations import _attach_iv_vs_hv_diagnostics
+
+        connection = MagicMock()
+        signals = [
+            {
+                "ticker": "AAPL",
+                "implied_volatility": 0.54,
+                "chain_source": "yfinance",
+                "iv_source": "yfinance",
+            }
+        ]
+
+        _attach_iv_vs_hv_diagnostics(signals, connection)
+
+        connection.get_historical_volatility.assert_not_called()
+        self.assertNotIn("iv_vs_hv", signals[0])
+
+    def test_readonly_trade_diagnostics_are_bounded_and_do_not_change_membership(self):
+        from unittest.mock import Mock
+
+        orders = [
+            {
+                "code": "US.AAPL260918P150000",
+                "status": "SUBMITTED",
+                "remaining_qty": 1,
+                "trd_side": "SELL",
+            }
+        ]
+        connection = Mock()
+        connection.get_open_orders.return_value = orders
+        connection.get_max_sellable_info.return_value = {
+            "max_position_sell": 0,
+            "max_sell_short": 2,
+            "max_buy_back": 0,
+        }
+        candidates = [
+            {
+                "ticker": ticker,
+                "expiration": "20260918",
+                "option_type": "PUT",
+                "strike": 150,
+                "bid": 1.25,
+                "rank": index,
+                "copy_eligible": True,
+                "recommended_contracts": 1,
+            }
+            for index, ticker in enumerate(("AAPL", "MSFT", "NVDA", "META"), start=1)
+        ]
+
+        selected_before = list(candidates[:3])
+        rank_before = [row["rank"] for row in candidates]
+        attach_readonly_trade_diagnostics(candidates, connection)
+
+        self.assertEqual(candidates[:3], selected_before)
+        self.assertEqual([row["rank"] for row in candidates], rank_before)
+        self.assertTrue(candidates[0]["has_working_order"])
+        self.assertFalse(candidates[1]["has_working_order"])
+        self.assertIsNone(candidates[3].get("has_working_order"))
+        self.assertEqual(connection.get_open_orders.call_count, 1)
+        self.assertEqual(connection.get_max_sellable_info.call_count, 3)
+        self.assertEqual(connection.get_max_sellable_info.call_args_list[0].args, ("US.AAPL260918P150000", 1.25))
+
+    def test_working_order_check_distinguishes_unknown_from_no_match(self):
+        candidate = {"ticker": "AAPL", "expiration": "20260918", "option_type": "PUT", "strike": 150}
+        self.assertIsNone(matching_working_orders(candidate, None))
+        self.assertEqual(matching_working_orders(candidate, []), [])
+        self.assertEqual(
+            len(matching_working_orders(candidate, [{"code": "US.AAPL260918P150000", "status": "SUBMITTED"}])),
+            1,
+        )
+        self.assertEqual(
+            matching_working_orders(candidate, [{"code": "US.AAPL260918P140000", "status": "SUBMITTED"}]),
+            [],
+        )
+
+    def test_active_watchlist_carries_moomoo_52_week_diagnostics_only(self):
+        from api.services.recommendations import _build_active_watchlist
+
+        payload = _build_active_watchlist(
+            wl_group_name="My Watchlist",
+            wl_group_status="ok",
+            wl_explanation="",
+            wl_groups_available=["My Watchlist"],
+            wl_unsupported=[],
+            wl_raw_codes={"AAPL": "US.AAPL"},
+            effective_watchlist=["AAPL", "MSFT"],
+            scan_status_by_ticker={"AAPL": "scanned", "MSFT": "scanned"},
+            position_tickers=[],
+            quote_fetched_at={},
+            fetched_at="2026-09-30T00:00:00Z",
+            price_snapshot_by_ticker={
+                "AAPL": {"last_price": 210.0, "highest52weeks_price": 260.0, "lowest52weeks_price": 164.0},
+                "MSFT": {"last_price": None, "highest52weeks_price": None, "lowest52weeks_price": None},
+            },
+        )
+
+        aapl, msft = payload["tickers"]
+        self.assertEqual(
+            aapl["price_context"],
+            {
+                "last_price": 210.0,
+                "week_52_high": 260.0,
+                "week_52_low": 164.0,
+                "source": "moomoo",
+                "pct_below_52w_high": 19.23,
+            },
+        )
+        self.assertIsNone(msft["price_context"])
+
     def test_selects_best_calls_by_capital_velocity_and_discloses_conservative_basis(self):
         from api.services import recommendations
 
@@ -83,6 +256,38 @@ class TestCapitalRecoveryCards(unittest.TestCase):
         self.assertIsNone(cards[0]["best_call_at_or_above_basis"])
         self.assertIsNone(cards[0]["best_call_below_basis"])
         self.assertIsNone(cards[0]["best_csp_opportunity"])
+
+    def test_capital_recovery_uses_only_proven_ledger_adjusted_basis(self):
+        from api.services import recommendations
+
+        cards = recommendations._build_capital_recovery_cards(
+            {
+                "AAPL": {
+                    "position": 200,
+                    "avg_cost": 105.0,
+                    "gate_basis": 103.0,
+                    "gate_basis_source": "ledger_adjusted",
+                }
+            },
+            {
+                "AAPL": [
+                    {
+                        "strike": 104.0,
+                        "expiration": "20261218",
+                        "capital_velocity_per_day": 0.0005,
+                        "if_called_pnl_vs_basis": 300.0,
+                        "hard_blockers": [],
+                        "blocked_reason_codes": [],
+                    }
+                ]
+            },
+            None,
+        )
+
+        self.assertEqual(cards[0]["basis_per_share"], 103.0)
+        self.assertEqual(cards[0]["basis_source"], "ledger_adjusted")
+        self.assertEqual(cards[0]["best_call_at_or_above_basis"]["strike"], 104.0)
+        self.assertIn("proven", cards[0]["basis_notice"].lower())
 
 
 class TestRecommendationEngine(unittest.TestCase):
@@ -683,6 +888,66 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertLessEqual(result["count"], 1)
 
+    def test_price_snapshot_cash_skips_are_covered_with_evidence(self):
+        tickers = [f"T{index:02}" for index in range(69)]
+        affordable = set(tickers[:5])
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": True,
+            "watchlist_size": len(affordable),
+            "affordable_names": len(affordable),
+            "estimated_scan_sec": 30.0,
+            "freshness_window_sec": 300,
+            "chain_calls": len(affordable) * 2,
+            "chain_quota_ok": True,
+            "recommended_max_size": 12,
+        }
+        self.mock_portfolio_context["cash_available_for_csp"] = 1075.66
+        self.mock_portfolio_context["account_value"] = 60000.0
+        self.mock_portfolio_context["underlying_capital_exposure"] = {}
+        self.mock_conn.get_price_snapshot.return_value = {
+            f"US.{ticker}": {
+                "last_price": 12.0 if ticker in affordable else 150.0,
+                "update_time": "2026-09-30 10:15:00",
+            }
+            for ticker in tickers
+        }
+        engine = self._import_engine()
+
+        with patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[]) as fetch_csp:
+            result = engine.get_top_recommendations(limit=3)
+
+        self.assertEqual(fetch_csp.call_count, len(affordable))
+        self.assertEqual([call.args[0] for call in fetch_csp.call_args_list], tickers[:5])
+        self.assertEqual(result["coverage_cash_skipped"], 64)
+        self.assertEqual(len(result["cash_skipped"]), 64)
+        self.assertGreater(result["cash_skipped"][0]["min_strike_needed"], 0)
+        self.assertEqual(result["preflight"]["chain_calls"], fetch_csp.call_count * 2)
+        self.assertEqual(result["scan_coverage"], {"scanned": 69, "total": 69, "complete": True})
+
+    def test_csp_quota_infeasible_still_runs_covered_call_lane(self):
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(["AAA"])
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": False,
+            "watchlist_size": 1,
+            "affordable_names": 1,
+            "estimated_scan_sec": 600.0,
+            "freshness_window_sec": 300,
+            "chain_calls": 2,
+            "chain_quota_ok": True,
+            "recommended_max_size": 0,
+        }
+        self.mock_conn.get_price_snapshot.return_value = {"US.AAA": {"last_price": 10.0}}
+        engine = self._import_engine()
+
+        with patch.object(engine, "_fetch_watchlist_ticker_csp") as fetch_csp:
+            result = engine.get_top_recommendations(limit=3)
+
+        fetch_csp.assert_not_called()
+        self.assertEqual(result["state"], "planning")
+        self.assertFalse(result["scan_coverage"]["complete"])
+        self.assertIn("covered_calls", result)
+
 
 class TestRecommendationEngineStripPrefix(unittest.TestCase):
     """Test ticker prefix stripping delegates to utils."""
@@ -703,6 +968,7 @@ class TestRecommendationEngineStripPrefix(unittest.TestCase):
                 MagicMock(),
                 MagicMock(),
             )
+
             result = engine._strip_ticker_prefix("US.AAPL")
 
             self.assertEqual(result, "AAPL")
@@ -2489,17 +2755,6 @@ class TestRecommendationNonDuplication(unittest.TestCase):
         # Stock at $100: 15% OTM = $85 strike (needs $8500 > $5000)
         result = engine._has_any_affordable_otm_strike(100.0, portfolio)
         self.assertFalse(result)
-
-    def test_find_affordable_csp_strike_returns_highest_affordable(self):
-        """Should return the highest strike that fits buying power."""
-        engine = self._import_engine()
-        portfolio = {
-            "cash_available_for_csp": 8500.0,
-            "broker_buying_power": 8500.0,
-        }
-        strikes = [80.0, 85.0, 88.0, 90.0, 95.0]
-        result = engine._find_affordable_csp_strike(100.0, portfolio, strikes)
-        self.assertEqual(result[0], 85.0)
 
     def test_watchlist_csp_scoring_applies_earnings_context(self):
         """Headline CSP scoring should apply earnings risk to the decision."""

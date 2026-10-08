@@ -10,8 +10,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 
-from core.utils import is_market_open
+from core.session_clock import MARKET_TIMEZONE, SessionCalendar
 
 logger = logging.getLogger("core.quote_cache")
 
@@ -25,52 +26,110 @@ class OptionChainCache:
     is disabled.
     """
 
-    def __init__(self, chain_ttl: int = 180, expiration_ttl: int = 300, broker_cache_after_hours: bool = True):
+    def __init__(
+        self,
+        chain_ttl: int = 180,
+        expiration_ttl: int = 300,
+        broker_cache_after_hours: bool = True,
+        session_calendar: SessionCalendar | None = None,
+        clock=None,
+        timestamp_clock=None,
+    ):
         self._chain_cache: dict = {}
         self._expiration_cache: dict = {}
+        self._range_chain_cache: dict = {}
         self._lock = threading.Lock()
         self._chain_ttl = int(chain_ttl)
         self._expiration_ttl = int(expiration_ttl)
         self.broker_cache_after_hours = bool(broker_cache_after_hours)
+        self.session_calendar = session_calendar or SessionCalendar.weekday_fallback()
+        self._clock = clock or (lambda: datetime.now(MARKET_TIMEZONE))
+        self._timestamp_clock = timestamp_clock or time.time
 
     def get_option_chain(self, symbol, expiration, right):
         cache_key = f"{symbol}_{expiration}_{right}"
         with self._lock:
             if cache_key in self._chain_cache:
                 cached_data, timestamp = self._chain_cache[cache_key]
-                cache_age = time.time() - timestamp
-                if is_market_open():
-                    if cache_age < self._chain_ttl:
+                cache_age = self._timestamp_clock() - timestamp
+                if self.session_calendar.is_open(self._clock()):
+                    if 0 <= cache_age < self._chain_ttl:
                         logger.debug(f"Using cached option chain for {cache_key}")
                         return cached_data
                 elif self.broker_cache_after_hours:
-                    logger.debug(f"Using cached option chain for {cache_key} (after-hours, age={cache_age:.0f}s)")
-                    return cached_data
+                    cached_at = datetime.fromtimestamp(timestamp, timezone.utc).astimezone(MARKET_TIMEZONE)
+                    last_close = self.session_calendar.last_regular_close(self._clock())
+                    if last_close is not None and cached_at >= last_close:
+                        logger.debug(f"Using after-close option chain for {cache_key} (age={cache_age:.0f}s)")
+                        return cached_data
                 del self._chain_cache[cache_key]
         return None
+
+    def get_option_chain_range(self, symbol, right, start, end, band):
+        key = (
+            str(symbol),
+            str(right),
+            str(start),
+            str(end),
+            round(float(band["min_strike"]), 8),
+            round(float(band["max_strike"]), 8),
+        )
+        with self._lock:
+            cached = self._range_chain_cache.get(key)
+            if cached is None:
+                return None
+            cached_data, timestamp = cached
+            age = self._timestamp_clock() - timestamp
+            if self.session_calendar.is_open(self._clock()):
+                if 0 <= age < self._chain_ttl:
+                    return cached_data
+                del self._range_chain_cache[key]
+                return None
+            if self.broker_cache_after_hours:
+                cached_at = datetime.fromtimestamp(timestamp, timezone.utc).astimezone(MARKET_TIMEZONE)
+                last_close = self.session_calendar.last_regular_close(self._clock())
+                if last_close is not None and cached_at >= last_close:
+                    return cached_data
+            del self._range_chain_cache[key]
+        return None
+
+    def cache_option_chain_range(self, symbol, right, start, end, band, data):
+        key = (
+            str(symbol),
+            str(right),
+            str(start),
+            str(end),
+            round(float(band["min_strike"]), 8),
+            round(float(band["max_strike"]), 8),
+        )
+        with self._lock:
+            self._range_chain_cache[key] = (data, self._timestamp_clock())
 
     def cache_option_chain(self, symbol, expiration, right, data):
         cache_key = f"{symbol}_{expiration}_{right}"
         with self._lock:
-            self._chain_cache[cache_key] = (data, time.time())
+            self._chain_cache[cache_key] = (data, self._timestamp_clock())
             logger.debug(f"Cached option chain for {cache_key}")
 
     def get_option_expirations(self, symbol):
         with self._lock:
             if symbol in self._expiration_cache:
                 cached_data, timestamp = self._expiration_cache[symbol]
-                cache_age = time.time() - timestamp
-                if is_market_open():
-                    if cache_age < self._expiration_ttl:
+                cache_age = self._timestamp_clock() - timestamp
+                if self.session_calendar.is_open(self._clock()):
+                    if 0 <= cache_age < self._expiration_ttl:
                         return cached_data
                     del self._expiration_cache[symbol]
                 elif self.broker_cache_after_hours:
-                    return cached_data
+                    cached_at = datetime.fromtimestamp(timestamp, timezone.utc).astimezone(MARKET_TIMEZONE)
+                    last_close = self.session_calendar.last_regular_close(self._clock())
+                    if last_close is not None and cached_at >= last_close:
+                        return cached_data
         return None
 
     def cache_option_expirations(self, symbol, data):
         with self._lock:
-            self._expiration_cache[symbol] = (data, time.time())
+            self._expiration_cache[symbol] = (data, self._timestamp_clock())
 
 
 class PendingRequestCoordinator:

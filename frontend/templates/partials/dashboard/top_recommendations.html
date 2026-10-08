@@ -138,6 +138,7 @@
                             <span class="rank-badge fs-6 fw-bold"></span>
                             <span class="ticker-badge fw-bold"></span>
                             <span class="signal-type-badge badge"></span>
+                            <span class="working-order-badge badge bg-warning text-dark d-none"></span>
                         </div>
                         <span class="option-type-badge badge"></span>
                     </div>
@@ -223,10 +224,13 @@
                             <span class="iv-rank fw-semibold"></span>
                         </div>
                         <div class="recommendation-detail-row d-flex justify-content-between">
-                            <span>Macro</span>
-                            <span class="macro-impact fw-semibold"></span>
+                            <span>IV / 20-session HV <small>(display only)</small></span>
+                            <span class="iv-vs-hv fw-semibold"></span>
                         </div>
-
+                        <div class="recommendation-detail-row d-flex justify-content-between">
+                            <span>Downtrend flag <small>(display only)</small></span>
+                            <span class="falling-knife-diagnostic fw-semibold"></span>
+                        </div>
                         <div class="csp-details d-none">
                             <hr class="my-1">
                             <div class="d-flex justify-content-between">
@@ -313,6 +317,7 @@
                 <!-- SOURCE / FRESHNESS -->
                 <div class="recommendation-card__group">
                     <div class="signal-data-source small text-muted text-center"></div>
+                    <div class="trade-diagnostic-note small text-muted text-center d-none mt-1"></div>
 
                     <div class="text-center mt-2">
                         <button type="button" class="btn btn-outline-primary btn-sm copy-ticket-btn">

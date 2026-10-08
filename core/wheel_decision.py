@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.connection_constants import _normalize_iv
-from core.growth_mode import (
+from core.risk_metrics import (
     classify_covered_call_intent,
     compute_confidence_score,
     compute_risk_budget_used,
@@ -95,7 +95,7 @@ class WheelDecision:
     breakeven_buffer_pct: float = 0.0  # PUT only
     cash_required: float = 0.0  # PUT only
     if_called_return: float = 0.0  # CALL only
-    broker_cost_basis: Optional[float] = None  # CALL: conservative Moomoo avg-cost floor
+    broker_cost_basis: Optional[float] = None  # CALL: basis from a proven ledger or Moomoo average cost
     if_called_pnl_vs_basis: Optional[float] = None  # CALL: per contract, includes current bid credit
     basis_source: str = "unknown"
 
@@ -228,6 +228,20 @@ def _normalize_source_value(value: object, fallback: str) -> str:
         if cleaned:
             return cleaned
     return fallback
+
+
+def _resolve_stock_basis(position: dict) -> tuple[float | None, str]:
+    """Use only a proven ledger basis or Moomoo average cost for covered calls."""
+    source = str(position.get("gate_basis_source") or "").strip()
+    if source in {"ledger_adjusted", "moomoo_avg_cost"}:
+        gated_basis = safe_float(position.get("gate_basis"))
+        if gated_basis > 0:
+            return gated_basis, source
+
+    broker_basis = safe_float(position.get("avg_cost"))
+    if broker_basis > 0:
+        return broker_basis, "moomoo_avg_cost"
+    return None, "missing"
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +474,7 @@ def score_contract(
     # -- Portfolio context ---------------------------------------------------
     position = portfolio_context.get("positions", {}).get(ticker, {})
     shares_owned = float(position.get("position", 0) or 0)
-    avg_cost = float(position.get("avg_cost", 0) or 0)
+    stock_basis, stock_basis_source = _resolve_stock_basis(position)
     cash_balance = float(portfolio_context.get("cash_balance", 0) or 0)
     available_cash = float(portfolio_context.get("available_cash", cash_balance) or 0)
     cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", available_cash) or 0)
@@ -584,12 +598,20 @@ def score_contract(
         if_called_return = (((strike - stock_price) + bid) / stock_price) * 100 if stock_price > 0 else 0
         decision.otm_pct = round(otm_pct, 2)
         decision.if_called_return = round(if_called_return, 2)
-        if avg_cost > 0:
-            decision.broker_cost_basis = avg_cost
-            decision.basis_source = "moomoo_avg_cost"
-            decision.if_called_pnl_vs_basis = round((strike - avg_cost) * 100 + bid * 100, 2)
-            if strike < avg_cost:
-                reason = f"Covered-call strike ${strike:.2f} is below Moomoo cost basis ${avg_cost:.2f}"
+        decision.basis_source = stock_basis_source
+        if stock_basis is None:
+            decision.hard_blockers.append(
+                "Covered-call stock cost basis is unavailable; verify Moomoo average cost before staging this call"
+            )
+            decision.blocked_reason_codes.append("missing_cost_basis")
+        else:
+            decision.broker_cost_basis = stock_basis
+            decision.if_called_pnl_vs_basis = round((strike - stock_basis) * 100 + bid * 100, 2)
+            if strike < stock_basis:
+                reason = (
+                    f"Covered-call strike ${strike:.2f} is below {stock_basis_source.replace('_', ' ')} "
+                    f"basis ${stock_basis:.2f}"
+                )
                 decision.hard_blockers.append(reason)
                 decision.blocked_reason_codes.append("below_cost_basis")
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
@@ -599,7 +621,7 @@ def score_contract(
             decision.warnings.append(f"Wide bid/ask spread ({spread_pct:.0f}%)")
         if open_interest < profile.get("ideal_open_interest", 500):
             decision.warnings.append("Below ideal open interest")
-        if avg_cost > 0 and strike < avg_cost:
+        if stock_basis is not None and strike < stock_basis:
             decision.warnings.append("Strike below stock cost basis")
         if iv_status_str == "extreme_low":
             decision.warnings.append(f"IV extremely low ({decision.iv_rank:.0f}%) - poor risk/reward")
@@ -881,15 +903,16 @@ def _apply_growth_scoring(
     )
 
     if option_type == "CALL":
-        shares_owned = float(portfolio_context.get("positions", {}).get(ticker, {}).get("position", 0) or 0)
-        avg_cost = float(portfolio_context.get("positions", {}).get(ticker, {}).get("avg_cost", 0) or 0)
+        stock_position = (portfolio_context.get("positions", {}) or {}).get(ticker, {}) or {}
+        shares_owned = float(stock_position.get("position", 0) or 0)
+        stock_basis, _ = _resolve_stock_basis(stock_position)
         decision.covered_call_intent = classify_covered_call_intent(
             strike=strike,
             stock_price=stock_price,
             premium_per_contract=premium_per_contract,
             annualized_return=annualized_return_raw,
             shares_owned=int(shares_owned),
-            avg_cost=avg_cost,
+            avg_cost=stock_basis or 0,
         )
 
         if decision.covered_call_intent == "upside-capping risk" and annualized_return_raw < 12:

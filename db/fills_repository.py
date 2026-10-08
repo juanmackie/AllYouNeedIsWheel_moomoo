@@ -296,3 +296,19 @@ class CashFlowRepository:
         except Exception:
             logger.error("Error getting cash flows", exc_info=True)
             return []
+
+    def delete_cash_flow(self, cashflow_id, *, env, account_id):
+        """Delete one explicitly identified flow within its owning account."""
+        if not cashflow_id or not env or not account_id:
+            return False
+        try:
+            with pooled_connection(self.db_path) as conn:
+                cursor = conn.execute(
+                    "DELETE FROM account_cash_flows WHERE cashflow_id = ? AND env = ? AND account_id = ?",
+                    (str(cashflow_id), str(env), str(account_id)),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception:
+            logger.error("Error deleting cash flow", exc_info=True)
+            raise

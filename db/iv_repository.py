@@ -1,8 +1,9 @@
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from core.connection_constants import _normalize_iv
+from core.utils import market_now
 
 from .sqlite_pool import pooled_connection
 
@@ -20,7 +21,10 @@ class IVRepository:
             with pooled_connection(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Keep the legacy wall-time string format, but assign samples
+                # to the US market calendar day rather than the host timezone.
+                market_time = market_now().replace(tzinfo=None)
+                timestamp = market_time.strftime("%Y-%m-%d %H:%M:%S")
                 normalized_iv = _normalize_iv(implied_volatility)
 
                 cursor.execute(
@@ -44,7 +48,7 @@ class IVRepository:
             with pooled_connection(self.db_path, row_factory=sqlite3.Row) as conn:
                 cursor = conn.cursor()
 
-                cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                cutoff_date = (market_now().replace(tzinfo=None) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
                 cursor.execute(
                     """
@@ -98,7 +102,7 @@ class IVRepository:
             with pooled_connection(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                cutoff_date = (market_now().replace(tzinfo=None) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
                 cursor.execute("DELETE FROM iv_history WHERE timestamp < ?", (cutoff_date,))
                 deleted = cursor.rowcount

@@ -39,9 +39,12 @@ class TestPresetContract(unittest.TestCase):
 
     def test_exposure_cap_is_25_percent_in_new_immutable_preset_versions(self):
         for preset in WHEEL_PRESETS.values():
-            self.assertEqual(preset.version, 7)
+            self.assertEqual(preset.version, 8)
             self.assertEqual(preset.max_account_exposure_pct_per_underlying, 25.0)
             self.assertEqual(preset.to_screener_profile()["max_account_exposure_pct_per_underlying"], 25.0)
+        self.assertEqual(WHEEL_PRESETS["conservative"].exit_roll_dte, 7)
+        self.assertEqual(WHEEL_PRESETS["balanced"].exit_roll_dte, 4)
+        self.assertEqual(WHEEL_PRESETS["aggressive"].exit_roll_dte, 2)
 
     def test_unknown_key_falls_back_to_balanced(self):
         self.assertIs(get_preset("quantum"), get_preset(DEFAULT_PRESET_KEY))

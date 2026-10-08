@@ -28,6 +28,7 @@
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
 - `test_recommendations.py` verifies complete watchlist-union scanning and deterministic capital-return-on-deployed-capital ordering with executable-bid velocity as tie-break (quality/event tiers are display-only risk info and never order); infeasible unions publish `planning` rather than truncating.
+- Query-only trade diagnostics are covered by `test_query_only_broker.py` and `test_recommendations.py`: order/capacity queries must stay within the structural allowlist, bound per-candidate capacity reads to three, and leave ranking/actionability untouched.
 - Testing approach aligns with V10 §5: Arrange-Act-Assert when conventional; cover success/failure/boundary; report skipped/flaky/blockers explicitly; close with brief changed/verified/assumptions/risks (V10 §9).
 
 ## Verification

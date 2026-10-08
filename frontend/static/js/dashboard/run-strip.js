@@ -56,6 +56,41 @@ function renderFreshness(freshnessEl, run) {
     }
 }
 
+function renderNextOpen(el, snapshot, run) {
+    if (!el) return;
+    if (!run) {
+        el.textContent = '';
+        return;
+    }
+    if (run.market_state === 'open') {
+        el.textContent = 'US market open';
+        return;
+    }
+    const session = snapshot?.active_watchlist?.market_session;
+    const nextOpenMs = Date.parse(session?.next_open_at || '');
+    if (!Number.isFinite(nextOpenMs)) {
+        el.textContent = '';
+        return;
+    }
+    const remainingMinutes = Math.ceil((nextOpenMs - Date.now()) / 60_000);
+    if (remainingMinutes <= 0) {
+        el.textContent = 'US open estimate passed · refresh run';
+        return;
+    }
+    const hours = Math.floor(remainingMinutes / 60);
+    const minutes = remainingMinutes % 60;
+    const countdown = hours ? `${hours}h ${String(minutes).padStart(2, '0')}m` : `${minutes}m`;
+    const marketTime = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit',
+    }).format(nextOpenMs);
+    const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+    const localTime = new Intl.DateTimeFormat(undefined, {
+        hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+    }).format(nextOpenMs);
+    const fallback = session?.calendar_source === 'weekday_fallback' ? ' · weekday estimate' : '';
+    el.textContent = `US opens in ${countdown} · ${marketTime} ET · ${localTime} ${localZone}${fallback}`;
+}
+
 /**
  * Pure render of the strip from an already-fetched attempt + snapshot.
  * Used by loadRunStrip() (fetch + render) and by the shared run-state poll,
@@ -76,11 +111,13 @@ export function renderRunStrip(attempt, snapshot, opts = {}) {
     if (!snapshot?.run) {
         setBadge('run-status', 'NO RUN', 'bg-secondary');
         renderActiveWatchlist(snapshot);
+        renderNextOpen(document.getElementById('run-next-open'), snapshot, null);
         return;
     }
 
     const run = snapshot.run;
     renderActiveWatchlist(snapshot);
+    renderNextOpen(document.getElementById('run-next-open'), snapshot, run);
     const status = snapshot.effective_status || (snapshot.tradeable ? run.status : 'stale');
     setBadge('run-env', run.env || '--', run.env === 'REAL' ? 'bg-danger' : 'bg-secondary');
     setBadge('run-market', `MARKET ${(run.market_state || 'unknown').toUpperCase()}`, 'bg-secondary');
@@ -103,8 +140,14 @@ export function renderRunStrip(attempt, snapshot, opts = {}) {
     const lastEl = document.getElementById('run-last-success');
     if (lastEl) {
         const published = run.published_at ? new Date(run.published_at) : null;
+        const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+        const localTime = published
+            ? new Intl.DateTimeFormat(undefined, {
+                hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+            }).format(published)
+            : '';
         lastEl.textContent = published
-            ? `last success: ${utcHms(published.getTime())}Z`
+            ? `last success: ${utcHms(published.getTime())}Z · ${localTime} ${localZone}`
             : 'no successful run yet';
     }
     const coverageEl = document.getElementById('run-coverage');

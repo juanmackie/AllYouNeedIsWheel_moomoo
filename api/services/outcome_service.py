@@ -8,6 +8,7 @@ aggregates:
 - option-leg net results after fees (unknown fees ⇒ unknown outcome, never zero);
 - capital-days and net P&L / capital-day (owner efficiency) via the pure
   ``core.outcome_attribution`` helpers;
+- wheel-cycle option + share P&L when a full Moomoo fill chain proves it;
 - groups by preset, DTE bucket, ticker, and event tier (display-only tiers —
   they never gate or reorder anything).
 
@@ -52,7 +53,8 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from api.services.recommendation_ranking import rank_candidates
 from api.services.taken_links import read_taken_links
@@ -61,12 +63,14 @@ from core.outcome_attribution import (
     capital_base_cc,
     capital_base_csp,
     capital_days_from_lots,
+    combined_outcome,
     owner_efficiency,
     owner_summary,
     parse_timestamp,
     slippage_dollars,
 )
-from core.utils import safe_float
+from core.utils import market_now, safe_float
+from core.wheel_cycle import classify_fills, realized_cycle_outcome
 
 logger = logging.getLogger("api.services.outcomes")
 
@@ -82,6 +86,7 @@ _DTE_BUCKET_EDGES = (
 
 _UNTIERED = "untiered"
 TRADE_LINK_SUGGESTION_WINDOW_DAYS = 7
+_ET = ZoneInfo("America/New_York")
 
 # Explicit owner evidence that a manual trade came from a recommendation
 # (``api.services.taken_links``) — distinct from the temporal "inferred" match.
@@ -262,8 +267,12 @@ def build_link_suggestions(
     )
 
 
+SAVED_CANDIDATE_DTE_MIN = 21
+SAVED_CANDIDATE_DTE_MAX = 45
+
+
 def build_dte_comparisons(run_snapshots, option_fills, window_days=TRADE_LINK_SUGGESTION_WINDOW_DAYS) -> list[dict]:
-    """Compare recent owner short fills with saved 21–45 DTE candidates.
+    """Compare recent owner short fills with saved candidates in the DTE window.
 
     This uses only candidates retained in each published snapshot; it never
     fetches chains or claims to rank against contracts the run did not retain.
@@ -288,7 +297,7 @@ def build_dte_comparisons(run_snapshots, option_fills, window_days=TRADE_LINK_SU
         except ValueError:
             continue
         traded_dte = (expiration_date - fill_time.date()).days
-        if not 21 <= traded_dte <= 45:
+        if not SAVED_CANDIDATE_DTE_MIN <= traded_dte <= SAVED_CANDIDATE_DTE_MAX:
             continue
 
         for snapshot in run_snapshots or []:
@@ -326,7 +335,7 @@ def build_dte_comparisons(run_snapshots, option_fills, window_days=TRADE_LINK_SU
                     str(candidate.get("ticker") or "").upper() == ticker
                     and str(candidate.get("option_type") or "").upper() == option_type
                     and candidate_dte is not None
-                    and 21 <= candidate_dte <= 45
+                    and SAVED_CANDIDATE_DTE_MIN <= candidate_dte <= SAVED_CANDIDATE_DTE_MAX
                 ):
                     matching.append(candidate)
             ranked = rank_candidates(matching)
@@ -511,6 +520,40 @@ def _realization_split(entry_fills, close_fills, closed_qty):
     return realized_in, realized_out, realized_fees, unrealized
 
 
+def _terminalize_open_lots(lots, terminal_at, terminal_contracts):
+    """Stop matched open option lots at an evidenced assignment/expiry horizon."""
+    remaining = max(0.0, safe_float(terminal_contracts, default=0.0))
+    result = []
+    for entry_at, exit_at, quantity in lots:
+        qty = max(0.0, safe_float(quantity, default=0.0))
+        if exit_at is not None or remaining <= 0:
+            result.append((entry_at, exit_at, qty))
+            continue
+        ended = min(qty, remaining)
+        if ended > 0:
+            result.append((entry_at, terminal_at, ended))
+            remaining -= ended
+        if qty > ended:
+            result.append((entry_at, None, qty - ended))
+    open_remaining = sum(qty for _, exit_at, qty in result if exit_at is None)
+    return result, open_remaining
+
+
+def _cycle_outcome(terminal_state, event, premium_in, fees):
+    if terminal_state not in {"assigned_put", "called_away"}:
+        return {"status": "unknown", "net_pnl": None}
+    option_leg = None
+    if fees is not None:
+        option_leg = {"premium_in": premium_in, "premium_out": 0.0, "fees": fees}
+    share_leg = {
+        "basis_price": None,
+        "exit_price": None,
+        "shares": safe_float((event or {}).get("shares"), default=0.0),
+        "fees": None,
+    }
+    return combined_outcome(option_leg, share_leg)
+
+
 def _recommendation_precedes_first_fill(candidate, first_fill_timestamp) -> bool:
     """True only when the recommendation's timestamp strictly precedes the
     first fill of the run. Unparseable timestamps can never confirm precedence
@@ -614,12 +657,16 @@ def _link_context(link) -> dict:
     }
 
 
-def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=None) -> list[dict]:
+def build_outcome_records(
+    run_snapshots, option_fills, now=None, taken_links=None, portfolio_snapshots=None
+) -> list[dict]:
     """Join recommendation signals to option fills and attribute outcomes.
 
     ``run_snapshots``: published snapshot dicts (any order; recommendations
     kept at full cardinality per identity so attribution can detect
-    ambiguity). ``option_fills``: fill rows for the same identity scope.
+    ambiguity). ``option_fills``: fill rows for the same identity scope. Stock
+    fills may be included as assignment evidence; they are never included in
+    option outcome records.
     ``now``: as-of for open-lot capital days. ``taken_links``: owner-recorded
     links stating which recommendation a manual trade came from; an
     unambiguous link that resolves to a stored recommendation attributes the
@@ -628,7 +675,7 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
     attributed, otherwise an unattributed evidence record for orphan fills
     (never dropped).
     """
-    now = now or datetime.now()
+    now = now or market_now().replace(tzinfo=None)
 
     # All candidate recommendations per identity (across signals + pick
     # lists), kept at full cardinality — never deduped early — because
@@ -665,9 +712,24 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
             signals_by_identity.setdefault(identity, []).append(meta)
             candidates_by_run_identity.setdefault((run_id, identity), []).append(meta)
 
-    # Option fills grouped by contract identity.
+    all_fills = list(option_fills or [])
+    assignment_buy_ids = _assignment_zero_buy_ids(all_fills)
+    terminal_events = {}
+    for event in classify_fills(all_fills, today=market_now().date()):
+        if event.get("event_type") not in {"assigned_put", "called_away"}:
+            continue
+        identity = _event_identity(event)
+        if identity is not None:
+            terminal_events[identity] = event
+    for event in _expired_snapshot_events(portfolio_snapshots):
+        identity = _event_identity(event)
+        if identity is not None and identity not in terminal_events:
+            terminal_events[identity] = event
+
+    # Option fills grouped by contract identity. Stock fills above are only
+    # pairing evidence; they never become option outcome rows.
     fills_by_identity: dict[tuple, list] = {}
-    for fill in option_fills or []:
+    for fill in all_fills:
         identity = fill_identity(fill)
         if identity is None:
             continue
@@ -682,20 +744,51 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
         link, linked_meta = _resolve_owner_link(links, candidates_by_run_identity)
         if linked_meta is not None:
             record = _build_record(
-                linked_meta["signal"], linked_meta, ticker, expiration, option_type, strike, fills, now
+                linked_meta["signal"],
+                linked_meta,
+                ticker,
+                expiration,
+                option_type,
+                strike,
+                fills,
+                now,
+                assignment_buy_ids,
+                terminal_events.get(identity),
             )
             record["attribution"] = ATTRIBUTION_OWNER_LINKED
         else:
             meta, attribution = _select_candidate(candidates, fills)
             if attribution != "unattributed" and meta is not None:
-                record = _build_record(meta["signal"], meta, ticker, expiration, option_type, strike, fills, now)
+                record = _build_record(
+                    meta["signal"],
+                    meta,
+                    ticker,
+                    expiration,
+                    option_type,
+                    strike,
+                    fills,
+                    now,
+                    assignment_buy_ids,
+                    terminal_events.get(identity),
+                )
                 record["attribution"] = attribution
             else:
                 # Orphan/unattributed fills are still real transactions: surfaced
                 # as matched evidence only, never silently dropped, never given a
                 # fabricated quoted price or a recommendation identity.
                 empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
-                record = _build_record(None, empty_meta, ticker, expiration, option_type, strike, fills, now)
+                record = _build_record(
+                    None,
+                    empty_meta,
+                    ticker,
+                    expiration,
+                    option_type,
+                    strike,
+                    fills,
+                    now,
+                    assignment_buy_ids,
+                    terminal_events.get(identity),
+                )
                 record["signal_type"] = "unmatched"
                 record["attribution"] = "unattributed"
         if link is not None:
@@ -720,17 +813,181 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
     return records
 
 
-def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, now) -> dict:
+def _assignment_zero_buy_ids(fills) -> set[int]:
+    """Find zero-price option buys paired with a nearby underlying share buy.
+
+    Assignment transfers 100 shares per option contract. Requiring the same
+    underlying, a five-second timestamp window, and matching share quantity
+    avoids treating an unrelated stock purchase as evidence for a zero-price
+    option close.
+    """
+    share_buys_by_ticker: dict[str, list[dict]] = {}
+    for fill in fills:
+        if (
+            str(fill.get("security_type", "") or "").upper() != "STK"
+            or str(fill.get("side", "") or "").upper() != "BUY"
+        ):
+            continue
+        ticker = str(fill.get("ticker", "") or "").strip().upper()
+        timestamp = parse_timestamp(fill.get("captured_at"))
+        quantity = safe_float(fill.get("qty"), default=0.0)
+        if ticker and timestamp is not None and quantity > 0:
+            share_buys_by_ticker.setdefault(ticker, []).append({"timestamp": timestamp, "remaining_qty": quantity})
+
+    paired_buys = set()
+    option_buys = sorted(
+        fills,
+        key=lambda fill: parse_timestamp(fill.get("captured_at")) or datetime.min,
+    )
+    for fill in option_buys:
+        if (
+            str(fill.get("security_type", "") or "").upper() != "OPT"
+            or str(fill.get("side", "") or "").upper() != "BUY"
+            or safe_float(fill.get("price"), default=None) != 0
+        ):
+            continue
+        ticker = str(fill.get("ticker", "") or "").strip().upper()
+        timestamp = parse_timestamp(fill.get("captured_at"))
+        contracts = safe_float(fill.get("qty"), default=0.0)
+        if not ticker or timestamp is None or contracts <= 0:
+            continue
+        shares_required = contracts * 100
+        candidates = [
+            stock_buy
+            for stock_buy in share_buys_by_ticker.get(ticker, [])
+            if stock_buy["remaining_qty"] >= shares_required
+            and abs((stock_buy["timestamp"] - timestamp).total_seconds()) <= 5
+        ]
+        if candidates:
+            match = min(candidates, key=lambda stock_buy: abs((stock_buy["timestamp"] - timestamp).total_seconds()))
+            paired_buys.add(id(fill))
+            match["remaining_qty"] -= shares_required
+    return paired_buys
+
+
+def _event_identity(event):
+    ticker = str(event.get("ticker") or "").strip().upper()
+    option_type = str(event.get("option_type") or "").strip().upper()
+    expiration = normalize_expiration_key(event.get("expiration"))
+    strike = safe_float(event.get("strike"), default=None)
+    if not ticker or option_type not in {"CALL", "PUT"} or len(expiration) != 8 or strike is None:
+        return None
+    return ticker, expiration, option_type, round(strike, 4)
+
+
+def _snapshot_market_datetime(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(_ET).replace(tzinfo=None)
+
+
+def _position_identity(position):
+    if not isinstance(position, dict) or str(position.get("security_type") or "").upper() != "OPT":
+        return None
+    if safe_float(position.get("qty"), default=0.0) >= 0:
+        return None
+    ticker = str(position.get("underlying") or "").strip().upper()
+    if not ticker:
+        ticker = str(position.get("symbol") or "").strip().upper()
+    return _event_identity(
+        {
+            "ticker": ticker,
+            "option_type": position.get("option_type"),
+            "expiration": position.get("expiration"),
+            "strike": position.get("strike"),
+        }
+    )
+
+
+def _expired_snapshot_events(portfolio_snapshots):
+    """Infer a capital-days stop only from a short present before expiry and absent after it.
+
+    The result deliberately remains ``expired_unverified``: portfolio-book
+    absence closes the position horizon but cannot prove its expiry payoff.
+    """
+    snapshots = [row for row in portfolio_snapshots or [] if isinstance(row, dict)]
+    snapshots.sort(key=lambda row: _snapshot_market_datetime(row.get("captured_at")) or datetime.min)
+    events = []
+    for previous, current in zip(snapshots, snapshots[1:]):
+        previous_at = _snapshot_market_datetime(previous.get("captured_at"))
+        current_at = _snapshot_market_datetime(current.get("captured_at"))
+        current_positions = current.get("positions")
+        if (
+            previous_at is None
+            or current_at is None
+            or not isinstance(current_positions, list)
+            or not current_positions
+        ):
+            continue
+        current_ids = {_position_identity(row) for row in current_positions}
+        current_ids.discard(None)
+        previous_positions = previous.get("positions")
+        if not isinstance(previous_positions, list):
+            continue
+        for position in previous_positions:
+            identity = _position_identity(position)
+            if identity is None or identity in current_ids:
+                continue
+            ticker, expiration, option_type, strike = identity
+            try:
+                expiration_date = datetime.strptime(expiration, "%Y%m%d").date()
+            except ValueError:
+                continue
+            cutoff = datetime.combine(expiration_date, time(16, 0))
+            if previous_at >= cutoff or current_at < cutoff:
+                continue
+            events.append(
+                {
+                    "event_type": "expired_unverified",
+                    "ticker": ticker,
+                    "option_type": option_type,
+                    "expiration": expiration,
+                    "strike": strike,
+                    "shares": 0,
+                    "contracts": abs(safe_float(position.get("qty"), default=0.0)),
+                    "timestamp": cutoff.isoformat(),
+                    "fees_known": False,
+                    "provisional": True,
+                }
+            )
+    return events
+
+
+def _build_record(
+    signal, meta, ticker, expiration, option_type, strike, fills, now, assignment_buy_ids=None, terminal_event=None
+) -> dict:
     quoted = quoted_credit_per_contract(signal) if signal is not None else None
     dte = signal.get("dte") if signal is not None else None
 
     entry_fills = [f for f in fills if str(f.get("side", "") or "").upper() == "SELL"]
-    close_fills = [f for f in fills if str(f.get("side", "") or "").upper() == "BUY"]
+    assignment_buy_ids = assignment_buy_ids or set()
+    close_fills = [
+        f for f in fills if str(f.get("side", "") or "").upper() == "BUY" and id(f) not in assignment_buy_ids
+    ]
 
     contracts_sold = sum(float(f.get("qty", 0) or 0) for f in entry_fills)
     contracts_bought = sum(float(f.get("qty", 0) or 0) for f in close_fills)
 
     lots, open_contracts, closed_qty = _fifo_lots(entry_fills, close_fills)
+    terminal_state = ""
+    terminal_at = None
+    if open_contracts > 0 and isinstance(terminal_event, dict):
+        event_type = str(terminal_event.get("event_type") or "")
+        event_contracts = safe_float(terminal_event.get("contracts"), default=None)
+        if event_contracts is None and event_type in {"assigned_put", "called_away"}:
+            event_contracts = safe_float(terminal_event.get("shares"), default=0.0) / 100.0
+        terminal_at = str(terminal_event.get("timestamp") or "")
+        if event_type in {"assigned_put", "called_away", "expired_unverified"} and terminal_at and event_contracts:
+            lots, open_contracts = _terminalize_open_lots(lots, terminal_at, event_contracts)
+            if open_contracts == 0:
+                terminal_state = event_type
 
     # All option-leg money derives from the single per-share → per-contract
     # conversion in ``_fill_credit_per_contract``; never mix units again.
@@ -777,6 +1034,8 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
         status = "pending"
     elif not fees_known:
         status = "unknown"
+    elif terminal_state:
+        status = "unknown"
     elif closed_qty <= 0 and open_contracts <= 0:
         status = "unknown"
     elif closed_qty <= 0:
@@ -818,6 +1077,11 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
         "capital_days": capital_days,
         "owner_efficiency": owner_efficiency(net_pnl, capital_days) if net_pnl is not None else None,
         "open": bool(fills) and open_contracts > 0,
+        "realization_state": terminal_state
+        or ("open" if open_contracts > 0 else "closed" if closed_qty > 0 else "pending"),
+        "cycle_outcome": _cycle_outcome(terminal_state, terminal_event, collected_premium_dollars, fees_total)
+        if terminal_state
+        else None,
         "attribution": "",  # set by build_outcome_records
         "fills": [_fill_transaction(f) for f in sorted(fills, key=lambda f: str(f.get("captured_at", "") or ""))],
     }
@@ -893,6 +1157,46 @@ def aggregate_group(records) -> dict:
     }
 
 
+def build_wheel_cycle_summary(cycles, ticker=None) -> dict:
+    """Summarize persisted wheel cycles without treating unknown legs as zero."""
+    rows = [cycle for cycle in (cycles or []) if isinstance(cycle, dict)]
+    if ticker:
+        ticker_filter = str(ticker).upper()
+        rows = [cycle for cycle in rows if str(cycle.get("ticker") or "").upper() == ticker_filter]
+    outcomes = []
+    measured = 0
+    unknown = 0
+    open_count = 0
+    net_dollars = 0.0
+    for cycle in rows:
+        result = realized_cycle_outcome(cycle)
+        status = str(result.get("status") or "unknown")
+        measured += status == "measured"
+        unknown += status == "unknown"
+        open_count += status == "open"
+        if status == "measured" and result.get("net_pnl") is not None:
+            net_dollars += float(result["net_pnl"])
+        outcomes.append(
+            {
+                "cycle_id": cycle.get("cycle_id"),
+                "ticker": cycle.get("ticker"),
+                "origin": cycle.get("origin"),
+                "opened_at": cycle.get("opened_at"),
+                "closed_at": cycle.get("closed_at"),
+                "state": cycle.get("state"),
+                "cycle_outcome": result,
+            }
+        )
+    return {
+        "sample_size": len(outcomes),
+        "measured_count": measured,
+        "unknown_count": unknown,
+        "open_count": open_count,
+        "net_dollars": round(net_dollars, 2) if measured else None,
+        "outcomes": outcomes,
+    }
+
+
 def group_records(records, key_fn, order=None) -> list[dict]:
     """Group records by a key function into [{key, ...aggregate}] entries."""
     groups: dict[str, list] = {}
@@ -949,6 +1253,21 @@ class OutcomeService:
 
         fills_service = FillsService(connection, self._db)
         fills_result = fills_service.ingest_history_fills(days=days)
+        if fills_result.get("ok"):
+            try:
+                from api.services.wheel_ledger import WheelLedgerService
+
+                env, account_id = connection.resolve_portfolio_identity()
+                snapshot = self._db.get_latest_portfolio_snapshot(env=env, account_id=account_id)
+                stocks = {
+                    str(position.get("symbol") or "").upper(): {"position": position.get("qty")}
+                    for position in (snapshot or {}).get("positions", [])
+                    if isinstance(position, dict) and position.get("security_type") == "STK"
+                }
+                if stocks:
+                    WheelLedgerService(self._db).recompute(env, account_id, positions=stocks)
+            except Exception as exc:
+                logger.warning("Wheel-cycle refresh after fill ingest failed (ignored): %s", exc)
 
         cash_result: dict = {"ok": True, "ingested": 0}
         try:
@@ -956,7 +1275,8 @@ class OutcomeService:
         except (TypeError, ValueError):
             cash_days = 0
         if cash_days:
-            dates = [(datetime.now() - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(cash_days)]
+            today = market_now().date()
+            dates = [(today - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(cash_days)]
             cash_result = fills_service.ingest_cash_flows(dates)
 
         ok = bool(fills_result.get("ok")) and bool(cash_result.get("ok", True))
@@ -990,15 +1310,34 @@ class OutcomeService:
             security_type="OPT",
             limit=max(1, int(fill_limit)),
         )
+        stock_fills = self._db.get_fills(
+            env=env,
+            account_id=account_id,
+            security_type="STK",
+            limit=max(1, int(fill_limit)),
+        )
         snapshots = self._db.get_run_snapshots(env=env, account_id=account_id, limit=max(1, int(snapshot_limit)))
+        history_reader = getattr(self._db, "get_portfolio_history", None)
+        portfolio_snapshots = (
+            history_reader(env=env, account_id=account_id, unbounded=True) if callable(history_reader) else []
+        )
         taken_links = read_taken_links(self._db, env, account_id)
+        cycle_reader = getattr(self._db, "get_wheel_cycles", None)
+        cycles = (
+            cycle_reader(env=env, account_id=account_id, ticker=ticker, limit=1000) if callable(cycle_reader) else []
+        )
         link_suggestions = build_link_suggestions(snapshots, fills, taken_links=taken_links)
         dte_comparisons = build_dte_comparisons(snapshots, fills)
         if ticker:
             ticker_filter = str(ticker).upper()
             link_suggestions = [item for item in link_suggestions if item["recommendation"]["ticker"] == ticker_filter]
             dte_comparisons = [item for item in dte_comparisons if item["traded"]["ticker"] == ticker_filter]
-        records = build_outcome_records(snapshots, fills, taken_links=taken_links)
+        records = build_outcome_records(
+            snapshots,
+            [*fills, *stock_fills],
+            taken_links=taken_links,
+            portfolio_snapshots=portfolio_snapshots,
+        )
         records = filter_records(
             records, ticker=ticker, preset=preset, event_tier=event_tier, dte_bucket_filter=dte_bucket
         )
@@ -1007,7 +1346,7 @@ class OutcomeService:
         event_order.append(_UNTIERED)
 
         return {
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": market_now().isoformat(),
             "taken_link_count": len(taken_links),
             "link_suggestions": link_suggestions,
             "dte_comparisons": dte_comparisons,
@@ -1018,6 +1357,7 @@ class OutcomeService:
                 "dte_bucket": dte_bucket or "",
             },
             "totals": aggregate_group(records),
+            "wheel_cycles": build_wheel_cycle_summary(cycles, ticker=ticker),
             "groups": {
                 "by_preset": group_records(records, lambda r: str(r.get("preset_key", "")) or _UNTIERED),
                 "by_dte_bucket": group_records(records, lambda r: str(r.get("dte_bucket", "")), order=_DTE_ORDER),

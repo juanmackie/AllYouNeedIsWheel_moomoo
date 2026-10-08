@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from typing import Any, overload
 from zoneinfo import ZoneInfo
 
+from core.session_clock import SessionCalendar
+
 # Configure logger
 logger = logging.getLogger("ayniwheel.utils")
 
@@ -50,23 +52,10 @@ def get_next_monthly_expiration():
 MARKET_TIMEZONE = ZoneInfo("America/New_York")
 
 
-_last_market_status = None
-
-
-def is_market_open() -> bool:
-    """Return True if US equity markets are currently open (9:30 AM - 4:00 PM ET, Mon-Fri)."""
-    global _last_market_status
-    now = datetime.now(MARKET_TIMEZONE)
-    if now.weekday() >= 5:
-        result = False
-    else:
-        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-        result = market_open <= now <= market_close
-    if _last_market_status is None or _last_market_status != result:
-        logger.info("Market %s at %s ET", "OPEN" if result else "CLOSED", now.strftime("%H:%M"))
-        _last_market_status = result
-    return result
+def is_market_open(session_calendar: SessionCalendar | None = None) -> bool:
+    """Return session state from a supplied calendar or labeled weekday fallback."""
+    calendar = session_calendar or SessionCalendar.weekday_fallback()
+    return calendar.is_open(market_now())
 
 
 def market_now():
@@ -74,7 +63,7 @@ def market_now():
     return datetime.now(MARKET_TIMEZONE)
 
 
-def entry_window_advice(now: datetime | None = None) -> dict:
+def entry_window_advice(now: datetime | None = None, session_calendar: SessionCalendar | None = None) -> dict:
     """Intraday entry-quality guidance for placing option tickets.
 
     Pure function of an ET clock (defaults to now). Deterministic so tests
@@ -87,15 +76,21 @@ def entry_window_advice(now: datetime | None = None) -> dict:
         good    — mid-session (deepest liquidity, tightest spreads)
     """
     now = market_now() if now is None else now
-    weekday = now.weekday()
-    if weekday >= 5:
+    calendar = session_calendar or SessionCalendar.weekday_fallback()
+    if not calendar.is_trading_day(now.date()):
         return {
             "quality": "closed",
-            "message": "Weekend — markets closed. Stage limit tickets for the next US session.",
+            "message": "Markets closed — stage limit tickets for the next US session.",
         }
 
-    open_dt = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_dt = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    open_dt = now.replace(
+        hour=calendar.regular_open(now.date()).hour,
+        minute=calendar.regular_open(now.date()).minute,
+        second=0,
+        microsecond=0,
+    )
+    close_time = calendar.regular_close(now.date())
+    close_dt = now.replace(hour=close_time.hour, minute=close_time.minute, second=0, microsecond=0)
     if now < open_dt:
         return {
             "quality": "closed",

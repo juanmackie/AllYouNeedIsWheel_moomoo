@@ -463,6 +463,56 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         self.assertEqual(result.broker_cost_basis, 105.0)
         self.assertEqual(result.if_called_pnl_vs_basis, 100.0)
 
+    def test_call_without_proven_basis_is_blocked(self):
+        future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        option = dict(
+            self.base_option,
+            option_type="CALL",
+            strike=110.0,
+            expiration=future_date,
+            delta=0.20,
+            bid=2.0,
+            ask=2.5,
+        )
+        portfolio = dict(self.base_portfolio, positions={"AAPL": {"position": 200, "avg_cost": 0}})
+
+        result = score_contract("AAPL", option, 100.0, self.base_profile, portfolio)
+
+        self.assertIn("missing_cost_basis", result.blocked_reason_codes)
+        self.assertFalse(result.copy_eligible)
+        self.assertIsNone(result.broker_cost_basis)
+        self.assertEqual(result.basis_source, "missing")
+
+    def test_call_uses_proven_adjusted_basis_for_block_and_pnl(self):
+        future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        option = dict(
+            self.base_option,
+            option_type="CALL",
+            strike=104.0,
+            expiration=future_date,
+            delta=0.20,
+            bid=2.0,
+            ask=2.5,
+        )
+        portfolio = dict(
+            self.base_portfolio,
+            positions={
+                "AAPL": {
+                    "position": 200,
+                    "avg_cost": 105.0,
+                    "gate_basis": 103.0,
+                    "gate_basis_source": "ledger_adjusted",
+                }
+            },
+        )
+
+        result = score_contract("AAPL", option, 100.0, self.base_profile, portfolio)
+
+        self.assertNotIn("below_cost_basis", result.blocked_reason_codes)
+        self.assertEqual(result.broker_cost_basis, 103.0)
+        self.assertEqual(result.basis_source, "ledger_adjusted")
+        self.assertEqual(result.if_called_pnl_vs_basis, 300.0)
+
     def test_preset_delta_bands_are_hard_limits_for_puts_and_calls(self):
         future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
         cases = [
@@ -1008,8 +1058,10 @@ class TestQuoteFreshness(unittest.TestCase):
     def setUp(self):
         from zoneinfo import ZoneInfo
 
+        from core.utils import market_now
+
         self.ny = ZoneInfo("America/New_York")
-        future = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        future = (market_now() + timedelta(days=21)).strftime("%Y%m%d")
         self.fresh_ts = datetime.now(self.ny).strftime("%Y-%m-%d %H:%M:%S")
         self.stale_ts = (datetime.now(self.ny) - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         self.profile = {

@@ -9,6 +9,7 @@
 ## Ownership
 
 - `workflows/ci.yml` owns the single Windows job: dependency sync (uv), Ruff check + format check, pytest run via `scripts/ci_pytest.py`, frontend Vitest (`npm ci` + `npm test`), AST-backed read-only and generated-artifact hygiene scans, and a fresh-clone import smoke.
+- The CI job also owns the Playwright browser smoke: install Chromium, start the app with the example connection config on loopback, wait for `/` to return HTTP 200, run `npm run test:e2e`, then stop the app in an `always()` cleanup step. The E2E fixture tests do not need live OpenD or account credentials. Locally, run `npx playwright install chromium`, start the app at `127.0.0.1:8000`, then run `npm run test:e2e` (`E2E_BASE_URL` can select another port).
 
 ## Local Contracts
 
@@ -21,6 +22,7 @@
 
 - Prefer narrow CI additions that catch real regressions without making local iteration painful.
 - If frontend tests are added to CI, install Node dependencies from `package-lock.json` and run the same `npm test` contract used locally.
+- Keep the Playwright smoke setup, readiness check, and guaranteed server cleanup aligned with `tests/README.md` and `tests/e2e/AGENTS.md`.
 - Preserve branch triggers unless the repository release flow intentionally changes.
 
 ## Verification

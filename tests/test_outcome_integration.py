@@ -6,6 +6,7 @@ connection. No OpenD, no network, no mock portfolio data in production
 behavior — the fake connection exists only inside this test.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -248,6 +249,31 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         self.assertIsNone(summary["outcomes"][0]["net_pnl"])
         self.assertTrue(summary["outcomes"][0]["open"])
 
+    def test_assignment_zero_price_option_buy_is_not_counted_as_buyback(self):
+        self._publish_signal_run()
+        conn = _FakeBrokerConnection(
+            [
+                _deal("D1", "O1", AAPL_PUT_CODE, "SELL", 1.0, 1.05, "2026-01-05 14:30:00"),
+                _deal("D2", "O2", AAPL_PUT_CODE, "BUY", 1.0, 0.0, "2026-02-20 14:30:00"),
+                _deal("D3", "O2", "US.AAPL", "BUY", 100.0, 70.0, "2026-02-20 14:30:00"),
+            ],
+            {},
+            {},
+        )
+        ingested = FillsService(conn, self.db).ingest_history_fills(days=30)
+        self.assertEqual(ingested["ingested"], 3)
+
+        summary = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
+        outcome = next(record for record in summary["outcomes"] if record["ticker"] == "AAPL")
+
+        self.assertEqual(outcome["contracts_bought_back"], 0)
+        self.assertEqual(outcome["open_contracts"], 0)
+        self.assertEqual(outcome["outcome_status"], "unknown")
+        self.assertEqual(outcome["realization_state"], "assigned_put")
+        self.assertEqual(outcome["cycle_outcome"], {"status": "unknown", "net_pnl": None})
+        self.assertIsNone(outcome["gross_premium_pnl"])
+        self.assertIsNone(outcome["net_pnl"])
+
     def test_signal_without_fills_is_pending(self):
         self._publish_signal_run()
         summary = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
@@ -256,6 +282,16 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         self.assertEqual(summary["totals"]["coverage_pct"], 0.0)
 
     def test_cash_flows_persisted_and_classified(self):
+        goal_config_key = f"goal_pace_config:{ENV}:{OPAQUE}"
+        self.db.set_setting(
+            goal_config_key,
+            json.dumps(
+                {
+                    "baseline_date": "2026-08-22",
+                    "cash_flow_attestation": {"complete": True, "through": "2026-09-30"},
+                }
+            ),
+        )
         conn = self._fake_connection()
         service = FillsService(conn, self.db)
         result = service.ingest_cash_flows(["2026-01-10"])
@@ -267,6 +303,7 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         self.assertEqual(flows[0]["flow_type"], "Deposit")
         self.assertAlmostEqual(flows[0]["amount"], 5000.0)
         self.assertTrue(is_capital_movement_cash_flow(flows[0]["flow_type"], flows[0]["remark"]))
+        self.assertNotIn("cash_flow_attestation", json.loads(self.db.get_setting(goal_config_key)))
         # Cash movements never enter trading attribution: no fills → no outcomes.
         summary = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
         self.assertEqual(summary["totals"]["sample_size"], 0)

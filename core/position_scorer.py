@@ -120,6 +120,19 @@ def score_existing_position(
 
     # Exit playbook verdict (deterministic rules, preset-driven thresholds).
     entry_credit = float(position_data.get("avg_cost", 0) or 0)
+    stock_position = (portfolio_context.get("positions", {}) or {}).get(ticker, {}) or {}
+    stock_basis = stock_position.get("gate_basis", stock_position.get("avg_cost"))
+    basis_source = stock_position.get("gate_basis_source") or (
+        "moomoo_avg_cost" if stock_position.get("avg_cost") not in (None, "", 0, 0.0) else "missing"
+    )
+    exit_values = portfolio_context.get("exit_thresholds") or {}
+    if isinstance(exit_values, dict):
+        try:
+            thresholds = ExitThresholds(**exit_values)
+        except TypeError:
+            thresholds = ExitThresholds()
+    else:
+        thresholds = ExitThresholds()
     exit_verdict = _evaluate_position_exit(
         decision,
         entry_credit_per_contract=entry_credit,
@@ -127,13 +140,10 @@ def score_existing_position(
         rotation_comparison=position_data.get("rotation_comparison"),
         roll_target=position_data.get("roll_target"),
         delta=raw_delta if delta_available else None,
-        thresholds=ExitThresholds(
-            profit_take_pct=float(portfolio_context.get("exit_profit_take_pct", 50.0) or 50.0),
-            roll_dte=int(portfolio_context.get("exit_roll_dte", 21) or 21),
-            exit_delta=float(portfolio_context.get("exit_delta", 0.65) or 0.65),
-            deep_itm_pct=float(portfolio_context.get("exit_deep_itm_pct", 15.0) or 15.0),
-            stop_loss_pct=float(portfolio_context.get("exit_stop_loss_pct", -100.0) or -100.0),
-        ),
+        thresholds=thresholds,
+        stock_basis=stock_basis,
+        basis_source=basis_source,
+        current_strike=strike,
     )
     decision.exit_verdict = exit_verdict.verdict
     decision.exit_reasons = exit_verdict.reasons
@@ -180,6 +190,9 @@ def _evaluate_position_exit(
     roll_target: dict | None = None,
     thresholds: ExitThresholds | None = None,
     delta: float | None = None,
+    stock_basis: float | None = None,
+    basis_source: str | None = None,
+    current_strike: float | None = None,
 ):
     """Bridge a scored open position into the exit playbook.
 
@@ -224,5 +237,8 @@ def _evaluate_position_exit(
         thresholds=thresholds,
         rotation_comparison=rotation_comparison,
         roll_target=roll_target,
+        stock_basis=stock_basis,
+        basis_source=basis_source,
+        current_strike=current_strike,
     )
     return verdict

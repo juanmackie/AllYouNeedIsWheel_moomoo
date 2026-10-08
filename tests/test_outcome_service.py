@@ -5,6 +5,7 @@ filled credit, net-of-fee outcomes, capital-days, groups with evidence
 metadata) plus OutcomeService against a fake database. No broker, no Flask.
 """
 
+import json
 import os
 import sys
 import unittest
@@ -213,6 +214,74 @@ class TestDteBucket(unittest.TestCase):
 
 
 class TestBuildOutcomeRecords(unittest.TestCase):
+    def test_assignment_zero_price_buy_is_not_realized_as_profit(self):
+        fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", "assignment_zero_buy.json")
+        with open(fixture_path, encoding="utf-8") as fixture_file:
+            scenario = json.load(fixture_file)
+
+        records = build_outcome_records(
+            [_snapshot([scenario["signal"], scenario["nearby_pair_signal"]])],
+            scenario["fills"],
+            now=NOW,
+        )
+
+        self.assertEqual(len(records), 2)
+        nearby_assignment = next(record for record in records if record["strike"] == 70.0)
+        outside_window = next(record for record in records if record["strike"] == 75.0)
+        self.assertEqual(nearby_assignment["contracts_bought_back"], 0)
+        self.assertEqual(nearby_assignment["open_contracts"], 0)
+        self.assertEqual(nearby_assignment["outcome_status"], "unknown")
+        self.assertEqual(nearby_assignment["realization_state"], "assigned_put")
+        self.assertEqual(nearby_assignment["cycle_outcome"], {"status": "unknown", "net_pnl": None})
+        self.assertFalse(nearby_assignment["open"])
+        self.assertLess(nearby_assignment["capital_days"], 7000 * 46.0208333333)
+        self.assertIsNone(nearby_assignment["gross_premium_pnl"])
+        self.assertIsNone(nearby_assignment["net_pnl"])
+        self.assertEqual(
+            [fill["fill_id"] for fill in nearby_assignment["fills"]],
+            [
+                "synthetic-short-put-open",
+                "synthetic-assignment-option-leg",
+            ],
+        )
+        self.assertEqual(outside_window["contracts_bought_back"], 1)
+        self.assertEqual(outside_window["open_contracts"], 0)
+        self.assertEqual(outside_window["outcome_status"], "measured")
+        self.assertAlmostEqual(outside_window["net_pnl"], 105.0)
+
+    def test_absent_expired_short_stops_capital_days_without_fabricating_payoff(self):
+        records = build_outcome_records(
+            [_snapshot([_signal()])],
+            [_fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=datetime(2026, 2, 20, 17, 0),
+            portfolio_snapshots=[
+                {
+                    "captured_at": "2026-02-19T21:00:00+00:00",
+                    "positions": [
+                        {
+                            "security_type": "OPT",
+                            "qty": -1,
+                            "underlying": "AAPL",
+                            "expiration": "20260220",
+                            "option_type": "PUT",
+                            "strike": 70.0,
+                        }
+                    ],
+                },
+                {
+                    "captured_at": "2026-02-20T21:05:00+00:00",
+                    "positions": [{"security_type": "STK", "symbol": "OTHER", "qty": 100}],
+                },
+            ],
+        )
+        record = records[0]
+
+        self.assertEqual(record["realization_state"], "expired_unverified")
+        self.assertEqual(record["outcome_status"], "unknown")
+        self.assertFalse(record["open"])
+        self.assertIsNone(record["net_pnl"])
+        self.assertAlmostEqual(record["capital_days"], 7000 * (46.0625))
+
     def test_measured_outcome_with_fees(self):
         records = build_outcome_records(
             [_snapshot([_signal()])],
@@ -504,6 +573,49 @@ class TestFilterRecords(unittest.TestCase):
 
 
 class TestOutcomeServiceWithFakeDb(unittest.TestCase):
+    def test_cycle_summary_uses_only_fully_evidenced_combined_pnl(self):
+        from api.services.outcome_service import build_wheel_cycle_summary
+
+        completed = {
+            "cycle_id": "complete",
+            "ticker": "SYN",
+            "origin": "cash_secured_put",
+            "state": "closed",
+            "opened_at": "2026-01-01T10:00:00-05:00",
+            "events": [
+                {"event_type": "open_put", "contracts": 1, "premium_net": 105.0},
+                {
+                    "event_type": "assigned_put",
+                    "contracts": 1,
+                    "shares": 100,
+                    "share_fill_price": 10.1,
+                    "share_fill_fees": 0.5,
+                    "option_exercise_fees": 0.1,
+                    "fees_known": True,
+                },
+                {"event_type": "open_call", "contracts": 1, "premium_net": 55.0},
+                {
+                    "event_type": "called_away",
+                    "contracts": 1,
+                    "shares": 100,
+                    "share_fill_price": 11.5,
+                    "share_fill_fees": 0.5,
+                    "option_exercise_fees": 0.1,
+                    "fees_known": True,
+                    "provisional": False,
+                },
+            ],
+        }
+        unverified = {"cycle_id": "open", "ticker": "SYN", "state": "assigned_uncovered", "events": []}
+
+        summary = build_wheel_cycle_summary([completed, unverified])
+
+        self.assertEqual(summary["sample_size"], 2)
+        self.assertEqual(summary["measured_count"], 1)
+        self.assertEqual(summary["open_count"], 1)
+        self.assertEqual(summary["net_dollars"], 298.8)
+        self.assertIsNone(summary["outcomes"][1]["cycle_outcome"]["net_pnl"])
+
     def test_summary_groups_and_payload(self):
         from api.services.outcome_service import OutcomeService
 
@@ -529,6 +641,7 @@ class TestOutcomeServiceWithFakeDb(unittest.TestCase):
         self.assertIn("by_dte_bucket", payload["groups"])
         self.assertIn("by_ticker", payload["groups"])
         self.assertIn("by_event_tier", payload["groups"])
+        self.assertEqual(payload["wheel_cycles"]["sample_size"], 0)
         self.assertEqual(payload["groups"]["by_preset"][0]["key"], "balanced")
         self.assertEqual(payload["outcomes"][0]["fills"][0]["fill_id"], fills[0]["fill_id"])
 

@@ -91,5 +91,38 @@ class TestDeploymentPlan(unittest.TestCase):
         self.assertEqual(plan[0]["ticker"], "AAA")
 
 
+class TestPickFunding(unittest.TestCase):
+    def test_annotates_cash_and_shared_underlying_exposure_in_rank_order(self):
+        from core.sizing import annotate_pick_funding
+
+        portfolio = {
+            "cash_available_for_csp": 2_500,
+            "account_value": 10_000,
+            "underlying_capital_exposure": {"AAPL": 1_000},
+        }
+        signals = [
+            {"ticker": "AAPL", "option_type": "PUT", "cash_required": 1_000, "recommended_contracts": 2},
+            {"ticker": "US.AAPL", "option_type": "PUT", "cash_required": 1_000, "recommended_contracts": 1},
+            {"ticker": "MSFT", "option_type": "PUT", "cash_required": 1_000, "recommended_contracts": 1},
+        ]
+
+        annotated = annotate_pick_funding(signals, portfolio, {"max_account_exposure_pct_per_underlying": 25})
+
+        self.assertEqual([item["funded_contracts"] for item in annotated], [1, 0, 1])
+        self.assertEqual([item["cash_conflict"] for item in annotated], [True, True, False])
+
+    def test_unknown_exposure_remains_unknown(self):
+        from core.sizing import annotate_pick_funding
+
+        annotated = annotate_pick_funding(
+            [{"ticker": "AAPL", "option_type": "PUT", "cash_required": 1_000, "recommended_contracts": 1}],
+            {"cash_available_for_csp": 2_000},
+            {"max_account_exposure_pct_per_underlying": 25},
+        )
+
+        self.assertIsNone(annotated[0]["funded_contracts"])
+        self.assertIsNone(annotated[0]["cash_conflict"])
+
+
 if __name__ == "__main__":
     unittest.main()

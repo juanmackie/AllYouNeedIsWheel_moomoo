@@ -50,6 +50,23 @@ class WheelPreset:
     max_account_exposure_pct_per_underlying: float
     # Long-horizon growth objective this preset is tuned for (e.g., 10x capital).
     target_account_multiple: float
+    # Position-exit playbook (versioned with the entry profile).
+    exit_profit_take_pct: float
+    exit_roll_dte: int
+    exit_delta: float
+    exit_deep_itm_pct: float
+    exit_stop_loss_pct: float
+    rotate_min_multiplier: float
+
+    def exit_thresholds(self) -> dict:
+        return {
+            "profit_take_pct": self.exit_profit_take_pct,
+            "roll_dte": self.exit_roll_dte,
+            "exit_delta": self.exit_delta,
+            "deep_itm_pct": self.exit_deep_itm_pct,
+            "stop_loss_pct": self.exit_stop_loss_pct,
+            "rotate_min_multiplier": self.rotate_min_multiplier,
+        }
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -88,23 +105,34 @@ class WheelPreset:
             "max_buying_power_pct_per_csp": self.max_buying_power_pct_per_csp,
             "max_account_exposure_pct_per_underlying": self.max_account_exposure_pct_per_underlying,
             "target_account_multiple": self.target_account_multiple,
-            "max_watchlist_tickers": 25,
             "require_cash_fit": True,
             # Neutral reader keys (CSP side by default; the CALL lane is
             # projected per-option-type where a profile is requested).
             "target_delta": self.csp_target_delta,
             "delta_tolerance": self.csp_delta_tolerance,
             "default_otm_pct": self.csp_min_otm_pct,
+            "exit_profit_take_pct": self.exit_profit_take_pct,
+            "exit_roll_dte": self.exit_roll_dte,
+            "exit_delta": self.exit_delta,
+            "exit_deep_itm_pct": self.exit_deep_itm_pct,
+            "exit_stop_loss_pct": self.exit_stop_loss_pct,
+            "rotate_min_multiplier": self.rotate_min_multiplier,
         }
 
 
 WHEEL_PRESETS: dict[str, WheelPreset] = {
     "conservative": WheelPreset(
         key="conservative",
-        version=7,
+        version=8,
         label="Conservative",
         description="Stricter liquidity, smaller allocations, farther OTM strikes.",
         target_account_multiple=5.0,
+        exit_profit_take_pct=50.0,
+        exit_roll_dte=7,
+        exit_delta=0.65,
+        exit_deep_itm_pct=15.0,
+        exit_stop_loss_pct=-100.0,
+        rotate_min_multiplier=2.0,
         csp_target_delta=0.25,
         csp_delta_tolerance=0.08,
         csp_min_dte=21,
@@ -130,10 +158,16 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
     ),
     "balanced": WheelPreset(
         key="balanced",
-        version=7,
+        version=8,
         label="Balanced",
         description="Moderate DTE/delta/liquidity and position-size limits (default).",
         target_account_multiple=5.0,
+        exit_profit_take_pct=50.0,
+        exit_roll_dte=4,
+        exit_delta=0.65,
+        exit_deep_itm_pct=15.0,
+        exit_stop_loss_pct=-100.0,
+        rotate_min_multiplier=2.0,
         csp_target_delta=0.30,
         csp_delta_tolerance=0.12,
         csp_min_dte=14,
@@ -159,10 +193,16 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
     ),
     "aggressive": WheelPreset(
         key="aggressive",
-        version=7,
+        version=8,
         label="Aggressive",
         description="Shorter DTE, broader deltas, and larger allocations.",
         target_account_multiple=5.0,
+        exit_profit_take_pct=50.0,
+        exit_roll_dte=2,
+        exit_delta=0.65,
+        exit_deep_itm_pct=15.0,
+        exit_stop_loss_pct=-100.0,
+        rotate_min_multiplier=2.0,
         csp_target_delta=0.35,
         csp_delta_tolerance=0.15,
         csp_min_dte=7,

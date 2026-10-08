@@ -5,8 +5,10 @@ Tests for api/services/portfolio_service.py - PortfolioService class
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 from api.services.config import get_config as _get_config
+from core.utils import market_now
 
 
 class TestPortfolioServiceInit(unittest.TestCase):
@@ -201,6 +203,21 @@ class TestPortfolioServicePositions(unittest.TestCase):
         self.assertEqual(len(positions), 1)
         self.assertEqual(positions[0]["symbol"], "US.AAPL")
 
+    def test_get_positions_exposes_broker_sellable_quantity_for_stock(self):
+        self.svc._fetch_portfolio.return_value = {
+            "positions": {
+                "US.AAPL": {
+                    "shares": 100,
+                    "security_type": "STK",
+                    "can_sell_qty": 60,
+                }
+            }
+        }
+
+        positions = self.svc.get_positions("STK")
+
+        self.assertEqual(positions[0]["can_sell_qty"], 60)
+
     def test_get_positions_preserves_broker_greeks_and_quotes(self):
         self.svc._fetch_portfolio.return_value = {
             "positions": {
@@ -257,7 +274,7 @@ class TestPortfolioServicePositions(unittest.TestCase):
         self.assertEqual(positions[0]["expiration"], "20240315")
 
     def test_get_weekly_option_income(self):
-        today = datetime.now()
+        today = market_now().date()
         days_until_friday = (4 - today.weekday()) % 7
         this_friday = today + timedelta(days=days_until_friday)
         expiry_str = this_friday.strftime("%Y%m%d")
@@ -283,6 +300,16 @@ class TestPortfolioServicePositions(unittest.TestCase):
         self.assertEqual(result["open_short_contracts_count"], 2)
         self.assertEqual(result["open_short_total_income"], 600.0)
 
+    def test_weekly_option_income_uses_us_market_weekday(self):
+        self.svc.get_positions = Mock(return_value=[])
+        market_time = datetime(2026, 9, 25, 22, 30, tzinfo=ZoneInfo("America/New_York"))
+
+        with patch("api.services.portfolio_service.market_now", return_value=market_time) as market_clock:
+            result = self.svc.get_weekly_option_income()
+
+        self.assertEqual(result["this_friday"], "2026-09-25")
+        market_clock.assert_called_once_with()
+
     def test_get_weekly_option_income_no_match(self):
         old_expiry = "20990101"
         mock_portfolio = {
@@ -307,7 +334,7 @@ class TestPortfolioServicePositions(unittest.TestCase):
         self.assertEqual(result["open_short_total_income"], 600.0)
 
     def test_get_weekly_option_income_mixed_open_shorts(self):
-        today = datetime.now()
+        today = market_now().date()
         days_until_friday = (4 - today.weekday()) % 7
         this_friday = today + timedelta(days=days_until_friday)
         next_friday = this_friday + timedelta(days=7)
@@ -359,7 +386,7 @@ class TestPortfolioServicePositions(unittest.TestCase):
     def test_get_weekly_option_income_missing_avg_cost_is_null_not_zero(self):
         """Unavailable avg-cost quotes render as null (em-dash), never a
         fabricated zero income in the table or the totals."""
-        today = datetime.now()
+        today = market_now().date()
         days_until_friday = (4 - today.weekday()) % 7
         this_friday = today + timedelta(days=days_until_friday)
         expiry_str = this_friday.strftime("%Y%m%d")

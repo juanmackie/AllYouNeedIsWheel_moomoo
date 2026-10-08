@@ -707,7 +707,7 @@ class TestWatchlistTickers(unittest.TestCase):
         mock_config.get.side_effect = lambda k, d=None: {
             "watchlist": ["CONFIG.ONLY"],
             "watchlist_mode": "static",
-            "growth_mode": {"enabled": True, "screener_profile": {"min_volatility_pct": 4.5}},
+            "growth_mode": {"enabled": True, "screener_profile": {}},
         }.get(k, d)
         mock_get_config.return_value = mock_config
 
@@ -818,7 +818,6 @@ class TestScreeningConfig(unittest.TestCase):
                     "csp_default_otm_pct": 10,
                     "csp_min_otm_pct": 5,
                     "csp_max_otm_pct": 15,
-                    "min_volatility_pct": 4.5,
                 },
             },
         }.get(k, d)
@@ -841,6 +840,7 @@ class TestScreeningConfig(unittest.TestCase):
         self.assertEqual(data["csp_max_otm_pct"], 15)
         self.assertEqual(data["csp_profile_summary"]["dte_range"], "30-45")
         self.assertEqual(data["csp_profile_summary"]["otm_range"], "5-15")
+        self.assertNotIn("min_volatility_pct", data["csp_profile_summary"])
 
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +1042,50 @@ class TestOutcomeAnalytics(unittest.TestCase):
         with app.test_client() as client:
             resp = client.post("/api/options/analytics/outcomes/ingest")
         self.assertEqual(resp.status_code, 502)
+
+
+class TestShadowAnalytics(unittest.TestCase):
+    """GET/POST /api/options/analytics/shadow*"""
+
+    def setUp(self):
+        _RATE_LIMIT_BUCKETS.clear()
+
+    @patch("api.get_service")
+    @patch("api.services.config.get_current_identity")
+    def test_get_shadow_analytics_is_local_and_validates_score_key(self, mock_identity, mock_get_service):
+        mock_identity.return_value = ("REAL", "opaque-1")
+        service = MagicMock()
+        service.get_analytics.return_value = {"candidate_count": 12, "checkpoint": {"ready": False}}
+        mock_get_service.return_value = service
+
+        app = _make_app()
+        with app.test_client() as client:
+            response = client.get("/api/options/analytics/shadow")
+            invalid = client.get("/api/options/analytics/shadow?alternative_score_key=untrusted")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["success"])
+        service.get_analytics.assert_called_once_with(
+            "REAL", "opaque-1", alternative_score_key="capital_velocity_per_day"
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+    @patch("api.get_service")
+    @patch("api.services.config.get_current_identity")
+    @patch("api.routes.utils.probe_opend_status")
+    def test_settle_shadow_is_gated_rate_limited_and_bounded(self, mock_probe, mock_identity, mock_get_service):
+        mock_probe.return_value = {"status": "connected"}
+        mock_identity.return_value = ("REAL", "opaque-1")
+        service = MagicMock()
+        service.settle_expired.return_value = {"ok": True, "settled": 4, "pending": 2}
+        mock_get_service.return_value = service
+
+        app = _make_app()
+        with app.test_client() as client:
+            response = client.post("/api/options/analytics/shadow/settle?limit=900")
+
+        self.assertEqual(response.status_code, 200)
+        service.settle_expired.assert_called_once_with("REAL", "opaque-1", limit=500)
 
 
 # ---------------------------------------------------------------------------

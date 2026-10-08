@@ -8,10 +8,11 @@ Falls back to yfinance for implied volatility when other sources return 0.
 
 import logging
 import math
-from datetime import date, datetime
+from datetime import datetime
 from statistics import NormalDist
 
 from core.connection_constants import _normalize_iv
+from core.utils import market_now
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ def enrich_option_with_greeks(
     # Calculate time to expiry in years
     try:
         expiry_date = datetime.strptime(expiration, "%Y%m%d").date()
-        today = date.today()
+        today = market_now().date()
         dte = max((expiry_date - today).days, 1)
         T = dte / 365.0
     except (ValueError, TypeError):

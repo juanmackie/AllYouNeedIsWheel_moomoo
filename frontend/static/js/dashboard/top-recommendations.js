@@ -498,6 +498,13 @@ function createRecommendationCard(rec) {
     const signalColors = { csp: 'bg-danger', covered_call: 'bg-success', call: 'bg-info', put: 'bg-warning text-dark' };
     signalTypeBadge.textContent = signalLabels[signalType] || signalType;
     addClassTokens(signalTypeBadge, signalColors[signalType] || 'bg-secondary');
+
+    const workingOrderBadge = clone.querySelector('.working-order-badge');
+    if (workingOrderBadge && rec.has_working_order === true) {
+        workingOrderBadge.textContent = 'RESTING ORDER';
+        workingOrderBadge.title = 'OpenD reports a working order on this exact option. This is informational and does not change eligibility.';
+        workingOrderBadge.classList.remove('d-none');
+    }
     
     // Option type badge
     const optionTypeBadge = clone.querySelector('.option-type-badge');
@@ -601,6 +608,25 @@ function createRecommendationCard(rec) {
         freshness.title = 'Data freshness';
         freshness.textContent = sourceInfo.freshness;
         sourceEl.append(freshness);
+    }
+
+    const tradeDiagnosticNote = clone.querySelector('.trade-diagnostic-note');
+    if (tradeDiagnosticNote && rec.trade_diagnostics_checked) {
+        const capacityValues = [
+            ['max position sell', rec.broker_max_position_sell],
+            ['max sell short', rec.broker_max_sell_short],
+            ['max buy back', rec.broker_max_buy_back],
+        ]
+            .filter(([, value]) => value != null && Number.isFinite(Number(value)))
+            .map(([label, value]) => `${label}: ${Number(value).toLocaleString()}`);
+        if (rec.broker_capacity_check === 'ok') {
+            tradeDiagnosticNote.textContent = capacityValues.length
+                ? `Moomoo capacity diagnostic · ${capacityValues.join(' · ')} · display only`
+                : 'Moomoo capacity diagnostic returned no sell-capacity fields';
+        } else {
+            tradeDiagnosticNote.textContent = 'Moomoo capacity diagnostic unavailable';
+        }
+        tradeDiagnosticNote.classList.remove('d-none');
     }
 
     // Warnings
@@ -709,6 +735,46 @@ function createRecommendationCard(rec) {
         ivRankEl.textContent = rec.iv_rank != null ? `${rec.iv_rank.toFixed(0)}%${percentile}` : 'N/A';
     }
 
+    const ivVsHvEl = clone.querySelector('.iv-vs-hv');
+    if (ivVsHvEl) {
+        const comparison = rec.iv_vs_hv;
+        if (
+            comparison?.status === 'available'
+            && Number.isFinite(Number(comparison.implied_volatility_pct))
+            && Number.isFinite(Number(comparison.historical_volatility_pct))
+            && Number.isFinite(Number(comparison.spread_percentage_points))
+        ) {
+            const spread = Number(comparison.spread_percentage_points);
+            const sign = spread > 0 ? '+' : '';
+            ivVsHvEl.textContent = `${Number(comparison.implied_volatility_pct).toFixed(1)}% / ${Number(comparison.historical_volatility_pct).toFixed(1)}% (${sign}${spread.toFixed(1)} pp)`;
+            if (comparison.as_of_date) {
+                ivVsHvEl.title = `Moomoo daily closes through ${comparison.as_of_date}; annualized over ${comparison.window_sessions || 20} sessions`;
+            }
+        } else {
+            ivVsHvEl.textContent = 'Unavailable';
+            ivVsHvEl.title = comparison?.reason || 'Moomoo 20-session history is unavailable';
+            ivVsHvEl.classList.add('text-muted');
+        }
+    }
+
+    const downtrendEl = clone.querySelector('.falling-knife-diagnostic');
+    if (downtrendEl) {
+        const diagnostic = rec.falling_knife;
+        downtrendEl.title = diagnostic?.rule || '20-session decline of at least 15% and close below 50-session average';
+        if (diagnostic?.status === 'available' && typeof diagnostic.flagged === 'boolean') {
+            const change = Number(diagnostic.decline_pct);
+            if (!Number.isFinite(change)) {
+                downtrendEl.textContent = 'Unavailable';
+            } else if (diagnostic.flagged) {
+                downtrendEl.textContent = `Flagged (${change.toFixed(1)}% / 20 sessions)`;
+            } else {
+                downtrendEl.textContent = 'No flag';
+            }
+        } else {
+            downtrendEl.textContent = 'Unavailable';
+        }
+    }
+
     // Return on deployed capital per day (decimal fraction -> % / day). This is
     // the ranking key, shown read-only. Missing stays 'N/A', never a zero.
     const capitalVelocityEl = clone.querySelector('.capital-velocity');
@@ -747,6 +813,9 @@ function createRecommendationCard(rec) {
         const qtyRec = Number(rec.recommended_contracts || 0);
         const bidPremiumPerContract = rec.bid_premium_per_contract ?? rec.wheel_decision?.bid_premium_per_contract;
         const incomeAtSize = qtyRec > 0 && bidPremiumPerContract != null ? qtyRec * Number(bidPremiumPerContract) : null;
+        const dailyIncomeAtSize = qtyRec > 0 && rec.premium_velocity_per_day != null
+            ? qtyRec * Number(rec.premium_velocity_per_day)
+            : null;
         const cashAfter = cashReq != null && cspCash > 0 ? cspCash - qtyRec * Number(cashReq) : null;
         const incomeEl = clone.querySelector('.csp-income-at-size');
         if (incomeEl) incomeEl.textContent = incomeAtSize != null ? formatCurrency(incomeAtSize) : 'N/A';
@@ -760,8 +829,8 @@ function createRecommendationCard(rec) {
         // required daily pace derived from persisted portfolio history.
         const contributionEl = clone.querySelector('.csp-pace-contribution');
         if (contributionEl) {
-            if (incomeAtSize != null && requiredPremiumPerDay != null && requiredPremiumPerDay > 0) {
-                const coverage = (incomeAtSize / requiredPremiumPerDay) * 100;
+            if (dailyIncomeAtSize != null && requiredPremiumPerDay != null && requiredPremiumPerDay > 0) {
+                const coverage = (dailyIncomeAtSize / requiredPremiumPerDay) * 100;
                 const targetMultiple = Number(signalsData?.preset?.screener_profile?.target_account_multiple || 5);
                 contributionEl.textContent = `Covers ${coverage.toFixed(1)}% of the daily pace to ${targetMultiple}x`;
                 contributionEl.classList.remove('d-none');

@@ -28,6 +28,13 @@ def build_roll_decisions(portfolio_context, conn, fresh_candidates=None):
 
         ps = get_service("portfolio")
         ctx, _, _ = build_portfolio_context(option_positions, ps)
+        # The local scorer context needs the same broker stock book, basis
+        # provenance, and active preset thresholds used by the run engine.
+        for ticker, position in positions.items():
+            if isinstance(position, dict) and not position.get("option_type"):
+                ctx["positions"][ticker] = position
+        if isinstance(portfolio_context.get("exit_thresholds"), dict):
+            ctx["exit_thresholds"] = portfolio_context["exit_thresholds"]
         iv_earnings = get_service("ivearnings")
         decisions = []
         for pos in option_positions:

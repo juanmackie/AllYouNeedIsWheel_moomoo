@@ -5,12 +5,14 @@ Extracted from the monolithic options_service.py for maintainability.
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import floor
 
 from api.services.options_data import fetch_option_chain_live_first
 from api.services.recommendation_ranking import (
+    attach_readonly_trade_diagnostics,
     format_recommendation,
+    option_code_for_candidate,
     rank_candidates,
 )
 from api.services.recommendation_ranking import (
@@ -20,8 +22,14 @@ from api.services.recommendation_ranking import (
     option_uses_yfinance as _option_uses_yfinance,
 )
 from api.services.utils import clean_yfinance_ticker
-from core.growth_mode import should_block_for_data_quality
-from core.sizing import deployment_plan, existing_short_exposure_by_underlying
+from core.risk_metrics import should_block_for_data_quality
+from core.scan_plan import chain_budget, csp_affordability, partition_universe
+from core.sizing import (
+    annotate_pick_funding,
+    deployment_plan,
+    existing_short_exposure_by_underlying,
+    remaining_underlying_capital,
+)
 from core.ticker_utils import canonical_underlying, earnings_underlying_ticker
 from core.utils import entry_window_advice, is_market_open, market_now, safe_float
 from core.wheel_decision import WheelDecision, score_contract
@@ -60,6 +68,57 @@ def _normalize_source(value, fallback=""):
     return fallback
 
 
+def _attach_iv_vs_hv_diagnostics(signals, connection, limit=3):
+    """Attach Moomoo IV/HV context after ranking; never changes signal order."""
+    get_historical_volatility = getattr(connection, "get_historical_volatility", None)
+    if not callable(get_historical_volatility):
+        return
+
+    for signal in (signals or [])[: max(0, int(limit))]:
+        chain_source = str(signal.get("chain_source") or "").strip().lower()
+        iv_source = str(signal.get("iv_source") or "").strip().lower()
+        if chain_source not in {"broker", "persisted-broker"} or iv_source != "broker":
+            continue
+        iv = safe_float(signal.get("implied_volatility"), default=None)
+        if iv is None or iv <= 0:
+            continue
+        iv_percent = iv if iv > 3.0 else iv * 100
+        try:
+            history = get_historical_volatility(signal.get("ticker"), window_sessions=20)
+        except Exception:
+            logger.debug("Historical volatility unavailable for %s", signal.get("ticker"), exc_info=True)
+            history = None
+        if not isinstance(history, dict):
+            continue
+
+        hv_percent = safe_float(history.get("historical_volatility_pct"), default=None)
+        available = history.get("status") == "available" and hv_percent is not None and hv_percent >= 0
+        signal["iv_vs_hv"] = {
+            "status": "available" if available else "unavailable",
+            "source": history.get("source") or "moomoo_adjusted_daily_close",
+            "window_sessions": 20,
+            "sample_sessions": int(history.get("sample_sessions", 0) or 0),
+            "implied_volatility_pct": round(iv_percent, 2),
+            "historical_volatility_pct": round(hv_percent, 2) if available else None,
+            "spread_percentage_points": round(iv_percent - hv_percent, 2) if available else None,
+            "as_of_date": history.get("as_of_date") if available else None,
+            "reason": None if available else history.get("reason"),
+        }
+        trend = history.get("falling_knife")
+        trend_available = isinstance(trend, dict) and trend.get("status") == "available"
+        decline_pct = safe_float(trend.get("decline_pct"), default=None) if trend_available else None
+        signal["falling_knife"] = {
+            "status": "available" if trend_available and decline_pct is not None else "unavailable",
+            "decline_window_sessions": 20,
+            "moving_average_sessions": 50,
+            "decline_pct": round(decline_pct, 2) if decline_pct is not None else None,
+            "below_moving_average": bool(trend.get("below_moving_average")) if trend_available else None,
+            "flagged": bool(trend.get("flagged")) if trend_available and decline_pct is not None else None,
+            "as_of_date": history.get("as_of_date") if trend_available else None,
+            "rule": "20-session decline of at least 15% and close below 50-session average",
+        }
+
+
 def _build_capital_recovery_cards(positions, calls_by_ticker, best_csp, available_contracts_by_ticker=None):
     """Build read-only recovery context using broker average cost as the safe basis."""
     calls_by_underlying = {}
@@ -85,8 +144,14 @@ def _build_capital_recovery_cards(positions, calls_by_ticker, best_csp, availabl
     for ticker, position in (positions or {}).items():
         key = canonical_underlying(ticker).upper()
         shares = safe_float((position or {}).get("position"))
-        basis = safe_float((position or {}).get("avg_cost"))
-        basis = basis if basis > 0 else None
+        position = position or {}
+        basis_source = str(position.get("gate_basis_source") or "")
+        basis = safe_float(position.get("gate_basis"))
+        if basis_source not in {"ledger_adjusted", "moomoo_avg_cost"} or basis <= 0:
+            basis = safe_float(position.get("avg_cost"))
+            basis_source = "moomoo_avg_cost" if basis > 0 else "missing"
+        if basis <= 0:
+            basis = None
         available = available_by_underlying.get(key, max(0, floor(shares / 100)))
         above_basis = []
         below_basis = []
@@ -128,11 +193,13 @@ def _build_capital_recovery_cards(positions, calls_by_ticker, best_csp, availabl
                 "shares": shares,
                 "available_contracts": available,
                 "basis_per_share": basis,
-                "basis_source": "moomoo_avg_cost" if basis is not None else None,
+                "basis_source": basis_source if basis is not None else None,
                 "basis_notice": (
-                    "Moomoo average cost is the conservative basis; historical option credits excluded "
+                    "Cycle-adjusted basis is used because fill-window, fee, and share reconciliation are proven."
+                    if basis_source == "ledger_adjusted"
+                    else "Moomoo average cost is the conservative basis; historical option credits excluded "
                     "because fill-history completeness is unverified."
-                    if basis is not None
+                    if basis_source == "moomoo_avg_cost"
                     else "Moomoo average-cost basis unavailable; no adjusted basis is shown."
                 ),
                 "best_call_at_or_above_basis": best_above,
@@ -325,70 +392,19 @@ class RecommendationEngine:
             "timestamp": datetime.now(),
         }
 
-    def _csp_target_strike_estimate(self, stock_price: float, portfolio_context: dict) -> float:
-        """Estimate the cash requirement for the default CSP target strike."""
-        otm_pct = float(self._preset_profile.get("csp_default_otm_pct", 10) or 10)
-        target_strike = stock_price * (1 - (otm_pct / 100))
-        return max(target_strike, 0.0)
-
-    def _can_afford_csp(self, stock_price: float, portfolio_context: dict, require_cash_fit: bool = True) -> bool:
-        """Return True when the default CSP target strike fits buying power."""
-        cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", 0) or 0)
-        if stock_price <= 0:
-            return False
-        if not require_cash_fit:
-            return True
-        if cash_available_for_csp <= 0:
-            return False
-        return self._csp_target_strike_estimate(stock_price, portfolio_context) * 100 <= cash_available_for_csp
-
-    def _find_affordable_csp_strike(
-        self, stock_price: float, portfolio_context: dict, strikes: list, require_cash_fit: bool = True
-    ) -> list:
-        """Filter strikes to only those that fit buying power, sorted closest to farthest OTM.
-
-        Returns the list of strikes that are affordable (strike * 100 <= cash_available_for_csp),
-        sorted by OTM distance ascending (closest OTM first).
-        """
-        cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", 0) or 0)
-        if stock_price <= 0:
-            return []
-        if not require_cash_fit:
-            return [strike for strike in sorted(strikes, reverse=True) if strike > 0 and strike < stock_price]
-        if cash_available_for_csp <= 0:
-            return []
-
-        affordable = []
-        for strike in strikes:
-            if strike <= 0 or strike >= stock_price:
-                continue
-            cash_required = strike * 100
-            if cash_required <= cash_available_for_csp:
-                affordable.append(strike)
-
-        affordable.sort(key=lambda s: s, reverse=True)
-        return affordable
-
     def _has_any_affordable_otm_strike(
-        self, stock_price: float, portfolio_context: dict, require_cash_fit: bool = True
+        self, stock_price: float, portfolio_context: dict, require_cash_fit: bool = True, ticker: str | None = None
     ) -> bool:
         """Check whether any strike in the 5-15% OTM range fits buying power."""
-        sp = self._preset_profile
-        min_otm = float(sp.get("csp_min_otm_pct", 5) or 5)
-        max_otm = float(sp.get("csp_max_otm_pct", 15) or 15)
-
-        min_strike = stock_price * (1 - (max_otm / 100))
-        max_strike = stock_price * (1 - (min_otm / 100))
-
         cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", 0) or 0)
         if not require_cash_fit:
             return stock_price > 0
-        if cash_available_for_csp <= 0:
-            return False
-
-        # Check if any strike in the range is affordable
-        affordable_strike = min(max_strike, cash_available_for_csp / 100)
-        return affordable_strike >= min_strike
+        exposure_room = (
+            remaining_underlying_capital(ticker, portfolio_context, self._preset_profile) if ticker else None
+        )
+        if exposure_room is None:
+            exposure_room = cash_available_for_csp
+        return csp_affordability(stock_price, cash_available_for_csp, exposure_room, self._preset_profile)
 
     def _score_csp_contract(
         self, contract, ticker, stock_price, dte, portfolio_context, research_only_mode: bool = False
@@ -440,7 +456,7 @@ class RecommendationEngine:
             research_only_mode=research_only_mode,
         )
 
-    def _fetch_watchlist_ticker_csp(self, ticker, portfolio_context):
+    def _fetch_watchlist_ticker_csp(self, ticker, portfolio_context, price_snapshot=None):
         """
         Fetch CSP candidates for a watchlist ticker (Moomoo broker data only).
 
@@ -452,9 +468,9 @@ class RecommendationEngine:
         Returns a list of candidate dicts, a list with a skip diagnostic, or
         None on error.
         """
-        return self._fetch_watchlist_csp_moomoo(ticker, portfolio_context)
+        return self._fetch_watchlist_csp_moomoo(ticker, portfolio_context, price_snapshot=price_snapshot)
 
-    def _fetch_watchlist_csp_moomoo(self, ticker, portfolio_context):
+    def _fetch_watchlist_csp_moomoo(self, ticker, portfolio_context, price_snapshot=None):
         """
         Fetch CSP candidates from Moomoo for a watchlist ticker.
 
@@ -466,7 +482,7 @@ class RecommendationEngine:
         """
         evidence = self._get_cached_watchlist_evidence(ticker)
         if evidence is None:
-            evidence = self._collect_watchlist_csp_evidence(ticker, portfolio_context)
+            evidence = self._collect_watchlist_csp_evidence(ticker, portfolio_context, price_snapshot=price_snapshot)
             if evidence is None:
                 return None
             if not evidence.get("skip_diagnostics"):
@@ -475,7 +491,7 @@ class RecommendationEngine:
             return evidence["skip_diagnostics"]
         return self._score_watchlist_csp_evidence(evidence, ticker, portfolio_context)
 
-    def _collect_watchlist_csp_evidence(self, ticker, portfolio_context):
+    def _collect_watchlist_csp_evidence(self, ticker, portfolio_context, price_snapshot=None):
         """
         Fetch raw CSP option-chain evidence from Moomoo (broker data only).
 
@@ -505,7 +521,7 @@ class RecommendationEngine:
             cached_price = conn.get_cached_stock_price(ticker)
             if cached_price is not None and cached_price > 0:
                 if not self._has_any_affordable_otm_strike(
-                    cached_price, portfolio_context, require_cash_fit=require_cash_fit
+                    cached_price, portfolio_context, require_cash_fit=require_cash_fit, ticker=ticker
                 ):
                     logger.debug(
                         f"Watchlist {ticker}: no configured OTM strike fits cached price ${cached_price:.2f} "
@@ -522,7 +538,14 @@ class RecommendationEngine:
                         ],
                     }
 
-            stock_price = conn.get_stock_price(ticker)
+            ticker_code = str(ticker).upper()
+            if not ticker_code.startswith("US."):
+                ticker_code = f"US.{ticker_code}"
+            snapshot = price_snapshot.get(ticker_code) if isinstance(price_snapshot, dict) else None
+            if isinstance(price_snapshot, dict):
+                stock_price = safe_float((snapshot or {}).get("last_price"), default=None)
+            else:
+                stock_price = conn.get_stock_price(ticker)
             if stock_price is None or stock_price <= 0:
                 return None
 
@@ -530,7 +553,7 @@ class RecommendationEngine:
             # any option-chain calls (this is part of qualification recomputation,
             # not a cached/scored decision).
             if not self._has_any_affordable_otm_strike(
-                stock_price, portfolio_context, require_cash_fit=require_cash_fit
+                stock_price, portfolio_context, require_cash_fit=require_cash_fit, ticker=ticker
             ):
                 logger.debug(
                     f"Watchlist {ticker}: no OTM strike in 5-15% range fits buying power ${cash_available_for_csp:.2f}"
@@ -552,48 +575,117 @@ class RecommendationEngine:
             min_dte = int(sp.get("csp_min_dte", 30) or 30)
             max_dte = int(sp.get("csp_max_dte", 45) or 45)
 
-            # ---- Determine the expiry window (expiration is part of the raw evidence).
-            from moomoo import RET_OK
-
-            ret, data = conn.get_option_expiration_dates(ticker)
-            if ret != RET_OK or data is None:
-                return None
-
-            expiration_column = "expiration_date"
-            if expiration_column not in data.columns:
-                if "strike_time" in data.columns:
-                    expiration_column = "strike_time"
-                elif "option_expiry_date" in data.columns:
-                    expiration_column = "option_expiry_date"
-                else:
-                    return None
-
-            valid_expirations = []
-            for raw_date in data[expiration_column].tolist():
-                exp_str = str(raw_date).replace("-", "")
-                try:
-                    exp_date = datetime.strptime(exp_str, "%Y%m%d").date()
-                    dte = (exp_date - today.date()).days
-                    if min_dte <= dte <= max_dte:
-                        valid_expirations.append((exp_str, dte))
-                except ValueError:
-                    continue
-
-            if not valid_expirations:
-                return None
-
-            by_dte = sorted(valid_expirations, key=lambda x: x[1])
-            by_preference = sorted(valid_expirations, key=lambda x: abs(pref_dte - x[1]))
-            expirations_to_check = []
-            for expiration_choice in (by_dte[0], by_preference[0], by_dte[-1]):
-                if expiration_choice not in expirations_to_check:
-                    expirations_to_check.append(expiration_choice)
-
             quote_fetched_at_utc = str(datetime.utcnow().isoformat() + "Z")
             chains = []
-
-            for exp_str, dte in expirations_to_check:
+            range_fetch = getattr(conn, "get_option_chain_range", None)
+            if callable(range_fetch) and isinstance(price_snapshot, dict):
+                exposure_room = remaining_underlying_capital(ticker, portfolio_context, self._preset_profile)
+                if exposure_room is None:
+                    exposure_room = cash_available_for_csp
+                max_affordable_strike = min(
+                    stock_price * (1 - float(sp.get("csp_min_otm_pct", 5) or 5) / 100),
+                    min(cash_available_for_csp, exposure_room) / 100,
+                )
+                min_band_strike = stock_price * (1 - float(sp.get("csp_max_otm_pct", 15) or 15) / 100)
+                range_options = []
+                budget = chain_budget(sp)
                 try:
+                    for offset in range(0, budget["span_days"], 30):
+                        start_dte = min_dte + offset
+                        end_dte = min(max_dte, start_dte + 29)
+                        chain = range_fetch(
+                            ticker,
+                            "P",
+                            (today.date() + timedelta(days=start_dte)).isoformat(),
+                            (today.date() + timedelta(days=end_dte)).isoformat(),
+                            {"min_strike": min_band_strike, "max_strike": max_affordable_strike},
+                        )
+                        if not isinstance(chain, dict):
+                            return None
+                        range_options.extend(chain.get("options", []) or [])
+                except Exception:
+                    logger.debug("Watchlist %s: range chain fetch failed", ticker, exc_info=True)
+                    return None
+
+                expirations = {}
+                for option in range_options:
+                    exp_str = str(option.get("expiration", "") or "").replace("-", "")
+                    try:
+                        dte = (datetime.strptime(exp_str, "%Y%m%d").date() - today.date()).days
+                    except ValueError:
+                        continue
+                    if min_dte <= dte <= max_dte:
+                        expirations.setdefault(exp_str, {"dte": dte, "options": []})["options"].append(option)
+                valid_expirations = [(exp_str, value["dte"]) for exp_str, value in expirations.items()]
+                if valid_expirations:
+                    by_dte = sorted(valid_expirations, key=lambda item: item[1])
+                    by_preference = sorted(valid_expirations, key=lambda item: abs(pref_dte - item[1]))
+                    selected_expirations = []
+                    for selected_expiration in (by_dte[0], by_preference[0], by_dte[-1]):
+                        if selected_expiration not in selected_expirations:
+                            selected_expirations.append(selected_expiration)
+                    for exp_str, dte in selected_expirations:
+                        raw_contracts = []
+                        for opt in expirations[exp_str]["options"]:
+                            if not _is_valid_external_option(opt, stock_price):
+                                continue
+                            raw_contracts.append(
+                                {
+                                    "strike": float(opt.get("strike", 0) or 0),
+                                    "expiration": exp_str,
+                                    "option_type": "PUT",
+                                    "bid": float(opt.get("bid", 0) or 0),
+                                    "ask": float(opt.get("ask", 0) or 0),
+                                    "last": float(opt.get("last", 0) or 0),
+                                    "dte": dte,
+                                    "implied_volatility": float(opt.get("implied_volatility", 0) or 0),
+                                    "open_interest": int(opt.get("open_interest", 0) or 0),
+                                    "volume": int(opt.get("volume", 0) or 0),
+                                    "delta": float(opt.get("delta", 0) or 0),
+                                    "gamma": float(opt.get("gamma", 0) or 0),
+                                    "theta": float(opt.get("theta", 0) or 0),
+                                    "vega": float(opt.get("vega", 0) or 0),
+                                    "update_time": str(opt.get("update_time", "") or ""),
+                                    "quote_fetched_at_utc": str(opt.get("quote_fetched_at_utc", "") or ""),
+                                    "security_type": self._scan_security_types.get(
+                                        str(ticker).upper().split(".")[-1], str(opt.get("security_type", "") or "stock")
+                                    ),
+                                }
+                            )
+                        if raw_contracts:
+                            chains.append({"exp_str": exp_str, "dte": dte, "options": raw_contracts})
+            else:
+                # Compatibility path for test donors and older connection adapters.
+                from moomoo import RET_OK
+
+                ret, data = conn.get_option_expiration_dates(ticker)
+                if ret != RET_OK or data is None:
+                    return None
+                expiration_column = next(
+                    (name for name in ("expiration_date", "strike_time", "option_expiry_date") if name in data.columns),
+                    None,
+                )
+                if expiration_column is None:
+                    return None
+                valid_expirations = []
+                for raw_date in data[expiration_column].tolist():
+                    exp_str = str(raw_date).replace("-", "")
+                    try:
+                        exp_date = datetime.strptime(exp_str, "%Y%m%d").date()
+                        dte = (exp_date - today.date()).days
+                        if min_dte <= dte <= max_dte:
+                            valid_expirations.append((exp_str, dte))
+                    except ValueError:
+                        continue
+                if not valid_expirations:
+                    return None
+                by_dte = sorted(valid_expirations, key=lambda item: item[1])
+                by_preference = sorted(valid_expirations, key=lambda item: abs(pref_dte - item[1]))
+                expirations_to_check = []
+                for expiration_choice in (by_dte[0], by_preference[0], by_dte[-1]):
+                    if expiration_choice not in expirations_to_check:
+                        expirations_to_check.append(expiration_choice)
+                for exp_str, dte in expirations_to_check:
                     chain = fetch_option_chain_live_first(
                         conn,
                         self.db,
@@ -606,33 +698,17 @@ class RecommendationEngine:
                     )
                     if not chain:
                         continue
-                    options = chain.get("options", [])
-                    if not options:
-                        continue
-
-                    # Normalise raw option contracts to stable keys.
                     raw_contracts = []
-                    for opt in options:
+                    for opt in chain.get("options", []):
                         if not _is_valid_external_option(opt, stock_price):
                             continue
                         raw_contracts.append(
                             {
+                                **opt,
                                 "strike": float(opt.get("strike", 0) or 0),
                                 "expiration": exp_str,
                                 "option_type": "PUT",
-                                "bid": float(opt.get("bid", 0) or 0),
-                                "ask": float(opt.get("ask", 0) or 0),
-                                "last": float(opt.get("last", 0) or 0),
                                 "dte": dte,
-                                "implied_volatility": float(opt.get("implied_volatility", 0) or 0),
-                                "open_interest": int(opt.get("open_interest", 0) or opt.get("openInterest", 0) or 0),
-                                "volume": int(opt.get("volume", 0) or 0),
-                                "delta": float(opt.get("delta", 0) or 0),
-                                "gamma": float(opt.get("gamma", 0) or 0),
-                                "theta": float(opt.get("theta", 0) or 0),
-                                "vega": float(opt.get("vega", 0) or 0),
-                                "update_time": str(opt.get("update_time", "") or ""),
-                                "quote_fetched_at_utc": str(opt.get("quote_fetched_at_utc", "") or ""),
                                 "security_type": self._scan_security_types.get(
                                     str(ticker).upper().split(".")[-1], str(opt.get("security_type", "") or "stock")
                                 ),
@@ -640,9 +716,6 @@ class RecommendationEngine:
                         )
                     if raw_contracts:
                         chains.append({"exp_str": exp_str, "dte": dte, "options": raw_contracts})
-                except Exception:
-                    logger.debug(f"Watchlist {ticker}: chain fetch failed for {exp_str}", exc_info=True)
-                    continue
 
             if not chains:
                 return None
@@ -673,7 +746,9 @@ class RecommendationEngine:
         stock_price = float(evidence.get("stock_price", 0) or 0)
         if stock_price <= 0:
             return [self._make_skip_diagnostic(ticker, "no_price", "No valid stock price for CSP")]
-        if not self._has_any_affordable_otm_strike(stock_price, portfolio_context, require_cash_fit=require_cash_fit):
+        if not self._has_any_affordable_otm_strike(
+            stock_price, portfolio_context, require_cash_fit=require_cash_fit, ticker=ticker
+        ):
             return [
                 self._make_skip_diagnostic(
                     ticker, "no_cash_fit", f"No CSP strike fits buying power (${cash_available_for_csp:.0f})"
@@ -883,19 +958,58 @@ class RecommendationEngine:
                     watchlist_with_origins = [{"ticker": str(t), "origins": ["config"]} for t in plain]
                 effective_watchlist = [item["ticker"] for item in watchlist_with_origins]
                 watchlist_origins = {item["ticker"]: item["origins"] for item in watchlist_with_origins}
+            price_snapshot = None
             security_types = {}
-            get_security_types = getattr(conn, "get_security_types", None)
-            if callable(get_security_types) and effective_watchlist:
+            get_price_snapshot = getattr(conn, "get_price_snapshot", None)
+            if callable(get_price_snapshot) and effective_watchlist:
                 try:
-                    raw_security_types = get_security_types(effective_watchlist)
-                    if isinstance(raw_security_types, dict):
+                    raw_price_snapshot = get_price_snapshot(effective_watchlist)
+                    if isinstance(raw_price_snapshot, dict):
+                        price_snapshot = raw_price_snapshot
                         security_types = {
-                            str(symbol).upper().split(".")[-1]: str(value).lower()
-                            for symbol, value in raw_security_types.items()
+                            str(symbol).upper().split(".")[-1]: str(value.get("security_type")).lower()
+                            for symbol, value in raw_price_snapshot.items()
+                            if isinstance(value, dict) and value.get("security_type")
                         }
                 except Exception:
-                    logger.debug("Broker security-type batch lookup unavailable", exc_info=True)
+                    logger.debug("Broker price snapshot unavailable", exc_info=True)
+            get_session_calendar = getattr(conn, "get_session_calendar", None)
+            try:
+                from core.session_clock import SessionCalendar
+
+                session_calendar = get_session_calendar() if callable(get_session_calendar) else None
+                if not isinstance(session_calendar, SessionCalendar):
+                    session_calendar = None
+            except Exception:
+                session_calendar = None
             self._scan_security_types = security_types
+            price_snapshot_by_ticker = {}
+            if isinstance(price_snapshot, dict):
+                price_snapshot_by_ticker = {
+                    str(symbol).upper().split(".")[-1]: value for symbol, value in price_snapshot.items()
+                }
+            cash_fit_tickers = list(effective_watchlist)
+            cash_skip_evidence = []
+            price_snapshot_gaps = []
+            if isinstance(price_snapshot, dict):
+                exposure_room = {}
+                for ticker in effective_watchlist:
+                    room = remaining_underlying_capital(ticker, portfolio_context, self._preset_profile)
+                    if room is None and "max_account_exposure_pct_per_underlying" not in self._preset_profile:
+                        room = cash_available_for_csp
+                    exposure_room[ticker] = room
+                price_map = {
+                    ticker: price_snapshot_by_ticker.get(str(ticker).upper().split(".")[-1])
+                    for ticker in effective_watchlist
+                }
+                cash_fit_tickers, cash_skip_evidence, price_snapshot_gaps = partition_universe(
+                    effective_watchlist,
+                    price_map,
+                    cash_available_for_csp,
+                    exposure_room,
+                    self._preset_profile,
+                    fetched_at=datetime.utcnow().isoformat() + "Z",
+                )
             logger.info(
                 f"Effective watchlist: {len(effective_watchlist)} tickers from group '{wl_group_name}' (status={wl_group_status})"
             )
@@ -940,6 +1054,8 @@ class RecommendationEngine:
                         scan_status_by_ticker={},
                         position_tickers=list(positions.keys()),
                         quote_fetched_at={},
+                        price_snapshot_by_ticker=price_snapshot_by_ticker,
+                        session_calendar=session_calendar,
                         fetched_at=wl_fetched_at,
                     ),
                     "message": wl_explanation or "No positions or watchlist configured",
@@ -959,6 +1075,24 @@ class RecommendationEngine:
             ticker_diagnostics = {}
             scan_quote_fetched_at = {}
             scan_status_by_ticker = {}
+            for item in cash_skip_evidence:
+                ticker = item["ticker"]
+                scan_status_by_ticker[ticker] = "skipped_no_cash_fit"
+                skipped_csp_diagnostics.append(
+                    self._make_skip_diagnostic(
+                        ticker,
+                        "no_cash_fit",
+                        f"No CSP strike fits available CSP cash and exposure room (${item['cash_at_scan']:.0f})",
+                    )
+                )
+                skipped_csp_diagnostics[-1]["coverage_evidence"] = item
+            for item in price_snapshot_gaps:
+                ticker = item["ticker"]
+                scan_status_by_ticker[ticker] = "error"
+                watchlist_errors += 1
+                skipped_csp_diagnostics.append(
+                    self._make_skip_diagnostic(ticker, item["reason"], "Price or exposure evidence is unavailable")
+                )
 
             # ════════════════════════════════════════════════════════════
             # LANE 1: Watchlist CSPs — short-circuit when no cash to deploy
@@ -979,8 +1113,14 @@ class RecommendationEngine:
             # cannot fit the OpenD quota + freshness window, we publish planning
             # diagnostics and direct the user to reduce the Moomoo group. We
             # never silently truncate and still claim a global top three.
+            preflight_infeasible = False
             if scan_universe_ok:
-                preflight = self._watchlist_provider.preflight_scan_feasibility(len(effective_watchlist))
+                preflight_count = (
+                    len(cash_fit_tickers) if isinstance(price_snapshot, dict) else len(effective_watchlist)
+                )
+                preflight = self._watchlist_provider.preflight_scan_feasibility(
+                    preflight_count, session_calendar=session_calendar
+                )
                 if not isinstance(preflight, dict):
                     # Mock/stub providers in tests: assume feasible.
                     preflight = {
@@ -999,42 +1139,17 @@ class RecommendationEngine:
                         preflight["estimated_scan_sec"],
                         preflight["freshness_window_sec"],
                     )
-                    return {
-                        "success": True,
-                        "count": 0,
-                        "total_scored": 0,
-                        "generated_at": datetime.now().isoformat(),
-                        "signals": [],
-                        "broker_buying_power": broker_buying_power,
-                        "cash_available_for_csp": cash_available_for_csp,
-                        "cash_reserved_for_csp": cash_reserved_for_csp,
-                        "blocked_signals": [],
-                        "blocked_reason_counts": {},
-                        "state": "planning",
-                        "scan_coverage": {"scanned": 0, "total": len(effective_watchlist), "complete": False},
-                        "preflight": preflight,
-                        "watchlist_origins": watchlist_origins,
-                        "active_watchlist": _build_active_watchlist(
-                            wl_group_name=wl_group_name,
-                            wl_group_status=wl_group_status,
-                            wl_explanation=wl_explanation,
-                            wl_groups_available=wl_groups_available,
-                            wl_unsupported=wl_unsupported,
-                            wl_raw_codes=wl_raw_codes,
-                            effective_watchlist=effective_watchlist,
-                            scan_status_by_ticker={},
-                            position_tickers=list(positions.keys()),
-                            quote_fetched_at={},
-                            fetched_at=wl_fetched_at,
-                        ),
-                        "message": (
-                            f"Full watchlist scan is infeasible within the freshness window "
-                            f"({preflight['watchlist_size']} tickers, est {preflight['estimated_scan_sec']:.0f}s "
-                            f"vs {preflight['freshness_window_sec']}s). Reduce the Moomoo watchlist group "
-                            f"to at most {preflight['recommended_max_size']} symbols "
-                            f"for actionable top-three results."
-                        ),
-                    }
+                    preflight_infeasible = True
+                    for ticker in cash_fit_tickers:
+                        scan_status_by_ticker[ticker] = "error"
+                        watchlist_errors += 1
+                    skipped_csp_diagnostics.append(
+                        self._make_skip_diagnostic(
+                            "__lane__",
+                            "planning_quota_infeasible",
+                            f"{preflight_count} affordable names exceed the current scan budget",
+                        )
+                    )
             elif wl_group_status != "ok":
                 logger.warning(
                     "Watchlist CSP lane skipped: group '%s' status=%s (%d positions still scanned for CC)",
@@ -1069,8 +1184,8 @@ class RecommendationEngine:
                 )
                 skipped_csp_diagnostics[-1]["ticker_count"] = len(effective_watchlist)
                 for ticker in scan_watchlist:
-                    scan_status_by_ticker[ticker] = "skipped_no_cash"
-            else:
+                    scan_status_by_ticker.setdefault(ticker, "skipped_no_cash")
+            elif not preflight_infeasible:
                 if cash_available_for_csp < min_csp_buying_power:
                     logger.info(
                         "Running research-only watchlist CSP scan: CSP cash %.2f < minimum %.2f",
@@ -1078,7 +1193,7 @@ class RecommendationEngine:
                         min_csp_buying_power,
                     )
 
-                for ticker in scan_watchlist:
+                for ticker in cash_fit_tickers if isinstance(price_snapshot, dict) else scan_watchlist:
                     is_held = ticker in positions
 
                     # Score decisions are recomputed on every run from cached raw
@@ -1086,7 +1201,7 @@ class RecommendationEngine:
                     # fetch, so we record evidence-cache hits here for observability.
                     is_evidence_cached = self._get_cached_watchlist_evidence(ticker) is not None
 
-                    results = self._fetch_watchlist_ticker_csp(ticker, portfolio_context)
+                    results = self._fetch_watchlist_ticker_csp(ticker, portfolio_context, price_snapshot=price_snapshot)
                     if results is None:
                         watchlist_errors += 1
                         scan_status_by_ticker[ticker] = "error"
@@ -1349,6 +1464,27 @@ class RecommendationEngine:
 
             # Single ranked signal pipeline combining CSPs and covered calls.
             signals = _select_top(all_candidates, max_per=2)[:limit]
+            signals = annotate_pick_funding(signals, portfolio_context, self._preset_profile)
+            attach_readonly_trade_diagnostics(signals[:3], conn)
+
+            # Lane cards reuse diagnostic evidence only when that exact option
+            # also appears in the bounded combined top-three query set.
+            diagnostics_by_code = {
+                option_code_for_candidate(candidate): {
+                    key: value
+                    for key, value in candidate.items()
+                    if key.startswith("working_order_")
+                    or key == "has_working_order"
+                    or key.startswith("broker_capacity_")
+                    or key.startswith("broker_max_")
+                }
+                for candidate in signals[:3]
+                if option_code_for_candidate(candidate)
+            }
+            for candidate in [*top_covered_calls, *top_watchlist_csp]:
+                diagnostics = diagnostics_by_code.get(option_code_for_candidate(candidate))
+                if diagnostics:
+                    candidate.update(diagnostics)
 
             # Log per-ticker diagnostics
             for t, diag in sorted(
@@ -1366,6 +1502,7 @@ class RecommendationEngine:
             formatted_signals = _format_rec_list(signals)
             formatted_cc = _format_rec_list(top_covered_calls)
             formatted_csp = _format_rec_list(top_watchlist_csp)
+            _attach_iv_vs_hv_diagnostics(formatted_signals, conn, limit=3)
 
             # Reserve the recommended cash from the visible top signals,
             # then offer the next ranked affordable CSPs for idle cash. This
@@ -1485,11 +1622,22 @@ class RecommendationEngine:
 
             return {
                 "success": True,
+                # Transient archive input; WheelRunSnapshot.to_dict excludes
+                # this list so immutable snapshot JSON remains compact.
+                "all_candidates": all_candidates,
+                "state": "planning" if preflight_infeasible else None,
+                "preflight": preflight if scan_universe_ok else None,
+                "message": (
+                    f"CSP scanning for {preflight.get('affordable_names', preflight.get('watchlist_size', 0))} affordable names "
+                    "exceeds the current open-session freshness budget; covered calls remain review-only."
+                    if preflight_infeasible
+                    else None
+                ),
                 "count": len(formatted_signals),
                 "total_scored": len(all_candidates),
                 "generated_at": datetime.now().isoformat(),
                 "signals": formatted_signals,
-                "entry_context": entry_window_advice(),
+                "entry_context": entry_window_advice(session_calendar=session_calendar),
                 "covered_calls": {
                     "signals": formatted_cc,
                     "count": len(formatted_cc),
@@ -1511,6 +1659,8 @@ class RecommendationEngine:
                 "watchlist_cash_fit": _build_watchlist_cash_fit_summary(
                     effective_watchlist, skipped_csp_diagnostics, cash_available_for_csp
                 ),
+                "coverage_cash_skipped": len(cash_skip_evidence),
+                "cash_skipped": cash_skip_evidence,
                 "cash_reserved_for_csp": round(cash_reserved_for_csp, 2),
                 "cash_diagnostics": portfolio_context.get("_cash_diagnostics", {}),
                 "enrichment": enrichment_hint,
@@ -1534,6 +1684,8 @@ class RecommendationEngine:
                     scan_status_by_ticker=scan_status_by_ticker,
                     position_tickers=list(positions.keys()),
                     quote_fetched_at=scan_quote_fetched_at,
+                    price_snapshot_by_ticker=price_snapshot_by_ticker,
+                    session_calendar=session_calendar,
                     fetched_at=wl_fetched_at,
                 ),
                 "quote_fetched_at": {ticker: scan_quote_fetched_at.get(ticker, "") for ticker in effective_watchlist},
@@ -1545,7 +1697,7 @@ class RecommendationEngine:
                     "csp_profile_summary": _build_csp_profile_summary(self._preset_profile),
                 },
                 "_freshness": {
-                    "market_state": "closed" if not is_market_open() else "open",
+                    "market_state": "closed" if not is_market_open(session_calendar) else "open",
                     "generated_at": datetime.now().isoformat(),
                     "as_of": datetime.now().isoformat(),
                 },
@@ -1570,6 +1722,7 @@ class RecommendationEngine:
                     "scan_tickers_cap": len(effective_watchlist),
                     "skipped_csp": skipped_csp_diagnostics,
                     "skipped_csp_count": len(skipped_csp_diagnostics),
+                    "coverage_cash_skipped": len(cash_skip_evidence),
                 },
             }
 
@@ -1607,7 +1760,6 @@ def _build_csp_profile_summary(profile: dict | None) -> str:
     max_otm = sp.get("csp_max_otm_pct", 15)
     parts.append(f"DTE {min_dte}-{max_dte} (pref {dte})")
     parts.append(f"OTM {min_otm}-{max_otm}% (pref {sp.get('csp_default_otm_pct', 10)}%)")
-    parts.append(f"volatility >={sp.get('min_volatility_pct', 4.5)}%")
     parts.append(f"min BP ${sp.get('min_csp_buying_power', 5000):,.0f}")
     if sp.get("require_cash_fit", True):
         parts.append("cash-fit req.")
@@ -1641,6 +1793,8 @@ def _build_active_watchlist(
     position_tickers: list,
     quote_fetched_at: dict,
     fetched_at: str,
+    price_snapshot_by_ticker: dict | None = None,
+    session_calendar=None,
 ) -> dict:
     """Build the ACTIVE WATCHLIST payload persisted into the run snapshot and
     rendered by the dashboard foot.
@@ -1654,14 +1808,41 @@ def _build_active_watchlist(
     """
     per_ticker = []
     for ticker in effective_watchlist:
+        quote = (price_snapshot_by_ticker or {}).get(str(ticker).upper().split(".")[-1])
+        price_context = None
+        if isinstance(quote, dict):
+            current = safe_float(quote.get("last_price"), default=None)
+            high = safe_float(quote.get("highest52weeks_price"), default=None)
+            low = safe_float(quote.get("lowest52weeks_price"), default=None)
+            price_context = {
+                "last_price": current if current is not None and current > 0 else None,
+                "week_52_high": high if high is not None and high > 0 else None,
+                "week_52_low": low if low is not None and low > 0 else None,
+                "source": "moomoo",
+            }
+            if current is not None and current > 0 and high is not None and high >= current:
+                price_context["pct_below_52w_high"] = round((high - current) / high * 100, 2)
+            else:
+                price_context["pct_below_52w_high"] = None
+            if not any(price_context.get(key) is not None for key in ("last_price", "week_52_high", "week_52_low")):
+                price_context = None
         per_ticker.append(
             {
                 "symbol": ticker,
                 "raw_code": wl_raw_codes.get(ticker, ticker),
                 "status": scan_status_by_ticker.get(ticker, "not_scanned"),
                 "quote_fetched_at": quote_fetched_at.get(ticker, ""),
+                "price_context": price_context,
             }
         )
+    market_session = None
+    if session_calendar is not None:
+        next_open = session_calendar.next_regular_open(market_now())
+        if next_open is not None:
+            market_session = {
+                "next_open_at": next_open.isoformat(),
+                "calendar_source": session_calendar.source,
+            }
     return {
         "group_name": wl_group_name,
         "group_status": wl_group_status,
@@ -1670,6 +1851,7 @@ def _build_active_watchlist(
         "fetched_at": fetched_at,
         "last_successful_sync": "",
         "tickers": per_ticker,
+        "market_session": market_session,
         "unsupported": wl_unsupported,
         "holdings_checked": sorted(str(t) for t in position_tickers if str(t).strip()),
     }

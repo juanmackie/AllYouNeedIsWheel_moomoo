@@ -14,9 +14,7 @@ from core.outcome_attribution import (
     capital_base_csp,
     capital_days_from_lots,
     combined_outcome,
-    gross_premium_dollars,
     is_capital_movement_cash_flow,
-    leakage_dollars,
     max_drawdown,
     net_event_pnl,
     owner_efficiency,
@@ -40,10 +38,6 @@ class TestUnitConversion(unittest.TestCase):
 
 
 class TestMoneyMath(unittest.TestCase):
-    def test_gross_premium_dollars_multiplies_contracts(self):
-        self.assertAlmostEqual(gross_premium_dollars(1.5, 2), 300.0)
-        self.assertAlmostEqual(gross_premium_dollars(50.0, 100, multiplier=1), 5000.0)
-
     def test_net_event_pnl_subtracts_fees(self):
         self.assertAlmostEqual(net_event_pnl(premium_in=500, premium_out=200, fees=5.5), 294.5)
 
@@ -59,19 +53,15 @@ class TestSlippage(unittest.TestCase):
     def test_sell_fill_below_quote_is_unfavorable(self):
         # Quoted 1.10, filled 1.05 → gave up $5.00 per contract.
         self.assertAlmostEqual(slippage_dollars(1.05, 1.10, 1, "SELL"), -5.0)
-        self.assertAlmostEqual(leakage_dollars(1.05, 1.10, 1, "SELL"), 5.0)
 
     def test_sell_fill_above_quote_is_favorable(self):
         self.assertAlmostEqual(slippage_dollars(1.15, 1.10, 1, "SELL"), 5.0)
-        self.assertAlmostEqual(leakage_dollars(1.15, 1.10, 1, "SELL"), 0.0)
 
     def test_buyback_below_reference_is_favorable(self):
         self.assertAlmostEqual(slippage_dollars(0.50, 0.60, 2, "BUY"), 20.0)
-        self.assertAlmostEqual(leakage_dollars(0.50, 0.60, 2, "BUY"), 0.0)
 
     def test_unknown_side_yields_zero_never_a_guess(self):
         self.assertEqual(slippage_dollars(1.0, 2.0, 1, ""), 0.0)
-        self.assertEqual(leakage_dollars(1.0, 2.0, 1, "HOLD"), 0.0)
 
 
 class TestCombinedOutcome(unittest.TestCase):

@@ -97,6 +97,8 @@ class WheelRunner:
         max_tradeable_age_sec: int = 300,
         roll_diagnostics_provider=None,
         event_context_refresher=None,
+        cycle_recomputer=None,
+        backup_provider=None,
     ):
         self._db = db
         self._options_service = options_service
@@ -112,6 +114,10 @@ class WheelRunner:
         # Failures must never abort the scan (best-effort, bounded on the api
         # side); core only swallows exceptions as a last line of defence.
         self._event_context_refresher = event_context_refresher
+        self._cycle_recomputer = cycle_recomputer
+        # Injected api-layer callable; database retention/backups do not belong
+        # in core, and backup failures must never fail a successful publish.
+        self._backup_provider = backup_provider
         self._latest_snapshot: WheelRunSnapshot | None = None
 
     # -- attempt helpers -------------------------------------------------
@@ -159,6 +165,14 @@ class WheelRunner:
                 )
             )
             portfolio_context = self._options_service._get_portfolio_context(refresh=True)
+            if isinstance(portfolio_context, dict) and portfolio_context.get("portfolio_error"):
+                raise RuntimeError(str(portfolio_context["portfolio_error"]))
+
+            if self._cycle_recomputer is not None:
+                try:
+                    self._cycle_recomputer(env, opaque, portfolio_context)
+                except Exception as exc:
+                    logger.warning("Wheel-cycle refresh failed (ignored): %s", exc)
 
             # Best-effort: refresh stale earnings/ex-dividend event context
             # before broker quote collection. Provider failures are swallowed
@@ -222,6 +236,12 @@ class WheelRunner:
                 portfolio_context=portfolio_context,
             )
 
+            if self._backup_provider is not None:
+                try:
+                    self._backup_provider(self._db)
+                except Exception as exc:
+                    logger.warning("Database backup failed after run %s was published: %s", snapshot.run.run_id, exc)
+
             self._persist_attempt(
                 RefreshAttempt(
                     attempt_id=attempt_id,
@@ -266,7 +286,11 @@ class WheelRunner:
         complete = bool(coverage.get("complete", total > 0 and scanned >= total))
         errors = result.get("errors") or []
         planning = result.get("state") == "planning"
-        market_state = "open" if is_market_open() else "closed"
+        freshness = result.get("_freshness")
+        freshness = freshness if isinstance(freshness, dict) else {}
+        market_state = str(freshness.get("market_state") or "").lower()
+        if market_state not in {"open", "closed"}:
+            market_state = "open" if is_market_open() else "closed"
 
         if planning:
             status = "planning"
@@ -359,6 +383,7 @@ class WheelRunner:
             active_watchlist=dict(active_watchlist),
             capital_recovery=tuple(result.get("capital_recovery", []) or []),
             watchlist_cash_fit=dict(result.get("watchlist_cash_fit") or {}),
+            candidate_archive=tuple(result.get("all_candidates", []) or []),
         )
 
     def latest(self) -> WheelRunSnapshot | None:

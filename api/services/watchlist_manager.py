@@ -352,29 +352,53 @@ class WatchlistManager:
             for ticker, origins in sorted(merged.items())
         ]
 
-    def preflight_scan_feasibility(self, watchlist_size: int) -> dict:
-        """Estimate whether a full watchlist scan fits the quota + freshness budget.
+    def preflight_scan_feasibility(self, watchlist_size: int, session_calendar=None) -> dict:
+        """Estimate whether the affordable CSP subset fits OpenD's chain budget.
 
-        Model: per symbol ~1 price + 1 expiration call (cheap) and 3 option-chain
-        calls spaced >= 3s by the chain rate limiter. Total chain time is
-        approximately 9s per symbol.
+        Price snapshots and cash-fit partitioning happen before this check.
+        A range query covers up to 30 DTE days; closed-session scans are
+        quota-limited but do not use the actionable quote freshness window.
         """
+        from core.scan_plan import chain_budget
+        from core.session_clock import SessionCalendar
+        from core.utils import market_now
+
         freshness_window = max(1, int(self.config.get("max_tradeable_quote_age_sec", 300) or 300))
         max_requests = max(1, int(self.config.get("chain_rate_limit_max_requests", 10) or 10))
         rate_window = max(1.0, float(self.config.get("chain_rate_limit_window_sec", 30) or 30))
         chain_spacing_sec = max(0.0, float(self.config.get("chain_min_request_spacing_sec", 3.0) or 0))
-        per_symbol_chain_sec = 3 * chain_spacing_sec
-        estimated_scan_sec = watchlist_size * per_symbol_chain_sec
-        chain_calls = watchlist_size * 3
-        quota_windows = max(1, int(freshness_window // rate_window))
-        chain_quota_ok = chain_calls <= max_requests * quota_windows
-        feasible = watchlist_size > 0 and estimated_scan_sec <= freshness_window and chain_quota_ok
-        recommended_max_size = (
-            max(1, int(freshness_window // per_symbol_chain_sec)) if per_symbol_chain_sec else watchlist_size
+        preset = self._active_preset_profile()
+        calls_per_symbol = chain_budget(preset)["calls_per_symbol"]
+        affordable_names = max(int(watchlist_size or 0), 0)
+        chain_calls = affordable_names * calls_per_symbol
+        spacing_elapsed = chain_calls * chain_spacing_sec
+        quota_windows_needed = (chain_calls + max_requests - 1) // max_requests
+        quota_elapsed = max(quota_windows_needed - 1, 0) * rate_window
+        estimated_scan_sec = max(spacing_elapsed, quota_elapsed)
+        calendar = (
+            session_calendar if isinstance(session_calendar, SessionCalendar) else SessionCalendar.weekday_fallback()
         )
+        open_session = calendar.is_open(market_now())
+        chain_quota_ok = True
+        feasible = not open_session or estimated_scan_sec <= freshness_window
+        recommended_max_size = affordable_names
+        if open_session and calls_per_symbol:
+            recommended_max_size = 0
+            for candidate_names in range(1, affordable_names + 1):
+                candidate_calls = candidate_names * calls_per_symbol
+                candidate_spacing = candidate_calls * chain_spacing_sec
+                candidate_windows = (candidate_calls + max_requests - 1) // max_requests
+                candidate_quota = max(candidate_windows - 1, 0) * rate_window
+                if max(candidate_spacing, candidate_quota) > freshness_window:
+                    break
+                recommended_max_size = candidate_names
         return {
             "feasible": feasible,
-            "watchlist_size": watchlist_size,
+            "watchlist_size": affordable_names,
+            "affordable_names": affordable_names,
+            "calls_per_symbol": calls_per_symbol,
+            "open_session": open_session,
+            "session_calendar_source": calendar.source,
             "estimated_scan_sec": round(estimated_scan_sec, 1),
             "freshness_window_sec": freshness_window,
             "chain_calls": chain_calls,

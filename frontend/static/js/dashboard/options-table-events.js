@@ -224,44 +224,6 @@ export function addOptionsTableEventListeners() {
                 }
             }
 
-            if (event.target.id === 'sell-all-calls' ||
-                event.target.closest('#sell-all-calls')) {
-
-                const button = event.target.id === 'sell-all-calls' ?
-                               event.target :
-                               event.target.closest('#sell-all-calls');
-
-                if (button.disabled) {
-                    return;
-                }
-
-                try {
-                    const { sellAllOptions } = await getOptionsTableActions();
-                    await sellAllOptions('CALL');
-                } catch (error) {
-                    console.error('Error in sell all calls handler:', error);
-                }
-            }
-
-            if (event.target.id === 'sell-all-puts' ||
-                event.target.closest('#sell-all-puts')) {
-
-                const button = event.target.id === 'sell-all-puts' ?
-                               event.target :
-                               event.target.closest('#sell-all-puts');
-
-                if (button.disabled) {
-                    return;
-                }
-
-                try {
-                    const { sellAllOptions } = await getOptionsTableActions();
-                    await sellAllOptions('PUT');
-                } catch (error) {
-                    console.error('Error in sell all puts handler:', error);
-                }
-            }
-
             if (event.target.id === 'refresh-all-calls' ||
                 event.target.closest('#refresh-all-calls')) {
 

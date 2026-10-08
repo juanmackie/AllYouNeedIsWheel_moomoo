@@ -58,7 +58,7 @@ jobs:
           '@ | uv run python -
 
       - name: Backend tests (locked env)
-        run: uv run python scripts/ci_pytest.py tests/ -q
+        run: uv run python scripts/ci_pytest.py tests/ -q --cov --cov-report=term:skip-covered --cov-fail-under=75
 
       - name: Frontend tests
         run: |

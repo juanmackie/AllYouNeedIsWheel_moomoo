@@ -25,9 +25,11 @@ class OptionsService:
         self.config = get_config()
         self.connection = None
         db_path = self.config.get("db_path")
+        from api.services.wheel_ledger import WheelLedgerService
         from db.database import OptionsDatabase
 
         self.db = OptionsDatabase(db_path)
+        self.wheel_ledger = WheelLedgerService(self.db)
         from api.services.iv_earnings_service import IVEarningsService
 
         self.iv_earnings_service = IVEarningsService(self.db)
@@ -40,6 +42,8 @@ class OptionsService:
         self.portfolio_context_helper = PortfolioContext(
             portfolio_service_provider=self,
             config_provider=self,
+            basis_provider=self._wheel_basis_provider,
+            exit_thresholds_provider=self._wheel_exit_thresholds,
         )
         self.options_data = OptionsDataService(
             connection_provider=self,
@@ -60,6 +64,26 @@ class OptionsService:
             options_data_provider=self.options_data,
             cash_calculator_provider=self.portfolio_context_helper,
         )
+
+    def _wheel_basis_provider(self, ticker, position):
+        connection = self.connection
+        if connection is None or not connection.is_connected():
+            return {}
+        try:
+            env, account_id = connection.resolve_portfolio_identity()
+            return self.wheel_ledger.basis_for_position(ticker, position, env, account_id)
+        except Exception as exc:
+            logger.debug("Wheel basis unavailable for %s: %s", ticker, exc)
+            return {}
+
+    def _wheel_exit_thresholds(self):
+        from core.presets import get_preset
+
+        engine = getattr(self, "recommendation_engine", None)
+        preset = getattr(engine, "_preset", None)
+        if preset is not None:
+            return preset.exit_thresholds()
+        return get_preset(self.db.get_setting("wheel_preset") or self.config.get("wheel_preset")).exit_thresholds()
 
     def _ensure_connection(self):
         """

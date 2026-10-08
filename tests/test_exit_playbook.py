@@ -15,6 +15,46 @@ from core.exit_playbook import (
 
 
 class TestEvaluateExit(unittest.TestCase):
+    def test_itm_call_accepts_assignment_only_at_or_above_known_basis(self):
+        accepted = evaluate_exit(
+            option_type="CALL",
+            dte=20,
+            delta=0.40,
+            otm_pct=-3.0,
+            stock_basis=100,
+            basis_source="moomoo_avg_cost",
+            current_strike=100,
+        )
+        blocked = evaluate_exit(
+            option_type="CALL",
+            dte=20,
+            delta=0.40,
+            otm_pct=-3.0,
+            stock_basis=None,
+            basis_source="missing",
+            current_strike=100,
+        )
+        self.assertEqual(accepted.verdict, "ACCEPT_ASSIGNMENT")
+        self.assertNotEqual(blocked.verdict, "ACCEPT_ASSIGNMENT")
+
+    def test_itm_put_roll_out_down_requires_later_expiry_lower_strike_credit_and_known_fees(self):
+        target = {
+            "ticker": "SYN",
+            "option_type": "PUT",
+            "strike": 90,
+            "expiration": "20261016",
+            "current_strike": 95,
+            "current_expiration": "20261002",
+            "net_credit_after_fees": 12.0,
+            "fees_known": True,
+        }
+        verdict = evaluate_exit(option_type="PUT", dte=3, delta=-0.4, otm_pct=-2, roll_target=target)
+        unknown_fee = evaluate_exit(
+            option_type="PUT", dte=3, delta=-0.4, otm_pct=-2, roll_target={**target, "fees_known": False}
+        )
+        self.assertEqual(verdict.verdict, "ROLL_OUT_DOWN")
+        self.assertNotEqual(unknown_fee.verdict, "ROLL_OUT_DOWN")
+
     def test_healthy_position_holds(self):
         verdict = evaluate_exit(option_type="PUT", dte=35, delta=-0.30, otm_pct=8.0, captured_profit_pct=10.0)
         self.assertEqual(verdict.verdict, VERDICT_HOLD)

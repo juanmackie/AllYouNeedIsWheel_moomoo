@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Auto-Trader API Server
-Starts the wheel app as one loopback-only Windows process (waitress).
-"""
+"""All You Need Is Wheel API server; starts one loopback-only process."""
 
 import argparse
 import os
@@ -62,7 +59,7 @@ def main():
     """Start the API server as one loopback-only Windows process."""
     try:
         # Parse command line arguments
-        parser = argparse.ArgumentParser(description="Start the Auto-Trader API server")
+        parser = argparse.ArgumentParser(description="Start the All You Need Is Wheel API server")
         parser.add_argument(
             "--realmoney", action="store_true", help="Use real money trading configuration instead of paper trading"
         )
@@ -102,7 +99,7 @@ def main():
 
         if is_windows:
             # Windows: single waitress process, loopback only
-            logger.info(f"Starting Auto-Trader API server on port {port} with waitress (Windows)")
+            logger.info(f"Starting All You Need Is Wheel API server on port {port} with waitress (Windows)")
             try:
                 from waitress import serve
 
@@ -115,7 +112,7 @@ def main():
                 sys.exit(1)
         else:
             # Non-Windows fallback: single Flask process, loopback only
-            logger.info(f"Starting Auto-Trader API server on port {port} (Flask, loopback)")
+            logger.info(f"Starting All You Need Is Wheel API server on port {port} (Flask, loopback)")
             from app import ensure_app
 
             application = ensure_app()

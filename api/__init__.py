@@ -253,11 +253,10 @@ def create_app(config=None):
 
     app.register_blueprint(run.bp)
 
-    # Extracted route modules (F008)
-    from api.routes import alerts, roll_pressure
+    # Extracted position-management route
+    from api.routes import roll_pressure
 
     app.register_blueprint(roll_pressure.bp)
-    app.register_blueprint(alerts.bp)
 
     # Wheel Scan Ledger
     from api.routes import ledger
@@ -389,6 +388,7 @@ def _register_services():
         from flask import current_app
 
         from api.services.roll_diagnostics import build_roll_decisions
+        from api.services.wheel_ledger import WheelLedgerService
         from core.wheel_runner import WheelRunner
 
         config = current_app.config.get("connection_config", {})
@@ -396,6 +396,7 @@ def _register_services():
         # background wheel-refresh thread, which has no Flask app context.
         options_service = get_service("options")
         iv_earnings = get_service("ivearnings")
+        wheel_ledger = WheelLedgerService(current_app.config.get("database"))
 
         def _refresh_stale_event_context(portfolio_context) -> dict:
             """Best-effort, bounded refresh of stale earnings/ex-dividend context
@@ -412,12 +413,23 @@ def _register_services():
                 return {"refreshed": 0, "errors": 0, "skipped": len(tickers)}
             return service(sorted(tickers))
 
+        def _backup_after_publish(database):
+            from db.backup import backup_database
+
+            return backup_database(database.db_path)
+
         return WheelRunner(
             db=current_app.config.get("database"),
             options_service=options_service,
             config=config,
             roll_diagnostics_provider=build_roll_decisions,
             event_context_refresher=_refresh_stale_event_context,
+            cycle_recomputer=lambda env, account_id, portfolio: wheel_ledger.recompute(
+                env,
+                account_id,
+                positions=portfolio.get("positions", {}) if isinstance(portfolio, dict) else {},
+            ),
+            backup_provider=_backup_after_publish,
         )
 
     register_service("wheel_runner", _create_wheel_runner)
@@ -438,3 +450,20 @@ def _register_services():
         return OutcomeService(db, connection_provider=_connected_broker_connection)
 
     register_service("outcome", _create_outcome_service)
+
+    def _create_shadow_service():
+        from api.services.config import get_config
+        from api.services.shadow_service import ShadowOutcomeService
+        from db.database import OptionsDatabase
+
+        db = OptionsDatabase(get_config().get("db_path"))
+
+        def _connected_broker_connection():
+            options = get_service("options")
+            if options is None:
+                return None
+            return options._ensure_connection()
+
+        return ShadowOutcomeService(db, connection_provider=_connected_broker_connection)
+
+    register_service("shadow", _create_shadow_service)

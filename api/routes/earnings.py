@@ -4,12 +4,14 @@ Earnings lock and locked tickers endpoints.
 """
 
 import logging
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
 from api import get_service
 from api.routes.utils import enforce_route_rate_limit, error_response, success_response
 from core.ticker_utils import earnings_underlying_ticker
+from core.utils import market_now
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +51,14 @@ def get_locked_tickers():
                 }
             )
 
-        from datetime import datetime
-
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = market_now().date()
         locked_list = []
         for item in locked:
             earnings_date = item.get("earnings_date")
             days_to = None
             if earnings_date:
                 try:
-                    ed = datetime.strptime(earnings_date[:10], "%Y-%m-%d")
+                    ed = datetime.strptime(earnings_date[:10], "%Y-%m-%d").date()
                     days_to = (ed - today).days
                 except Exception:
                     pass

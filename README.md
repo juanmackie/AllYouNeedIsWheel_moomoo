@@ -94,9 +94,10 @@ Key pieces:
 - `core/position_diff.py` + `core/portfolio_snapshot.py` — per-run portfolio
   snapshots and trade-event inference (entry/exit/roll/assignment) feeding the
   persisted journal and win-rate analytics.
-- `core/growth_mode.py::growth_pace` — path-to-target math from persisted
-  snapshots: progress, annualized pace, ETA, required premium/day. No fixed
-  deadline; verdicts derive from realized pace.
+- `core/goal_pace.py` — flow-adjusted 5x path math from persisted snapshots:
+  required vs. realized CAGR, gap, and time to target at the current pace.
+- `core/risk_metrics.py` — pure always-on risk, confidence, and covered-call
+  intent calculations used by the wheel decision model.
 - `db/portfolio_snapshots_repository.py` — one snapshot row per completed run;
   served by `GET /api/portfolio/history` (equity curve + pace payload).
 - `core/broker_protocol.py` — the query-only surface; forbidden SDK members
@@ -106,7 +107,7 @@ Key pieces:
   risk info), and deterministic executable return on deployed capital ranking
   with executable-bid premium velocity as the tie-break.
 - `api/routes/` — `run`, `settings`, `watchlist`, `options`, `portfolio`,
-  `roll_pressure`, `alerts`, `earnings`, `ledger`, `source_policy`.
+  `roll_pressure`, `earnings`, `ledger`, `source_policy`.
 
 ## Prerequisites
 
@@ -145,7 +146,8 @@ last-session chains for the Australian-evening review.
 |---|---|---|
 | `MOOMOO_OPEND_HOST` / `PORT` | `127.0.0.1` / `11111` | OpenD connection |
 | `MOOMOO_PORTFOLIO_ENV` | `SIMULATE` | `REAL` or `SIMULATE` (read-only view of the paper account) |
-| `MOOMOO_ACCOUNT_ID` | — | Explicit account id; REQUIRED for REAL |
+| `MOOMOO_SECURITY_FIRM` | `FUTUSECURITIES` | Broker legal entity used to filter REAL accounts (must match the account's OpenD `security_firm`) |
+| `MOOMOO_ACCOUNT_ID` | — | Explicit OpenD `acc_id` (not `uniCardNum` or `cardNum`); REQUIRED for REAL |
 | `PORT` | `8000` | App port (loopback only) |
 | `CONNECTION_CONFIG` | `connection.json` | Config file |
 | `WATCHLIST` | — | Legacy static tickers (merged as the `config` source) |
@@ -153,6 +155,7 @@ last-session chains for the Australian-evening review.
 | `MOOMOO_CHAIN_RATE_LIMIT_MAX_REQUESTS` | `10` | Conservative option-chain requests per window |
 | `MOOMOO_CHAIN_RATE_LIMIT_WINDOW_SEC` | `30` | Option-chain quota window in seconds |
 | `MOOMOO_CHAIN_MIN_REQUEST_SPACING_SEC` | `3.0` | Minimum spacing between chain calls |
+| `ALPHA_VANTAGE_API_KEY` | — | Optional Alpha Vantage earnings-metadata provider key; without it, that provider is unavailable |
 | `wheel_preset` (in config/DB) | `balanced` | Selected risk preset; persisted via `/api/settings/preset` |
 
 ## Tests and quality gates
@@ -171,8 +174,17 @@ fresh-clone import smoke.
 
 - SQLite database: `options.db` (git-ignored; WAL mode). Watchlist symbols,
   selected preset, run snapshots, and refresh attempts persist there.
-- Backup: stop the app, copy `options.db` (use SQLite backup API for
-  consistency). The Phase-0 verified backup lives in
+- Automatic backup: after each successful run publish, the app uses SQLite's
+  online backup API to create a daily archive under `backups/daily/` and a
+  monthly archive under `backups/monthly/`, beside the configured database.
+  It retains 14 daily and 36 monthly archives; `/backups/` is git-ignored.
+- Restore: stop the app, preserve the current database, then copy the chosen
+  archive to the configured database path. Keep the `.sqlite3` extension and
+  remove matching `-wal` and `-shm` sidecars before restarting. Validate the
+  restored database with `sqlite3 <database-path> "PRAGMA quick_check;"`.
+  To make a manual consistent copy while the app is running, use SQLite's
+  backup API instead of copying the live database file.
+- The Phase-0 verified backup lives in
   `Documents/TradingProjectArchive/step1-manifests/options.db-verified-backup-20260802.db`.
 - Reset: stop the app, back up first, delete `options.db`.
 

@@ -2,17 +2,51 @@
 Shared position-scoring logic for portfolio route endpoints.
 
 Extracted from api/routes/portfolio.py to avoid duplication between
-the roll-pressure and alerts endpoints.
+the roll-pressure endpoint.
 """
 
 from datetime import datetime, timezone
 from math import isfinite
 
 from core.logging_config import get_logger
+from core.measured_fee_model import measured_fee_note
 from core.ticker_utils import canonical_underlying, earnings_underlying_ticker, parse_moomoo_symbol
 from core.utils import market_now, parse_position_qty, safe_float
 
 logger = get_logger("api.services.portfolio_scoring", "api")
+
+
+def _load_measured_option_fee_model(portfolio_service):
+    from core.measured_fee_model import empty_measured_option_fee_model
+
+    try:
+        from api.services.config import get_config, get_current_identity
+        from api.services.fee_model import get_measured_option_fee_model
+
+        config = get_config()
+        if not str(config.get("account_id", "") or "").strip():
+            return empty_measured_option_fee_model()
+        env, account_id = get_current_identity()
+        database = portfolio_service._get_db()
+        return get_measured_option_fee_model(database, env, account_id)
+    except Exception as exc:
+        logger.debug("Measured option fee model unavailable: %s", type(exc).__name__)
+        return empty_measured_option_fee_model()
+
+
+def _side_fee(model, side):
+    estimate = model.get(side) if isinstance(model, dict) else None
+    if not isinstance(estimate, dict):
+        return None
+    fee = safe_float(estimate.get("fee_per_contract"), None)
+    return fee if fee is not None and fee >= 0 else None
+
+
+def _fee_sample_orders(model, side):
+    estimate = model.get(side) if isinstance(model, dict) else None
+    if not isinstance(estimate, dict):
+        return 0
+    return max(0, int(safe_float(estimate.get("sample_orders"), 0) or 0))
 
 
 def build_portfolio_context(option_positions, portfolio_service):
@@ -35,6 +69,7 @@ def build_portfolio_context(option_positions, portfolio_service):
         "account_value": account_value,
         "short_calls": {},
         "short_puts": {},
+        "measured_option_fees": _load_measured_option_fee_model(portfolio_service),
     }
 
     for pos in option_positions:
@@ -145,30 +180,56 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service, fresh_cand
     roll_target = None
     rotation_comparison = None
     if roll_candidate:
+        fee_model = portfolio_context.get("measured_option_fees") or {}
+        close_fee = _side_fee(fee_model, "BUY")
+        open_fee = _side_fee(fee_model, "SELL")
+        fees_known = close_fee is not None and open_fee is not None
+        fee_note = measured_fee_note(fee_model)
         roll_target = {
             key: roll_candidate.get(key)
             for key in ("ticker", "expiration", "strike", "bid", "ask", "dte", "capital_velocity_per_day")
         }
+        roll_target["current_strike"] = strike
+        roll_target["current_expiration"] = expiration
         roll_target["option_type"] = _normalized_option_type(roll_candidate.get("option_type"))
         roll_target["quote_fetched_at_utc"] = roll_candidate.get("quote_fetched_at_utc") or (
             roll_candidate.get("wheel_decision") or {}
         ).get("quote_fetched_at_utc")
+        roll_target.update(
+            {
+                "close_fee_per_contract": close_fee,
+                "open_fee_per_contract": open_fee,
+                "fees_known": fees_known,
+                "fee_model_note": fee_note,
+                "fee_sample_orders": {
+                    "BUY": _fee_sample_orders(fee_model, "BUY"),
+                    "SELL": _fee_sample_orders(fee_model, "SELL"),
+                },
+            }
+        )
         held_capital = current_price * 100 if option_type in {"CALL", "C"} else strike * 100
         fresh_capital = (
             safe_float(roll_candidate.get("stock_price")) * 100
             if option_type in {"CALL", "C"}
             else safe_float(roll_candidate.get("cash_required"), safe_float(roll_candidate.get("strike")) * 100)
         )
+        fresh_bid = safe_float(roll_candidate.get("bid"), None)
+        if fees_known and ask > 0 and fresh_bid is not None and fresh_bid >= 0:
+            roll_target["net_credit_after_fees"] = fresh_bid * 100 - ask * 100 - close_fee - open_fee
+        else:
+            roll_target["net_credit_after_fees"] = None
         rotation_comparison = {
             "held_mark": mid_price,
             "held_capital": held_capital,
             "held_dte": dte,
             "close_ask": ask,
-            "close_fee": pos.get("expected_fee_per_contract"),
-            "fresh_bid": safe_float(roll_candidate.get("bid")),
+            "close_fee": close_fee,
+            "fresh_bid": fresh_bid,
             "fresh_capital": fresh_capital,
             "fresh_dte": safe_float(roll_candidate.get("dte")),
-            "open_fee": roll_candidate.get("expected_fee_per_contract"),
+            "open_fee": open_fee,
+            "fee_model_note": fee_note,
+            "fee_sample_orders": roll_target["fee_sample_orders"],
             "target": roll_target,
         }
 

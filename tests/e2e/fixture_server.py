@@ -308,10 +308,10 @@ class StubWatchlistManager:
         return _tickers_for_preset(self._db.get_setting("wheel_preset") or "balanced")
 
     def get_watchlist_sources(self):
-        return {"fixture": len(self.get_effective_watchlist())}
+        return {"config": self.get_effective_watchlist()}
 
     def get_effective_watchlist_with_origins(self):
-        return [{"symbol": t, "origin": "fixture"} for t in self.get_effective_watchlist()]
+        return [{"ticker": t, "origins": ["config"]} for t in self.get_effective_watchlist()]
 
 
 class StubPortfolioContextHelper:
@@ -403,6 +403,13 @@ class StubIVEarningsService:
     def get_cache_stats(self):
         return {}
 
+    def get_provider_status(self):
+        return {
+            "alpha_vantage": {"available": False, "status": "missing_key"},
+            "yfinance": {"available": True, "note": "fixture only"},
+            "cache": {},
+        }
+
     def get_earnings_info(self, ticker):
         return {}
 
@@ -424,7 +431,7 @@ def build_stub_registry(db, config):
         db=db,
         options_service=options,
         config=config,
-        roll_diagnostics_provider=lambda pc, conn: [],
+        roll_diagnostics_provider=lambda pc, conn, fresh_candidates: [],
     )
     return {
         "options": options,

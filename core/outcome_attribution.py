@@ -102,11 +102,6 @@ def broker_price_to_contract_credit(price_per_share: float) -> float:
     return safe_float(price_per_share) * CONTRACT_MULTIPLIER
 
 
-def gross_premium_dollars(price_per_contract: float, qty: float, multiplier: int = CONTRACT_MULTIPLIER) -> float:
-    """Dollar value of one fill: per-contract price × contracts × multiplier."""
-    return safe_float(price_per_contract) * safe_float(qty) * multiplier
-
-
 def net_event_pnl(premium_in: float, premium_out: float, fees: float) -> float:
     """Option-leg net P&L: premium collected − premium paid back − fees."""
     return safe_float(premium_in) - safe_float(premium_out) - safe_float(fees)
@@ -132,18 +127,6 @@ def slippage_dollars(
     else:
         return 0.0
     return signed_diff * safe_float(qty) * multiplier
-
-
-def leakage_dollars(
-    fill_price: float,
-    reference_price: float,
-    qty: float,
-    side: str,
-    multiplier: int = CONTRACT_MULTIPLIER,
-) -> float:
-    """Unfavorable part of slippage: ≥ 0 dollars lost to execution, else 0."""
-    slippage = slippage_dollars(fill_price, reference_price, qty, side, multiplier)
-    return max(0.0, -slippage)
 
 
 # ── Combined per-recommendation outcome ──────────────────────────────────

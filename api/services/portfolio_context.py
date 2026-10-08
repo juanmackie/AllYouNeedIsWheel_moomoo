@@ -13,7 +13,7 @@ logger = logging.getLogger("api.services.portfolio_context")
 
 
 TRUE_CASH_FIELDS = ("available_cash", "cash_balance", "cash_available")
-MARGIN_CAPACITY_FIELDS = ("buying_power", "excess_liquidity", "max_power_short_sell", "power")
+MARGIN_CAPACITY_FIELDS = ("buying_power", "excess_liquidity", "max_power_short", "power")
 BROKER_NET_BUYING_POWER_SOURCES = {
     "usd_net_cash_power",
     "us_avl_withdrawal_cash",
@@ -57,6 +57,12 @@ def _csp_cash_available(source_value: float, source: str, reserved: float) -> tu
     return max(0.0, source_value - reserved), f"{source_name}_minus_open_short_put_collateral"
 
 
+def _cash_source(summary: dict, fallback: str) -> str:
+    """Retain the broker field that supplied the normalized available-cash value."""
+    source = str(summary.get("available_cash_source") or "").strip()
+    return source or fallback
+
+
 def _stock_capital_exposure(position: dict, quantity: int) -> float | None:
     if quantity == 0:
         return 0.0
@@ -91,9 +97,17 @@ class PortfolioContext:
     Handles portfolio context building and cash reservation calculations.
     """
 
-    def __init__(self, portfolio_service_provider, config_provider=None):
+    def __init__(
+        self,
+        portfolio_service_provider,
+        config_provider=None,
+        basis_provider=None,
+        exit_thresholds_provider=None,
+    ):
         self._portfolio_service_provider = portfolio_service_provider
         self._config_provider = config_provider
+        self._basis_provider = basis_provider
+        self._exit_thresholds_provider = exit_thresholds_provider
         self.config = config_provider.config if config_provider and hasattr(config_provider, "config") else {}
         self._portfolio_service = None
 
@@ -130,6 +144,7 @@ class PortfolioContext:
             "short_puts": {},
             "cash_reserved_for_csp": 0.0,
             "cash_available_for_csp": 0.0,
+            "available_cash_source": "none",
             "broker_buying_power": 0.0,
             "broker_buying_power_source": "none",
             "open_short_put_collateral": 0.0,
@@ -143,10 +158,12 @@ class PortfolioContext:
         raw_positions = portfolio.get("positions", {}) or {}
 
         true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
+        true_cash_source = _cash_source(summary, true_cash_source)
         context["cash_balance"] = float(summary.get("cash_balance", summary.get("available_cash", 0)) or 0)
         context["account_value"] = float(summary.get("account_value", 0) or 0)
         context["excess_liquidity"] = float(summary.get("excess_liquidity", 0) or 0)
         context["available_cash"] = true_cash
+        context["available_cash_source"] = true_cash_source
         context["broker_buying_power"], context["broker_buying_power_source"] = _broker_buying_power(
             summary, true_cash, true_cash_source
         )
@@ -213,7 +230,8 @@ class PortfolioContext:
         )
         context["_cash_diagnostics"] = {
             "raw_summary_fields": {
-                f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS, "buying_power_source"]
+                f: summary.get(f)
+                for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS, "available_cash_source", "buying_power_source"]
             },
             "available_cash": context["available_cash"],
             "available_cash_source": true_cash_source,
@@ -225,6 +243,7 @@ class PortfolioContext:
             "cash_available_for_csp": context["cash_available_for_csp"],
             "cash_available_for_csp_source": csp_cash_source_label,
         }
+        self._inject_exit_thresholds(context)
         return context
 
     def get_cash_status(self, refresh=True):
@@ -283,6 +302,7 @@ class PortfolioContext:
             "short_puts": {},
             "cash_reserved_for_csp": 0.0,
             "cash_available_for_csp": 0.0,
+            "available_cash_source": "none",
             "broker_buying_power": 0.0,
             "broker_buying_power_source": "none",
             "open_short_put_collateral": 0.0,
@@ -311,19 +331,28 @@ class PortfolioContext:
         try:
             portfolio_service = self._get_portfolio_service()
             if portfolio_service is None:
+                context["portfolio_error"] = "Moomoo portfolio service unavailable"
                 return context
 
-            summary = portfolio_service.get_portfolio_summary() or {}
-            stock_positions = portfolio_service.get_positions("STK") or []
-            option_positions = portfolio_service.get_positions("OPT") or []
+            summary = portfolio_service.get_portfolio_summary()
+            stock_positions = portfolio_service.get_positions("STK")
+            option_positions = portfolio_service.get_positions("OPT")
+            if not isinstance(summary, dict) or summary.get("error"):
+                context["portfolio_error"] = "Moomoo account summary unavailable"
+                return context
+            if stock_positions is None or option_positions is None:
+                context["portfolio_error"] = "Moomoo position query unavailable"
+                return context
 
             # Keep true cash separate from margin/buying-power fields.
             true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
+            true_cash_source = _cash_source(summary, true_cash_source)
             context["cash_balance"] = float(summary.get("cash_balance", summary.get("available_cash", 0)) or 0)
             context["account_value"] = float(summary.get("account_value", 0) or 0)
             context["excess_liquidity"] = float(summary.get("excess_liquidity", 0) or 0)
 
             context["available_cash"] = true_cash
+            context["available_cash_source"] = true_cash_source
 
             context["broker_buying_power"], context["broker_buying_power_source"] = _broker_buying_power(
                 summary, true_cash, true_cash_source
@@ -393,7 +422,13 @@ class PortfolioContext:
             # Diagnostics: expose raw summary fields for debugging
             context["_cash_diagnostics"] = {
                 "raw_summary_fields": {
-                    f: summary.get(f) for f in [*TRUE_CASH_FIELDS, *MARGIN_CAPACITY_FIELDS, "buying_power_source"]
+                    f: summary.get(f)
+                    for f in [
+                        *TRUE_CASH_FIELDS,
+                        *MARGIN_CAPACITY_FIELDS,
+                        "available_cash_source",
+                        "buying_power_source",
+                    ]
                 },
                 "available_cash": context["available_cash"],
                 "available_cash_source": true_cash_source,
@@ -408,8 +443,38 @@ class PortfolioContext:
 
         except Exception as exc:
             logger.error(f"Error building portfolio context for options scoring: {exc}")
+            context["portfolio_error"] = "Moomoo portfolio context could not be built"
 
+        self._inject_basis(context)
+        self._inject_exit_thresholds(context)
         return context
+
+    def _inject_exit_thresholds(self, context):
+        if not callable(self._exit_thresholds_provider):
+            return
+        try:
+            thresholds = self._exit_thresholds_provider()
+        except Exception as exc:
+            logger.debug("Exit preset thresholds unavailable: %s", exc)
+            return
+        if isinstance(thresholds, dict):
+            context["exit_thresholds"] = thresholds
+
+    def _inject_basis(self, context):
+        """Attach conservative wheel basis evidence to stock positions."""
+        if not callable(self._basis_provider):
+            return
+        positions = context.get("positions", {}) or {}
+        for ticker, position in positions.items():
+            if not isinstance(position, dict) or position.get("option_type"):
+                continue
+            try:
+                evidence = self._basis_provider(ticker, position)
+            except Exception as exc:
+                logger.debug("Wheel basis lookup failed for %s: %s", ticker, exc)
+                continue
+            if isinstance(evidence, dict):
+                position.update(evidence)
 
     def _get_position_snapshot(self, portfolio_context, ticker):
         symbol = parse_moomoo_symbol(str(ticker or ""))

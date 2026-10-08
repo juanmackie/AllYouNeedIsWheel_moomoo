@@ -4,7 +4,7 @@
 
 ## Purpose
 
-`api/routes/` exposes Flask blueprints for run, settings, watchlist, options, portfolio (incl. alerts), roll-pressure, earnings, ledger, and source-policy endpoints.
+`api/routes/` exposes Flask blueprints for run, settings, watchlist, options, portfolio, roll-pressure, earnings, ledger, and source-policy endpoints.
 
 ## Ownership
 
@@ -19,6 +19,10 @@
 - Do not add routes that imply autonomous order execution.
 - `/api/run` and `/api/run/refresh` are the sole dashboard shortlist workflow. `GET /api/run` returns the immutable last snapshot plus a read-time effective `tradeable`/`stale` view; refresh is serialized and never overwrites the last good snapshot.
 - `GET /api/options/analytics/outcomes` serves broker-verified outcome summaries (totals + groups by preset/DTE bucket/ticker/event tier, each with sample size, coverage %, unknown count, and per-outcome fill drill-down) from local SQLite only — it never gates on live OpenD. `POST /api/options/analytics/outcomes/ingest` is the only broker-backed endpoint of the pair: it gates on the shared OpenD probe, rate-limits tightly (6/min; days ≤ 90 per the SDK history window), and only triggers query-only ingestion.
+- `GET /api/options/analytics/shadow` reports archived-candidate settlement counts and offline rank checkpoints from SQLite only. `POST /api/options/analytics/shadow/settle` is OpenD-gated and rate-limited; it checks the aggregate history-K-line quota before requesting bounded unadjusted daily closes. Shadow evidence remains diagnostic and cannot affect actionability or rank.
+- `GET /api/portfolio/holdings` includes persisted Moomoo `can_sell_qty` as a display-only stock-capacity cross-check. It does not modify covered-call eligibility and does not query OpenD.
+- `/api/portfolio/goal-flows` stores owner-declared deposits/withdrawals in the configured account scope. Flow completeness is an explicit account-scoped attestation through the latest snapshot; adding or removing a manual flow revokes it, and history suppresses flow-adjusted pace metrics while incomplete.
+- `GET /api/options/analytics/outcomes` may include `wheel_cycles`; the service returns combined option/share P&L only for fully evidenced cycles and preserves unknown results as `null`.
 
 ## Work Guidance
 

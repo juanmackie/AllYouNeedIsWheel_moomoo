@@ -9,6 +9,7 @@ const ELEMENT_IDS = [
   'run-market',
   'run-status',
   'run-last-success',
+  'run-next-open',
   'run-coverage',
   'run-freshness',
 ];
@@ -97,6 +98,31 @@ describe('run-strip freshness rendering', () => {
     expect(els['run-freshness'].textContent).toContain('· data');
     expect(els['run-freshness'].textContent).toContain('(max 300s)');
     expect(els['run-freshness'].textContent).not.toContain('NaN');
+    expect(els['run-last-success'].textContent).toContain('Z ·');
+  });
+
+  it('shows the next OpenD-calendar session open in market and machine-local time', async () => {
+    const els = setupDOM();
+    const nextOpen = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+    stubFetch({
+      attempt: null,
+      snapshot: {
+        tradeable: false,
+        run: {
+          env: 'SIMULATE', market_state: 'closed', status: 'planning',
+          published_at: new Date().toISOString(), coverage_scanned: 0, coverage_total: 0,
+          quote_fetched_at: {}, max_tradeable_age_sec: 300,
+        },
+        active_watchlist: { market_session: { next_open_at: nextOpen, calendar_source: 'moomoo_request_trading_days' } },
+      },
+    });
+
+    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    await loadRunStrip();
+
+    expect(els['run-next-open'].textContent).toContain('US opens in 2h');
+    expect(els['run-next-open'].textContent).toContain('ET ·');
+    expect(els['run-next-open'].textContent).not.toContain('weekday estimate');
   });
 
   it('keeps the FAILED badge visible while retaining the last-good snapshot', async () => {

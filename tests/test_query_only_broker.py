@@ -10,7 +10,7 @@ import unittest
 
 import pandas as pd
 
-from core.broker_protocol import FORBIDDEN_SDK_MEMBERS
+from core.broker_protocol import FORBIDDEN_SDK_MEMBERS, QUERY_SDK_MEMBERS, QUERY_TRADE_SDK_MEMBERS
 from core.connection_manager import MoomooConnection
 from core.context_factory import QueryOnlyTradeContext
 
@@ -85,6 +85,31 @@ def _build_fake_contexts():
     trade_methods = {
         "get_acc_list": lambda: (RET_OK, acc_df),
         "accinfo_query": lambda **kw: (RET_OK, acc_info_df),
+        "order_list_query": lambda **kw: (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": "US.AAPL260918P150000",
+                        "order_status": "SUBMITTED",
+                        "qty": 2,
+                        "dealt_qty": 1,
+                        "trd_side": "SELL",
+                    },
+                    {
+                        "code": "US.MSFT260918P400000",
+                        "order_status": "FILLED_ALL",
+                        "qty": 1,
+                        "dealt_qty": 1,
+                        "trd_side": "SELL",
+                    },
+                ]
+            ),
+        ),
+        "acctradinginfo_query": lambda **kw: (
+            RET_OK,
+            pd.DataFrame([{"max_position_sell": 0, "max_sell_short": 3, "max_buy_back": 0}]),
+        ),
         "position_list_query": lambda **kw: (RET_OK, _empty_df()),
         "history_deal_list_query": lambda **kw: (
             RET_OK,
@@ -114,6 +139,27 @@ def _build_fake_contexts():
 
 
 class TestQueryOnlyTradeContext(unittest.TestCase):
+    def test_public_methods_match_the_trade_query_allowlist(self):
+        expected = {
+            "get_acc_list",
+            "accinfo_query",
+            "order_list_query",
+            "acctradinginfo_query",
+            "position_list_query",
+            "history_deal_list_query",
+            "order_fee_query",
+            "get_acc_cash_flow",
+            "close",
+        }
+        exposed = {
+            name for name, value in vars(QueryOnlyTradeContext).items() if not name.startswith("_") and callable(value)
+        }
+
+        self.assertEqual(exposed, expected)
+        self.assertEqual(exposed, set(QueryOnlyTradeContext._QUERY_ALLOWLIST))
+        self.assertEqual(QueryOnlyTradeContext._QUERY_ALLOWLIST, QUERY_TRADE_SDK_MEMBERS)
+        self.assertTrue(exposed.issubset(QUERY_SDK_MEMBERS))
+
     def test_forbidden_sdk_members_are_not_exposed(self):
         class RawContext:
             def get_acc_list(self):
@@ -192,6 +238,14 @@ class TestQueryOnlySurface(unittest.TestCase):
         self.assertIsNotNone(fees)
         self.assertEqual(fees[0]["fee_amount"], 1.5)
         self.assertEqual(conn.get_cash_flow("2026-08-01"), [])
+        orders = conn.get_open_orders()
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["remaining_qty"], 1.0)
+        self.assertEqual(orders[0]["status"], "SUBMITTED")
+        self.assertNotIn("order_id", orders[0])
+        capacity = conn.get_max_sellable_info("US.AAPL260918P150000", 1.25)
+        self.assertEqual(capacity["max_sell_short"], 3.0)
+        self.assertEqual(capacity["max_position_sell"], 0.0)
         env_label, opaque = conn.resolve_portfolio_identity()
         self.assertEqual(env_label, "SIMULATE")
         # Opaque account id: 12-char hash, never the raw broker account id.

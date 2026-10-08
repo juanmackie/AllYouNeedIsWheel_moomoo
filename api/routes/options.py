@@ -288,7 +288,6 @@ def get_screening_config():
                     "preferred_dte": preferred_dte,
                     "otm_range": f"{min_otm_pct}-{max_otm_pct}",
                     "otm_pct": screener_profile.get("csp_default_otm_pct", 10),
-                    "min_volatility_pct": screener_profile.get("min_volatility_pct", 4.5),
                 },
             }
         )
@@ -321,7 +320,6 @@ def get_screening_config():
                     "preferred_dte": preferred_dte,
                     "otm_range": f"{min_otm_pct}-{max_otm_pct}",
                     "otm_pct": int(sp.get("csp_default_otm_pct", 10)),
-                    "min_volatility_pct": 4.5,
                 },
                 "degraded": True,
             }
@@ -564,3 +562,55 @@ def ingest_outcome_evidence():
         logger.error(f"Error ingesting outcome evidence: {str(e)}")
         logger.error(traceback.format_exc())
         return error_response(str(e))
+
+
+@bp.route("/analytics/shadow", methods=["GET"])
+def get_shadow_analytics():
+    """Report settled archived candidates and offline rank checkpoints."""
+    try:
+        from api.services.config import get_current_identity
+
+        alternative_key = request.args.get("alternative_score_key", "capital_velocity_per_day")
+        allowed_keys = {"capital_velocity_per_day", "premium_velocity_per_day"}
+        if alternative_key not in allowed_keys:
+            return error_response("Unsupported alternative_score_key", status_code=400)
+        identity_env, identity_account = get_current_identity()
+        import api
+
+        service = api.get_service("shadow")
+        return success_response(
+            service.get_analytics(identity_env, identity_account, alternative_score_key=alternative_key)
+        )
+    except Exception as e:
+        logger.error("Error fetching shadow analytics: %s", e)
+        return error_response("Unable to fetch shadow analytics")
+
+
+@bp.route("/analytics/shadow/settle", methods=["POST"])
+def settle_shadow_analytics():
+    """Settle expired archived candidates using Moomoo's unadjusted daily close."""
+    unavailable_response = _ensure_opend_available()
+    if unavailable_response:
+        return unavailable_response
+    allowed, retry_after = enforce_route_rate_limit(
+        "shadow-settle", request.remote_addr or "local", max_requests=3, window_seconds=60
+    )
+    if not allowed:
+        return error_response("Rate limit exceeded", status_code=429, retry_after=retry_after)
+    try:
+        import api
+        from api.services.config import get_current_identity
+
+        identity_env, identity_account = get_current_identity()
+        try:
+            limit = int(request.args.get("limit", 500))
+        except (TypeError, ValueError):
+            return error_response("limit must be an integer", status_code=400)
+        limit = min(max(limit, 1), 500)
+        result = api.get_service("shadow").settle_expired(identity_env, identity_account, limit=limit)
+        if not result.get("ok"):
+            return error_response(result.get("error") or "Shadow settlement failed", status_code=502)
+        return success_response(result)
+    except Exception as e:
+        logger.error("Error settling shadow outcomes: %s", e)
+        return error_response("Unable to settle shadow outcomes")

@@ -101,6 +101,81 @@ def remaining_underlying_capital(
     return max(account_value * cap_pct / 100.0 - exposure, 0.0)
 
 
+def annotate_pick_funding(
+    candidates: list[dict] | None,
+    portfolio_context: dict | None,
+    sizing_profile: dict | None,
+) -> list[dict]:
+    """Annotate ranked picks with sequential cash and per-underlying funding.
+
+    Candidate membership and order are preserved. A missing cash or exposure
+    input stays unknown instead of being rendered as zero funded contracts.
+    """
+    context = portfolio_context if isinstance(portfolio_context, dict) else {}
+    profile = sizing_profile or {}
+    try:
+        remaining_cash = float(context.get("cash_available_for_csp"))
+        if not isfinite(remaining_cash) or remaining_cash < 0:
+            remaining_cash = None
+    except (TypeError, ValueError):
+        remaining_cash = None
+
+    allocated_by_underlying: dict[str, float] = {}
+    annotated: list[dict] = []
+    for candidate in candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        item = dict(candidate)
+        option_type = str(item.get("option_type", "")).upper()
+        try:
+            requested = int(item.get("recommended_contracts"))
+            if requested < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            item["funded_contracts"] = None
+            item["cash_conflict"] = None
+            annotated.append(item)
+            continue
+
+        if option_type != "PUT":
+            item["funded_contracts"] = requested
+            item["cash_conflict"] = False
+            annotated.append(item)
+            continue
+
+        try:
+            cash_per_contract = float(item.get("cash_required"))
+            if not isfinite(cash_per_contract) or cash_per_contract <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            item["funded_contracts"] = None
+            item["cash_conflict"] = None
+            annotated.append(item)
+            continue
+
+        ticker = str(item.get("ticker", "") or "")
+        underlying = earnings_underlying_ticker(ticker).upper()
+        room = remaining_underlying_capital(ticker, context, profile) if ticker else None
+        if "max_account_exposure_pct_per_underlying" not in profile:
+            room = float("inf")
+        if remaining_cash is None or room is None or not underlying:
+            item["funded_contracts"] = None
+            item["cash_conflict"] = None
+            annotated.append(item)
+            continue
+
+        remaining_room = max(room - allocated_by_underlying.get(underlying, 0.0), 0.0)
+        cash_capacity = int(remaining_cash // cash_per_contract)
+        exposure_capacity = int(remaining_room // cash_per_contract) if isfinite(remaining_room) else requested
+        funded = min(requested, cash_capacity, exposure_capacity)
+        item["funded_contracts"] = funded
+        item["cash_conflict"] = funded < requested
+        remaining_cash = max(remaining_cash - funded * cash_per_contract, 0.0)
+        allocated_by_underlying[underlying] = allocated_by_underlying.get(underlying, 0.0) + funded * cash_per_contract
+        annotated.append(item)
+    return annotated
+
+
 def existing_short_exposure_by_underlying(portfolio_context: dict | None) -> dict[str, int]:
     """Count open short-option contracts per canonical underlying.
 

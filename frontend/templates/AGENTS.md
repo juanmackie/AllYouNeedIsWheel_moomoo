@@ -27,6 +27,8 @@
 - Keep templates presentation-focused; route/service layers should provide data contracts.
 - Preserve accessibility basics: labels, button text, modal semantics, and readable empty/error states.
 - Signal cards use `<details>` to collapse `.recommendation-details` (metrics detail rows); hero/reward/warnings/source remain visible. Preserve `.recommendation-card`, `.copy-ticket-btn`, `.signal-data-source`, `.missing-risk-badge`, `.d-none` visibility contracts.
+- Signal cards may show `.working-order-badge` and `.trade-diagnostic-note` for broker-reported resting-order/capacity evidence; both are informational and must not imply order execution or change copy state.
+- Signal cards may show `.falling-knife-diagnostic` as a display-only price-history warning; preserve its optional/unavailable state and do not connect it to eligibility or copy controls.
 - Keep script/style dependencies consistent with `base.html`.
 - Do not alter class names that frontend tests (`tests/frontend/`) depend on (e.g. `.recommendation-card`, `.ticker-badge`, `.table-responsive`).
 

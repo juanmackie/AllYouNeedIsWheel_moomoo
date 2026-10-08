@@ -44,7 +44,9 @@ function aw(overrides = {}) {
     fetched_at: '2026-09-10T12:00:00.000Z',
     last_successful_sync: '',
     tickers: [
-      { symbol: 'AAPL', raw_code: 'US.AAPL', status: 'scanned', quote_fetched_at: '' },
+      { symbol: 'AAPL', raw_code: 'US.AAPL', status: 'scanned', quote_fetched_at: '', price_context: {
+        last_price: 210, week_52_low: 164, week_52_high: 260, pct_below_52w_high: 19.23, source: 'moomoo',
+      } },
       { symbol: 'MSFT', raw_code: 'US.MSFT', status: 'error', quote_fetched_at: '' },
       { symbol: 'BRK-B', raw_code: 'US.BRK.B', status: 'scanned', quote_fetched_at: '' },
     ],
@@ -74,6 +76,7 @@ describe('renderActiveWatchlist', () => {
     expect(render.textContent).toContain('BRK-B · scanned');
     expect(render.textContent).toContain('CC holdings checked: AAPL, NVDA');
     expect(render.textContent).toContain('HK.0700 — not scanned: non-US listing HK.0700.');
+    expect(render.textContent).toContain('Moomoo 52-week context (display only): AAPL $210.00 (52w $164.00–$260.00, 19.2% below high)');
     expect(document.getElementById('active-watchlist-sync').textContent).toContain('last sync 2026-09-10 12:00:00Z');
   });
 

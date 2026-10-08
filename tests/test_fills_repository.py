@@ -59,7 +59,7 @@ class TestFillsRepository(unittest.TestCase):
             self.assertIn("option_fills", tables)
             self.assertIn("account_cash_flows", tables)
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 12)
+            self.assertEqual(version, 13)
         finally:
             conn.close()
 
@@ -77,7 +77,7 @@ class TestFillsRepository(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 12)
+            self.assertEqual(version, 13)
             cols = {row[1] for row in conn.execute("PRAGMA table_info(option_fills)")}
             self.assertIn("fill_id", cols)
             self.assertIn("fees", cols)
@@ -179,6 +179,14 @@ class TestCashFlowRepository(unittest.TestCase):
         self.assertEqual(len(flows_b), 1)
 
         self.assertEqual(self.db.get_cash_flows(env="REAL", account_id="acctA")[0]["amount"], 1000.0)
+
+    def test_delete_cash_flow_is_scoped_to_environment_and_account(self):
+        self.repo.save_cash_flows([self._flow("owner:one", account_id="acctA")])
+
+        self.assertFalse(self.db.delete_cash_flow("owner:one", env="REAL", account_id="acctB"))
+        self.assertEqual(len(self.repo.get_cash_flows(env="REAL", account_id="acctA")), 1)
+        self.assertTrue(self.db.delete_cash_flow("owner:one", env="REAL", account_id="acctA"))
+        self.assertEqual(self.repo.get_cash_flows(env="REAL", account_id="acctA"), [])
 
 
 if __name__ == "__main__":

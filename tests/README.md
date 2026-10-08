@@ -29,7 +29,7 @@ states when OpenD is unavailable. Set `E2E_BASE_URL` to target another port.
 Focused shortlist checks:
 
 ```bash
-uv run python scripts/ci_pytest.py tests/test_connection.py tests/test_wheel_decision.py tests/test_score_regression.py tests/test_presets.py tests/test_portfolio_context.py tests/test_recommendations.py tests/test_run_model.py tests/test_wheel_parity.py tests/test_scan_ledger.py tests/test_routes_options.py tests/test_routes_run.py -q
+uv run python scripts/ci_pytest.py tests/test_connection.py tests/test_wheel_decision.py tests/test_score_regression.py tests/test_presets.py tests/test_portfolio_context.py tests/test_recommendations.py tests/test_run_model.py tests/test_wheel_parity.py tests/test_scan_ledger.py tests/test_routes_options.py tests/test_routes_run.py tests/test_routes_watchlist.py tests/test_routes_ledger.py -q
 npm test -- tests/frontend/top-recommendations.test.js
 ```
 

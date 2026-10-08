@@ -1,0 +1,21 @@
+<section class="app-section mt-4" id="holdings-panel">
+    <div class="summary-panel">
+        <div class="summary-panel__header">
+            <div>
+                <span class="app-section__eyebrow">Wheel ledger</span>
+                <h2>Holdings &amp; cycle state</h2>
+            </div>
+            <button id="refresh-holdings" class="btn btn-outline-secondary btn-sm" type="button">Refresh</button>
+        </div>
+        <p id="holdings-status" class="text-muted small mb-2">Loading the latest local portfolio snapshot…</p>
+        <div id="holdings-summary" class="small mb-3"></div>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-2" aria-label="Stock holdings and wheel cycle state">
+                <thead><tr><th>Ticker</th><th>Shares</th><th>Broker sellable qty</th><th>Broker basis</th><th>Adjusted basis</th><th>Cycle</th><th>Open legs</th><th>Call at basis</th></tr></thead>
+                <tbody id="holdings-body"><tr><td colspan="8" class="text-muted">Loading holdings…</td></tr></tbody>
+            </table>
+        </div>
+        <div id="holdings-changes" class="small"></div>
+        <p class="text-muted small mt-2 mb-0">Local persisted Moomoo snapshots and fill evidence. No live broker query. Broker sellable quantity is a display-only cross-check and does not determine covered-call eligibility. Cycle basis falls back to Moomoo average cost until fill history and share reconciliation prove completeness.</p>
+    </div>
+</section>

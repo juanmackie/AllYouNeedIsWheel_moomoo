@@ -3,9 +3,32 @@ Tests for api/routes/portfolio.py — portfolio API endpoints.
 """
 
 import json
+import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+
+def _cycle_for_holdings():
+    return {
+        "cycle_id": "holdings-cycle",
+        "env": "SIMULATE",
+        "account_id": "acct-one",
+        "ticker": "XYZ",
+        "state": "assigned_uncovered",
+        "origin": "cash_secured_put",
+        "opened_at": "2026-09-01T10:00:00-04:00",
+        "shares": 100,
+        "gross_basis_per_share": 50,
+        "credits_net": 2,
+        "fees_known": True,
+        "completeness": "partial",
+        "reasons": ["history_incomplete"],
+        "adjusted_basis_per_share": 48,
+        "events": [],
+        "updated_at": "2026-09-30T10:00:00-04:00",
+    }
 
 
 class TestPortfolioRoutes(unittest.TestCase):
@@ -120,6 +143,59 @@ class TestPortfolioRoutes(unittest.TestCase):
         response = self.client.get("/api/portfolio/weekly-income")
         self.assertEqual(response.status_code, 500)
 
+    @patch("api.services.config.get_current_identity", return_value=("SIMULATE", "acct-one"))
+    def test_holdings_uses_local_snapshot_and_scopes_cycles(self, _identity):
+        from db.database import OptionsDatabase
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = OptionsDatabase(Path(temp_dir) / "holdings.sqlite")
+            self.app.config["database"] = db
+            db.save_portfolio_snapshot(
+                {
+                    "run_id": "r1",
+                    "captured_at": "2026-09-30T10:00:00-04:00",
+                    "env": "SIMULATE",
+                    "account_id": "acct-one",
+                    "net_liquidation": 10000,
+                    "positions": [
+                        {
+                            "symbol": "XYZ",
+                            "security_type": "STK",
+                            "qty": 100,
+                            "avg_cost": 55,
+                            "market_price": 50,
+                            "market_val": 5000,
+                            "can_sell_qty": 60,
+                        },
+                        {
+                            "symbol": "XYZ261002C00055000",
+                            "underlying": "XYZ",
+                            "security_type": "OPT",
+                            "qty": -1,
+                            "option_type": "CALL",
+                            "strike": "55",
+                            "expiration": "20261002",
+                        },
+                    ],
+                }
+            )
+            db.save_wheel_cycles([_cycle_for_holdings()])
+            try:
+                response = self.client.get("/api/portfolio/holdings?since=2026-09-29T00:00:00-04:00")
+                self.assertEqual(response.status_code, 200)
+                payload = response.get_json()
+                self.assertEqual(payload["source"], "local_snapshot")
+                self.assertEqual(payload["holdings"][0]["ticker"], "XYZ")
+                self.assertEqual(payload["holdings"][0]["basis"], 55)
+                self.assertEqual(payload["holdings"][0]["basis_source"], "moomoo_avg_cost")
+                self.assertEqual(payload["holdings"][0]["broker_sellable_shares"], 60)
+                self.assertEqual(payload["holdings"][0]["covered_call_capacity_crosscheck"]["position_shares"], 100)
+                self.assertIn("Display-only", payload["holdings"][0]["covered_call_capacity_crosscheck"]["note"])
+                self.assertEqual(payload["holdings"][0]["open_legs"][0]["option_type"], "CALL")
+                self.assertAlmostEqual(payload["dead_money_share_of_nav"], 0.5)
+            finally:
+                db.close()
+
 
 class TestRollPressureRoutes(unittest.TestCase):
     """Roll-pressure route tests (extracted module, F008)."""
@@ -136,21 +212,18 @@ class TestRollPressureRoutes(unittest.TestCase):
             response = self.client.get("/api/portfolio/roll-pressure")
             self.assertEqual(response.status_code, 503)
 
+    @patch("api.routes.roll_pressure._ensure_opend_available", return_value=None)
+    @patch("api.routes.roll_pressure._get_portfolio_service")
+    def test_roll_pressure_generated_at_is_utc(self, mock_get_service, _opend_available):
+        service = MagicMock()
+        service.get_positions.return_value = []
+        mock_get_service.return_value = service
 
-class TestAlertsRoutes(unittest.TestCase):
-    """Alerts route tests (extracted module, F008)."""
+        response = self.client.get("/api/portfolio/roll-pressure")
 
-    def setUp(self):
-        from api import create_app
-
-        self.app = create_app()
-        self.client = self.app.test_client()
-        self.app.config["TESTING"] = True
-
-    def test_alerts_opend_unavailable(self):
-        with patch("api.routes.utils.probe_opend_status", return_value={"status": "unavailable"}):
-            response = self.client.get("/api/portfolio/alerts")
-            self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.status_code, 200)
+        generated_at = datetime.fromisoformat(response.get_json()["generated_at"])
+        self.assertEqual(generated_at.utcoffset(), timezone.utc.utcoffset(generated_at))
 
 
 class TestPortfolioHistoryRoute(unittest.TestCase):
@@ -224,11 +297,11 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
         """C07: the growth goal (baseline/target) must not move with the chart
         ``limit``. The chart series truncates, but pace is derived from the full
         unbounded history, so a small limit still reports the true baseline."""
-        # 5 snapshots; only the first (oldest) is the true baseline.
+        # Baseline is the owner's fixed 2026-08-22 snapshot, independent of chart limit.
         snaps = [
             {
                 "run_id": f"r{i}",
-                "captured_at": f"2026-07-2{i}T15:00:00+00:00",
+                "captured_at": timestamp,
                 "env": "SIMULATE",
                 "account_id": "h1",
                 "net_liquidation": 1000.0 + 100 * i,
@@ -238,7 +311,15 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
                 "broker_buying_power": 0.0,
                 "positions": [],
             }
-            for i in range(5)
+            for i, timestamp in enumerate(
+                [
+                    "2026-08-22T16:00:00-04:00",
+                    "2026-08-30T16:00:00-04:00",
+                    "2026-09-10T16:00:00-04:00",
+                    "2026-09-20T16:00:00-04:00",
+                    "2026-09-30T16:00:00-04:00",
+                ]
+            )
         ]
         mock_db = MagicMock()
 
@@ -250,6 +331,15 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
             return snaps[-lim:]
 
         mock_db.get_portfolio_history.side_effect = fake_history
+        mock_db.get_setting.return_value = json.dumps(
+            {
+                "baseline_date": "2026-08-22",
+                "baseline_nav": 1000.0,
+                "target_multiple": 5.0,
+                "horizon_end": "2029-08-22",
+                "cash_flow_attestation": {"complete": True, "through": "2026-09-30"},
+            }
+        )
         self.app.config["database"] = mock_db
 
         small = json.loads(self.client.get("/api/portfolio/history?limit=2").data)
@@ -263,6 +353,113 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
         )
         self.assertEqual(small["pace"]["baseline_nav"], 1000.0)
         self.assertEqual(small["pace"]["target_nav"], 5000.0)
+        self.assertIsNotNone(small["pace"]["required_cagr"])
+
+
+class TestGoalFlowRoutes(unittest.TestCase):
+    def setUp(self):
+        from api import create_app
+        from db.database import OptionsDatabase
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db = OptionsDatabase(Path(self.temp_dir.name) / "goal-flows.sqlite")
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.app.config["database"] = self.db
+        self.client = self.app.test_client()
+        self.identity = patch("api.services.config.get_current_identity", return_value=("REAL", "acct-opaque"))
+        self.identity.start()
+        self.clock = patch("core.utils.market_now", return_value=datetime.fromisoformat("2026-09-30T16:00:00-04:00"))
+        self.clock.start()
+        for run_id, captured_at, nav in (
+            ("baseline", "2026-08-22T16:00:00-04:00", 10000),
+            ("latest", "2026-09-30T16:00:00-04:00", 10200),
+        ):
+            self.db.save_portfolio_snapshot(
+                {
+                    "run_id": run_id,
+                    "captured_at": captured_at,
+                    "env": "REAL",
+                    "account_id": "acct-opaque",
+                    "net_liquidation": nav,
+                    "cash_available": 0,
+                    "cash_reserved_for_csp": 0,
+                    "cash_available_for_csp": 0,
+                    "broker_buying_power": 0,
+                    "positions": [],
+                }
+            )
+
+    def tearDown(self):
+        self.identity.stop()
+        self.clock.stop()
+        self.db.close()
+        self.temp_dir.cleanup()
+
+    def test_manual_flows_and_explicit_completeness_gate_goal_metrics(self):
+        history = self.client.get("/api/portfolio/history").get_json()
+        self.assertFalse(history["flow_completeness"]["complete"])
+        self.assertEqual(history["pace"]["confidence_state"], "flows_incomplete")
+        self.assertIsNone(history["pace"]["realized_cagr"])
+
+        created = self.client.post(
+            "/api/portfolio/goal-flows",
+            json={"date": "2026-09-01", "direction": "IN", "amount": 250, "currency": "USD"},
+        )
+        self.assertEqual(created.status_code, 201)
+        flow = created.get_json()["flow"]
+        self.assertTrue(flow["cashflow_id"].startswith("owner:"))
+        self.assertEqual(flow["date"], "2026-09-01")
+        self.assertEqual(flow["amount"], 250)
+
+        confirmed = self.client.put(
+            "/api/portfolio/goal-flows/completeness",
+            json={"complete": True, "through": "2026-09-30"},
+        )
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertTrue(confirmed.get_json()["flow_completeness"]["complete"])
+        history = self.client.get("/api/portfolio/history").get_json()
+        self.assertTrue(history["pace"]["flows_complete"])
+        self.assertEqual(history["pace"]["confidence_state"], "complete")
+
+        self.client.post(
+            "/api/portfolio/goal-flows",
+            json={"date": "2026-09-10", "direction": "OUT", "amount": 75},
+        )
+        history = self.client.get("/api/portfolio/history").get_json()
+        self.assertFalse(history["flow_completeness"]["complete"])
+        self.assertIsNone(history["pace"]["required_cagr"])
+
+        deleted = self.client.delete(f"/api/portfolio/goal-flows/{flow['cashflow_id']}")
+        self.assertEqual(deleted.status_code, 200)
+
+    def test_manual_flow_validation_and_attestation_cannot_understate_history(self):
+        invalid = self.client.post(
+            "/api/portfolio/goal-flows",
+            json={"date": "2026-08-01", "direction": "IN", "amount": 50},
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+        early = self.client.put(
+            "/api/portfolio/goal-flows/completeness",
+            json={"complete": True, "through": "2026-09-01"},
+        )
+        self.assertEqual(early.status_code, 400)
+
+        invalid_delete = self.client.delete("/api/portfolio/goal-flows/BROKER-ID")
+        self.assertEqual(invalid_delete.status_code, 400)
+
+        foreign_currency = self.client.post(
+            "/api/portfolio/goal-flows",
+            json={"date": "2026-09-01", "direction": "IN", "amount": 50, "currency": "HKD"},
+        )
+        self.assertEqual(foreign_currency.status_code, 400)
+
+        boolean_amount = self.client.post(
+            "/api/portfolio/goal-flows",
+            json={"date": "2026-09-01", "direction": "IN", "amount": True},
+        )
+        self.assertEqual(boolean_amount.status_code, 400)
 
 
 class TestScorePositionExitInputs(unittest.TestCase):

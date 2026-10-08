@@ -11,13 +11,16 @@ from moomoo import (
     TrdMarket,
 )
 
+from core.broker_protocol import QUERY_TRADE_SDK_MEMBERS
 from core.logging_config import get_logger
 
 logger = get_logger("ayniwheel.connection", "moomoo")
 
 
 class QueryOnlyTradeContext:
-    """Expose only the trade-context queries used by this application."""
+    """Expose exactly the trade-context query members listed by the protocol."""
+
+    _QUERY_ALLOWLIST = QUERY_TRADE_SDK_MEMBERS
 
     def __init__(self, context):
         self._context = context
@@ -27,6 +30,12 @@ class QueryOnlyTradeContext:
 
     def accinfo_query(self, *args, **kwargs):
         return self._context.accinfo_query(*args, **kwargs)
+
+    def order_list_query(self, *args, **kwargs):
+        return self._context.order_list_query(*args, **kwargs)
+
+    def acctradinginfo_query(self, *args, **kwargs):
+        return self._context.acctradinginfo_query(*args, **kwargs)
 
     def position_list_query(self, *args, **kwargs):
         return self._context.position_list_query(*args, **kwargs)

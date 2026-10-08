@@ -51,6 +51,7 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context["cash_balance"], 0.0)
         self.assertEqual(context["account_value"], 0.0)
         self.assertEqual(context["positions"], {})
+        self.assertTrue(context["portfolio_error"])
 
     def test_populates_cash_and_account_value(self):
         self.portfolio_service.get_portfolio_summary.return_value = {
@@ -295,6 +296,48 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
             context["_cash_diagnostics"]["cash_available_for_csp_source"],
             "available_cash_minus_open_short_put_collateral",
         )
+
+    def test_broker_net_cash_source_is_preserved_and_not_double_counted(self):
+        self.portfolio_service.get_portfolio_summary.return_value = {
+            "available_cash": 1075.66,
+            "available_cash_source": "us_avl_withdrawal_cash",
+            "account_value": 60000.0,
+        }
+        self.portfolio_service.get_positions.side_effect = lambda t=None: {
+            "STK": [],
+            "OPT": [
+                {"symbol": "US.AAPL240315P00100000", "position": -4, "option_type": "PUT", "strike": 100.0},
+            ],
+        }.get(t, [])
+
+        context = self.ctx.get_portfolio_context()
+
+        self.assertEqual(context["cash_reserved_for_csp"], 40000.0)
+        self.assertEqual(context["available_cash_source"], "us_avl_withdrawal_cash")
+        self.assertEqual(context["cash_available_for_csp"], 1075.66)
+        self.assertEqual(context["_cash_diagnostics"]["available_cash_source"], "us_avl_withdrawal_cash")
+
+    def test_cached_context_preserves_broker_net_cash_source(self):
+        context = self.ctx._build_context_from_cached_portfolio(
+            {
+                "available_cash": 1075.66,
+                "available_cash_source": "us_avl_withdrawal_cash",
+                "account_value": 60000.0,
+                "positions": {
+                    "US.AAPL240315P00100000": {
+                        "shares": -4,
+                        "security_type": "OPT",
+                        "option_type": "PUT",
+                        "strike": 100.0,
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(context["cash_reserved_for_csp"], 40000.0)
+        self.assertEqual(context["available_cash_source"], "us_avl_withdrawal_cash")
+        self.assertEqual(context["cash_available_for_csp"], 1075.66)
+        self.assertEqual(context["_cash_diagnostics"]["available_cash_source"], "us_avl_withdrawal_cash")
 
     def test_csp_cash_with_no_short_puts(self):
         """cash_available_for_csp uses true available cash when no collateral reserved."""

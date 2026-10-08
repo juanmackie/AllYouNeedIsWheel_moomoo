@@ -22,11 +22,19 @@
                 <h3 class="summary-metric-value" id="growth-progress">0%</h3>
             </div>
             <div class="summary-metric-cell">
-                <p class="summary-metric-label">Annualized pace</p>
+                <p class="summary-metric-label">Realized CAGR</p>
                 <h3 class="summary-metric-value" id="growth-annualized">—</h3>
             </div>
             <div class="summary-metric-cell">
-                <p class="summary-metric-label" id="growth-eta-label">ETA to 5x</p>
+                <p class="summary-metric-label">Required CAGR</p>
+                <h3 class="summary-metric-value" id="growth-required-cagr">—</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Gap</p>
+                <h3 class="summary-metric-value" id="growth-gap-pp">—</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label" id="growth-eta-label">At current pace</p>
                 <h3 class="summary-metric-value" id="growth-eta">—</h3>
             </div>
         </div>
@@ -69,9 +77,46 @@
         </div>
 
         <p class="text-muted small mt-2 mb-0">
-            Pace math uses persisted portfolio snapshots only (Moomoo/OpenD truth,
-            captured at each completed run). No fixed deadline — ETA is derived
-            from your realized pace.
+            Flow-adjusted pace uses persisted Moomoo snapshots and classified
+            deposits/withdrawals. Annualization starts after 60 days. The 5x / 3-year
+            target requires about 71% CAGR; current positive returns alone do not
+            mean the account is on track. Key levers: underwater-stock drag,
+            assignment losses, realized capture, utilization, fees, and compounding.
         </p>
+
+        <div class="mt-3 border-top pt-3" id="goal-flow-controls">
+            <p class="mb-1"><strong>Capital-flow history:</strong> <span id="goal-flow-status" class="badge bg-warning text-dark">FLOWS INCOMPLETE</span></p>
+            <p class="text-muted small">OpenD's available history may be partial. Add any deposits or withdrawals since the baseline, then confirm that all capital flows are recorded through the latest account snapshot. Pace metrics stay hidden until confirmed.</p>
+            <div id="goal-owner-flows" class="small mb-2" aria-live="polite"></div>
+            <form id="goal-flow-form" class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small mb-1" for="goal-flow-date">Date</label>
+                    <input class="form-control form-control-sm" id="goal-flow-date" type="date" required>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1" for="goal-flow-direction">Type</label>
+                    <select class="form-select form-select-sm" id="goal-flow-direction">
+                        <option value="IN">Deposit</option>
+                        <option value="OUT">Withdrawal</option>
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1" for="goal-flow-amount">Amount (USD)</label>
+                    <input class="form-control form-control-sm" id="goal-flow-amount" type="number" min="0.01" step="0.01" required>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1" for="goal-flow-currency">Currency</label>
+                    <input class="form-control form-control-sm" id="goal-flow-currency" value="USD" readonly aria-label="Currency (USD)">
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-sm btn-outline-primary" type="submit">Add flow</button>
+                </div>
+            </form>
+            <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+                <button class="btn btn-sm btn-outline-success" id="goal-flow-confirm" type="button">Confirm flows complete through latest snapshot</button>
+                <button class="btn btn-sm btn-outline-secondary" id="goal-flow-revoke" type="button">Revoke confirmation</button>
+                <span id="goal-flow-message" class="small text-muted" role="status"></span>
+            </div>
+        </div>
     </div>
 </section>

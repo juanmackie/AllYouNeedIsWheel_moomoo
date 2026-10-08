@@ -2,7 +2,7 @@
  * Dashboard initialization and position command panel.
  * Split from dashboard.js (F042)
  */
-import { loadPortfolioData } from './account.js';
+import { loadPortfolioData, renderRecycleReadyPositions } from './account.js';
 import { initializeTopRecommendations, loadTopRecommendations, isBackendGenerating } from './top-recommendations.js';
 import { formatCurrency } from '../utils/formatters.js';
 import { fetchWeeklyOptionIncome } from './api-portfolio.js';
@@ -15,6 +15,7 @@ import { renderGrowthPanel } from './growth-panel.js';
 import { renderOutcomePanel } from './outcome-panel.js';
 import { renderWeeklyIncome } from './weekly-income.js';
 import { state as optionsTableState } from './options-table-state.js';
+import { loadHoldings } from './holdings.js';
 
 let signalPanelsInitialized = false;
 
@@ -39,8 +40,8 @@ export async function initializeDashboard() {
         showWaveLoading('wave1', 'Loading account data...');
         try {
             await loadPortfolioData();
-        initWatchlistPanel();
-        initRunStrip();
+            initWatchlistPanel();
+            initRunStrip();
             // Initial operational-strip render (also fetches the active preset
             // label once per session). The shared poll keeps it fresh after.
             await loadRunStrip();
@@ -51,6 +52,7 @@ export async function initializeDashboard() {
         showWaveLoading('wave2', 'Loading positions...');
         try {
             await loadPositionsCommandPanel();
+            await loadHoldings();
         } catch (error) { console.error('Wave 2 error:', error); }
         hideWaveLoading('wave2');
 
@@ -103,7 +105,9 @@ export async function initializeDashboard() {
 async function reloadAllPanelsAfterPublish() {
     const reloads = [
         () => loadRunStrip(),
-        () => loadPortfolioData(),
+        async () => {
+            await loadPortfolioData();
+        },
         () => loadPositionsCommandPanel(),
         () => loadTopRecommendations(false),
         () => loadWatchlist(),
@@ -226,6 +230,10 @@ function copyRollTicket(pos, btn) {
         `BTC: ${type} ${ticker} ${expiry} ${strike} x${qty}`,
         targetLine,
         `Reason: roll pressure ${pressure}/100`,
+        `Fees: ${target?.fee_model_note || 'Prospective fees unavailable; not assumed to be zero.'}`,
+        target?.net_credit_after_fees != null && Number.isFinite(Number(target.net_credit_after_fees))
+            ? `Estimated net credit after fees per contract: $${Number(target.net_credit_after_fees).toFixed(2)}`
+            : 'Estimated net credit after fees per contract: unavailable',
         'Source: Moomoo positions (read-only)',
     ].join('\n');
     const original = btn.textContent;
@@ -379,6 +387,12 @@ function renderPositionRow(pos) {
     badge.textContent = statusBadge;
     if (reasons) badge.title = reasons;
     actionCell.appendChild(badge);
+    if (target && target.fee_model_note) {
+        const feeNote = document.createElement('small');
+        feeNote.className = 'd-block text-muted position-fee-note';
+        feeNote.textContent = target.fee_model_note;
+        actionCell.appendChild(feeNote);
+    }
     actionCell.appendChild(document.createTextNode(' '));
     const button = document.createElement('button');
     button.type = 'button';
@@ -397,11 +411,13 @@ export async function loadPositionsCommandPanel() {
     try {
         const resp = await fetch('/api/portfolio/roll-pressure');
         if (!resp.ok) {
+            renderRecycleReadyPositions([]);
             setPositionMessage(tbody, 'Could not load positions');
             return;
         }
         const data = await resp.json();
         const positions = data.positions || [];
+        renderRecycleReadyPositions(positions);
         if (positions.length === 0) {
             setPositionMessage(tbody, 'No open short option positions');
             return;
@@ -414,6 +430,7 @@ export async function loadPositionsCommandPanel() {
         }
     } catch (err) {
         console.error('Error loading positions:', err);
+        renderRecycleReadyPositions([]);
         setPositionMessage(tbody, 'Error loading positions', 'text-danger');
     }
 }

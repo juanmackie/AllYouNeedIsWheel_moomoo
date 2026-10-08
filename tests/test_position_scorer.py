@@ -47,6 +47,29 @@ def _score(position, stock_price, earnings_info=None):
 
 
 class TestExitBridge(unittest.TestCase):
+    def test_verified_stock_basis_and_preset_thresholds_reach_exit_engine(self):
+        context = {
+            **PORTFOLIO_CONTEXT,
+            "positions": {
+                "AAPL": {"gate_basis": 104.0, "gate_basis_source": "ledger_adjusted"},
+            },
+            "exit_thresholds": {
+                "profit_take_pct": 50.0,
+                "roll_dte": 4,
+                "exit_delta": 0.65,
+                "deep_itm_pct": 15.0,
+                "stop_loss_pct": -100.0,
+                "rotate_min_multiplier": 2.0,
+            },
+        }
+        decision = score_existing_position(
+            ticker="AAPL",
+            position_data=self._mild_itm_call(20),
+            current_stock_price=105.0,
+            portfolio_context=context,
+        )
+        self.assertEqual(decision.exit_verdict, "ACCEPT_ASSIGNMENT")
+
     def _mild_itm_call(self, dte):
         """A call barely ITM with a mark near the entry credit.
 

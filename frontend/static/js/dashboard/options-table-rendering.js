@@ -380,7 +380,6 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
         return false;
     }
 
-    const score = option.score || 0;
     const annualizedReturn = option.annualized_return || 0;
     const rationaleText = sanitize((option.rationale || []).join(' | '));
 
@@ -409,8 +408,6 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
                 return `<div class="text-warning"><i class="bi ${icon} me-1"></i>${sanitize(w)}${context}</div>`;
             }).join('')}
         </div>` : '';
-
-    const scoreBadgeClass = score >= 80 ? 'bg-success' : (score >= 65 ? 'bg-primary' : 'bg-warning text-dark');
 
     const premiumPerContract = getPremiumPerContract(option);
     const midPrice = option.mid_price != null
@@ -471,16 +468,8 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
         row.innerHTML = `
             <td class="align-middle">
                 <div class="fw-semibold" title="${rationaleText}">${sanitize(ticker)}</div>
-                <div class="d-flex align-items-center gap-1 mt-1">
-                    <span class="badge ${scoreBadgeClass} badge--compact"
-                          data-bs-toggle="tooltip"
-                          title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
-                        Score: ${score.toFixed(1)}
-                    </span>
-                    <span class="small text-muted">|</span>
-                    <span class="small" data-bs-toggle="tooltip" title="Annualized return if you sell this option every week for a year">
-                        ${annualizedReturn.toFixed(1)}% annualized
-                    </span>
+                <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Annualized return if you sell this option every week for a year">
+                    ${annualizedReturn.toFixed(1)}% annualized
                 </div>
                 ${warningHtml}
             </td>
@@ -574,16 +563,8 @@ export function addTickerRowToTable(tableId, optionType, ticker) {
         row.innerHTML = `
             <td class="align-middle">
                 <div class="fw-semibold" title="${rationaleText}">${sanitize(ticker)}</div>
-                <div class="d-flex align-items-center gap-1 mt-1">
-                    <span class="badge ${scoreBadgeClass} badge--compact"
-                          data-bs-toggle="tooltip"
-                          title="Quality score: ${score >= 80 ? 'High' : score >= 65 ? 'Good' : 'Fair - check warnings'} quality opportunity">
-                        Score: ${score.toFixed(1)}
-                    </span>
-                    <span class="small text-muted">|</span>
-                    <span class="small" data-bs-toggle="tooltip" title="Annualized return if you sell this option every week for a year">
-                        ${annualizedReturn.toFixed(1)}% annualized
-                    </span>
+                <div class="small text-muted mt-1" data-bs-toggle="tooltip" title="Annualized return if you sell this option every week for a year">
+                    ${annualizedReturn.toFixed(1)}% annualized
                 </div>
                 ${warningHtml}
                 ${concWarningHtml}
@@ -913,10 +894,6 @@ export function buildTabsHTML(putTabWasActive) {
         <div class="tab-content" id="options-tabs-content">
             <div class="tab-pane fade ${putTabWasActive ? '' : 'show active'}" id="call-options-section" role="tabpanel" aria-labelledby="call-options-tab">
                 <div class="d-flex justify-content-end mb-2">
-                    <span class="badge bg-light text-muted border small me-2" id="sell-all-calls"
-                        data-bs-toggle="tooltip" title="Signal only — review trades in your broker app">
-                        <i class="bi bi-eye"></i> Signal Only
-                    </span>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-calls">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Calls
                     </button>
@@ -946,10 +923,6 @@ export function buildTabsHTML(putTabWasActive) {
 
             <div class="tab-pane fade ${putTabWasActive ? 'show active' : ''}" id="put-options-section" role="tabpanel" aria-labelledby="put-options-tab">
                 <div class="d-flex justify-content-end mb-2">
-                    <span class="badge bg-light text-muted border small me-2" id="sell-all-puts"
-                        data-bs-toggle="tooltip" title="Signal only — review trades in your broker app">
-                        <i class="bi bi-eye"></i> Signal Only
-                    </span>
                     <button class="btn btn-sm btn-outline-primary" id="refresh-all-puts">
                         <i class="bi bi-arrow-repeat"></i> Refresh All Puts
                     </button>

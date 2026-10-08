@@ -16,12 +16,17 @@ by executable return on deployed capital so the shortlist reflects the 5x goal.
 - absolute option delta outside the selected preset's inclusive target ± tolerance band;
 - CSPs that do not fit true available cash after reserved short-put collateral;
 - CSPs that exceed the preset's per-underlying account exposure cap (stock market value plus existing and proposed short-put collateral; the current cap is 25% for every preset);
-- covered calls without unencumbered 100-share lots.
+- covered calls without unencumbered 100-share lots;
+- covered calls with missing cost basis, or with a strike below the usable basis (proven ledger-adjusted basis, otherwise Moomoo average cost).
 
 A locked market (`ask == bid`) is valid. Margin buying power is displayed only;
-it never establishes CSP capacity. When account value or current underlying
-exposure cannot be verified, the CSP cap fails closed. Multi-contract
-recommendations are reduced to the remaining per-underlying room.
+it never establishes CSP capacity. The source field from Moomoo's USD account
+summary is preserved as `available_cash_source`. When that broker field already
+reflects working short-put collateral, CSP cash uses it directly; otherwise,
+tracked open-put collateral is deducted from available cash once. When account
+value or current underlying exposure cannot be verified, the CSP cap fails
+closed. Multi-contract recommendations are reduced to the remaining
+per-underlying room.
 
 A hard-gate-passing candidate receives:
 
@@ -33,6 +38,32 @@ A hard-gate-passing candidate receives:
   produces zero, never an invented one-contract ticket;
 - machine-readable blockers, rationale, source, broker timestamp, and UTC
   fetch timestamp.
+
+## Cash-aware watchlist coverage
+
+The CSP scan universe remains the complete Moomoo watchlist group. One batched
+Moomoo price snapshot (up to 400 codes per request) partitions that universe
+before option-chain work. `scan_coverage.scanned` counts a symbol only after an
+evidenced terminal result: a completed scan, `skipped_no_cash_fit` with broker
+price, minimum strike needed, deployable cash, and fetch time, or an explicit
+error. Missing price or exposure evidence is an error/gap, never a cash skip.
+`coverage_cash_skipped` and `cash_skipped` report the count and evidence.
+
+Preflight estimates chain calls from the affordable names and the preset DTE
+span (`ceil(span_days / 30)`). During an open session the whole affordable scan
+must fit the configured freshness window; outside the session, only the chain
+quota applies. An infeasible CSP lane publishes `planning` while still
+assessing held covered calls; O1 keeps those calls review-only until the global
+Moomoo coverage/copy gate passes. The returned `session_calendar_source`
+identifies whether the session clock came from OpenD trading days or the
+weekday fallback.
+
+Range-chain requests derive expirations from returned Moomoo rows and snapshot
+only put codes inside both the preset OTM band and cash/exposure limit. Up to
+three expiry samples (minimum, nearest preferred DTE, and maximum) are retained
+for scoring. A response requiring more than 400 option codes is an error; it is
+never truncated. Closed-session chain cache data is reused only when captured
+after the last regular close.
 
 ## Canonical math
 
@@ -163,11 +194,14 @@ earnings overlap does not hard-block CSPs or affect shortlist ordering.
 
 ## Capital-aware sizing on every pick
 
-CSP capacity is computed from true available cash after reserved short-put
-collateral (`cash_available_for_csp`). Each pick displays: cash required,
-income at the recommended size (recommended contracts × executable bid),
-cash remaining after the trade, and — when portfolio history exists — what
-percentage of the daily pace to the preset's growth target this trade covers.
+CSP capacity is computed from true available cash (`cash_available_for_csp`)
+and the remaining per-underlying cap. Ranked top picks preserve membership and
+order, then receive sequential `funded_contracts` and `cash_conflict` estimates
+against shared cash and exposure room. Unknown account/exposure evidence stays
+unknown. Each pick also displays cash required, income at the recommended size
+(recommended contracts × executable bid), cash remaining after the trade, and
+— when portfolio history exists — what percentage of the daily pace to the
+preset's growth target this trade covers.
 
 ## IV rank and percentile (display-only)
 
@@ -198,10 +232,26 @@ so they cannot reorder the shortlist. IV history retention is 400 days
 (`DEFAULT_RETENTION_DAYS`) — enough headroom for the 1-year window, which the
 previous 45-day cap silently truncated.
 
+The combined top-three cards also show each broker-sourced option's implied
+volatility beside annualized 20-session historical volatility. Historical
+volatility is the sample standard deviation of daily log returns, annualized
+with `sqrt(252)`, from Moomoo split/dividend-adjusted daily closes. The
+comparison is added after shortlist selection, only when the history quota is
+verified and 21 completed closes are available, and is cached for 24 hours.
+Insufficient or unavailable history stays explicitly unavailable. This
+diagnostic does not gate, score, or reorder any candidate.
+
+The top-three card also reports a display-only downtrend flag from the same
+completed Moomoo close history: a 20-session close-to-close decline of at least
+15% with the latest close below its 50-session simple average. The threshold is
+descriptive context, not an eligibility or copy gate; fewer than 50 completed
+closes leaves the flag unavailable.
+
 ## Exit playbook (open positions)
 
 `core/exit_playbook.py::evaluate_exit` assigns each open short option one
-deterministic verdict — HOLD, TAKE_PROFIT, ROTATE, ROLL, or CLOSE — with ranked
+deterministic verdict — HOLD, TAKE_PROFIT, ROTATE, ROLL, ROLL_OUT_DOWN,
+ACCEPT_ASSIGNMENT, or CLOSE — with ranked
 reasons. First matching rule wins:
 
 1. CLOSE — earnings land before expiry while ITM or within 5% OTM.
@@ -210,6 +260,15 @@ reasons. First matching rule wins:
    is captured (roll past ex-div or close). Dividends drive early exercise of
    calls only, so a short PUT never triggers this rule; a call within 5% OTM
    gets a context note and no verdict.
+1c. ACCEPT_ASSIGNMENT — an ITM short CALL may be assigned when its strike is
+   at or above the stock's effective basis. A proven wheel ledger basis is
+   preferred; otherwise the Moomoo average cost is used. Missing basis never
+   unlocks acceptance.
+1d. ROLL_OUT_DOWN — an ITM short PUT may roll only to a later expiry at an
+   equal or lower strike, with positive net credit after measured fees from the
+   account's own US option fills. Without complete pricing and both fee sides,
+   this verdict is unavailable. Ordinary risk-management ROLL can still name a
+   fresh target when fee history is incomplete, but its net credit stays unknown.
 2. CLOSE — deeply ITM beyond the preset threshold (default 15%).
 3. CLOSE — |delta| breaches the exit level (default 0.65).
 4. TAKE_PROFIT — ≥ 50% of entry credit captured (entry credit from Moomoo
@@ -220,12 +279,13 @@ reasons. First matching rule wins:
    position cannot be quietly rolled instead of closed.
 4c. ROTATE — a fresh eligible same-underlying/same-side contract's net return/day
    is at least 2× the held contract's mark-based return/day, after pricing the
-   close at ask, the new sale at bid, and subtracting known close/open fees.
-   Unknown fees never count as zero: the comparison is reported unavailable and
-   ROTATE is not emitted. The current app has no prospective fee schedule, so
-   this verdict remains unavailable until both per-contract fees are explicitly
-   supplied.
-5. ROLL — DTE entered the roll window (default ≤ 21) while safely OTM, and only
+   close at ask, the new sale at bid, and subtracting measured close/open fees.
+   Each side's per-contract estimate is the median fee per complete order from
+   the account's own fee-resolved US option fills in the last 90 days. The UI
+   labels the estimate "Fees measured from your fills" and shows the
+   BUY/SELL order counts. Unknown fees never count as zero: missing either side
+   leaves the comparison unavailable and ROTATE is not emitted.
+5. ROLL — DTE entered the preset roll window while safely OTM, and only
    when a fresh eligible same-side target exists. The target contract is named;
    without one, ROLL is suppressed and the position remains HOLD.
 6. HOLD — otherwise; proximity/decay notes ride along.
@@ -252,11 +312,19 @@ keys on "ITM with ex-div before expiry" rather than the exact
 extrinsic-value-vs-dividend comparison that decides early exercise; fabricating
 a payout figure would violate the broker-truth contract.
 
-Exit thresholds (`exit_profit_take_pct`, `exit_roll_dte`, `exit_delta`,
-`exit_deep_itm_pct`, `exit_stop_loss_pct`) are read from the portfolio context
-when present, but nothing populates those keys today and presets carry no exit
-fields, so the defaults above always apply. Preset-driving them is a known open
-gap, not implemented behaviour.
+Exit thresholds are part of immutable preset v8 and are passed to the position
+scorer from the active preset. The roll windows are 7 DTE (Conservative), 4 DTE
+(Balanced), and 2 DTE (Aggressive); the other exit values are exposed in the
+read-only effective preset. Open short-call premium is excluded from adjusted
+basis while it remains unresolved. Ledger-adjusted basis is used only when
+fill history covers the cycle origin, fees are known, and shares reconcile to
+the broker snapshot; otherwise the playbook uses Moomoo average cost, or keeps
+basis missing.
+
+`GET /api/portfolio/holdings` serves stock holdings, cycle state, basis
+provenance, open legs, stored call candidates at/above basis, recent changes,
+near expiries, dead-money share of NAV, and fill-window age from local SQLite.
+It does not make a live OpenD request.
 
 ## Entry timing guidance
 
@@ -270,10 +338,27 @@ before entry is already enforced by event tiers.
 
 One portfolio snapshot is persisted per completed run (NAV, cash, reserved
 collateral, full position book). `GET /api/portfolio/history` serves the
-series plus a `pace` payload from `core.growth_mode.growth_pace`: progress
-toward the active preset's 5x `target_account_multiple`, annualized pace from
-realized NAV change, ETA to target, required premium/day, and an on-track
-verdict derived from realized pace — never a promised date.
+series plus a flow-adjusted, chain-linked `pace` payload from
+`core.goal_pace.goal_pace`. The account goal is pinned to the 2026-08-22 NAV,
+5x target, and 2029-08-22 horizon in account-scoped settings. Classified
+deposits/withdrawals are neutralized with Modified Dietz weighting; the app
+reports required CAGR, realized CAGR after at least 60 days, the gap in points,
+and years at the current pace (or `never` when the mature realized pace is
+non-positive). The dashboard waits for a 60-day observation before showing an
+ETA and uses the server's pace result directly. At baseline, 5x in three years
+requires about 71% CAGR. Positive returns alone never mark the goal on track;
+`on_track` is true only when realized CAGR meets the current required CAGR.
+
+OpenD cash-flow history can be partial. The growth panel therefore starts in
+`flows_incomplete` confidence state and withholds goal index, progress, CAGR,
+gap, ETA, and on-track metrics until the owner has entered missing deposits or
+withdrawals and explicitly confirms the account flow history through the latest
+snapshot date. Owner-entered flows are stored in the same account-scoped cash
+flow ledger with `owner:<uuid>` IDs. Adding or removing one clears the
+confirmation; newly ingested broker capital flows do too. Manual amounts use
+USD, matching the NAV query currency. The ledger must be reviewed and confirmed
+again. The current NAV and target NAV remain visible while flow-adjusted
+metrics are withheld.
 
 ## Actionability
 
@@ -299,6 +384,12 @@ Hard trust gates still block copy: crossed markets, missing/stale quotes while
 open, yfinance fallback, insufficient capacity, and research-only mode all keep
 a signal review-only. Copy text uses the bid credit and the midpoint only as a
 labelled non-guaranteed limit target.
+
+OpenD working-order matches and `acctradinginfo_query` sell-capacity values are
+queried for the bounded combined top-three shortlist and shown as diagnostics.
+An exact working order receives a `RESTING ORDER` badge. These fields do not
+change candidate order, membership, actionability, or recommended quantity;
+failed reads remain unavailable rather than implying no order or zero capacity.
 
 During closed-market review, both CSP and covered-call lanes request the freshest
 available last-session chain from OpenD first, then fall back to a persisted broker

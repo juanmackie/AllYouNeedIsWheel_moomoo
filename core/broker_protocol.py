@@ -29,6 +29,8 @@ FORBIDDEN_SDK_MEMBERS: tuple[str, ...] = (
     "place_order",
     "modify_order",
     "cancel_order",
+    "cancel_all_order",
+    "change_order",
     "place_combo_order",
     "place_crypto_order",
     "cancel_crypto_order",
@@ -42,26 +44,33 @@ QUERY_SDK_MEMBERS: tuple[str, ...] = (
     "get_global_state",
     "get_option_expiration_date",
     "get_market_snapshot",
-    "get_capital_distribution",
-    "get_capital_flow",
-    "get_broker_queue",
+    "request_trading_days",
     "request_history_kline",
-    "get_cur_kline",
-    "get_owner_plate",
+    "get_history_kl_quota",
     "get_option_chain",
     "accinfo_query",
+    "order_list_query",
+    "acctradinginfo_query",
     "position_list_query",
     "history_deal_list_query",
     "order_fee_query",
     "get_acc_cash_flow",
     "get_user_security_group",
     "get_user_security",
-    "query_subscription",
-    "get_option_volatility",
-    "get_option_exercise_probability",
-    "get_option_screen",
-    "get_short_interest",
-    "get_financials_earnings_price_move",
+    "close",
+)
+
+# Trade-context calls are kept explicit because the raw SDK trade context has
+# order-capable members. QueryOnlyTradeContext must expose exactly this set.
+QUERY_TRADE_SDK_MEMBERS: tuple[str, ...] = (
+    "get_acc_list",
+    "accinfo_query",
+    "order_list_query",
+    "acctradinginfo_query",
+    "position_list_query",
+    "history_deal_list_query",
+    "order_fee_query",
+    "get_acc_cash_flow",
     "close",
 )
 
@@ -97,3 +106,13 @@ class BrokerQuerySurface(Protocol):
     def get_user_security_group(self, group_type=None) -> Any: ...
 
     def get_market_snapshot(self, symbols) -> Any: ...
+
+    def get_price_snapshot(self, symbols) -> dict[str, dict[str, Any]]: ...
+
+    def get_option_chain_range(self, symbol, right, start, end, band) -> Any: ...
+
+    def get_session_calendar(self) -> Any: ...
+
+    def get_open_orders(self) -> list[dict[str, Any]] | None: ...
+
+    def get_max_sellable_info(self, code: str, price: float) -> dict[str, float | None] | None: ...

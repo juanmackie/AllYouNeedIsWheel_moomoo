@@ -9,7 +9,7 @@ from datetime import datetime
 
 from api.services.recommendation_ranking import rank_candidates
 from api.services.utils import clean_yfinance_ticker
-from core.growth_mode import should_block_for_data_quality
+from core.risk_metrics import should_block_for_data_quality
 from core.utils import get_closest_friday, is_market_open, market_now, safe_float
 from core.utils import normalize_expiration as _normalize_expiration
 from core.wheel_decision import score_contract
@@ -57,10 +57,9 @@ def _annotate_chain_sources(
 def fetch_option_chain_live_first(conn, db, config, ticker, expiration, right, target_strike=None, stock_price=None):
     """Fetch a broker chain live first, falling back to persisted broker data.
 
-    Closed-market scans are planning-only, but they are the user's normal review
-    window. Bypass the in-memory after-hours cache for the freshest OpenD
-    last-session quote; use the persisted snapshot only when OpenD cannot provide
-    a chain. No external source can enter this path.
+    Closed-market scans are planning-only. Reuse a broker chain only when it was
+    captured after the last regular close; OpenD cannot provide newer prices
+    outside a session. No external source can enter this path.
     """
     market_closed = not is_market_open()
     right = str(right or "C").upper()
@@ -71,7 +70,7 @@ def fetch_option_chain_live_first(conn, db, config, ticker, expiration, right, t
                 expiration,
                 right,
                 target_strike=target_strike,
-                force_refresh=market_closed,
+                force_refresh=False,
             )
         except TypeError as exc:
             # Keep lightweight test/donor providers compatible while the real

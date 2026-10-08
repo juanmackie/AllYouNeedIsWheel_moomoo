@@ -1,7 +1,9 @@
 """Tests for api/routes/earnings.py — earnings API endpoints."""
 
 import unittest
+from datetime import datetime
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 
 class TestEarningsRoutes(unittest.TestCase):
@@ -107,6 +109,23 @@ class TestEarningsRoutes(unittest.TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["tickers"][0]["ticker"], "AAPL")
         mock_db.assert_called_once()
+
+    @patch("api.routes.earnings.market_now")
+    @patch("api.routes.earnings.get_service")
+    def test_locked_ticker_days_use_us_market_date(self, mock_get_service, market_clock):
+        service = MagicMock()
+        service.db.get_pending_earnings.return_value = [
+            {"ticker": "AAPL", "earnings_date": "2026-09-29", "time_of_day": "post-market"}
+        ]
+        mock_get_service.return_value = service
+        market_clock.return_value = datetime(2026, 9, 29, 20, 30, tzinfo=ZoneInfo("America/New_York"))
+
+        response = self.client.get("/api/earnings/locked-tickers")
+
+        self.assertEqual(response.status_code, 200)
+        item = response.get_json()["locked"][0]
+        self.assertEqual(item["days_to_earnings"], 0)
+        market_clock.assert_called_once_with()
 
 
 if __name__ == "__main__":

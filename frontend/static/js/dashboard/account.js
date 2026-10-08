@@ -142,38 +142,34 @@ function updateAccountSummary() {
     }
 }
 
-/**
- * Load positions that have reached 50%+ of max profit (ready to recycle capital).
- * Fetches from the alerts endpoint which flags profit_target_progress >= 50%.
- */
-async function loadRecycleReadyPositions() {
-    try {
-        const response = await fetch('/api/portfolio/alerts');
-        if (!response.ok) return;
-        const data = await response.json();
-        if (!data || !data.alerts) return;
+/** Render profit-target positions from the already-fetched roll-pressure payload. */
+export function renderRecycleReadyPositions(positions = []) {
+    const panel = document.getElementById('recycle-panel');
+    const list = document.getElementById('recycle-positions-list');
+    if (!panel || !list) return;
 
-        const recycleAlerts = data.alerts.filter(a =>
-            a.alert_type === 'profit_target_50'
-        );
+    const ready = (Array.isArray(positions) ? positions : []).filter(
+        (position) => Number(position?.profit_target_progress) >= 50
+    );
+    list.replaceChildren();
+    if (!ready.length) {
+        panel.style.display = 'none';
+        return;
+    }
 
-        const panel = document.getElementById('recycle-panel');
-        const list = document.getElementById('recycle-positions-list');
-        if (!panel || !list) return;
-
-        if (recycleAlerts.length === 0) {
-            panel.style.display = 'none';
-            return;
-        }
-
-        panel.style.display = 'block';
-        list.innerHTML = recycleAlerts.map(a =>
-            `<div class="d-flex justify-content-between align-items-center py-1 border-bottom">
-                <span><strong>${escapeHtml(a.ticker)}</strong> ${escapeHtml(a.option_type)} $${escapeHtml(a.strike)}</span>
-                <span class="badge bg-success">${escapeHtml(a.message)}</span>
-            </div>`
-        ).join('');
-    } catch (e) {
+    panel.style.display = 'block';
+    for (const position of ready) {
+        const row = document.createElement('div');
+        row.className = 'd-flex justify-content-between align-items-center py-1 border-bottom';
+        const contract = document.createElement('span');
+        const ticker = document.createElement('strong');
+        ticker.textContent = String(position.ticker || '');
+        contract.append(ticker, ` ${String(position.option_type || '')} $${String(position.strike ?? '')}`);
+        const badge = document.createElement('span');
+        badge.className = 'badge bg-success';
+        badge.textContent = `50% profit target reached (${Number(position.profit_target_progress).toFixed(0)}%)`;
+        row.append(contract, badge);
+        list.appendChild(row);
     }
 }
 
@@ -399,7 +395,6 @@ async function loadPortfolioData() {
         if (accountData) {
             updateAccountSummary();
             await loadPositionsTable();
-            loadRecycleReadyPositions();
         } else {
             updateUnavailableAccountState();
         }

@@ -2,6 +2,8 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 
+from core.utils import market_now
+
 from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.earnings")
@@ -135,7 +137,7 @@ class EarningsRepository:
             with pooled_connection(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                today = as_of if as_of is not None else datetime.now().date()
+                today = as_of if as_of is not None else market_now().date()
                 future_date = (today + timedelta(days=days_threshold)).strftime("%Y-%m-%d")
                 today_str = today.strftime("%Y-%m-%d")
 

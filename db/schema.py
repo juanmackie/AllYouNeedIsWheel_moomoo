@@ -4,7 +4,77 @@ from .sqlite_pool import pooled_connection
 
 logger = logging.getLogger("db.schema")
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
+
+
+def _create_v13_tables(cursor):
+    """Create durable wheel cycles and the shadow-ranking evidence tables."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_cycles (
+            cycle_id TEXT NOT NULL UNIQUE,
+            env TEXT NOT NULL DEFAULT '',
+            account_id TEXT NOT NULL DEFAULT '',
+            ticker TEXT NOT NULL,
+            state TEXT NOT NULL,
+            origin TEXT NOT NULL DEFAULT '',
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            shares REAL NOT NULL DEFAULT 0,
+            gross_basis_per_share REAL,
+            credits_net REAL NOT NULL DEFAULT 0,
+            open_credit REAL,
+            fees_known INTEGER NOT NULL DEFAULT 0,
+            completeness TEXT NOT NULL DEFAULT 'partial',
+            reasons_json TEXT NOT NULL DEFAULT '[]',
+            adjusted_basis_per_share REAL,
+            events_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wheel_cycles_identity_ticker ON wheel_cycles(env, account_id, ticker)"
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_cycles_state_updated ON wheel_cycles(state, updated_at)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS run_candidates (
+            candidate_id TEXT NOT NULL UNIQUE,
+            run_id TEXT NOT NULL,
+            env TEXT NOT NULL DEFAULT '',
+            account_id TEXT NOT NULL DEFAULT '',
+            ticker TEXT NOT NULL,
+            option_type TEXT NOT NULL,
+            strike REAL NOT NULL,
+            expiration TEXT NOT NULL,
+            dte INTEGER,
+            bid REAL,
+            stock_price REAL,
+            cash_required REAL,
+            quote_fetched_at_utc TEXT,
+            rank_position INTEGER,
+            candidate_json TEXT NOT NULL,
+            archived_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_run_candidates_run ON run_candidates(run_id, rank_position)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_run_candidates_expiry ON run_candidates(expiration, env, account_id)"
+    )
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS shadow_outcomes (
+            candidate_id TEXT NOT NULL UNIQUE,
+            settled_at TEXT,
+            expiry_close REAL,
+            settlement_source TEXT NOT NULL DEFAULT '',
+            net_per_share REAL,
+            outcome_label TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            outcome_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(candidate_id) REFERENCES run_candidates(candidate_id)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_shadow_outcomes_status ON shadow_outcomes(status, settled_at)")
 
 
 def create_tables(conn):
@@ -277,6 +347,8 @@ def create_tables(conn):
         CREATE INDEX IF NOT EXISTS idx_account_cash_flows_account_date
         ON account_cash_flows(env, account_id, clearing_date)
     """)
+
+    _create_v13_tables(cursor)
 
 
 def migrate_database(db_path):
@@ -612,6 +684,11 @@ def migrate_database(db_path):
                         logger.info("Migration: Adding strike to iv_history")
                         cursor.execute("ALTER TABLE iv_history ADD COLUMN strike REAL")
                 cursor.execute("PRAGMA user_version = 12")
+                conn.commit()
+
+            if current_version < 13:
+                _create_v13_tables(cursor)
+                cursor.execute("PRAGMA user_version = 13")
                 conn.commit()
 
             logger.info("Database migration completed successfully (schema version %s)", SCHEMA_VERSION)

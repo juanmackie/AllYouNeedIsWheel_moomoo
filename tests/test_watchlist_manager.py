@@ -34,24 +34,34 @@ class TestPreflightScanFeasibility(unittest.TestCase):
         self.mock_context.config = {}
         self.manager = WatchlistManager(self.mock_context)
 
+    def _market_time(self, value):
+        from datetime import datetime
+
+        return datetime.fromisoformat(value)
+
     def test_default_window_fits_27_symbol_union(self):
-        result = self.manager.preflight_scan_feasibility(27)
+        with patch("core.utils.market_now", return_value=self._market_time("2026-09-30T10:00:00-04:00")):
+            result = self.manager.preflight_scan_feasibility(27)
         self.assertTrue(result["feasible"], result)
         self.assertEqual(result["freshness_window_sec"], 300)
-        self.assertEqual(result["estimated_scan_sec"], 243.0)
+        self.assertEqual(result["estimated_scan_sec"], 162.0)
+        self.assertEqual(result["calls_per_symbol"], 2)
+        self.assertEqual(result["chain_calls"], 54)
         self.assertTrue(result["chain_quota_ok"])
 
     def test_explicit_config_override_is_respected(self):
         self.mock_context.config = {"max_tradeable_quote_age_sec": 120}
-        result = self.manager.preflight_scan_feasibility(27)
+        with patch("core.utils.market_now", return_value=self._market_time("2026-09-30T10:00:00-04:00")):
+            result = self.manager.preflight_scan_feasibility(27)
         self.assertFalse(result["feasible"])
         self.assertEqual(result["freshness_window_sec"], 120)
 
     def test_oversized_union_stays_infeasible(self):
         """Complete-union-or-planning still gates genuinely oversized lists."""
-        result = self.manager.preflight_scan_feasibility(60)
+        with patch("core.utils.market_now", return_value=self._market_time("2026-09-30T10:00:00-04:00")):
+            result = self.manager.preflight_scan_feasibility(60)
         self.assertFalse(result["feasible"])
-        self.assertEqual(result["estimated_scan_sec"], 540.0)
+        self.assertEqual(result["estimated_scan_sec"], 360.0)
 
     def test_configured_chain_quota_drives_estimate_and_capacity(self):
         self.mock_context.config = {
@@ -60,14 +70,24 @@ class TestPreflightScanFeasibility(unittest.TestCase):
             "chain_min_request_spacing_sec": 1.0,
         }
 
-        result = self.manager.preflight_scan_feasibility(27)
+        with patch("core.utils.market_now", return_value=self._market_time("2026-09-30T10:00:00-04:00")):
+            result = self.manager.preflight_scan_feasibility(27)
 
         self.assertTrue(result["feasible"], result)
-        self.assertEqual(result["estimated_scan_sec"], 81.0)
-        self.assertEqual(result["chain_calls"], 81)
+        self.assertEqual(result["estimated_scan_sec"], 54.0)
+        self.assertEqual(result["chain_calls"], 54)
         self.assertTrue(result["chain_quota_ok"])
         self.assertEqual(result["chain_rate_limit_max_requests"], 30)
         self.assertEqual(result["chain_min_request_spacing_sec"], 1.0)
+
+    def test_closed_session_uses_quota_only_budget(self):
+        self.mock_context.config = {"max_tradeable_quote_age_sec": 120}
+        with patch("core.utils.market_now", return_value=self._market_time("2026-09-30T20:00:00-04:00")):
+            result = self.manager.preflight_scan_feasibility(60)
+
+        self.assertTrue(result["feasible"])
+        self.assertFalse(result["open_session"])
+        self.assertEqual(result["chain_calls"], 120)
 
 
 class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
@@ -108,7 +128,6 @@ class TestWatchlistManagerGetEffectiveWatchlist(unittest.TestCase):
             "watchlist": ["AAPL"],
             "watchlist_mode": "dynamic",
             "screening_criteria": {
-                "min_volatility_pct": 3.0,
                 "min_volume": 1000000,
                 "max_stocks": 50,
             },

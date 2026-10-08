@@ -15,12 +15,14 @@ This service owns OpenD/error handling; the attribution math lives in pure
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from core.connection_constants import _infer_security_type_from_code, _parse_option_code_metadata
+from core.outcome_attribution import is_capital_movement_cash_flow
 from core.ticker_utils import parse_moomoo_symbol
-from core.utils import parse_position_qty
+from core.utils import market_now, parse_position_qty
 
 logger = logging.getLogger("api.services.fills")
 
@@ -86,7 +88,7 @@ def normalize_deal_row(row, env: str, opaque_account: str):
         "order_id": str(row.get("order_id", "") or ""),
         "run_id": "",
         "captured_at": str(row.get("create_time", "") or ""),
-        "ingested_at": datetime.now().isoformat(),
+        "ingested_at": market_now().isoformat(),
         "env": env or "",
         "account_id": opaque_account or "",
         "ticker": ticker,
@@ -124,7 +126,7 @@ class FillsService:
         except Exception as exc:
             return {"ok": False, "error": f"Account resolution failed: {exc}", "ingested": 0}
 
-        start = (datetime.now() - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
+        start = (market_now().date() - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
         ret_rows = self._connection.get_history_deals(start=start, end="")
         if ret_rows is None:
             error = getattr(self._connection, "last_error", "") or "history deal query failed"
@@ -138,6 +140,9 @@ class FillsService:
                 rows.append(normalized)
         inserted = self._db.save_fills(rows)
         fees_updated = self._backfill_fees(env, opaque_account)
+        setting_key = f"fill_history_window_start:{env}:{opaque_account}"
+        if not self._db.get_setting(setting_key):
+            self._db.set_setting(setting_key, start)
         logger.info(
             "Fill ingestion complete: %d deal row(s) seen, %d new, env=%s account=%s",
             len(ret_rows),
@@ -229,4 +234,17 @@ class FillsService:
                     }
                 )
         inserted = self._db.save_cash_flows(rows)
+        if inserted and any(is_capital_movement_cash_flow(row.get("flow_type"), row.get("remark", "")) for row in rows):
+            self._invalidate_goal_flow_attestation(env, opaque_account)
         return {"ok": True, "seen": len(rows), "ingested": inserted}
+
+    def _invalidate_goal_flow_attestation(self, env, account_id):
+        """New broker cash evidence requires the owner to review completeness again."""
+        key = f"goal_pace_config:{env}:{account_id}"
+        try:
+            stored = self._db.get_setting(key)
+            config = json.loads(stored) if stored else None
+            if isinstance(config, dict) and config.pop("cash_flow_attestation", None) is not None:
+                self._db.set_setting(key, json.dumps(config, sort_keys=True))
+        except (TypeError, ValueError):
+            logger.warning("Could not invalidate goal cash-flow confirmation after broker ingestion")

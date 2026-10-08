@@ -14,6 +14,7 @@ import StateModel from '../utils/state-model.js';
 
 const STATE_ID = 'outcome-state';
 const TOTALS_ID = 'outcome-totals';
+const WHEEL_CYCLES_ID = 'outcome-wheel-cycles';
 const RECORDS_ID = 'outcome-records';
 const RECORDS_COUNT_ID = 'outcome-records-count';
 const LINK_SUGGESTIONS_ID = 'outcome-link-suggestions';
@@ -51,6 +52,7 @@ function _optNum(value) {
 
 /** Signed currency with explicit +/−, for deltas like slippage / net P&L. */
 function _signedMoney(value) {
+  if (value == null || value === '') return '—';
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
@@ -99,6 +101,41 @@ function renderTotals(totals) {
     ['Avg slippage', Number.isFinite(avgSlippage) ? _signedMoney(avgSlippage) : '—'],
   ];
   for (const [label, value, extraClass = ''] of metrics) el.appendChild(metricCell(label, value, extraClass));
+}
+
+function renderWheelCycles(payload) {
+  const body = document.getElementById(WHEEL_CYCLES_ID);
+  if (!body) return;
+  body.replaceChildren();
+  const cycles = Array.isArray(payload?.outcomes) ? payload.outcomes : [];
+  if (cycles.length === 0) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 7;
+    cell.className = 'ft-td-center ft-td-mute';
+    cell.textContent = 'No wheel cycles recorded.';
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  for (const cycle of cycles) {
+    const row = document.createElement('tr');
+    const outcome = cycle.cycle_outcome || {};
+    const add = (value, className = '') => {
+      const cell = document.createElement('td');
+      cell.className = className;
+      cell.textContent = value == null || value === '' ? '—' : String(value);
+      row.appendChild(cell);
+    };
+    add(cycle.ticker || '—', 'ft-td-bold');
+    add(cycle.opened_at ? String(cycle.opened_at).replace('T', ' ').slice(0, 16) : '—');
+    add(cycle.state || '—');
+    add(outcome.status || 'unknown');
+    add(optionalCurrency(outcome.option_leg_net_pnl), 'ft-td-right');
+    add(optionalCurrency(outcome.share_leg_net_pnl), 'ft-td-right');
+    add(_signedMoney(outcome.net_pnl), 'ft-td-right');
+    body.appendChild(row);
+  }
 }
 
 function groupRow(group) {
@@ -474,6 +511,7 @@ export async function renderOutcomePanel() {
   }
 
   renderTotals(payload.totals);
+  renderWheelCycles(payload.wheel_cycles);
   renderGroups(payload.groups);
   renderLinkSuggestions(payload.link_suggestions);
   renderDteComparisons(payload.dte_comparisons);

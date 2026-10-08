@@ -8,6 +8,7 @@ import traceback
 from datetime import datetime, timedelta
 
 from core.ticker_utils import earnings_underlying_ticker
+from core.utils import market_now
 from core.utils import safe_float as _safe_float
 
 logger = logging.getLogger("api.services.portfolio")
@@ -247,6 +248,9 @@ class PortfolioService:
                     "security_type": pos_type,
                 }
 
+                if pos_type == "STK":
+                    position_data["can_sell_qty"] = pos.get("can_sell_qty")
+
                 if pos_type == "OPT":
                     position_data.update(
                         {
@@ -307,7 +311,7 @@ class PortfolioService:
                     "positions_count": 0,
                 }
 
-            today = datetime.now()
+            today = market_now().date()
             days_until_friday = (4 - today.weekday()) % 7
             this_friday = today + timedelta(days=days_until_friday)
             this_friday_str = this_friday.strftime("%Y%m%d")

@@ -5,10 +5,12 @@ Tests for api/services/options_data.py - OptionsDataService candidate handling.
 import os
 import sys
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+
+from core.utils import market_now
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -37,7 +39,7 @@ class TestAfterHoursChainFetch(unittest.TestCase):
         )
 
         self.assertEqual(result["chain_source"], "broker")
-        conn.get_option_chain.assert_called_once_with("AAPL", "20260918", "P", target_strike=90.0, force_refresh=True)
+        conn.get_option_chain.assert_called_once_with("AAPL", "20260918", "P", target_strike=90.0, force_refresh=False)
         db.get_latest_option_chain.assert_not_called()
         db.save_option_chain_snapshot.assert_called_once()
 
@@ -204,7 +206,7 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
     @patch("api.services.options_data.score_contract", return_value=None)
     def test_malformed_broker_iv_does_not_abort_candidate_scoring(self, mock_score):
         service = self._make_service()
-        expiration = (date.today() + timedelta(days=21)).strftime("%Y%m%d")
+        expiration = (market_now().date() + timedelta(days=21)).strftime("%Y%m%d")
         option = {
             "strike": 80.0,
             "expiration": expiration,
@@ -224,7 +226,7 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
 
     def test_below_basis_call_is_retained_only_for_recovery_analysis(self):
         service = self._make_service()
-        expiration = (date.today() + timedelta(days=21)).strftime("%Y%m%d")
+        expiration = (market_now().date() + timedelta(days=21)).strftime("%Y%m%d")
         option = {
             "strike": 95.0,
             "expiration": expiration,
@@ -424,10 +426,10 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         }
 
         expirations = [
-            (date.today() + timedelta(days=14)).strftime("%Y-%m-%d"),
-            (date.today() + timedelta(days=37)).strftime("%Y-%m-%d"),
-            (date.today() + timedelta(days=45)).strftime("%Y-%m-%d"),
-            (date.today() + timedelta(days=50)).strftime("%Y-%m-%d"),
+            (market_now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
+            (market_now().date() + timedelta(days=37)).strftime("%Y-%m-%d"),
+            (market_now().date() + timedelta(days=45)).strftime("%Y-%m-%d"),
+            (market_now().date() + timedelta(days=50)).strftime("%Y-%m-%d"),
         ]
         conn = MagicMock()
         conn.get_option_expiration_dates.return_value = (
@@ -457,7 +459,7 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
             "preferred_dte": 21,
         }
 
-        expiration = (date.today() + timedelta(days=14)).strftime("%Y%m%d")
+        expiration = (market_now().date() + timedelta(days=14)).strftime("%Y%m%d")
         conn = MagicMock()
         conn.get_option_expiration_dates.return_value = (
             RET_OK,

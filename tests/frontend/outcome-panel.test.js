@@ -18,6 +18,7 @@ function setupDOM() {
       <h3>21–45 DTE comparison</h3>
       <div id="outcome-dte-comparisons"></div>
       <div id="outcome-totals" class="outcome-totals-grid"></div>
+      <table><tbody id="outcome-wheel-cycles"></tbody></table>
       <div id="outcome-groups">
         <div class="outcome-group">
           <h3 class="outcome-group__title">By preset</h3>
@@ -92,6 +93,7 @@ function samplePayload() {
     },
     link_suggestions: [],
     dte_comparisons: [],
+    wheel_cycles: { sample_size: 0, measured_count: 0, unknown_count: 0, open_count: 0, net_dollars: null, outcomes: [] },
     outcomes: [
       {
         identity: 'NVDA|20260619|PUT|150',
@@ -196,6 +198,37 @@ describe('outcome-panel rendering', () => {
     expect(totals).toContain('Net outcome');
     expect(totals).toContain('$410.00');
     expect(totals).toContain('Capital-days');
+  });
+
+  it('renders measured wheel-cycle P&L and keeps unknown share results blank', async () => {
+    const payload = samplePayload();
+    payload.wheel_cycles = {
+      sample_size: 2,
+      measured_count: 1,
+      unknown_count: 1,
+      open_count: 0,
+      net_dollars: 298.8,
+      outcomes: [
+        {
+          ticker: 'SYN', opened_at: '2026-01-01T10:00:00-05:00', state: 'closed',
+          cycle_outcome: { status: 'measured', option_leg_net_pnl: 159.8, share_leg_net_pnl: 139, net_pnl: 298.8 },
+        },
+        {
+          ticker: 'UNK', opened_at: '2026-01-02T10:00:00-05:00', state: 'closed',
+          cycle_outcome: { status: 'unknown', reason: 'expiry_payoff_unverified', net_pnl: null },
+        },
+      ],
+    };
+    mockFetchOnce(payload);
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+
+    const rows = [...document.querySelectorAll('#outcome-wheel-cycles tr')];
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('SYN');
+    expect(rows[0].textContent).toContain('$298.80');
+    expect(rows[1].textContent).toContain('unknown');
+    expect([...rows[1].querySelectorAll('td')].slice(-3).map((cell) => cell.textContent)).toEqual(['—', '—', '—']);
   });
 
   it('shows em dash (never $0.00) for open/unknown net P&L, slippage and $/day', async () => {

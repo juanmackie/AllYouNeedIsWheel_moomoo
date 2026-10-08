@@ -6,20 +6,24 @@ option chains, watchlist groups). There is no order/unlock surface;
 readonly=False is rejected at construction (see core/broker_protocol.py).
 """
 
+import math
 import os
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 try:
     from moomoo import (
         RET_ERROR,
         RET_OK,
+        Currency,
         OpenQuoteContext,
         OptionDataFilter,
         OptionType,
+        OrderStatus,
+        OrderType,
         SecurityFirm,
         TrdEnv,
         UserSecurityGroupType,
@@ -33,8 +37,11 @@ except ImportError:
     TrdEnv = None
 
     OptionType = None
+    OrderStatus = None
+    OrderType = None
     UserSecurityGroupType = None
     OptionDataFilter = None
+    Currency = None
 
 from core.broker_protocol import FORBIDDEN_SDK_MEMBERS  # noqa: F401 - documented surface for tests
 from core.connection_constants import (
@@ -68,6 +75,27 @@ def _safe_str(value) -> str:
         return raw.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
 
 
+def _historical_volatility_result(window_sessions, reason):
+    return {
+        "status": "unavailable",
+        "source": "moomoo_adjusted_daily_close",
+        "window_sessions": max(int(window_sessions), 0),
+        "sample_sessions": 0,
+        "historical_volatility_pct": None,
+        "as_of_date": None,
+        "falling_knife": {
+            "status": "unavailable",
+            "decline_window_sessions": 20,
+            "moving_average_sessions": 50,
+            "decline_pct": None,
+            "moving_average_price": None,
+            "below_moving_average": None,
+            "flagged": None,
+        },
+        "reason": reason,
+    }
+
+
 def _is_rate_limit_response(value) -> bool:
     """Recognize provider responses that indicate frequency pressure."""
     text = _safe_str(value).lower()
@@ -97,7 +125,7 @@ def _select_buying_power_field(acc_row) -> tuple[float, str]:
     """Choose the Moomoo field that represents option cash power/capacity."""
     power_fields = (
         "usd_net_cash_power",
-        "max_power_short_sell",
+        "max_power_short",
         "power",
         "buying_power",
     )
@@ -117,7 +145,7 @@ def _cash_diagnostics_from_acc_row(acc_row) -> dict:
         "us_avl_withdrawal_cash",
         "us_cash",
         "usd_net_cash_power",
-        "max_power_short_sell",
+        "max_power_short",
         "power",
         "buying_power",
         "cash",
@@ -241,6 +269,8 @@ class MoomooConnection:
         self._connection_lock = threading.Lock()
         self._last_activity = None
         self._initialized = True
+        self._session_calendar = None
+        self._session_calendar_checked_at = 0.0
 
         self._rate_limiter = RateLimiter(
             max_requests_per_window=45, rate_limit_window=60, burst_threshold=20, burst_window=10
@@ -266,6 +296,8 @@ class MoomooConnection:
                     burst_window=chain_rate_limit_window_sec,
                 )
         self._ticker_cache = TickerCache(price_ttl=120, failed_ttl=300)
+        self._historical_volatility_cache = {}
+        self._historical_volatility_cache_lock = threading.Lock()
 
         # Quote caches + single-flight coordination live in dedicated modules.
         self._quote_cache = OptionChainCache(
@@ -598,6 +630,98 @@ class MoomooConnection:
             self._pending_requests.complete(request_key, None)
             return None
 
+    def get_price_snapshot(self, symbols):
+        """Return broker quote fields for requested Moomoo codes in batches.
+
+        The result is keyed by fully formatted Moomoo code (for example,
+        ``US.AAPL``). Missing codes and missing broker fields remain ``None``;
+        this method does not infer a security type or synthesize quote values.
+        """
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        requested = []
+        seen = set()
+        for symbol in symbols or []:
+            if not isinstance(symbol, str) or not symbol.strip():
+                continue
+            code = self._format_symbol(symbol.strip())
+            if code not in seen:
+                seen.add(code)
+                requested.append(code)
+
+        fields = (
+            "last_price",
+            "prev_close_price",
+            "highest52weeks_price",
+            "lowest52weeks_price",
+            "dividend_ttm",
+            "update_time",
+            "security_type",
+        )
+        unknown = dict.fromkeys(fields)
+        result = {code: unknown.copy() for code in requested}
+        if not requested:
+            return result
+
+        try:
+            if not self._ensure_quote_context():
+                return result
+
+            for offset in range(0, len(requested), 400):
+                batch = requested[offset : offset + 400]
+                self._rate_limiter.check_rate_limit()
+                ret, data = self.quote_ctx.get_market_snapshot(batch)
+                if ret != RET_OK or data is None or getattr(data, "empty", True):
+                    continue
+
+                for _, row in data.iterrows():
+                    code = row.get("code")
+                    if not isinstance(code, str) or code not in result:
+                        continue
+
+                    snapshot = {}
+                    for field in fields[:-1]:
+                        try:
+                            parsed = safe_float(row.get(field), default=None)
+                            snapshot[field] = parsed if parsed is not None and math.isfinite(parsed) else None
+                        except (TypeError, ValueError):
+                            snapshot[field] = None
+                    update_time = row.get("update_time")
+                    if isinstance(update_time, str):
+                        snapshot["update_time"] = update_time.strip() or None
+                    elif update_time is None:
+                        snapshot["update_time"] = None
+                    else:
+                        try:
+                            snapshot["update_time"] = None if update_time != update_time else str(update_time)
+                        except (TypeError, ValueError):
+                            snapshot["update_time"] = None
+                    broker_type = next(
+                        (
+                            str(row.get(name) or "").strip().lower()
+                            for name in ("stock_type", "security_type", "sec_type", "stock_class")
+                            if str(row.get(name) or "").strip()
+                        ),
+                        "",
+                    )
+                    if broker_type in {"etf", "ie", "exchange_traded_fund"}:
+                        snapshot["security_type"] = "etf"
+                    elif broker_type in {"index", "idx", "ind"}:
+                        snapshot["security_type"] = "index"
+                    elif broker_type in {"stock", "equity"}:
+                        snapshot["security_type"] = "stock"
+                    else:
+                        snapshot["security_type"] = None
+
+                    result[code] = snapshot
+                    last_price = snapshot["last_price"]
+                    if last_price is not None and last_price > 0:
+                        self._cache_stock_price(code, last_price)
+        except Exception as exc:
+            logger.error("Error getting price snapshot for %s: %s", requested, str(exc))
+
+        return result
+
     def _ensure_quote_context(self):
         if self.quote_ctx is not None and self.is_connected():
             return True
@@ -618,40 +742,39 @@ class MoomooConnection:
             logger.error(f"Error getting market snapshot for {symbols}: {str(e)}")
             return RET_ERROR, None
 
-    def get_capital_distribution(self, symbol):
-        symbol = self._format_symbol(symbol)
-        try:
-            self._rate_limiter.check_rate_limit()
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            return self.quote_ctx.get_capital_distribution(symbol)
-        except Exception as e:
-            logger.error(f"Error getting capital distribution for {symbol}: {str(e)}")
-            return RET_ERROR, None
+    def get_session_calendar(self):
+        """Return a cached US session calendar, with a labeled weekday fallback."""
+        from core.session_clock import MARKET_TIMEZONE, SessionCalendar
 
-    def get_capital_flow(self, symbol, period_type=None, start=None, end=None):
-        symbol = self._format_symbol(symbol)
+        now = datetime.now(MARKET_TIMEZONE)
+        if self._session_calendar is not None and time.time() - self._session_calendar_checked_at < 86400:
+            return self._session_calendar
+        fallback = SessionCalendar.weekday_fallback()
         try:
-            self._rate_limiter.check_rate_limit()
             if not self._ensure_quote_context():
-                return RET_ERROR, None
-            if period_type is None:
-                return self.quote_ctx.get_capital_flow(symbol, start=start, end=end)
-            return self.quote_ctx.get_capital_flow(symbol, period_type=period_type, start=start, end=end)
-        except Exception as e:
-            logger.error(f"Error getting capital flow for {symbol}: {str(e)}")
-            return RET_ERROR, None
-
-    def get_broker_queue(self, symbol):
-        symbol = self._format_symbol(symbol)
-        try:
+                self._session_calendar = fallback
+                self._session_calendar_checked_at = time.time()
+                return fallback
+            start = (now.date() - timedelta(days=14)).isoformat()
+            end = (now.date() + timedelta(days=370)).isoformat()
             self._rate_limiter.check_rate_limit()
-            if not self._ensure_quote_context():
-                return RET_ERROR, None, None
-            return self.quote_ctx.get_broker_queue(symbol)
-        except Exception as e:
-            logger.error(f"Error getting broker queue for {symbol}: {str(e)}")
-            return RET_ERROR, None, None
+            ret, data = self.quote_ctx.request_trading_days(market="US", start=start, end=end)
+            if ret == RET_OK and data is not None:
+                rows = [] if getattr(data, "empty", True) else data.to_dict("records")
+                calendar = SessionCalendar.from_trading_days(rows)
+                if calendar.trading_days:
+                    self._session_calendar = calendar
+                    self._session_calendar_checked_at = time.time()
+                    if hasattr(self, "_quote_cache"):
+                        self._quote_cache.session_calendar = calendar
+                    return calendar
+        except Exception as exc:
+            logger.debug("OpenD trading-day calendar unavailable: %s", exc)
+        self._session_calendar = fallback
+        self._session_calendar_checked_at = time.time()
+        if hasattr(self, "_quote_cache"):
+            self._quote_cache.session_calendar = fallback
+        return fallback
 
     def get_history_kline(
         self,
@@ -692,32 +815,123 @@ class MoomooConnection:
             logger.error(f"Error getting history kline for {symbol}: {str(e)}")
             return RET_ERROR, None, None
 
-    def get_cur_kline(self, symbol, num, ktype=None, autype=None):
-        symbol = self._format_symbol(symbol)
+    def get_history_kl_quota(self, get_detail=False):
+        """Return OpenD's historical-K-line quota summary (query-only)."""
         try:
             self._rate_limiter.check_rate_limit()
             if not self._ensure_quote_context():
                 return RET_ERROR, None
-            kwargs = {"code": symbol, "num": num}
-            if ktype is not None:
-                kwargs["ktype"] = ktype
-            if autype is not None:
-                kwargs["autype"] = autype
-            return self.quote_ctx.get_cur_kline(**kwargs)
+            return self.quote_ctx.get_history_kl_quota(get_detail=get_detail)
         except Exception as e:
-            logger.error(f"Error getting current kline for {symbol}: {str(e)}")
+            logger.error(f"Error getting historical K-line quota: {str(e)}")
             return RET_ERROR, None
 
-    def get_owner_plate(self, symbol):
-        symbol = self._format_symbol(symbol)
+    def get_historical_volatility(self, symbol, window_sessions=20):
+        """Return cached, Moomoo-close-derived annualized volatility for a US symbol.
+
+        The latest daily bar is included only after that session's regular close.
+        Missing quota, bars, or a complete return window remain unavailable.
+        """
+        from core.historical_volatility import annualized_historical_volatility, falling_knife_diagnostic
+        from core.utils import market_now
+
         try:
-            self._rate_limiter.check_rate_limit()
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            return self.quote_ctx.get_owner_plate([symbol])
-        except Exception as e:
-            logger.error(f"Error getting owner plate for {symbol}: {str(e)}")
-            return RET_ERROR, None
+            window = int(window_sessions)
+        except (TypeError, ValueError):
+            window = 0
+        code = self._format_symbol(symbol)
+        if window < 2 or window > 100 or not code.startswith("US."):
+            return _historical_volatility_result(window, reason="invalid_request")
+
+        cache_key = (code, window)
+        now_epoch = time.time()
+        with self._historical_volatility_cache_lock:
+            cached = self._historical_volatility_cache.get(cache_key)
+            if cached and now_epoch - cached["cached_at"] < cached["ttl"]:
+                return dict(cached["result"])
+
+        request_key = f"historical_volatility:{code}:{window}"
+        pending = self._pending_requests.wait_for(request_key)
+        if isinstance(pending, dict):
+            return dict(pending)
+
+        result = _historical_volatility_result(window, reason="provider_unavailable")
+        try:
+            quota = self.get_history_kl_quota()
+            if not isinstance(quota, tuple) or len(quota) < 2 or quota[0] != RET_OK:
+                result = _historical_volatility_result(window, reason="history_quota_unverified")
+            elif not isinstance(quota[1], tuple) or len(quota[1]) < 2:
+                result = _historical_volatility_result(window, reason="history_quota_unverified")
+            else:
+                try:
+                    remaining = int(quota[1][1])
+                except (TypeError, ValueError):
+                    remaining = -1
+                if remaining == 0:
+                    result = _historical_volatility_result(window, reason="history_quota_exhausted")
+                elif remaining < 0:
+                    result = _historical_volatility_result(window, reason="history_quota_unverified")
+                else:
+                    try:
+                        from moomoo import KL_FIELD, AuType, KLType
+                    except ImportError:
+                        result = _historical_volatility_result(window, reason="sdk_unavailable")
+                    else:
+                        ret, data, _page_req_key = self.get_history_kline(
+                            code,
+                            ktype=KLType.K_DAY,
+                            autype=AuType.QFQ,
+                            fields=[KL_FIELD.CLOSE],
+                            max_count=max(window + 2, 52),
+                        )
+                        if ret == RET_OK and data is not None and not getattr(data, "empty", True):
+                            rows = data.to_dict("records") if hasattr(data, "to_dict") else []
+                            today = market_now().date()
+                            calendar = self.get_session_calendar()
+                            last_close = calendar.last_regular_close(market_now())
+                            include_today = last_close is not None and last_close.date() == today
+                            closes_by_date = {}
+                            for row in rows:
+                                try:
+                                    session_date = datetime.strptime(
+                                        str(row.get("time_key", ""))[:10], "%Y-%m-%d"
+                                    ).date()
+                                    close = safe_float(row.get("close"), default=None)
+                                except (TypeError, ValueError):
+                                    continue
+                                if close is None or (session_date == today and not include_today):
+                                    continue
+                                if session_date <= today:
+                                    closes_by_date[session_date] = close
+                            ordered = sorted(closes_by_date.items())
+                            closes = [close for _, close in ordered]
+                            hv = annualized_historical_volatility(closes, window)
+                            falling_knife = falling_knife_diagnostic(closes)
+                            if hv is not None:
+                                result = {
+                                    "status": "available",
+                                    "source": "moomoo_adjusted_daily_close",
+                                    "window_sessions": window,
+                                    "sample_sessions": window,
+                                    "historical_volatility_pct": round(hv, 2),
+                                    "as_of_date": ordered[-1][0].isoformat(),
+                                    "falling_knife": falling_knife,
+                                    "reason": None,
+                                }
+                            else:
+                                result = _historical_volatility_result(window, reason="insufficient_history")
+        except Exception as exc:
+            logger.debug("Moomoo historical-volatility diagnostic unavailable for %s: %s", code, exc)
+        finally:
+            ttl = 86400 if result["status"] == "available" else 300
+            with self._historical_volatility_cache_lock:
+                self._historical_volatility_cache[cache_key] = {
+                    "cached_at": time.time(),
+                    "ttl": ttl,
+                    "result": dict(result),
+                }
+            self._pending_requests.complete(request_key, result)
+        return result
 
     def get_option_chain(
         self, symbol, expiration=None, right="C", target_strike=None, data_filter=None, force_refresh=False
@@ -841,6 +1055,128 @@ class MoomooConnection:
             self._pending_requests.complete(request_key, None)
             return None
 
+    def get_option_chain_range(self, symbol, right, start, end, band):
+        """Fetch option quotes for a bounded date and strike range.
+
+        This performs one chain query and one snapshot for the selected option
+        codes. More than the broker's 400-code snapshot limit fails closed; no
+        contracts are silently truncated.
+        """
+        symbol = self._format_symbol(symbol)
+        right = str(right or "P").upper()
+        if right not in {"P", "C"} or not isinstance(band, dict):
+            return None
+        cached_range = self._quote_cache.get_option_chain_range(symbol, right, start, end, band)
+        if cached_range is not None:
+            return cached_range
+        try:
+            min_strike = float(band.get("min_strike"))
+            max_strike = float(band.get("max_strike"))
+            if min_strike <= 0 or max_strike < min_strike:
+                return {"symbol": symbol.split(".")[-1], "right": right, "options": []}
+            self._option_chain_rate_limiter.check_rate_limit()
+            if not self.is_connected() and not self.connect():
+                return None
+            opt_type = OptionType.PUT if right == "P" else OptionType.CALL
+            self._acquire_option_chain_gate(f"range:{symbol}:{right}:{start}:{end}")
+            try:
+                ret, data = self.quote_ctx.get_option_chain(
+                    code=symbol,
+                    start=str(start),
+                    end=str(end),
+                    option_type=opt_type,
+                )
+            finally:
+                MoomooConnection._option_chain_gate.release()
+            if ret != RET_OK or data is None:
+                return None
+            if data.empty:
+                result = {"symbol": symbol.split(".")[-1], "right": right, "options": []}
+                self._quote_cache.cache_option_chain_range(symbol, right, start, end, band, result)
+                return result
+
+            strike_field = "strike_price" if "strike_price" in data.columns else "option_strike_price"
+            if strike_field not in data.columns or "code" not in data.columns:
+                return None
+            data = data.copy()
+            data[strike_field] = data[strike_field].apply(lambda value: safe_float(value, default=None))
+            data = data[
+                data[strike_field].notna() & (data[strike_field] >= min_strike) & (data[strike_field] <= max_strike)
+            ]
+            option_codes = list(dict.fromkeys(str(code) for code in data["code"].tolist() if code))
+            if len(option_codes) > 400:
+                logger.warning("Range chain for %s selected %d codes (snapshot cap 400)", symbol, len(option_codes))
+                return None
+            if not option_codes:
+                result = {"symbol": symbol.split(".")[-1], "right": right, "options": []}
+                self._quote_cache.cache_option_chain_range(symbol, right, start, end, band, result)
+                return result
+
+            self._rate_limiter.check_rate_limit()
+            ret, snap_data = self.quote_ctx.get_market_snapshot(option_codes)
+            if ret != RET_OK or snap_data is None:
+                return None
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            options = []
+            for _, row in snap_data.iterrows():
+                expiration = (
+                    row.get("option_expiry_date", "") or row.get("strike_time", "") or row.get("strike_date", "")
+                )
+                expiration = str(expiration).replace("-", "")
+                if len(expiration) != 8:
+                    continue
+                options.append(
+                    {
+                        "strike": safe_float(row.get("option_strike_price"), default=None),
+                        "expiration": expiration,
+                        "option_type": "CALL" if row.get("option_type") == "CALL" else "PUT",
+                        "bid": safe_float(row.get("bid_price"), default=0),
+                        "ask": safe_float(row.get("ask_price"), default=0),
+                        "last": safe_float(row.get("last_price"), default=0),
+                        "volume": int(safe_float(row.get("volume"), default=0) or 0),
+                        "open_interest": int(
+                            safe_float(row.get("option_open_interest", row.get("open_interest")), default=0) or 0
+                        ),
+                        "implied_volatility": _normalize_iv(row.get("option_implied_volatility", 0)),
+                        "delta": safe_float(row.get("option_delta"), default=0),
+                        "gamma": safe_float(row.get("option_gamma"), default=0),
+                        "theta": safe_float(row.get("option_theta"), default=0),
+                        "vega": safe_float(row.get("option_vega"), default=0),
+                        "update_time": str(row.get("update_time", "") or ""),
+                        "quote_fetched_at_utc": fetched_at,
+                    }
+                )
+
+            grouped = {}
+            for option in options:
+                grouped.setdefault(option["expiration"], []).append(option)
+            for expiration, expiry_options in grouped.items():
+                self._quote_cache.cache_option_chain(
+                    symbol,
+                    expiration,
+                    right,
+                    {
+                        "symbol": symbol.split(".")[-1],
+                        "expiration": expiration,
+                        "stock_price": None,
+                        "right": right,
+                        "options": expiry_options,
+                    },
+                )
+            result = {
+                "symbol": symbol.split(".")[-1],
+                "right": right,
+                "options": options,
+                "quote_fetched_at_utc": fetched_at,
+            }
+            self._quote_cache.cache_option_chain_range(symbol, right, start, end, band, result)
+            return result
+        except Exception as exc:
+            if _is_rate_limit_response(exc):
+                self._option_chain_rate_limiter.record_rate_limit(_safe_str(exc))
+            logger.error("Error retrieving option chain range for %s: %s", symbol, _safe_str(exc))
+            return None
+
     def get_portfolio(self):
         if not self.is_connected():
             if not self.connect():
@@ -848,7 +1184,11 @@ class MoomooConnection:
 
         try:
             trd_env, account_id = self._resolve_portfolio_account()
-            ret, acc_data = self.trd_ctx.accinfo_query(trd_env=trd_env, acc_id=self._account_id_arg(account_id))
+            ret, acc_data = self.trd_ctx.accinfo_query(
+                trd_env=trd_env,
+                acc_id=self._account_id_arg(account_id),
+                currency=Currency.USD if Currency is not None else "USD",
+            )
             if ret != RET_OK:
                 self.last_error = self._format_trade_error("get account info", acc_data, trd_env, account_id)
                 logger.error(self.last_error)
@@ -895,7 +1235,12 @@ class MoomooConnection:
             }
 
             ret, pos_data = self.trd_ctx.position_list_query(trd_env=trd_env, acc_id=self._account_id_arg(account_id))
-            if ret == RET_OK and not pos_data.empty:
+            if ret != RET_OK or pos_data is None:
+                self.last_error = self._format_trade_error("position list query", pos_data, trd_env, account_id)
+                logger.error(self.last_error)
+                return None
+
+            if not pos_data.empty:
                 position_types = pos_data["code"].apply(_infer_security_type_from_code)
                 option_positions = pos_data[position_types == "OPT"]
                 if not option_positions.empty:
@@ -916,6 +1261,7 @@ class MoomooConnection:
                     pos_key = symbol
                     pos_details = {
                         "shares": safe_float(pos.get("qty", 0)),
+                        "can_sell_qty": safe_float(pos.get("can_sell_qty"), None),
                         "avg_cost": safe_float(pos.get("average_cost", pos.get("cost_price", 0))),
                         "market_price": safe_float(pos.get("nominal_price", pos.get("last_price", 0))),
                         "market_value": safe_float(pos.get("market_val", 0)),
@@ -1071,6 +1417,94 @@ class MoomooConnection:
             logger.debug(traceback.format_exc())
             return None
 
+    def get_open_orders(self):
+        """Return active account orders without order IDs or other private fields.
+
+        A successful empty result is ``[]``; ``None`` means OpenD could not
+        establish the account's open-order state. Only rows with a positive
+        remaining quantity and an active status are returned.
+        """
+        if not self.is_connected() and not self.connect():
+            return None
+        active_statuses = (
+            "WAITING_SUBMIT",
+            "SUBMITTING",
+            "SUBMITTED",
+            "FILLED_PART",
+            "CANCELLING_PART",
+            "CANCELLING_ALL",
+        )
+        try:
+            self._rate_limiter.check_rate_limit()
+            trd_env, account_id = self._resolve_portfolio_account()
+            statuses = [getattr(OrderStatus, name, name) for name in active_statuses]
+            ret, data = self.trd_ctx.order_list_query(
+                status_filter_list=statuses,
+                trd_env=trd_env,
+                acc_id=self._account_id_arg(account_id),
+            )
+            if ret != RET_OK or data is None:
+                self.last_error = "OpenD open-order query is unavailable for the configured account."
+                return None
+            rows = [] if getattr(data, "empty", True) else data.to_dict("records")
+            result = []
+            for row in rows:
+                status = str(row.get("order_status", row.get("status", "")) or "").upper()
+                qty = safe_float(row.get("qty"), default=None)
+                dealt = safe_float(row.get("dealt_qty"), default=0.0)
+                remaining = None if qty is None else max(qty - (dealt or 0.0), 0.0)
+                if status not in active_statuses or remaining is None or remaining <= 0:
+                    continue
+                result.append(
+                    {
+                        "code": str(row.get("code", "") or ""),
+                        "status": status,
+                        "remaining_qty": remaining,
+                        "trd_side": str(row.get("trd_side", "") or "").upper(),
+                    }
+                )
+            return result
+        except Exception as exc:
+            self.last_error = "OpenD open-order query is unavailable for the configured account."
+            logger.warning("OpenD open-order query unavailable (%s)", type(exc).__name__)
+            return None
+
+    def get_max_sellable_info(self, code, price):
+        """Query Moomoo sell-capacity diagnostics for one security.
+
+        This is display-only evidence; it never controls eligibility or
+        quantity. Unknown fields remain ``None`` instead of being treated as
+        zero. Callers should bound this to the visible shortlist.
+        """
+        code = self._format_symbol(code)
+        try:
+            quote = safe_float(price, default=None)
+            if not code or quote is None or quote <= 0:
+                return None
+            if not self.is_connected() and not self.connect():
+                return None
+            self._rate_limiter.check_rate_limit()
+            trd_env, account_id = self._resolve_portfolio_account()
+            ret, data = self.trd_ctx.acctradinginfo_query(
+                order_type=OrderType.NORMAL if OrderType is not None else "NORMAL",
+                code=code,
+                price=quote,
+                trd_env=trd_env,
+                acc_id=self._account_id_arg(account_id),
+            )
+            if ret != RET_OK or data is None or getattr(data, "empty", True):
+                self.last_error = "OpenD sell-capacity query is unavailable for the configured account."
+                return None
+            row = data.iloc[0]
+            return {
+                field: safe_float(row.get(field), default=None)
+                for field in ("max_position_sell", "max_sell_short", "max_buy_back")
+            }
+        except Exception as exc:
+            self.last_error = "OpenD sell-capacity query is unavailable for the configured account."
+            logger.warning("OpenD sell-capacity query unavailable (%s)", type(exc).__name__)
+            return None
+
     def get_user_security_group(self, group_type=None):
         try:
             self._rate_limiter.check_rate_limit()
@@ -1093,219 +1527,5 @@ class MoomooConnection:
             return self.quote_ctx.get_user_security(group_name)
         except Exception as e:
             logger.error(f"Error getting securities for group '{group_name}': {e}")
-            logger.debug(traceback.format_exc())
-            return RET_ERROR, None
-
-    @staticmethod
-    def _normalize_security_type_row(row):
-        """Normalize only broker-provided underlying classification."""
-        for field in ("stock_type", "security_type", "sec_type", "stock_class"):
-            value = str(row.get(field, "") or "").strip().lower()
-            if value in ("etf", "ie", "exchange_traded_fund"):
-                return "etf"
-            if value in ("index", "idx", "ind"):
-                return "index"
-        name = str(row.get("name", "") or "").lower()
-        if "etf" in name or name.endswith(" etf"):
-            return "etf"
-        return "stock"
-
-    def get_security_types(self, symbols):
-        """Return broker-verified underlying types for symbols in one snapshot."""
-        requested = [self._format_symbol(symbol) for symbol in (symbols or []) if symbol]
-        if not requested:
-            return {}
-        try:
-            if not self._ensure_quote_context():
-                return {symbol.split(".")[-1]: "stock" for symbol in requested}
-            ret, data = self.quote_ctx.get_market_snapshot(requested)
-            if ret != RET_OK or data is None or getattr(data, "empty", True):
-                return {symbol.split(".")[-1]: "stock" for symbol in requested}
-            result = {symbol.split(".")[-1]: "stock" for symbol in requested}
-            for _, row in data.iterrows():
-                code = str(row.get("code", "") or row.get("symbol", "") or "")
-                if code:
-                    result[code.split(".")[-1]] = self._normalize_security_type_row(row)
-            return result
-        except Exception as exc:
-            logger.debug("get_security_types failed: %s", exc)
-            return {symbol.split(".")[-1]: "stock" for symbol in requested}
-
-    def get_security_type(self, symbol):
-        """Return one broker-verified underlying type."""
-        normalized = self._format_symbol(symbol).split(".")[-1]
-        return self.get_security_types([symbol]).get(normalized, "stock")
-
-    def query_subscription(self, is_all_conn=True):
-        try:
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            return self.quote_ctx.query_subscription(is_all_conn=is_all_conn)
-        except Exception as e:
-            logger.error(f"Error querying subscription: {e}")
-            logger.debug(traceback.format_exc())
-            return RET_ERROR, None
-
-    @staticmethod
-    def _get_sdk_version():
-        try:
-            import moomoo as _m
-
-            return getattr(_m, "__version__", "unknown")
-        except Exception:
-            return "N/A"
-
-    def get_opend_diagnostics(self):
-        sdk_version = self._get_sdk_version()
-        if not self._ensure_quote_context():
-            return {
-                "connected": False,
-                "sdk_available": OpenQuoteContext is not None,
-                "sdk_version": sdk_version,
-                "security_firm": str(self.security_firm) if self.security_firm else "N/A",
-                "portfolio_env": _env_name(self.portfolio_env),
-                "readonly": self.readonly,
-            }
-        try:
-            ret, sub_data = self.query_subscription()
-            sub_info = None
-            if ret == RET_OK and sub_data is not None:
-                sub_info = {
-                    "total_used": int(sub_data.get("total_used", 0)),
-                    "remain": int(sub_data.get("remain", 0)),
-                    "own_used": int(sub_data.get("own_used", 0)),
-                }
-            return {
-                "connected": True,
-                "sdk_available": True,
-                "sdk_version": sdk_version,
-                "security_firm": str(self.security_firm) if self.security_firm else "N/A",
-                "portfolio_env": _env_name(self.portfolio_env),
-                "readonly": self.readonly,
-                "subscription": sub_info,
-                "option_data_filter_available": OptionDataFilter is not None,
-                "host": self.host,
-                "port": self.port,
-            }
-        except Exception as e:
-            logger.error(f"Error getting OpenD diagnostics: {e}")
-            logger.debug(traceback.format_exc())
-            return {
-                "connected": True,
-                "sdk_available": OpenQuoteContext is not None,
-                "sdk_version": sdk_version,
-                "error": str(e),
-            }
-
-    def create_option_contract(self, symbol, expiry, strike, option_type):
-        symbol = self._format_symbol(symbol)
-        opt_type = OptionType.CALL if option_type.upper() in ["C", "CALL"] else OptionType.PUT
-
-        moomoo_expiry = f"{expiry[0:4]}-{expiry[4:6]}-{expiry[6:8]}" if len(expiry) == 8 else expiry
-
-        ret, data = self.quote_ctx.get_option_chain(
-            code=symbol, start=moomoo_expiry, end=moomoo_expiry, option_type=opt_type
-        )
-        if ret == RET_OK:
-            match = data[data["strike_price"] == float(strike)]
-            if not match.empty:
-                return match.iloc[0]["code"]
-
-        return None
-
-    def get_option_volatility(self, code, query_time_period=None, hv_time_period=None):
-        try:
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            kwargs = {}
-            if query_time_period is not None:
-                kwargs["query_time_period"] = query_time_period
-            if hv_time_period is not None:
-                kwargs["hv_time_period"] = hv_time_period
-            return self.quote_ctx.get_option_volatility(code, **kwargs)
-        except AttributeError:
-            logger.warning("get_option_volatility not available in this SDK version (requires upgrade)")
-            return RET_ERROR, None
-        except Exception as e:
-            logger.error(f"Error getting option volatility: {e}")
-            logger.debug(traceback.format_exc())
-            return RET_ERROR, None
-
-    def get_option_exercise_probability(self, code):
-        try:
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            return self.quote_ctx.get_option_exercise_probability(code)
-        except AttributeError:
-            logger.warning("get_option_exercise_probability not available in this SDK version (requires upgrade)")
-            return RET_ERROR, None
-        except Exception as e:
-            logger.error(f"Error getting exercise probability: {e}")
-            logger.debug(traceback.format_exc())
-            return RET_ERROR, None
-
-    def get_option_screen(self, screen_request):
-        try:
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            return self.quote_ctx.get_option_screen(screen_request)
-        except AttributeError:
-            logger.warning("get_option_screen not available in this SDK version (requires upgrade)")
-            return RET_ERROR, None
-        except Exception as e:
-            logger.error(f"Error running option screen: {e}")
-            logger.debug(traceback.format_exc())
-            return RET_ERROR, None
-
-    def get_short_interest(self, code, next_key=None, num=None):
-        try:
-            if not self._ensure_quote_context():
-                return RET_ERROR, None, None
-            kwargs = {}
-            if next_key is not None:
-                kwargs["next_key"] = next_key
-            if num is not None:
-                kwargs["num"] = num
-            return self.quote_ctx.get_short_interest(code, **kwargs)
-        except AttributeError:
-            logger.warning("get_short_interest not available in this SDK version (requires upgrade)")
-            return RET_ERROR, None, None
-        except Exception as e:
-            logger.error(f"Error getting short interest: {e}")
-            logger.debug(traceback.format_exc())
-            return RET_ERROR, None, None
-
-    def get_financials_earnings_price_move(self, code, period_count=None):
-        try:
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            kwargs = {}
-            if period_count is not None:
-                kwargs["period_count"] = period_count
-            return self.quote_ctx.get_financials_earnings_price_move(code, **kwargs)
-        except AttributeError:
-            logger.warning("get_financials_earnings_price_move not available in this SDK version (requires upgrade)")
-            return RET_ERROR, None
-        except Exception as e:
-            logger.error(f"Error getting earnings price move: {e}")
-            logger.debug(traceback.format_exc())
-            return RET_ERROR, None
-
-    def get_financials_earnings_price_history(self, code):
-        try:
-            if not self._ensure_quote_context():
-                return RET_ERROR, None
-            api = getattr(self.quote_ctx, "get_financials_earnings_price_history", None)
-            if not callable(api):
-                logger.warning(
-                    "get_financials_earnings_price_history not available in this SDK version (requires upgrade)"
-                )
-                return RET_ERROR, None
-            return api(code)
-        except AttributeError:
-            logger.warning("get_financials_earnings_price_history not available in this SDK version (requires upgrade)")
-            return RET_ERROR, None
-        except Exception as e:
-            logger.error(f"Error getting earnings price history: {e}")
             logger.debug(traceback.format_exc())
             return RET_ERROR, None

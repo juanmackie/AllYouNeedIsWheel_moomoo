@@ -11,7 +11,9 @@ from .fills_repository import CashFlowRepository, FillsRepository
 from .iv_repository import IVRepository
 from .option_chain_repository import OptionChainRepository
 from .portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from .run_candidates_repository import RunCandidatesRepository
 from .schema import create_tables, migrate_database
+from .shadow_outcomes_repository import ShadowOutcomesRepository
 from .sqlite_pool import (
     get_connection_pool_stats,
     pooled_connection,
@@ -19,18 +21,17 @@ from .sqlite_pool import (
     release_pool_handle,
 )
 from .trade_events_repository import TradeEventsRepository
+from .wheel_cycles_repository import WheelCyclesRepository
 
 logger = logging.getLogger("db.database")
 
 
 DEFAULT_RETENTION_DAYS = {
     "option_chain_snapshots": ("as_of", 14),
-    "run_metadata": ("published_at", 365),
+    "run_metadata": ("published_at", 1200),
     "refresh_attempts": ("created_at", 365),
-    "portfolio_snapshots": ("captured_at", 365),
-    "trade_events": ("timestamp", 365),
-    "option_fills": ("captured_at", 365),
-    "account_cash_flows": ("clearing_date", 365),
+    "portfolio_snapshots": ("captured_at", 1200),
+    "trade_events": ("timestamp", 1200),
     "scan_ledger": ("timestamp", 365),
     # IV rank/percentile read a 1-year window. The previous 45-day cap made that
     # window unreachable and silently truncated history on every DB init.
@@ -61,6 +62,9 @@ class OptionsDatabase:
         self._cash_flows = CashFlowRepository(self.db_path)
         self._option_chains = OptionChainRepository(self.db_path)
         self._portfolio_snapshots = PortfolioSnapshotsRepository(self.db_path)
+        self._wheel_cycles = WheelCyclesRepository(self.db_path)
+        self._run_candidates = RunCandidatesRepository(self.db_path)
+        self._shadow_outcomes = ShadowOutcomesRepository(self.db_path)
 
         self.prune_retained_data()
         logger.info("OptionsDatabase initialized at %s", self.db_path)
@@ -77,8 +81,9 @@ class OptionsDatabase:
 
         Retention is deliberately explicit and bounded: option-chain payloads are
         short-lived evidence, while run/portfolio/trade history remains available
-        for the growth cockpit for one year. Failures are raised so startup or a
-        publish path cannot silently claim cleanup occurred when it did not.
+        for the three-year goal horizon. Broker fills and account cash flows are
+        durable ledger evidence and are exempt from automatic pruning. Failures
+        are raised so startup or publish cannot silently claim cleanup occurred.
         """
         policies = dict(DEFAULT_RETENTION_DAYS)
         if retention_days:
@@ -188,6 +193,8 @@ class OptionsDatabase:
                 logging.getLogger("db.database").warning(
                     "Run %s already published; snapshot left immutable", run.run_id
                 )
+            elif snapshot.candidate_archive:
+                self._run_candidates.archive_in_transaction(conn, run, snapshot.candidate_archive, per_ticker_cap=10)
             conn.commit()
         return run.run_id
 
@@ -241,6 +248,15 @@ class OptionsDatabase:
                 if isinstance(parsed, dict):
                     snapshots.append(parsed)
         return snapshots
+
+    def get_run_candidates(self, env=None, account_id=None, expiration=None, limit=10000):
+        return self._run_candidates.get_candidates(env, account_id, expiration, limit)
+
+    def get_shadow_candidates(self, env=None, account_id=None, limit=10000):
+        return self._shadow_outcomes.get_candidates(env, account_id, limit)
+
+    def settle_shadow_outcomes(self, settlements):
+        return self._shadow_outcomes.settle(settlements)
 
     def save_refresh_attempt(self, attempt):
         """Persist a RefreshAttempt row."""
@@ -501,11 +517,20 @@ class OptionsDatabase:
     def get_order_ids_missing_fees(self, env=None, account_id=None):
         return self._fills.get_order_ids_missing_fees(env=env, account_id=account_id)
 
+    def save_wheel_cycles(self, cycles) -> int:
+        return self._wheel_cycles.save_cycles(cycles)
+
+    def get_wheel_cycles(self, env=None, account_id=None, ticker=None, states=None, limit=500):
+        return self._wheel_cycles.get_cycles(env, account_id, ticker, states, limit)
+
     def save_cash_flows(self, flow_rows) -> int:
         return self._cash_flows.save_cash_flows(flow_rows)
 
     def get_cash_flows(self, env=None, account_id=None, start=None, end=None, limit=5000):
         return self._cash_flows.get_cash_flows(env=env, account_id=account_id, start=start, end=end, limit=limit)
+
+    def delete_cash_flow(self, cashflow_id, *, env, account_id):
+        return self._cash_flows.delete_cash_flow(cashflow_id, env=env, account_id=account_id)
 
     # --- Option Chain Snapshots ---
 

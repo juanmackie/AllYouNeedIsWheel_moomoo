@@ -218,6 +218,26 @@ class TestRunnerFailurePreservesLastSnapshot(unittest.TestCase):
         self.assertEqual(saved[-1].state, "failed")
         self.assertIsNone(saved[-1].run_id)
 
+    def test_position_query_failure_aborts_before_scan_or_snapshot(self):
+        db = MagicMock()
+        service = MagicMock()
+        runner = WheelRunner(db, service, {"portfolio_env": "SIMULATE", "account_id": ""})
+        conn = MagicMock()
+        conn._get_available_accounts.return_value = [{"acc_id": "P1", "trd_env": "SIMULATE"}]
+        service._ensure_connection.return_value = conn
+        service._get_portfolio_context.return_value = {"portfolio_error": "Moomoo portfolio query failed"}
+        engine = MagicMock()
+        service.recommendation_engine = engine
+
+        with self.assertRaisesRegex(RuntimeError, "Moomoo portfolio query failed"):
+            runner.refresh()
+
+        engine.get_top_recommendations.assert_not_called()
+        db.save_run_snapshot.assert_not_called()
+        saved = [call.args[0] for call in db.save_refresh_attempt.call_args_list]
+        self.assertEqual(saved[-1].state, "failed")
+        self.assertIsNone(saved[-1].run_id)
+
 
 class TestRunnerRollDiagnosticsInjection(unittest.TestCase):
     """F-H1 regression: core must not import api; roll diagnostics arrive via
@@ -303,6 +323,7 @@ class TestReadTimeEligibility(unittest.TestCase):
             "recommended_contracts": 1,
             "copy_eligible": True,
             "chain_source": "broker",
+            "quote_fetched_at_utc": (self.now_utc - timedelta(seconds=45)).isoformat(),
         }
         sig.update(overrides)
         return sig
@@ -468,6 +489,40 @@ class TestReadTimeEligibility(unittest.TestCase):
             self.assertNotIn("eligibility", snapshot[lane][0])
             self.assertNotIn("quote_age_sec", snapshot[lane][0])
 
+    def test_blank_non_candidate_quote_does_not_demote_fresh_candidate(self):
+        snapshot = self._lanes_snapshot()
+        snapshot["run"]["quote_fetched_at"]["TSLA"] = ""
+
+        view = recompute_effective_snapshot(snapshot, self.now_utc, self.monday_10am_et)
+
+        assert view is not None
+        self.assertEqual(view["eligibility"]["session"]["state"], "open")
+        self.assertTrue(view["eligibility"]["quote_freshness"]["fresh"])
+        self.assertEqual(view["signals"][0]["eligibility"]["mode"], "live")
+
+    def test_stale_candidate_quote_is_review_only_when_other_quotes_are_fresh(self):
+        snapshot = self._lanes_snapshot()
+        snapshot["signals"][0]["quote_fetched_at_utc"] = (self.now_utc - timedelta(minutes=10)).isoformat()
+
+        view = recompute_effective_snapshot(snapshot, self.now_utc, self.monday_10am_et)
+
+        assert view is not None
+        self.assertEqual(view["eligibility"]["session"]["state"], "open")
+        self.assertTrue(view["eligibility"]["quote_freshness"]["fresh"])
+        self.assertEqual(view["signals"][0]["eligibility"]["mode"], "review_only")
+        self.assertTrue(any("stale" in reason for reason in view["signals"][0]["eligibility"]["reasons"]))
+
+    def test_stale_non_candidate_quote_does_not_demote_fresh_candidate(self):
+        snapshot = self._lanes_snapshot()
+        snapshot["run"]["quote_fetched_at"]["TSLA"] = (self.now_utc - timedelta(hours=2)).isoformat()
+
+        view = recompute_effective_snapshot(snapshot, self.now_utc, self.monday_10am_et)
+
+        assert view is not None
+        self.assertEqual(view["eligibility"]["session"]["state"], "open")
+        self.assertEqual(view["signals"][0]["eligibility"]["mode"], "live")
+        self.assertEqual(view["eligibility"]["quote_freshness"]["stale_symbols"], ["TSLA"])
+
     def test_read_time_capital_view_collateral_and_available_shares(self):
         view = recompute_effective_snapshot(self._lanes_snapshot(), self.now_utc, self.monday_10am_et)
         assert view is not None
@@ -498,7 +553,9 @@ class TestActiveWatchlistSnapshot(unittest.TestCase):
             MagicMock(), MagicMock(), {"portfolio_env": "SIMULATE", "account_id": ""}, max_tradeable_age_sec=120
         )
 
-    def _build(self, active_watchlist, tradeable_run=True, capital_recovery=None, watchlist_cash_fit=None):
+    def _build(
+        self, active_watchlist, tradeable_run=True, capital_recovery=None, watchlist_cash_fit=None, market_state=None
+    ):
         result = {
             "generated_at": utc_now_iso(),
             "scan_coverage": {"scanned": 2, "total": 2, "complete": True},
@@ -512,6 +569,7 @@ class TestActiveWatchlistSnapshot(unittest.TestCase):
             "capital_recovery": capital_recovery or [],
             "watchlist_cash_fit": watchlist_cash_fit or {},
             "active_watchlist": active_watchlist,
+            "_freshness": {"market_state": market_state} if market_state else {},
         }
         with patch("core.wheel_runner.is_market_open", return_value=True):
             return self._runner()._build_snapshot("REAL", "acc1", utc_now_iso(), result, {"account_value": 10000}, [])
@@ -539,6 +597,13 @@ class TestActiveWatchlistSnapshot(unittest.TestCase):
         self.assertEqual(payload["active_watchlist"]["group_name"], "My Watchlist")
         self.assertEqual(len(payload["active_watchlist"]["tickers"]), 2)
         self.assertEqual(payload["active_watchlist"]["holdings_checked"], ["AAPL", "NVDA"])
+
+    def test_snapshot_uses_the_recommendation_calendar_market_state(self):
+        with patch("core.wheel_runner.is_market_open", return_value=True):
+            snapshot = self._build(self._active_watchlist(), market_state="closed")
+
+        self.assertEqual(snapshot.run.market_state, "closed")
+        self.assertEqual(snapshot.run.status, "planning")
 
     def test_capital_recovery_survives_snapshot_build_and_serialization(self):
         recovery = [{"ticker": "AAPL", "basis_per_share": 100.0}]

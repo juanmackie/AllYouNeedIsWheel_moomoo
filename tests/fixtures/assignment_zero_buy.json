@@ -1,0 +1,109 @@
+{
+  "description": "Synthetic assignment: zero-price option buy paired with an underlying share purchase",
+  "signal": {
+    "ticker": "REDACTED",
+    "option_type": "PUT",
+    "expiration": "20260220",
+    "strike": 70.0,
+    "dte": 30,
+    "bid_premium_per_contract": 110.0,
+    "stock_price": 80.0,
+    "signal_type": "csp"
+  },
+  "nearby_pair_signal": {
+    "ticker": "REDACTED",
+    "option_type": "PUT",
+    "expiration": "20260320",
+    "strike": 75.0,
+    "dte": 30,
+    "bid_premium_per_contract": 110.0,
+    "stock_price": 80.0,
+    "signal_type": "csp"
+  },
+  "fills": [
+    {
+      "fill_id": "synthetic-short-put-open",
+      "order_id": "synthetic-open-order",
+      "ticker": "REDACTED",
+      "security_type": "OPT",
+      "option_type": "PUT",
+      "expiration": "20260220",
+      "strike": 70.0,
+      "side": "SELL",
+      "qty": 1,
+      "price": 1.05,
+      "fees": 0.0,
+      "captured_at": "2026-01-05T14:30:00"
+    },
+    {
+      "fill_id": "synthetic-assignment-option-leg",
+      "order_id": "synthetic-assignment-order",
+      "ticker": "REDACTED",
+      "security_type": "OPT",
+      "option_type": "PUT",
+      "expiration": "20260220",
+      "strike": 70.0,
+      "side": "BUY",
+      "qty": 1,
+      "price": 0.0,
+      "fees": 0.0,
+      "captured_at": "2026-02-20T14:30:03"
+    },
+    {
+      "fill_id": "synthetic-assignment-shares",
+      "order_id": "synthetic-assignment-order",
+      "ticker": "REDACTED",
+      "security_type": "STK",
+      "option_type": "",
+      "expiration": "",
+      "strike": null,
+      "side": "BUY",
+      "qty": 100,
+      "price": 70.0,
+      "fees": 0.0,
+      "captured_at": "2026-02-20T14:30:00"
+    },
+    {
+      "fill_id": "synthetic-second-short-put-open",
+      "order_id": "synthetic-second-open-order",
+      "ticker": "REDACTED",
+      "security_type": "OPT",
+      "option_type": "PUT",
+      "expiration": "20260320",
+      "strike": 75.0,
+      "side": "SELL",
+      "qty": 1,
+      "price": 1.05,
+      "fees": 0.0,
+      "captured_at": "2026-01-05T14:30:00"
+    },
+    {
+      "fill_id": "synthetic-unpaired-zero-price-buy",
+      "order_id": "synthetic-later-option-order",
+      "ticker": "REDACTED",
+      "security_type": "OPT",
+      "option_type": "PUT",
+      "expiration": "20260320",
+      "strike": 75.0,
+      "side": "BUY",
+      "qty": 1,
+      "price": 0.0,
+      "fees": 0.0,
+      "captured_at": "2026-02-20T14:31:00"
+    },
+    {
+      "fill_id": "synthetic-stock-buy-outside-window",
+      "order_id": "synthetic-later-stock-order",
+      "ticker": "REDACTED",
+      "security_type": "STK",
+      "option_type": "",
+      "expiration": "",
+      "strike": null,
+      "side": "BUY",
+      "qty": 100,
+      "price": 75.0,
+      "fees": 0.0,
+      "captured_at": "2026-02-20T14:31:06"
+    }
+  ]
+}

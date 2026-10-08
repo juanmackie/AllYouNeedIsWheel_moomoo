@@ -258,7 +258,7 @@ class TestPresetParity(unittest.TestCase):
         preset = get_preset(None)
         self.assertEqual(preset.key, "balanced")
         # Version 7: preset delta bands and per-underlying exposure are versioned.
-        self.assertEqual(preset.version, 7)
+        self.assertEqual(preset.version, 8)
         self.assertTrue(preset.to_screener_profile()["require_cash_fit"])
 
 

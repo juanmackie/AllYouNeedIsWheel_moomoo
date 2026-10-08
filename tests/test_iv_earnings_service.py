@@ -166,6 +166,23 @@ class TestIVEarningsService(unittest.TestCase):
         # Legacy free-text source is normalized to the canonical token.
         self.assertEqual(info["earnings_source"], "alpha_vantage")
 
+    def test_earnings_day_uses_us_market_date_when_host_date_is_next_day(self):
+        from zoneinfo import ZoneInfo
+
+        self.service.db.get_earnings_date.return_value = {
+            "ticker": "AAPL",
+            "earnings_date": "2026-09-29",
+            "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        market_time = datetime(2026, 9, 29, 20, 30, tzinfo=ZoneInfo("America/New_York"))
+
+        with patch("api.services.iv_earnings_service.market_now", return_value=market_time) as market_clock:
+            info = self.service.get_earnings_info("AAPL")
+
+        self.assertEqual(info["days_to_earnings"], 0)
+        self.assertEqual(info["warning_level"], "today")
+        market_clock.assert_called_once_with()
+
 
 class TestAlphaVantageProvider(unittest.TestCase):
     """Alpha Vantage CSV parsing, caching, and availability."""
@@ -709,7 +726,7 @@ class TestWheelRunnerEventContextHook(unittest.TestCase):
     """WheelRunner invokes the injected event-context refresher before the scan,
     and a provider failure there never aborts the broker scan."""
 
-    def _build_runner(self, refresher=None):
+    def _build_runner(self, refresher=None, backup_provider=None):
         from core.wheel_runner import WheelRunner
 
         options = MagicMock()
@@ -740,6 +757,7 @@ class TestWheelRunnerEventContextHook(unittest.TestCase):
             options_service=options,
             config={"portfolio_env": "SIMULATE", "account_id": "SIM-0"},
             event_context_refresher=refresher,
+            backup_provider=backup_provider,
         )
         return runner, options
 
@@ -784,6 +802,29 @@ class TestWheelRunnerEventContextHook(unittest.TestCase):
         ):
             snapshot = runner.refresh()
         self.assertIsNotNone(snapshot)
+
+    def test_backup_provider_runs_after_publish_and_failure_does_not_fail_run(self):
+        calls = []
+        db = MagicMock()
+        db.get_latest_portfolio_snapshot.return_value = None
+        db.save_portfolio_transition.return_value = True
+
+        def backup_provider(database):
+            calls.append(database)
+            raise OSError("disk full")
+
+        runner, options = self._build_runner(backup_provider=backup_provider)
+        runner._db = db
+        with (
+            patch("core.wheel_runner.resolve_account", return_value="SIM-0"),
+            patch("core.wheel_runner.is_market_open", return_value=False),
+        ):
+            snapshot = runner.refresh()
+
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(calls, [db])
+        db.save_run_snapshot.assert_called_once_with(snapshot)
+        options.recommendation_engine.get_top_recommendations.assert_called_once()
 
 
 def _daily_rows(ivs, start_day=1):

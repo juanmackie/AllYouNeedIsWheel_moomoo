@@ -24,7 +24,13 @@ def _context():
         "cash_available_for_csp": 4_000.0,
         "broker_buying_power": 12_000.0,
         "positions": {
-            "US.AAPL": {"symbol": "US.AAPL", "security_type": "STK", "position": 100, "avg_cost": 210.5},
+            "US.AAPL": {
+                "symbol": "US.AAPL",
+                "security_type": "STK",
+                "position": 100,
+                "avg_cost": 210.5,
+                "can_sell_qty": 60,
+            },
             # Duplicated under both raw and canonical key (context behavior)
             "AAPL": {"symbol": "AAPL", "security_type": "STK", "position": 100, "avg_cost": 210.5},
             "US.TSLA260904P00300000": {
@@ -68,6 +74,8 @@ class TestBuildPortfolioSnapshot(unittest.TestCase):
         tsla = snap["positions"][2]
         self.assertEqual(tsla["qty"], -1)
         self.assertEqual(tsla["contract_key"], "TSLA260904P00300000 20260904 P300")
+        aapl = next(row for row in snap["positions"] if row["symbol"] == "AAPL")
+        self.assertEqual(aapl["can_sell_qty"], 60)
 
     def test_none_and_empty_contexts(self):
         snap = build_portfolio_snapshot(None, "r", "SIMULATE", "", "t")

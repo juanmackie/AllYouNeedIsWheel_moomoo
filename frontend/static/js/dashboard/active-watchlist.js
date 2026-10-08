@@ -101,6 +101,19 @@ export function renderActiveWatchlist(snapshot) {
             tickRow.appendChild(chip);
         }
         renderEl.appendChild(tickRow);
+        const priceDiagnostics = tickers
+            .filter((ticker) => ticker.price_context && [
+                ticker.price_context.last_price,
+                ticker.price_context.week_52_low,
+                ticker.price_context.week_52_high,
+            ].some((value) => Number.isFinite(Number(value))))
+            .map((ticker) => formatPriceContext(ticker.symbol, ticker.price_context));
+        if (priceDiagnostics.length) {
+            const diagnostics = document.createElement('div');
+            diagnostics.className = 'small text-muted mb-1';
+            diagnostics.textContent = `Moomoo 52-week context (display only): ${priceDiagnostics.join(' · ')}`;
+            renderEl.appendChild(diagnostics);
+        }
     } else if (clean) {
         renderEl.appendChild(muted('no tickers scanned.'));
     }
@@ -125,6 +138,19 @@ export function renderActiveWatchlist(snapshot) {
     // empty/offline read mislabeled as success.
     const lastSuccess = aw.last_successful_sync || (clean ? aw.fetched_at || null : null);
     setSyncBadge(syncEl, lastSuccess);
+}
+
+function formatPriceContext(symbol, context) {
+    const money = (value) => Number.isFinite(Number(value))
+        ? `$${Number(value).toFixed(2)}`
+        : '—';
+    const range = context.week_52_low != null || context.week_52_high != null
+        ? `52w ${money(context.week_52_low)}–${money(context.week_52_high)}`
+        : '52w range unavailable';
+    const drawdown = Number.isFinite(Number(context.pct_below_52w_high))
+        ? `, ${Number(context.pct_below_52w_high).toFixed(1)}% below high`
+        : '';
+    return `${symbol} ${money(context.last_price)} (${range}${drawdown})`;
 }
 
 function renderGroupPicker(container, aw) {

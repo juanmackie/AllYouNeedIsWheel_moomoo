@@ -14,6 +14,7 @@ Pure helpers extracted from RecommendationEngine (F-S1).
 
 from __future__ import annotations
 
+from core.connection_constants import _parse_option_code_metadata
 from core.scoring_factors import capital_velocity_per_day, premium_velocity_per_day
 from core.utils import safe_float
 
@@ -85,6 +86,89 @@ def rank_key(candidate: dict):
 def rank_candidates(candidates: list) -> list:
     """Sort candidates by the deterministic shortlist ordering."""
     return sorted(candidates, key=rank_key)
+
+
+def option_code_for_candidate(candidate: dict) -> str | None:
+    """Build the SDK option code used only for bounded read-only diagnostics."""
+    ticker = str(candidate.get("ticker", "")).strip().upper().split(".")[-1]
+    expiration = str(candidate.get("expiration", "")).replace("-", "")
+    option_type = str(candidate.get("option_type", "")).upper()
+    strike = safe_float(candidate.get("strike"), default=None)
+    if (
+        not ticker
+        or not expiration.isdigit()
+        or len(expiration) != 8
+        or option_type not in {"CALL", "PUT"}
+        or strike is None
+        or strike <= 0
+    ):
+        return None
+    right = "C" if option_type == "CALL" else "P"
+    return f"US.{ticker}{expiration[2:]}{right}{int(round(strike * 1000))}"
+
+
+def matching_working_orders(candidate: dict, orders: list[dict] | None) -> list[dict] | None:
+    """Return working orders matching one exact option, or None if state is unknown."""
+    if orders is None:
+        return None
+    target = (
+        str(candidate.get("ticker", "")).upper().split(".")[-1],
+        str(candidate.get("expiration", "")).replace("-", ""),
+        str(candidate.get("option_type", "")).upper(),
+        safe_float(candidate.get("strike"), default=None),
+    )
+    matches = []
+    for order in orders:
+        metadata = _parse_option_code_metadata(order.get("code"))
+        if not metadata:
+            continue
+        key = (
+            metadata["underlying"].upper(),
+            metadata["expiration"],
+            metadata["option_type"],
+            safe_float(metadata["strike"], default=None),
+        )
+        if key[:3] == target[:3] and key[3] is not None and target[3] is not None and abs(key[3] - target[3]) < 1e-6:
+            matches.append(order)
+    return matches
+
+
+def attach_readonly_trade_diagnostics(candidates: list[dict], connection) -> list[dict]:
+    """Attach exact-order and max-sell evidence to at most three selected cards.
+
+    Evidence is display-only: it does not change rank, candidate membership,
+    copy eligibility, or recommended quantity.
+    """
+    selected = list(candidates or [])[:3]
+    open_orders = None
+    order_query = getattr(connection, "get_open_orders", None)
+    if callable(order_query):
+        try:
+            open_orders = order_query()
+        except Exception:
+            open_orders = None
+
+    capacity_query = getattr(connection, "get_max_sellable_info", None)
+    for candidate in selected:
+        candidate["trade_diagnostics_checked"] = True
+        matches = matching_working_orders(candidate, open_orders)
+        candidate["working_order_check"] = "unavailable" if matches is None else "ok"
+        candidate["has_working_order"] = None if matches is None else bool(matches)
+        candidate["working_order_count"] = None if matches is None else len(matches)
+        candidate["working_order_statuses"] = sorted({str(row.get("status", "")) for row in matches or []})
+
+        code = option_code_for_candidate(candidate)
+        bid = safe_float(candidate.get("bid"), default=None)
+        capacity = None
+        if callable(capacity_query) and code and bid is not None and bid > 0:
+            try:
+                capacity = capacity_query(code, bid)
+            except Exception:
+                capacity = None
+        candidate["broker_capacity_check"] = "ok" if capacity is not None else "unavailable"
+        for field in ("max_position_sell", "max_sell_short", "max_buy_back"):
+            candidate[f"broker_{field}"] = safe_float((capacity or {}).get(field), default=None)
+    return candidates
 
 
 def option_source_value(option: dict, wheel_decision: dict | None, key: str, fallback: str = "unknown") -> str:
@@ -201,4 +285,15 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "quote_fetched_at_utc": option.get("quote_fetched_at_utc", wd.get("quote_fetched_at_utc", "")),
         "blocked_reason_codes": wd.get("blocked_reason_codes", []) or wd.get("hard_blockers", []),
         "research_only": research_only,
+        # Query-only broker diagnostics are display-only and never alter
+        # shortlist rank, copy eligibility, or contract quantity.
+        "working_order_check": option.get("working_order_check", "unavailable"),
+        "has_working_order": option.get("has_working_order"),
+        "working_order_count": option.get("working_order_count"),
+        "working_order_statuses": option.get("working_order_statuses", []),
+        "trade_diagnostics_checked": bool(option.get("trade_diagnostics_checked", False)),
+        "broker_capacity_check": option.get("broker_capacity_check", "unavailable"),
+        "broker_max_position_sell": option.get("broker_max_position_sell"),
+        "broker_max_sell_short": option.get("broker_max_sell_short"),
+        "broker_max_buy_back": option.get("broker_max_buy_back"),
     }

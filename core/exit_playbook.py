@@ -47,6 +47,8 @@ VERDICT_TAKE_PROFIT = "TAKE_PROFIT"
 VERDICT_ROLL = "ROLL"
 VERDICT_ROTATE = "ROTATE"
 VERDICT_CLOSE = "CLOSE"
+VERDICT_ACCEPT_ASSIGNMENT = "ACCEPT_ASSIGNMENT"
+VERDICT_ROLL_OUT_DOWN = "ROLL_OUT_DOWN"
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,9 @@ def evaluate_exit(
     thresholds: ExitThresholds | None = None,
     rotation_comparison: dict | None = None,
     roll_target: dict | None = None,
+    stock_basis: float | None = None,
+    basis_source: str | None = None,
+    current_strike: float | None = None,
 ) -> ExitVerdict:
     """Evaluate exit rules for one open short option position.
 
@@ -160,8 +165,50 @@ def evaluate_exit(
         if otm < 5.0:
             reasons.append(
                 f"Ex-dividend in {days_to_ex_dividend}d lands before expiry while only {otm:.1f}% OTM — "
-                f"assignment risk if it crosses"
+                "assignment risk if it crosses"
             )
+
+    # Assignment is an acceptable stock exit when an ITM call strike covers
+    # the verified/effective stock basis. Unknown basis never unlocks it.
+    if option_type == "CALL" and is_itm and basis_source in {"ledger_adjusted", "moomoo_avg_cost"}:
+        try:
+            basis = float(stock_basis)
+            strike = float(current_strike)
+        except (TypeError, ValueError):
+            basis = 0.0
+            strike = None
+        if basis > 0 and strike is not None and strike >= basis:
+            reasons.append(f"ITM call strike {strike:g} covers stock basis {basis:g} ({basis_source})")
+            return _verdict(VERDICT_ACCEPT_ASSIGNMENT)
+    # Roll an ITM put down only with an explicit later expiry, non-higher
+    # strike, positive net credit, and known fees. Unknown fees stay unknown.
+    if option_type == "PUT" and is_itm and isinstance(roll_target, dict):
+        if roll_target.get("fees_known") is not True:
+            reasons.append(
+                "ITM put roll-out/down unavailable: measured fee evidence is missing; unknown fees are not zero"
+            )
+        try:
+            current_strike = float(roll_target.get("current_strike"))
+            target_strike = float(roll_target.get("strike"))
+            net_credit = float(roll_target.get("net_credit_after_fees"))
+            current_expiry = str(roll_target.get("current_expiration", "")).replace("-", "")
+            target_expiry = str(roll_target.get("expiration", "")).replace("-", "")
+        except (TypeError, ValueError):
+            current_strike = target_strike = net_credit = 0.0
+            current_expiry = target_expiry = ""
+        if (
+            roll_target.get("fees_known") is True
+            and target_expiry.isdigit()
+            and current_expiry.isdigit()
+            and target_expiry > current_expiry
+            and target_strike <= current_strike
+            and net_credit > 0
+        ):
+            fee_note = str(roll_target.get("fee_model_note") or "known fees")
+            reasons.append(
+                f"ITM put can roll out and down to {_target_label(roll_target)} for positive net credit after {fee_note}"
+            )
+            return _verdict(VERDICT_ROLL_OUT_DOWN, roll_target)
 
     # 2. Deeply ITM.
     if is_itm and abs(otm) >= t.deep_itm_pct:
@@ -225,17 +272,18 @@ def evaluate_exit(
                     values["fresh_bid"] * 100 - values["close_ask"] * 100 - values["close_fee"] - values["open_fee"]
                 )
                 fresh_rate = fresh_net_credit / (values["fresh_capital"] * values["fresh_dte"])
+                fee_note = str(comparison.get("fee_model_note") or "known fees")
                 if held_rate > 0 and fresh_rate >= held_rate * t.rotate_min_multiplier:
                     target = comparison.get("target")
                     label = _target_label(target)
                     reasons.append(
                         f"Fresh net return/day is {fresh_rate / held_rate:.1f}x held return/day "
-                        f"after bid/ask spread and known fees; rotate to {label}"
+                        f"after bid/ask spread and {fee_note}; rotate to {label}"
                     )
                     return _verdict(VERDICT_ROTATE, target)
                 reasons.append(
                     f"Fresh net return/day does not reach {t.rotate_min_multiplier:.1f}x held return/day "
-                    "after spread and fees"
+                    f"after spread and {fee_note}"
                 )
 
     # 5. Roll window for a safe OTM position. Do not issue an unnamed roll.

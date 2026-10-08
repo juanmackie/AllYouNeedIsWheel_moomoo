@@ -6,12 +6,14 @@ import os
 import threading
 import time
 import unittest
+from datetime import date, datetime
 from unittest.mock import MagicMock, Mock, patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 # Import the modules under test
-from moomoo import RET_ERROR, RET_OK, SecurityFirm, TrdEnv
+from moomoo import RET_ERROR, RET_OK, Currency, SecurityFirm, TrdEnv
 
 from core.connection_constants import (
     _clean_account_id,
@@ -27,8 +29,17 @@ from core.connection_constants import (
 )
 from core.connection_manager import MoomooConnection
 from core.context_factory import probe_opend_status
+from core.session_clock import SessionCalendar
 from core.utils import safe_float
 from core.wheel_runner import opaque_account_id
+
+
+class FrozenMarketDateTime(datetime):
+    frozen = datetime(2026, 9, 30, 17, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.frozen if tz else cls.frozen.replace(tzinfo=None)
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -572,14 +583,15 @@ class TestMoomooConnectionCaching(unittest.TestCase):
         conn = MoomooConnection(broker_cache_after_hours=False)
         conn._quote_cache.cache_option_chain("AAPL", "20230616", "C", {"chain": "data"})
 
-        old_time = time.time() - 1000
+        old_time = datetime(2026, 9, 30, 16, 1, tzinfo=ZoneInfo("America/New_York")).timestamp()
+        conn._quote_cache.session_calendar = SessionCalendar.from_trading_days(["2026-09-30"])
         with conn._quote_cache._lock:
             cache_key = "AAPL_20230616_C"
             if cache_key in conn._quote_cache._chain_cache:
                 data, _ = conn._quote_cache._chain_cache[cache_key]
                 conn._quote_cache._chain_cache[cache_key] = (data, old_time)
 
-        with patch("core.quote_cache.is_market_open", return_value=False):
+        with patch("core.quote_cache.datetime", FrozenMarketDateTime):
             result = conn._quote_cache.get_option_chain("AAPL", "20230616", "C")
         self.assertIsNone(result)
 
@@ -589,13 +601,14 @@ class TestMoomooConnectionCaching(unittest.TestCase):
         conn = MoomooConnection(broker_cache_after_hours=True)
         conn._quote_cache.cache_option_chain("AAPL", "20230616", "C", {"chain": "data"})
 
-        old_time = time.time() - 10000
+        old_time = datetime(2026, 9, 30, 16, 1, tzinfo=ZoneInfo("America/New_York")).timestamp()
+        conn._quote_cache.session_calendar = SessionCalendar.from_trading_days(["2026-09-30"])
         with conn._quote_cache._lock:
             cache_key = "AAPL_20230616_C"
             data, _ = conn._quote_cache._chain_cache[cache_key]
             conn._quote_cache._chain_cache[cache_key] = (data, old_time)
 
-        with patch("core.quote_cache.is_market_open", return_value=False):
+        with patch("core.quote_cache.datetime", FrozenMarketDateTime):
             result = conn._quote_cache.get_option_chain("AAPL", "20230616", "C")
         self.assertIsNotNone(result)
         self.assertEqual(result, {"chain": "data"})
@@ -772,6 +785,33 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         self.assertEqual(position["bid"], 0.9)
         self.assertEqual(position["ask"], 1.1)
 
+    def test_get_portfolio_preserves_broker_sellable_stock_quantity(self):
+        conn = self._make_connected_conn()
+        acc_data = MagicMock()
+        acc_data.iloc.__getitem__.return_value = self._make_acc_row({"acc_id": "acct-123", "us_cash": 40000})
+        self.mock_trd_ctx.accinfo_query.return_value = (RET_OK, acc_data)
+        self.mock_trd_ctx.position_list_query.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [{"code": "US.AAPL", "qty": 100, "can_sell_qty": 60, "average_cost": 140, "market_val": 15000}]
+            ),
+        )
+
+        result = conn.get_portfolio()
+
+        self.assertEqual(result["positions"]["US.AAPL"]["can_sell_qty"], 60)
+
+    def test_get_portfolio_fails_when_position_query_fails(self):
+        conn = self._make_connected_conn()
+        acc_data = MagicMock()
+        acc_data.iloc.__getitem__.return_value = self._make_acc_row({"acc_id": "acct-123", "us_cash": 40000})
+        self.mock_trd_ctx.accinfo_query.return_value = (RET_OK, acc_data)
+        self.mock_trd_ctx.position_list_query.return_value = (RET_ERROR, "position query failed")
+
+        result = conn.get_portfolio()
+
+        self.assertIsNone(result)
+
     def test_get_portfolio_keeps_cash_and_buying_power_separate(self):
         conn = self._make_connected_conn()
         acc_data = MagicMock()
@@ -797,6 +837,25 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         self.assertEqual(result["available_cash_source"], "us_cash")
         self.assertEqual(result["buying_power"], 25000)
         self.assertEqual(result["buying_power_source"], "usd_net_cash_power")
+        self.assertEqual(self.mock_trd_ctx.accinfo_query.call_args.kwargs["currency"], Currency.USD)
+
+    def test_get_portfolio_uses_sdk_max_power_short_field(self):
+        conn = self._make_connected_conn()
+        acc_data = MagicMock()
+        acc_data.empty = False
+        acc_data.iloc.__getitem__.return_value = self._make_acc_row(
+            {"acc_id": "acct-123", "us_cash": 1000, "max_power_short": 5000}
+        )
+        empty_positions = MagicMock()
+        empty_positions.empty = True
+        empty_positions.to_dict.return_value = []
+        self.mock_trd_ctx.accinfo_query.return_value = (RET_OK, acc_data)
+        self.mock_trd_ctx.position_list_query.return_value = (RET_OK, empty_positions)
+
+        result = conn.get_portfolio()
+
+        self.assertEqual(result["buying_power"], 5000)
+        self.assertEqual(result["buying_power_source"], "max_power_short")
 
     def test_get_portfolio_falls_back_to_us_cash_when_no_usd_cash_field_exists(self):
         conn = self._make_connected_conn()
@@ -1054,161 +1113,6 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         self.assertIn("data_filter", call_kwargs)
         self.assertEqual(call_kwargs["data_filter"].delta_min, 0.15)
 
-    def test_query_subscription(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.query_subscription.return_value = (RET_OK, {"total_used": 5, "remain": 95, "own_used": 3})
-
-        ret, data = conn.query_subscription()
-
-        self.assertEqual(ret, RET_OK)
-        self.assertEqual(data["total_used"], 5)
-        self.mock_quote_ctx.query_subscription.assert_called_once()
-
-    def test_query_subscription_failure(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.query_subscription.return_value = (RET_ERROR, None)
-
-        ret, data = conn.query_subscription()
-
-        self.assertEqual(ret, RET_ERROR)
-
-    def test_get_opend_diagnostics_connected(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.query_subscription.return_value = (RET_OK, {"total_used": 3, "remain": 97, "own_used": 3})
-
-        diag = conn.get_opend_diagnostics()
-
-        self.assertTrue(diag["connected"])
-        self.assertTrue(diag["sdk_available"])
-        self.assertIn("sdk_version", diag)
-        self.assertIn("subscription", diag)
-        self.assertTrue(diag["option_data_filter_available"])
-
-    def test_get_opend_diagnostics_disconnected(self):
-        conn = MoomooConnection()
-        with patch.object(conn, "_ensure_quote_context", return_value=False):
-            diag = conn.get_opend_diagnostics()
-
-        self.assertFalse(diag["connected"])
-        self.assertIn("sdk_version", diag)
-
-    def test_create_option_contract_found(self):
-        conn = self._make_connected_conn()
-        mock_df = MagicMock()
-        mock_df.empty = False
-        mock_match = MagicMock()
-        mock_match.empty = False
-        mock_iloc = MagicMock()
-        mock_iloc.__getitem__.return_value = {"code": "US.AAPL240315C00200000"}
-        mock_match.iloc = mock_iloc
-        mock_df.__getitem__.return_value = mock_match
-        self.mock_quote_ctx.get_option_chain.return_value = (RET_OK, mock_df)
-
-        code = conn.create_option_contract("US.AAPL", "20240315", 200, "CALL")
-        self.assertEqual(code, "US.AAPL240315C00200000")
-
-    def test_get_option_volatility_delegates_to_sdk(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.get_option_volatility.return_value = (RET_OK, {"iv": 0.35})
-        ret, data = conn.get_option_volatility("US.AAPL", query_time_period=2, hv_time_period=30)
-        self.assertEqual(ret, RET_OK)
-        self.assertEqual(data["iv"], 0.35)
-        call_args = self.mock_quote_ctx.get_option_volatility.call_args
-        self.assertEqual(call_args[0][0], "US.AAPL")
-        self.assertEqual(call_args[1]["query_time_period"], 2)
-        self.assertEqual(call_args[1]["hv_time_period"], 30)
-
-    def test_get_option_volatility_graceful_fallback(self):
-        conn = self._make_connected_conn()
-        del self.mock_quote_ctx.get_option_volatility
-        ret, data = conn.get_option_volatility("US.AAPL")
-        self.assertEqual(ret, RET_ERROR)
-
-    def test_get_option_exercise_probability_delegates_to_sdk(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.get_option_exercise_probability.return_value = (RET_OK, {"probability": 0.72})
-        ret, data = conn.get_option_exercise_probability("US.AAPL")
-        self.assertEqual(ret, RET_OK)
-        self.assertEqual(data["probability"], 0.72)
-
-    def test_get_option_exercise_probability_graceful_fallback(self):
-        conn = self._make_connected_conn()
-        del self.mock_quote_ctx.get_option_exercise_probability
-        ret, data = conn.get_option_exercise_probability("US.AAPL")
-        self.assertEqual(ret, RET_ERROR)
-
-    def test_get_option_screen_delegates_to_sdk(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.get_option_screen.return_value = (RET_OK, {"matches": ["AAPL240315C00200000"]})
-        ret, data = conn.get_option_screen(None)
-        self.assertEqual(ret, RET_OK)
-        self.assertIn("matches", data)
-
-    def test_get_option_screen_graceful_fallback(self):
-        conn = self._make_connected_conn()
-        del self.mock_quote_ctx.get_option_screen
-        ret, data = conn.get_option_screen(None)
-        self.assertEqual(ret, RET_ERROR)
-
-    def test_get_short_interest_delegates_to_sdk(self):
-        conn = self._make_connected_conn()
-        mock_us_df = MagicMock()
-        mock_hk_df = MagicMock()
-        self.mock_quote_ctx.get_short_interest.return_value = (RET_OK, mock_us_df, mock_hk_df)
-        ret, us_df, hk_df = conn.get_short_interest("US.AAPL")
-        self.assertEqual(ret, RET_OK)
-        self.assertIs(us_df, mock_us_df)
-        self.assertIs(hk_df, mock_hk_df)
-
-    def test_get_short_interest_passes_pagination_params(self):
-        conn = self._make_connected_conn()
-        mock_us_df = MagicMock()
-        mock_hk_df = MagicMock()
-        self.mock_quote_ctx.get_short_interest.return_value = (RET_OK, mock_us_df, mock_hk_df)
-        ret, us_df, hk_df = conn.get_short_interest("US.AAPL", next_key="abc", num=10)
-        self.assertEqual(ret, RET_OK)
-        call_kwargs = self.mock_quote_ctx.get_short_interest.call_args
-        self.assertEqual(call_kwargs[0][0], "US.AAPL")
-        self.assertEqual(call_kwargs[1]["next_key"], "abc")
-        self.assertEqual(call_kwargs[1]["num"], 10)
-
-    def test_get_short_interest_graceful_fallback(self):
-        conn = self._make_connected_conn()
-        del self.mock_quote_ctx.get_short_interest
-        ret, us_df, hk_df = conn.get_short_interest("US.AAPL")
-        self.assertEqual(ret, RET_ERROR)
-        self.assertIsNone(us_df)
-        self.assertIsNone(hk_df)
-
-    def test_get_financials_earnings_price_move_delegates(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.get_financials_earnings_price_move.return_value = (RET_OK, {"rows": []})
-        ret, data = conn.get_financials_earnings_price_move("US.AAPL", period_count=2)
-        self.assertEqual(ret, RET_OK)
-        self.assertIn("rows", data)
-        call_args = self.mock_quote_ctx.get_financials_earnings_price_move.call_args
-        self.assertEqual(call_args[0][0], "US.AAPL")
-        self.assertEqual(call_args[1]["period_count"], 2)
-
-    def test_get_financials_earnings_price_move_graceful_fallback(self):
-        conn = self._make_connected_conn()
-        del self.mock_quote_ctx.get_financials_earnings_price_move
-        ret, data = conn.get_financials_earnings_price_move("US.AAPL")
-        self.assertEqual(ret, RET_ERROR)
-
-    def test_get_financials_earnings_price_history_delegates(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.get_financials_earnings_price_history.return_value = (RET_OK, {"history": []})
-        ret, data = conn.get_financials_earnings_price_history("US.AAPL")
-        self.assertEqual(ret, RET_OK)
-        self.assertIn("history", data)
-
-    def test_get_financials_earnings_price_history_graceful_fallback(self):
-        conn = self._make_connected_conn()
-        self.mock_quote_ctx.get_financials_earnings_price_history = None
-        ret, data = conn.get_financials_earnings_price_history("US.AAPL")
-        self.assertEqual(ret, RET_ERROR)
-
 
 class TestMoomooConnectionThreadSafety(unittest.TestCase):
     """Test thread safety of MoomooConnection"""
@@ -1380,7 +1284,7 @@ class TestBrokerEvidence(unittest.TestCase):
     def tearDown(self):
         MoomooConnection._instances.clear()
 
-    def test_security_types_are_batched_and_broker_derived(self):
+    def test_price_snapshot_preserves_broker_fields_and_seeds_valid_last_price(self):
         conn = MoomooConnection()
         conn.quote_ctx = MagicMock()
         conn.is_connected = MagicMock(return_value=True)
@@ -1388,17 +1292,147 @@ class TestBrokerEvidence(unittest.TestCase):
             RET_OK,
             pd.DataFrame(
                 [
-                    {"code": "US.SPY", "stock_type": "ETF"},
-                    {"code": "US.AAPL", "stock_type": "STOCK"},
+                    {
+                        "code": "US.AAPL",
+                        "last_price": 201.25,
+                        "prev_close_price": 199.5,
+                        "highest52weeks_price": 237.49,
+                        "lowest52weeks_price": 164.08,
+                        "dividend_ttm": 1.04,
+                        "update_time": "2026-09-30 10:15:00",
+                    }
                 ]
             ),
         )
 
-        result = conn.get_security_types(["SPY", "AAPL"])
+        result = conn.get_price_snapshot(["AAPL"])
 
-        self.assertEqual(result, {"SPY": "etf", "AAPL": "stock"})
-        conn.quote_ctx.get_market_snapshot.assert_called_once()
-        self.assertEqual(conn.get_security_type("SPY"), "etf")
+        self.assertEqual(
+            result,
+            {
+                "US.AAPL": {
+                    "last_price": 201.25,
+                    "prev_close_price": 199.5,
+                    "highest52weeks_price": 237.49,
+                    "lowest52weeks_price": 164.08,
+                    "dividend_ttm": 1.04,
+                    "update_time": "2026-09-30 10:15:00",
+                    "security_type": None,
+                }
+            },
+        )
+        self.assertEqual(conn._get_cached_stock_price("US.AAPL"), 201.25)
+        conn.quote_ctx.get_market_snapshot.assert_called_once_with(["US.AAPL"])
+
+    def test_price_snapshot_keeps_missing_values_unknown_and_unreturned_codes(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": "US.AAPL",
+                        "last_price": None,
+                        "prev_close_price": pd.NA,
+                        "highest52weeks_price": float("inf"),
+                        "dividend_ttm": float("nan"),
+                    }
+                ]
+            ),
+        )
+
+        result = conn.get_price_snapshot(["AAPL", "MSFT"])
+
+        unknown_row = {
+            "last_price": None,
+            "prev_close_price": None,
+            "highest52weeks_price": None,
+            "lowest52weeks_price": None,
+            "dividend_ttm": None,
+            "update_time": None,
+            "security_type": None,
+        }
+        self.assertEqual(result, {"US.AAPL": unknown_row, "US.MSFT": unknown_row})
+        self.assertIsNone(conn._get_cached_stock_price("US.AAPL"))
+
+    def test_price_snapshot_batches_no_more_than_400_codes_per_request(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+
+        def snapshots(codes):
+            return RET_OK, pd.DataFrame([{"code": code, "last_price": index + 1} for index, code in enumerate(codes)])
+
+        conn.quote_ctx.get_market_snapshot.side_effect = snapshots
+        conn._rate_limiter.check_rate_limit = MagicMock()
+        symbols = [f"TICKER{index}" for index in range(401)]
+
+        result = conn.get_price_snapshot(symbols)
+
+        self.assertEqual(len(result), 401)
+        self.assertEqual(conn.quote_ctx.get_market_snapshot.call_count, 2)
+        first_batch, second_batch = [call.args[0] for call in conn.quote_ctx.get_market_snapshot.call_args_list]
+        self.assertEqual(len(first_batch), 400)
+        self.assertEqual(len(second_batch), 1)
+        self.assertEqual(conn._rate_limiter.check_rate_limit.call_count, 2)
+
+    def test_option_chain_range_fetches_only_band_rows_and_snapshots_once(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx.get_option_chain.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {"code": "US.AAPL260116P00095000", "strike_price": 95.0},
+                    {"code": "US.AAPL260116P00080000", "strike_price": 80.0},
+                ]
+            ),
+        )
+        conn.quote_ctx.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "option_expiry_date": "2026-01-16",
+                        "option_strike_price": 95.0,
+                        "option_type": "PUT",
+                        "bid_price": 1.2,
+                        "ask_price": 1.3,
+                        "last_price": 1.25,
+                        "option_delta": -0.2,
+                        "update_time": "2025-12-20 10:15:00",
+                    }
+                ]
+            ),
+        )
+
+        result = conn.get_option_chain_range(
+            "AAPL", "P", "2026-01-01", "2026-01-30", {"min_strike": 90, "max_strike": 100}
+        )
+
+        self.assertEqual(len(result["options"]), 1)
+        self.assertEqual(result["options"][0]["strike"], 95.0)
+        conn.quote_ctx.get_option_chain.assert_called_once()
+        conn.quote_ctx.get_market_snapshot.assert_called_once_with(["US.AAPL260116P00095000"])
+
+    def test_session_calendar_uses_moomoo_trading_day_rows(self):
+        conn = MoomooConnection()
+        conn.quote_ctx = MagicMock()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.quote_ctx.request_trading_days.return_value = (
+            RET_OK,
+            pd.DataFrame([{"trade_date": "2026-09-30"}]),
+        )
+
+        calendar = conn.get_session_calendar()
+
+        self.assertEqual(calendar.source, "moomoo_request_trading_days")
+        self.assertIn(date(2026, 9, 30), calendar.trading_days)
+        conn.quote_ctx.request_trading_days.assert_called_once()
+        self.assertEqual(conn._quote_cache.session_calendar, calendar)
 
     def test_option_chain_carries_broker_time_and_fetch_time(self):
         conn = MoomooConnection()
@@ -1436,6 +1470,66 @@ class TestBrokerEvidence(unittest.TestCase):
         option = result["options"][0]
         self.assertEqual(option["update_time"], "2024-01-01 10:00:00")
         self.assertTrue(option["quote_fetched_at_utc"])
+
+    def test_historical_volatility_uses_completed_moomoo_bars_and_caches_result(self):
+        conn = MoomooConnection()
+        dates = pd.bdate_range("2026-08-31", "2026-09-30")
+        rows = [
+            {"time_key": f"{day:%Y-%m-%d} 00:00:00", "close": 100 + index + (index % 3) * 0.5}
+            for index, day in enumerate(dates)
+        ]
+        conn.get_history_kl_quota = Mock(return_value=(RET_OK, (1, 299)))
+        conn.get_history_kline = Mock(return_value=(RET_OK, pd.DataFrame(rows), None))
+        conn.get_session_calendar = Mock(return_value=SessionCalendar.weekday_fallback())
+
+        with patch("core.utils.market_now", return_value=FrozenMarketDateTime.frozen.replace(hour=15)):
+            result = conn.get_historical_volatility("AAPL")
+            cached_result = conn.get_historical_volatility("US.AAPL")
+
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["source"], "moomoo_adjusted_daily_close")
+        self.assertEqual(result["sample_sessions"], 20)
+        self.assertEqual(result["as_of_date"], "2026-09-29")
+        self.assertEqual(result, cached_result)
+        conn.get_history_kl_quota.assert_called_once_with()
+        conn.get_history_kline.assert_called_once()
+        self.assertEqual(conn.get_history_kline.call_args.kwargs["max_count"], 52)
+
+    def test_historical_volatility_includes_falling_knife_diagnostic_from_same_history_call(self):
+        conn = MoomooConnection()
+        dates = pd.bdate_range("2026-06-01", "2026-09-30")
+        closes = [100.0] * (len(dates) - 21)
+        closes.extend([100.0] + [100.0 - index for index in range(1, 21)])
+        rows = [
+            {"time_key": f"{day:%Y-%m-%d} 00:00:00", "close": close} for day, close in zip(dates, closes, strict=True)
+        ]
+        conn.get_history_kl_quota = Mock(return_value=(RET_OK, (1, 299)))
+        conn.get_history_kline = Mock(return_value=(RET_OK, pd.DataFrame(rows), None))
+        conn.get_session_calendar = Mock(return_value=SessionCalendar.weekday_fallback())
+
+        with patch("core.utils.market_now", return_value=FrozenMarketDateTime.frozen.replace(hour=15)):
+            result = conn.get_historical_volatility("AAPL")
+
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["falling_knife"]["status"], "available")
+        self.assertTrue(result["falling_knife"]["flagged"])
+        conn.get_history_kline.assert_called_once()
+        self.assertEqual(conn.get_history_kline.call_args.kwargs["max_count"], 52)
+
+    def test_historical_volatility_fails_closed_when_quota_cannot_be_verified(self):
+        conn = MoomooConnection()
+        conn.get_history_kl_quota = Mock(return_value=(RET_ERROR, None))
+        conn.get_history_kline = Mock()
+
+        result = conn.get_historical_volatility("AAPL")
+        cached_result = conn.get_historical_volatility("AAPL")
+
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "history_quota_unverified")
+        self.assertIsNone(result["historical_volatility_pct"])
+        self.assertEqual(result, cached_result)
+        conn.get_history_kl_quota.assert_called_once_with()
+        conn.get_history_kline.assert_not_called()
 
 
 if __name__ == "__main__":

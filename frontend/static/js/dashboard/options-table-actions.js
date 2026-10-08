@@ -332,7 +332,3 @@ export async function refreshOptionsForTickerByType(ticker, optionType, updateUI
         if (!isTimeout) showAlert(`Error refreshing ${optionType} options for ${ticker}: ${error.message}`, 'danger');
     }
 }
-
-export async function sellAllOptions(optionType) {
-    showAlert('Signal only mode — review trades in your broker app', 'info');
-}

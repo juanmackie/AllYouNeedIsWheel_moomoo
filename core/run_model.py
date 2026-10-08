@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from core.session_clock import SessionCalendar
 from core.utils import market_now, safe_float
 
 ACTIONABLE_STATES = ("ready",)
@@ -47,19 +48,21 @@ MODE_REVIEW_ONLY = "review_only"
 
 
 def _scheduled_market_open(now_et: datetime) -> bool:
-    """US session by wall clock (Mon-Fri 9:30-16:00 ET); holidays not modeled."""
-    if now_et.weekday() >= 5:
-        return False
-    open_dt = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_dt = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
-    return open_dt <= now_et <= close_dt
+    """Compatibility shim around the shared weekday-fallback session clock."""
+    return SessionCalendar.weekday_fallback().is_open(now_et)
 
 
 def _fresh_quote_map(quote_fetched_at: dict, max_age_sec: int, now: datetime) -> tuple[bool, list[str]]:
     stale_symbols = []
     if not quote_fetched_at:
         return False, stale_symbols
+    has_fresh_evidence = False
     for symbol, fetched_at in quote_fetched_at.items():
+        # A blank timestamp means this symbol produced no quote evidence (often
+        # because it had no candidate). Coverage accounts for whether the
+        # symbol was scanned; freshness applies to evidence that exists.
+        if not str(fetched_at or "").strip():
+            continue
         try:
             parsed = datetime.fromisoformat(str(fetched_at))
             if parsed.tzinfo is None:
@@ -70,7 +73,9 @@ def _fresh_quote_map(quote_fetched_at: dict, max_age_sec: int, now: datetime) ->
             continue
         if age > max_age_sec or age < 0:
             stale_symbols.append(str(symbol))
-    return not stale_symbols, stale_symbols
+        else:
+            has_fresh_evidence = True
+    return has_fresh_evidence, stale_symbols
 
 
 def resolve_session_context(run: dict | None, now_et: datetime | None = None) -> tuple[str, list[str]]:
@@ -260,11 +265,17 @@ def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: 
         for candidate in view.get(lane) or []:
             if not isinstance(candidate, dict):
                 continue
+            candidate_quotes_fresh = fresh
+            if session_state == SESSION_OPEN:
+                candidate_age = _candidate_quote_age_sec(candidate, now_utc)
+                candidate_quotes_fresh = (
+                    fresh and candidate_age is not None and 0 <= candidate_age <= _max_tradeable_age_sec(run)
+                )
             mode, reasons = compute_signal_eligibility(
                 candidate,
                 session_state=session_state,
                 coverage_truth=coverage_truth,
-                quotes_fresh=fresh,
+                quotes_fresh=candidate_quotes_fresh,
                 coverage_reasons=coverage_reasons,
                 session_reasons=session_reasons,
             )
@@ -352,6 +363,9 @@ class WheelRunSnapshot:
     capital_recovery: tuple[dict, ...] = ()
     # Per-watchlist cash-fit summary; default keeps pre-field snapshots loadable.
     watchlist_cash_fit: dict = field(default_factory=dict)
+    # Hard-gate-passing candidates archived transactionally beside the run.
+    # Deliberately excluded from `to_dict()` to keep snapshot JSON bounded.
+    candidate_archive: tuple[dict, ...] = ()
 
     @property
     def tradeable(self) -> bool:

@@ -5,7 +5,6 @@ Extracted from api/routes/portfolio.py (F008).
 """
 
 import traceback
-from datetime import datetime
 
 from flask import Blueprint
 
@@ -15,6 +14,7 @@ from api.routes.utils import get_db as _get_db
 from api.routes.utils import get_portfolio_service as _get_portfolio_service
 from api.services.portfolio_scoring import build_portfolio_context, score_position
 from core.logging_config import get_logger
+from core.run_model import utc_now_iso
 from core.ticker_utils import earnings_underlying_ticker
 from core.utils import safe_float as _safe_float
 
@@ -60,7 +60,7 @@ def get_roll_pressure():
 
         option_positions = positions if isinstance(positions, list) else positions.get("positions", [])
         if not option_positions:
-            return success_response({"positions": [], "count": 0, "generated_at": datetime.now().isoformat()})
+            return success_response({"positions": [], "count": 0, "generated_at": utc_now_iso()})
 
         import api
 
@@ -118,7 +118,7 @@ def get_roll_pressure():
         scored_positions.sort(key=lambda x: x["roll_pressure"], reverse=True)
 
         return success_response(
-            {"positions": scored_positions, "count": len(scored_positions), "generated_at": datetime.now().isoformat()}
+            {"positions": scored_positions, "count": len(scored_positions), "generated_at": utc_now_iso()}
         )
 
     except Exception as e:

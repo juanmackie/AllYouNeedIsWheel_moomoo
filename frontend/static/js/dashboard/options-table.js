@@ -9,7 +9,7 @@ import { state, loadOtmSettings, ensureTickerDataState, getSavedTabPreference, s
 import { calculateEarningsSummary } from './options-table-calc.js';
 import { buildTabsHTML, updateOptionsTable, addTickerRowToTable, displayPremiumSummary, addPutQtyInputEventListeners, initializeOptionsTableTooltips, insertProgressBanner, updateProgressBanner, finishProgressBanner, failProgressBanner } from './options-table-rendering.js';
 import { addOptionsTableEventListeners } from './options-table-events.js';
-import { refreshOptionsForTicker, refreshAllOptions, refreshOptionsForTickerByType, sellAllOptions } from './options-table-actions.js';
+import { refreshOptionsForTicker, refreshAllOptions, refreshOptionsForTickerByType } from './options-table-actions.js';
 
 function canonicalTicker(ticker) {
     return String(ticker || '').replace(/^[A-Z]{2}\./, '').toUpperCase();
@@ -263,6 +263,5 @@ export {
     loadTickers,
     refreshOptionsForTicker,
     refreshOptionsForTickerByType,
-    refreshAllOptions,
-    sellAllOptions
+    refreshAllOptions
 };

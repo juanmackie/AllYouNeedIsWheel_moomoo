@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../frontend/static/js/dashboard/account.js', () => ({
   loadPortfolioData: vi.fn().mockResolvedValue(undefined),
+  renderRecycleReadyPositions: vi.fn(),
 }));
 
 vi.mock('../../frontend/static/js/dashboard/top-recommendations.js', () => ({
@@ -97,7 +98,7 @@ describe('dashboard signal-panel initialization', () => {
 
   it('starts visible signal panels after account, position, and market waves', async () => {
     const { initializeDashboard } = await import('../../frontend/static/js/dashboard/dashboard-init.js');
-    const { loadPortfolioData } = await import('../../frontend/static/js/dashboard/account.js');
+    const { loadPortfolioData, renderRecycleReadyPositions } = await import('../../frontend/static/js/dashboard/account.js');
     const { initializeTopRecommendations } = await import('../../frontend/static/js/dashboard/top-recommendations.js');
     const { renderWeeklyIncome } = await import('../../frontend/static/js/dashboard/weekly-income.js');
     const { loadTickers } = await import('../../frontend/static/js/dashboard/options-table.js');
@@ -107,6 +108,7 @@ describe('dashboard signal-panel initialization', () => {
     await vi.dynamicImportSettled?.();
 
     expect(loadPortfolioData).toHaveBeenCalledTimes(1);
+    expect(renderRecycleReadyPositions).toHaveBeenCalledTimes(1);
     expect(initializeTopRecommendations).toHaveBeenCalledTimes(1);
     expect(renderWeeklyIncome).toHaveBeenCalledTimes(1);
     expect(loadTickers).not.toHaveBeenCalled();
@@ -123,12 +125,30 @@ describe('dashboard signal-panel initialization', () => {
     expect(loadTickers).toHaveBeenCalledTimes(1);
   });
 
+  it('uses one roll-pressure response for positions and recycle-ready cards', async () => {
+    const { renderRecycleReadyPositions } = await import('../../frontend/static/js/dashboard/account.js');
+    const positions = [{ ticker: 'AAPL', profit_target_progress: 60 }];
+    global.fetch = vi.fn(async (url) => {
+      if (url === '/api/portfolio/roll-pressure') {
+        return { ok: true, json: async () => ({ positions }) };
+      }
+      return { ok: true, json: async () => ({ positions: [] }) };
+    });
+
+    const { loadPositionsCommandPanel } = await import('../../frontend/static/js/dashboard/dashboard-init.js');
+    await loadPositionsCommandPanel();
+
+    expect(renderRecycleReadyPositions).toHaveBeenCalledWith(positions);
+    expect(global.fetch.mock.calls.filter(([url]) => url === '/api/portfolio/roll-pressure')).toHaveLength(1);
+    expect(global.fetch.mock.calls.some(([url]) => url === '/api/portfolio/alerts')).toBe(false);
+  });
+
   it('P1b: a published run fans out explicit reloads to every panel', async () => {
     // The poll uses real timers here so the immediate first fetch and the
     // fan-out microtasks settle deterministically.
     vi.useRealTimers();
     const { initializeDashboard } = await import('../../frontend/static/js/dashboard/dashboard-init.js');
-    const { loadPortfolioData } = await import('../../frontend/static/js/dashboard/account.js');
+    const { loadPortfolioData, renderRecycleReadyPositions } = await import('../../frontend/static/js/dashboard/account.js');
     const { loadTopRecommendations } = await import('../../frontend/static/js/dashboard/top-recommendations.js');
     const { loadWatchlist } = await import('../../frontend/static/js/dashboard/watchlist-panel.js');
     const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
@@ -163,6 +183,7 @@ describe('dashboard signal-panel initialization', () => {
     expect(loadTopRecommendations).toHaveBeenCalledWith(false); // no-scan reload
     // Panel already loaded at init and reloaded once by the fan-out:
     expect(loadPortfolioData).toHaveBeenCalledTimes(2);
+    expect(renderRecycleReadyPositions).toHaveBeenCalledTimes(2);
     // The poll rendered the strip from its own /api/run payload (no second fetch):
     expect(renderRunStrip).toHaveBeenCalled();
     // Options table is not reloaded on a publish until the scanner was loaded:
@@ -266,9 +287,12 @@ describe('C09 position P&L with unknown marks', () => {
       symbol: 'AAPL231215P140', ticker: 'AAPL', option_type: 'PUT', strike: 140, position: -1,
       exit_verdict: 'ROLL', roll_target: {
         ticker: 'AAPL', option_type: 'PUT', strike: 95, expiration: '20261016',
+        fee_model_note: 'Fees measured from your fills: US options, last 90 days (BUY 20 orders; SELL 20 orders).',
       },
     }]);
     expect(html).toContain('ROLL → AAPL PUT 95.00 2026-10-16');
+    expect(html).toContain('Fees measured from your fills');
+    expect(html).toContain('BUY 20 orders; SELL 20 orders');
   });
 
   it('renders ROTATE as a distinct exit verdict', async () => {

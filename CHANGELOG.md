@@ -1,5 +1,146 @@
 # Changelog
 
+## 2026-09-30 — Add display-only downtrend context
+
+The combined top-three cards can flag a 20-session decline of at least 15%
+when the latest close is below its 50-session average. This uses the same
+quota-checked, cached Moomoo daily-close request as the IV/HV diagnostic. It is
+display-only and does not change ranking, eligibility, or copy behavior.
+
+## 2026-09-30 — Compare broker IV with 20-session historical volatility
+
+The combined top-three cards can show broker-sourced implied volatility beside
+annualized volatility from Moomoo's adjusted daily closes. The read-only
+diagnostic checks historical-K-line quota, uses only completed sessions, and
+stays unavailable when data is incomplete. It is calculated after ranking and
+does not affect eligibility, ordering, or copy behavior.
+
+## 2026-09-30 — Use US market dates for earnings, weekly income, and IV history
+
+Earnings day counts and weekly expiry summaries now follow the US market date
+instead of the Windows host date. IV samples are stamped and aged on the same
+market wall clock so Brisbane's next calendar day cannot split or misdate the
+US session's daily IV history. Roll-pressure generation timestamps are UTC.
+
+## 2026-09-30 — Scope live quote freshness to available evidence and each pick
+
+Missing or stale quote timestamps for scanned symbols without a candidate no
+longer make every pick review-only. During open sessions, each copy-addressable
+candidate must still carry a parseable, fresh Moomoo quote timestamp or it
+remains review-only.
+
+## 2026-09-30 — Fail closed when covered-call basis is unknown
+
+Covered-call candidates now use a completeness-proven ledger-adjusted basis,
+fall back to Moomoo average cost, and are blocked when neither is available.
+Below-basis checks and the displayed called-away P&L use that same basis source.
+
+## 2026-09-30 — Preserve the last run when broker positions are unavailable
+
+An unsuccessful Moomoo position query no longer returns a success-shaped empty
+portfolio. The refresh now fails before recommendation scanning or portfolio
+snapshot diffing, so it cannot manufacture exits from a missing position book.
+
+## 2026-09-30 — Show OpenD working-order and sell-capacity diagnostics
+
+Added account-scoped, query-only `order_list_query` and
+`acctradinginfo_query` wrappers. Recommendation cards among the combined top
+three can show an exact-match `RESTING ORDER` badge and Moomoo max-sell fields.
+Unknown query results stay unavailable. These diagnostics do not affect rank,
+copy eligibility, or recommended quantity.
+
+## 2026-09-30 — Restore the growth-panel pace ETA
+
+The 5x growth panel now renders the server-calculated years at current pace.
+Previously an undefined variable stopped the panel before the ETA could render.
+It waits for the 60-day sample, shows `Never at current pace` for a mature
+non-positive return, and labels a reached target explicitly.
+
+## 2026-09-30 — Add evidence-gated wheel-cycle P&L
+
+Outcome analytics now report option and assigned-share P&L together for fully
+closed cycles with complete paired-fill prices, quantities, and fees. Open,
+unverified, provisional, or incomplete share legs remain unknown. Buying back a
+covered call leaves the stock cycle open, and option buyback debits include
+their fees.
+
+## 2026-09-30 — Show Moomoo sellable shares beside wheel holdings
+
+Persist Moomoo's stock `can_sell_qty` field with portfolio snapshots and display
+it beside held shares as a covered-call capacity cross-check. It is explicitly
+display-only and does not affect candidate eligibility or scan results.
+
+## 2026-09-30 — Measure prospective roll fees from ingested fills
+
+Roll, rotation, and ITM put roll-down comparisons now use side-specific median
+fees per complete US option order from the active account's fee-resolved fills
+in the last 90 days. The position monitor labels the source and BUY/SELL sample
+counts; a missing side keeps net credit unknown and cannot produce ROTATE or
+ROLL_OUT_DOWN.
+
+## 2026-09-30 — Stop option capital-days at assignment and evidenced expiry
+
+Paired zero-price assignment fills now end the option obligation's capital-day
+window without being counted as a buyback or fabricated profit. Consecutive
+Moomoo portfolio snapshots that show a short option before expiry and absent
+after 16:00 ET stop capital-days as `expired_unverified`. Assignment and expiry
+payoff remain unknown at cycle level until the share leg or payoff is proven.
+
+## 2026-09-30 — Add offline shadow settlement and rank checkpoint
+
+Archived hard-gate-passing candidates can now be settled from Moomoo's
+unadjusted expiration-day close after an aggregate quota check. Missing bars and
+insufficient quota leave observations pending. PUT results subtract intrinsic
+value; CALL results identify intrinsic value as upside forgone. Local analytics
+report sample readiness and block-bootstrap rank comparisons by DTE bucket;
+they do not alter shortlist order or copy eligibility.
+
+## 2026-09-30 — Persist wheel cycles and show holdings state
+
+Schema v13 now stores account-scoped wheel-cycle folds, run candidates, and
+shadow outcomes; fill/cash-flow evidence is exempt from automatic pruning and
+portfolio/run/trade history is retained for 1,200 days. Assignment and called-
+away fills are classified conservatively; adjusted basis falls back to Moomoo
+average cost unless fill-window, fee, and share reconciliation are proven.
+Preset v8 drives exit thresholds and adds basis-aware `ACCEPT_ASSIGNMENT` and
+fee-gated `ROLL_OUT_DOWN` verdicts. `GET /api/portfolio/holdings` and the new
+dashboard panel show local snapshot holdings, cycles, basis provenance, changes,
+near expiries, and fill-history age without querying OpenD.
+
+The growth panel now uses account-scoped 2026-08-22 baseline settings and a
+flow-adjusted, chain-linked pace calculation. It shows required and realized
+CAGR, the point gap, and years at the current pace; annualization waits for 60
+days, and a positive return does not by itself report the 5x / 3-year goal on
+track. Because OpenD's cash-flow history may be partial, the dashboard now
+supports account-scoped owner-declared deposits/withdrawals and an explicit
+completeness confirmation. Goal progress, return, ETA, and on-track metrics
+remain withheld until confirmed; adding or removing a flow revokes confirmation.
+
+## 2026-09-30 — Cash-aware, session-aware watchlist scans
+
+Batch broker price snapshots now retain price, previous close, 52-week range,
+dividend, update time, and verified security type. Scan preflight uses only
+affordable names and the preset DTE span; evidence-backed cash skips count as
+covered, while missing price/exposure remains a gap. Bounded range-chain calls
+select expirations from broker rows, preserve the three-expiry sampling rule,
+and fail closed rather than truncating option snapshots. OpenD trading days
+seed the session calendar with a labeled weekday fallback; closed-session
+option cache entries must come from after the last regular close, and open-session
+TTL checks reject future cache timestamps. Infeasible
+CSP preflight no longer suppresses the covered-call lane, and visible top picks
+show sequential funding conflicts without changing shortlist order.
+
+## 2026-09-30 — Correct broker cash, assignment outcomes, and market dates
+
+Preserve Moomoo's source field for available USD cash and avoid subtracting
+working short-put collateral a second time when the broker cash field already
+accounts for it. Account summaries now explicitly request USD and use the SDK's
+`max_power_short` field. Market-date consumers use the US market clock. A
+zero-price option buy paired with the matching stock assignment within five
+seconds is no longer counted as a buyback. The read-only SDK surface is covered
+by enforced allowlist checks, and recommendation pace contribution compares
+daily premium velocity with the required daily pace.
+
 ## 2026-09-27 — Remove unused recommendation metrics
 
 Removed the misleading IV-adjusted-return and target-gap values from scored

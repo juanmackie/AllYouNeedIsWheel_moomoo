@@ -11,8 +11,13 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timedelta
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
+from core.run_model import RunMetadata, WheelRunSnapshot
+from core.utils import market_now
 from db.database import OptionsDatabase
 from db.schema import create_tables, migrate_database
 from db.sqlite_pool import close_connection_pool
@@ -46,23 +51,121 @@ class TestOptionsDatabase(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        expected_tables = ["iv_history", "earnings_calendar", "trade_events"]
+        expected_tables = [
+            "iv_history",
+            "earnings_calendar",
+            "trade_events",
+            "wheel_cycles",
+            "run_candidates",
+            "shadow_outcomes",
+        ]
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         actual_tables = {row[0] for row in cursor.fetchall()}
         for table in expected_tables:
             self.assertIn(table, actual_tables, f"Missing table: {table}")
 
         cursor.execute("PRAGMA user_version")
-        self.assertEqual(cursor.fetchone()[0], 12)
+        self.assertEqual(cursor.fetchone()[0], 13)
 
         evaluator_tables = {t for t in actual_tables if t.startswith("evaluator_")}
         self.assertEqual(evaluator_tables, set(), f"Evaluator tables should be dropped: {evaluator_tables}")
 
-        # Retired 2026-08 consolidation tables must not exist at schema v9.
+        # Retired 2026-08 consolidation tables must not exist at schema v13.
         self.assertNotIn("recommendations", actual_tables)
         self.assertNotIn("playbook_hypotheses", actual_tables)
 
         conn.close()
+
+    def test_candidate_archive_is_atomic_bounded_and_excluded_from_snapshot_json(self):
+        now = "2026-09-30T12:00:00+00:00"
+        run = RunMetadata(
+            run_id="archive-run",
+            generated_at=now,
+            published_at=now,
+            env="SIMULATE",
+            account_id="acct-one",
+            preset_key="balanced",
+            preset_version=8,
+            market_state="closed",
+            status="planning",
+        )
+        candidates = [
+            {
+                "ticker": "XYZ",
+                "option_type": "PUT",
+                "strike": 10 + index,
+                "expiration": "20261016",
+                "dte": 16,
+                "bid": 1.0,
+                "stock_price": 12.0,
+                "cash_required": 1000.0,
+                "quote_fetched_at_utc": now,
+            }
+            for index in range(11)
+        ]
+        candidates.append({**candidates[0], "ticker": "ABC"})
+        snapshot = WheelRunSnapshot(
+            run=run,
+            portfolio={},
+            csp_picks=(),
+            cc_decisions=(),
+            roll_decisions=(),
+            rejected=(),
+            preset={},
+            watchlist_origins={},
+            candidate_archive=tuple(candidates),
+        )
+
+        self.db.save_run_snapshot(snapshot)
+        saved = self.db.get_latest_snapshot(env="SIMULATE", account_id="acct-one")
+        archived = self.db.get_run_candidates(env="SIMULATE", account_id="acct-one")
+
+        self.assertNotIn("candidate_archive", saved)
+        self.assertEqual(len(archived), 11)  # ten XYZ plus one ABC
+        self.assertEqual(sum(item["ticker"] == "XYZ" for item in archived), 10)
+        self.db.save_run_snapshot(snapshot)
+        self.assertEqual(len(self.db.get_run_candidates(env="SIMULATE", account_id="acct-one")), 11)
+
+    def test_shadow_outcome_persists_and_joins_archived_candidate(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """INSERT INTO run_candidates (
+                candidate_id, run_id, env, account_id, ticker, option_type, strike,
+                expiration, candidate_json, archived_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "shadow-id-1",
+                "run-shadow-1",
+                "REAL",
+                "acct-1",
+                "XYZ",
+                "PUT",
+                50.0,
+                "20200117",
+                '{"bid": 2.0}',
+                "2020-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        settled = {
+            "candidate_id": "shadow-id-1",
+            "settled_at": "2020-01-18T00:00:00+00:00",
+            "expiry_close": 45.0,
+            "settlement_source": "moomoo_unadjusted_daily_close",
+            "net_per_share": -3.0,
+            "outcome_label": "put_net",
+            "outcome": {"capital_return_per_day": -0.004},
+        }
+        self.assertEqual(self.db.settle_shadow_outcomes([settled]), 1)
+        self.assertEqual(self.db.settle_shadow_outcomes([settled]), 0)
+        records = self.db.get_shadow_candidates(env="REAL", account_id="acct-1")
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["status"], "settled")
+        self.assertEqual(records[0]["expiry_close"], 45.0)
+        self.assertEqual(records[0]["capital_return_per_day"], -0.004)
 
     def test_earnings_migration_dedupes_ticker_keeps_latest(self):
         self.db.close()
@@ -134,6 +237,14 @@ class TestOptionsDatabase(unittest.TestCase):
         self.assertIsNotNone(latest)
         self.assertEqual(latest["implied_volatility"], 0.30)
 
+    def test_iv_history_timestamp_uses_us_market_wall_time(self):
+        market_time = datetime(2026, 9, 29, 20, 30, tzinfo=ZoneInfo("America/New_York"))
+        with patch("db.iv_repository.market_now", return_value=market_time):
+            self.assertTrue(self.db.save_iv_data("AAPL", 0.30))
+            latest = self.db.get_latest_iv("AAPL")
+
+        self.assertEqual(latest["timestamp"], "2026-09-29 20:30:00")
+
     def test_connection_pool_reuses_connections(self):
         """Repeated repository calls should reuse pooled SQLite connections."""
         before = self.db.get_connection_pool_stats()
@@ -161,7 +272,7 @@ class TestOptionsDatabase(unittest.TestCase):
         """Test purging old IV data"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        old_date = (datetime.now() - timedelta(days=50)).strftime("%Y-%m-%d %H:%M:%S")
+        old_date = (market_now().replace(tzinfo=None) - timedelta(days=50)).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             """
             INSERT INTO iv_history (ticker, timestamp, implied_volatility, stock_price)
@@ -205,6 +316,12 @@ class TestOptionsDatabase(unittest.TestCase):
             INSERT INTO scan_ledger
                 (scan_type, timestamp, config_hash, portfolio_hash)
             VALUES ('recommendations', '2000-01-01 00:00:00', 'config', 'portfolio');
+            INSERT INTO option_fills
+                (fill_id, captured_at, ingested_at, ticker)
+            VALUES ('old-fill', '2000-01-01 00:00:00', '2000-01-01 00:00:00', 'AAPL');
+            INSERT INTO account_cash_flows
+                (cashflow_id, clearing_date)
+            VALUES ('old-cashflow', '2000-01-01');
             """
         )
         conn.execute(
@@ -223,6 +340,14 @@ class TestOptionsDatabase(unittest.TestCase):
         self.assertEqual(deleted["trade_events"], 1)
         self.assertEqual(deleted["scan_ledger"], 1)
         self.assertEqual(deleted["iv_history"], 1)
+        self.assertNotIn("option_fills", deleted)
+        self.assertNotIn("account_cash_flows", deleted)
+        retained_conn = sqlite3.connect(self.db_path)
+        try:
+            self.assertEqual(retained_conn.execute("SELECT count(*) FROM option_fills").fetchone()[0], 1)
+            self.assertEqual(retained_conn.execute("SELECT count(*) FROM account_cash_flows").fetchone()[0], 1)
+        finally:
+            retained_conn.close()
 
     def test_save_and_get_earnings_date(self):
         """Test saving and retrieving earnings dates"""
@@ -235,8 +360,8 @@ class TestOptionsDatabase(unittest.TestCase):
 
     def test_get_pending_earnings(self):
         """Test getting tickers with upcoming earnings"""
-        today = datetime.now().strftime("%Y-%m-%d")
-        future_date = (datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d")
+        today = market_now().date().strftime("%Y-%m-%d")
+        future_date = (market_now().date() + timedelta(days=5)).strftime("%Y-%m-%d")
 
         self.db.save_earnings_date("AAPL", future_date)
         self.db.save_earnings_date("TSLA", today)
@@ -254,7 +379,7 @@ class TestOptionsDatabase(unittest.TestCase):
 
         old_conn = sqlite3.connect(self.db_path)
         old_cursor = old_conn.cursor()
-        old_time = (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+        old_time = (market_now().replace(tzinfo=None) - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
         old_cursor.execute(
             """
             INSERT OR REPLACE INTO earnings_calendar
@@ -449,7 +574,7 @@ class TestDatabaseEdgeCases(unittest.TestCase):
         """Test that get_iv_history respects the days parameter"""
         old_conn = sqlite3.connect(self.db_path)
         old_cursor = old_conn.cursor()
-        old_ts = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
+        old_ts = (market_now().replace(tzinfo=None) - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
         old_cursor.execute(
             "INSERT INTO iv_history (ticker, timestamp, implied_volatility) VALUES (?, ?, ?)", ("AAPL", old_ts, 0.25)
         )
@@ -979,6 +1104,77 @@ class TestTradeEventsAccountScoping(unittest.TestCase):
         self.assertEqual(unfiltered["total_exits"], 1)
 
 
+class TestDatabaseBackups(unittest.TestCase):
+    def test_backup_is_wal_safe_idempotent_and_keeps_daily_plus_monthly_copies(self):
+        from db.backup import backup_database
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = os.path.join(temp_dir, "live.db")
+            root = os.path.join(temp_dir, "backups")
+            live = sqlite3.connect(source)
+            live.execute("PRAGMA journal_mode=WAL")
+            live.execute("CREATE TABLE facts (value TEXT NOT NULL)")
+            live.execute("INSERT INTO facts VALUES ('first')")
+            live.commit()
+
+            first = backup_database(source, root, now=datetime(2026, 9, 30, 12, tzinfo=timezone.utc))
+            self.assertTrue(first["daily_created"])
+            self.assertTrue(first["monthly_created"])
+            with closing(sqlite3.connect(first["daily_backup"])) as backup:
+                self.assertEqual(backup.execute("SELECT value FROM facts").fetchall(), [("first",)])
+
+            live.execute("INSERT INTO facts VALUES ('second')")
+            live.commit()
+            repeated = backup_database(source, root, now=datetime(2026, 9, 30, 18, tzinfo=timezone.utc))
+            self.assertFalse(repeated["daily_created"])
+            self.assertFalse(repeated["monthly_created"])
+            tomorrow = backup_database(source, root, now=datetime(2026, 10, 1, 12, tzinfo=timezone.utc))
+            self.assertTrue(tomorrow["daily_created"])
+            self.assertTrue(tomorrow["monthly_created"])
+            with closing(sqlite3.connect(tomorrow["daily_backup"])) as backup:
+                self.assertEqual(
+                    backup.execute("SELECT value FROM facts ORDER BY rowid").fetchall(),
+                    [("first",), ("second",)],
+                )
+            live.close()
+
+    def test_backup_retention_prunes_only_old_named_archives(self):
+        from db.backup import backup_database
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = os.path.join(temp_dir, "live.db")
+            root = os.path.join(temp_dir, "backups")
+            with closing(sqlite3.connect(source)) as live:
+                live.execute("CREATE TABLE facts (value TEXT)")
+            daily_dir = os.path.join(root, "daily")
+            monthly_dir = os.path.join(root, "monthly")
+            os.makedirs(daily_dir)
+            os.makedirs(monthly_dir)
+            for name in (
+                "wheel-20260928.sqlite3",
+                "wheel-20260929.sqlite3",
+                "wheel-20260930.sqlite3",
+                "keep-this-note.txt",
+            ):
+                with open(os.path.join(daily_dir, name), "w", encoding="utf-8") as file:
+                    file.write("archive")
+            for name in ("wheel-202607.sqlite3", "wheel-202608.sqlite3", "wheel-202609.sqlite3"):
+                with open(os.path.join(monthly_dir, name), "w", encoding="utf-8") as file:
+                    file.write("archive")
+
+            backup_database(
+                source,
+                root,
+                now=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                daily_keep=2,
+                monthly_keep=2,
+            )
+
+            self.assertFalse(os.path.exists(os.path.join(daily_dir, "wheel-20260928.sqlite3")))
+            self.assertTrue(os.path.exists(os.path.join(daily_dir, "keep-this-note.txt")))
+            self.assertFalse(os.path.exists(os.path.join(monthly_dir, "wheel-202607.sqlite3")))
+
+
 class TestPortfolioTransitionAtomic(unittest.TestCase):
     """C12: the snapshot baseline plus its event batch commit atomically."""
 
@@ -1075,13 +1271,13 @@ class TestIvHistoryStrikeMigration(unittest.TestCase):
         try:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(iv_history)")}
             self.assertIn("strike", cols)
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 13)
         finally:
             conn.close()
 
     def test_v11_history_table_gains_strike_and_keeps_rows(self):
         # Pre-create the v11 shape (no strike) and pin the old version so
-        # migrate_database runs only the v12 block.
+        # migrate_database runs the v12 and v13 blocks.
         conn = sqlite3.connect(self.db_path)
         conn.executescript(
             """
@@ -1110,7 +1306,7 @@ class TestIvHistoryStrikeMigration(unittest.TestCase):
         try:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(iv_history)")}
             self.assertIn("strike", cols)
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 12)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 13)
             rows = conn.execute("SELECT ticker, implied_volatility, strike FROM iv_history").fetchall()
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0][0], "AAPL")

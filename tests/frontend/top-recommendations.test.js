@@ -70,6 +70,7 @@ function setupDOM() {
         <span class="rank-badge"></span>
         <span class="ticker-badge"></span>
         <span class="signal-type-badge"></span>
+        <span class="working-order-badge badge d-none"></span>
         <span class="option-type-badge"></span>
         <span class="strike-price"></span>
         <span class="expiration-date"></span>
@@ -82,6 +83,7 @@ function setupDOM() {
         <span class="underlying-quality-badge"></span>
         <span class="research-only-badge"></span>
         <span class="signal-data-source"></span>
+        <div class="trade-diagnostic-note d-none"></div>
         <button type="button" class="btn btn-sm copy-ticket-btn">Copy ticket</button>
         <input type="number" class="form-control traded-strike-input" />
         <button type="button" class="btn btn-sm mark-taken-btn">Mark taken</button>
@@ -90,12 +92,12 @@ function setupDOM() {
         <div class="missing-risk-badge small text-warning fw-semibold d-none"></div>
         <span class="otm-pct"></span>
         <span class="delta-value"></span>
-        <span class="iv-rank"></span>
-        <div class="macro-impact"></div>
         <div class="csp-details d-none">
           <span class="csp-cash-required"></span>
           <span class="csp-cash-pct"></span>
           <span class="csp-cash-remaining"></span>
+        <span class="csp-income-at-size"></span>
+        <div class="csp-pace-contribution d-none"></div>
           <span class="csp-breakeven-buffer"></span>
           <span class="csp-expected-move"></span>
         </div>
@@ -115,8 +117,9 @@ function setupDOM() {
         <div class="recommendation-details">
           <div class="recommendation-detail-row otm-row"></div>
           <div class="recommendation-detail-row delta-row"></div>
-          <div class="recommendation-detail-row iv-row"></div>
-          <div class="recommendation-detail-row macro-row"></div>
+          <div class="recommendation-detail-row iv-row"><span class="iv-rank"></span></div>
+          <div class="recommendation-detail-row"><span class="iv-vs-hv"></span></div>
+          <div class="recommendation-detail-row"><span class="falling-knife-diagnostic"></span></div>
         </div>
         <div class="growth-mode-details d-none"></div>
       </div>
@@ -489,7 +492,9 @@ describe('top-recommendations unknown IV status', () => {
     const tierBadgeEl = cards[0].querySelector('.underlying-quality-badge');
     expect(tierBadgeEl.classList.contains('bg-warning')).toBe(true);
     expect(tierBadgeEl.classList.contains('text-dark')).toBe(true);
-    expect(cards[0].querySelectorAll('.recommendation-detail-row').length).toBe(4);
+    expect(cards[0].querySelectorAll('.recommendation-detail-row').length).toBe(5);
+    expect(cards[0].querySelector('.iv-vs-hv').textContent).toBe('Unavailable');
+    expect(cards[0].querySelector('.falling-knife-diagnostic').textContent).toBe('Unavailable');
     expect(cards[0].querySelector('.csp-details')?.classList.contains('d-none')).toBe(false);
     expect(cards[0].querySelector('.cc-details')?.classList.contains('d-none')).toBe(true);
     expect(cards[0].querySelector('.hard-blockers')?.classList.contains('d-none')).toBe(true);
@@ -520,6 +525,20 @@ describe('top-recommendations unknown IV status', () => {
           iv_rank: 85,
           iv_status: 'normal',
           iv_percentile: 0.92,
+          iv_vs_hv: {
+            status: 'available',
+            implied_volatility_pct: 54,
+            historical_volatility_pct: 32.5,
+            spread_percentage_points: 21.5,
+            window_sessions: 20,
+            as_of_date: '2026-09-29',
+          },
+          falling_knife: {
+            status: 'available',
+            decline_pct: -18.25,
+            flagged: true,
+            rule: '20-session decline of at least 15% and close below 50-session average',
+          },
           otm_pct: 5.0,
           delta: -0.25,
         },
@@ -534,6 +553,12 @@ describe('top-recommendations unknown IV status', () => {
 
     const ivRankEl = document.querySelector('.recommendation-card .iv-rank');
     expect(ivRankEl.textContent).toBe('85% (%ile 92)');
+    const ivVsHvEl = document.querySelector('.recommendation-card .iv-vs-hv');
+    expect(ivVsHvEl.textContent).toBe('54.0% / 32.5% (+21.5 pp)');
+    expect(ivVsHvEl.title).toContain('2026-09-29');
+    const fallingKnifeEl = document.querySelector('.recommendation-card .falling-knife-diagnostic');
+    expect(fallingKnifeEl.textContent).toBe('Flagged (-18.3% / 20 sessions)');
+    expect(fallingKnifeEl.title).toContain('50-session average');
   });
 
   it('reads absent history as insufficient instead of a moderate rank', async () => {
@@ -806,6 +831,12 @@ describe('top-recommendations source badges', () => {
         quote_quality: 'tradable',
         blocked_reason_codes: [],
         research_only: true,
+        has_working_order: true,
+        trade_diagnostics_checked: true,
+        broker_capacity_check: 'ok',
+        broker_max_position_sell: 0,
+        broker_max_sell_short: 2,
+        broker_max_buy_back: null,
       }],
       blocked_signals: [],
     });
@@ -828,6 +859,10 @@ describe('top-recommendations source badges', () => {
     expect(document.getElementById('bp-diagnostics')?.textContent).toContain('raw: us_cash=$40000.00, usd_net_cash_power=$25000.00');
     expect(document.querySelector('.research-only-badge')?.textContent).toBe('Research only');
     expect(document.querySelector('.research-only-badge')?.classList.contains('d-none')).toBe(false);
+    expect(document.querySelector('.working-order-badge')?.textContent).toBe('RESTING ORDER');
+    expect(document.querySelector('.working-order-badge')?.classList.contains('d-none')).toBe(false);
+    expect(document.querySelector('.trade-diagnostic-note')?.textContent).toContain('max sell short: 2');
+    expect(document.querySelector('.trade-diagnostic-note')?.textContent).toContain('display only');
   });
 });
 
@@ -1298,6 +1333,41 @@ describe('top-recommendations strategy lanes (preset rules + two sections)', () 
     expect(ccSection.classList.contains('d-none')).toBe(false);
     expect(document.getElementById('top-csp-cards').querySelectorAll('.recommendation-card').length).toBe(3);
     expect(document.getElementById('top-cc-cards').querySelectorAll('.recommendation-card').length).toBe(3);
+  });
+
+  it('compares per-day contract income with the required daily pace', async () => {
+    setupLaneDOM();
+    vi.resetModules();
+    cleanup = (await import('../../frontend/static/js/dashboard/top-recommendations.js')).cleanupTopRecommendations;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ pace: { required_premium_per_day: 10 } }),
+    }));
+
+    const { fetchRunState } = await import('../../frontend/static/js/dashboard/api-run.js');
+    const candidate = {
+      ...csp(1),
+      bid_premium_per_contract: 300,
+      premium_velocity_per_day: 10,
+      recommended_contracts: 2,
+    };
+    fetchRunState.mockResolvedValue({
+      success: true, count: 1,
+      tradeable: true,
+      run: { run_id: 'pace-run', market_state: 'open', status: 'ready' },
+      signals: [candidate], csp_picks: [candidate], cc_decisions: [], rejected: [],
+      generated_at: '2026-05-24T12:00:00',
+    });
+
+    const { initializeTopRecommendations } = await import('../../frontend/static/js/dashboard/top-recommendations.js');
+    await initializeTopRecommendations();
+    await vi.dynamicImportSettled?.();
+    await vi.waitFor(() => {
+      expect(document.querySelector('.csp-pace-contribution')?.textContent).toContain('Covers 200.0%');
+    });
+
+    expect(document.querySelector('.csp-income-at-size').textContent).toBe('$600.00');
+    vi.unstubAllGlobals();
   });
 
   it('keeps both lanes always visible and lists remaining candidates below each', async () => {

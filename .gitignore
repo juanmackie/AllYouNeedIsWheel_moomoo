@@ -53,6 +53,7 @@ plans/
 .env.local
 
 # Backups and temporary files
+/backups/
 *.bak
 *.tmp
 *.log
@@ -100,3 +101,5 @@ research.md
 # Playwright artifacts
 test-results/
 playwright-report/
+.coverage
+.coverage.*

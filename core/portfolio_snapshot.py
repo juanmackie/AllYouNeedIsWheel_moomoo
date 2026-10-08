@@ -31,7 +31,7 @@ def _option_underlying(code: str) -> str:
 
 
 # Fields copied from each stock position into positions_json.
-_STOCK_FIELDS = ("market_price", "avg_cost", "cost_price", "market_val")
+_STOCK_FIELDS = ("market_price", "avg_cost", "cost_price", "market_val", "can_sell_qty")
 
 # Fields copied from each option position into positions_json.
 _OPTION_FIELDS = ("strike", "expiration", "option_type", "market_price", "avg_cost", "market_val")

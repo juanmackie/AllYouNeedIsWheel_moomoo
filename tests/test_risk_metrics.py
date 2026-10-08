@@ -11,14 +11,14 @@ Covers:
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from core.growth_mode import (
+from core.risk_metrics import (
     classify_covered_call_intent,
     compute_confidence_score,
     compute_risk_budget_used,
     compute_stress_loss,
-    estimate_target_gap,
     should_block_for_data_quality,
 )
+from core.utils import market_now
 from core.wheel_decision import score_contract
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ def _base_profile():
 
 
 def _make_option(strike, bid, ask, oi, vol, delta, iv, option_type="PUT"):
-    future = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+    future = (market_now().date() + timedelta(days=21)).strftime("%Y%m%d")
     mid = (bid + ask) / 2
     return {
         "strike": strike,
@@ -214,30 +214,6 @@ class TestCoveredCallIntent(unittest.TestCase):
         self.assertEqual(intent, "income")
 
 
-class TestEstimateTargetGap(unittest.TestCase):
-    """Target gap contribution is positive when shortfall exists."""
-
-    def test_shortfall_positive(self):
-        gap = estimate_target_gap(
-            account_value=80000,
-            target_multiple=2.0,
-            current_premium_income=200,
-            projected_months=12,
-        )
-        # target=160k, projected=80k+2.4k=82.4k => gap=77.6k
-        self.assertGreater(gap, 0)
-
-    def test_on_track_zero(self):
-        gap = estimate_target_gap(
-            account_value=80000,
-            target_multiple=2.0,
-            current_premium_income=7000,
-            projected_months=12,
-        )
-        # target=160k, projected=80k+84k=164k => no gap
-        self.assertEqual(gap, 0.0)
-
-
 # ---------------------------------------------------------------------------
 # Integration tests with score_contract
 # ---------------------------------------------------------------------------
@@ -247,7 +223,7 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
     """Growth mode correctly influences score_contract output."""
 
     def setUp(self):
-        self.future = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        self.future = (market_now().date() + timedelta(days=21)).strftime("%Y%m%d")
         self.profile = _base_profile()
         self.gp = _growth_profile_dict()
         self.portfolio = {
@@ -345,7 +321,7 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
         meaningfully accelerate the 2x target should be penalized.
         Use a strike barely above stock to trigger upside-capping risk.
         """
-        future = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        future = (market_now().date() + timedelta(days=21)).strftime("%Y%m%d")
         opt = _make_option(strike=101, bid=0.30, ask=0.40, oi=500, vol=200, delta=0.10, iv=0.20, option_type="CALL")
         opt["expiration"] = future
         portfolio = {
@@ -520,7 +496,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
     """
 
     def setUp(self):
-        self.future = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
+        self.future = (market_now().date() + timedelta(days=37)).strftime("%Y%m%d")
         # Balanced monthly profile (legacy defaults)
         self.balanced_profile = {
             "min_mid_price": 0.05,
@@ -574,7 +550,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         """
         # Candidate A: growth-tuned (0.30 delta, 37 DTE, closer OTM)
         opt_a = _make_option(strike=92, bid=4.50, ask=4.80, oi=600, vol=300, delta=-0.30, iv=0.40, option_type="PUT")
-        opt_a["expiration"] = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
+        opt_a["expiration"] = (market_now().date() + timedelta(days=37)).strftime("%Y%m%d")
 
         result_a = score_contract(
             "AAPL",
@@ -587,7 +563,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
 
         # Candidate B: conservative (0.22 delta, 45 DTE, farther OTM)
         opt_b = _make_option(strike=90, bid=1.20, ask=1.35, oi=900, vol=500, delta=-0.22, iv=0.25, option_type="PUT")
-        opt_b["expiration"] = (datetime.now() + timedelta(days=45)).strftime("%Y%m%d")
+        opt_b["expiration"] = (market_now().date() + timedelta(days=45)).strftime("%Y%m%d")
 
         result_b = score_contract(
             "AAPL",
@@ -618,7 +594,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         portfolio = dict(self.portfolio)
 
         valid = _make_option(strike=90, bid=2.20, ask=2.40, oi=700, vol=300, delta=-0.20, iv=0.30, option_type="PUT")
-        valid["expiration"] = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
+        valid["expiration"] = (market_now().date() + timedelta(days=37)).strftime("%Y%m%d")
         valid_result = score_contract(
             "AAPL",
             valid,
@@ -631,7 +607,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         self.assertFalse(valid_result.hard_blockers)
 
         bad_dte = _make_option(strike=90, bid=2.20, ask=2.40, oi=700, vol=300, delta=-0.20, iv=0.30, option_type="PUT")
-        bad_dte["expiration"] = (datetime.now() + timedelta(days=29)).strftime("%Y%m%d")
+        bad_dte["expiration"] = (market_now().date() + timedelta(days=29)).strftime("%Y%m%d")
         bad_dte_result = score_contract(
             "AAPL",
             bad_dte,
@@ -645,7 +621,7 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         self.assertIn("outside_csp_dte_range", bad_dte_result.blocked_reason_codes)
 
         bad_otm = _make_option(strike=96, bid=1.40, ask=1.60, oi=700, vol=300, delta=-0.20, iv=0.30, option_type="PUT")
-        bad_otm["expiration"] = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
+        bad_otm["expiration"] = (market_now().date() + timedelta(days=37)).strftime("%Y%m%d")
         bad_otm_result = score_contract(
             "AAPL",
             bad_otm,

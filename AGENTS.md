@@ -12,7 +12,7 @@ AllYouNeedIsWheel scans the user's Moomoo watchlist for the top 3 cash-secured p
 
 - `app.py` — Flask application factory, config load, SQLite data layer, one-screen dashboard, redirects for retired /portfolio and /options paths. Runtime services start only via explicit entry points (`run_api.py`, `python app.py`); importing never opens the DB or starts threads.
 - `config.py` — application defaults and environment overrides, including the wheel risk preset default.
-- `api/` — route blueprints and service orchestration (run, settings, watchlist, options, portfolio, roll pressure, alerts, earnings, ledger, source policy); `api/services/recommendation_ranking.py` owns shortlist ordering.
+- `api/` — route blueprints and service orchestration (run, settings, watchlist, options, portfolio, roll pressure, earnings, ledger, source policy); `api/services/recommendation_ranking.py` owns shortlist ordering.
 - `core/` — trading, scoring, connection, cache, wheel runner, immutable run model, presets, exit playbook, growth math, decision logic.
 - `db/` — SQLite schema, migrations, pooling, repositories.
 - `frontend/` — Jinja templates, CSS, static assets, browser JS for the one-screen dashboard.
@@ -53,8 +53,15 @@ and the actionability/state-table half by implementation (read-time
 session/coverage resolution in `core/run_model.py`, live/staged/review_only
 signal modes, and copy revalidation at `api/routes/run.py::evaluate_copy_check`,
 matched by the state/action table in `SCORING.md`). No code-level gap remains
-open; the only unexercised surface is the owner-run live Windows/OpenD
-acceptance runbook (`docs/acceptance-runbook.md`).
+  open for S03. This statement is scoped to S03 only; it does not mean all
+  product gaps are closed. The 2026-09-30 roadmap still tracks full wheel-cycle
+  P&L realization, broader OpenD analytics adoption, and cleanup; option capital-days
+  now stop on paired assignment or evidenced post-expiry absence. Prospective
+  roll/rotate fee estimates use the active account's own fee-resolved US option
+  fills and stay unknown when either side lacks evidence. Candidate
+  archiving, quota-gated shadow settlement/checkpoints, and goal-pace measurement
+  are implemented. Shadow evidence and OpenD data remain diagnostic only. The only unexercised S03 surface is
+  the owner-run live Windows/OpenD acceptance runbook (`docs/acceptance-runbook.md`).
 
 ## Child contracts
 
