@@ -113,3 +113,14 @@ establish closed-market capability. No account balances or orders are queried.
 
 If OpenD is unavailable, record the blocked manual-smoke result rather than
 substituting simulated production portfolio or quote data.
+
+Startup and refresh responsiveness checks:
+
+- With a saved run, throttle the account request in browser developer tools.
+  Confirm recommendation cards, run status, and the refresh control work while
+  the account panel is still loading. Opening the dashboard must not start a scan.
+- With stale earnings/ex-dividend context and a slow external provider, refresh
+  manually. Confirm the broker scan starts after at most the three-second event
+  wait budget. Missing or stale event context stays labelled; quote and coverage
+  copy gates still apply. Repeat the refresh and confirm pending provider work
+  is not duplicated.

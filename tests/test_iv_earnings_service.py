@@ -2,6 +2,7 @@
 Tests for api/services/iv_earnings_service.py — IV tracking and earnings.
 """
 
+import threading
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, PropertyMock, patch
@@ -703,6 +704,86 @@ class TestStaleEventContextRefresh(unittest.TestCase):
         self.service.db.get_all_earnings_dates.side_effect = RuntimeError("db down")
         result = self.service.refresh_stale_event_context(["AAPL"])
         self.assertEqual(result["refreshed"], 0)
+
+    def test_stalled_provider_times_out_and_deduplicates_until_recovered(self):
+        started = threading.Event()
+        release = threading.Event()
+        self.service.db.get_all_earnings_dates.return_value = []
+
+        def blocked_update(_ticker):
+            started.set()
+            release.wait()
+            return True
+
+        with patch.object(self.service, "update_earnings_data", side_effect=blocked_update) as mock_update:
+            try:
+                first = self.service.refresh_stale_event_context(["AAPL"], timeout_sec=0.05)
+                self.assertTrue(started.wait(1))
+                self.assertEqual(first["timed_out"], 1)
+                self.assertEqual(first["deferred"], 0)
+
+                second = self.service.refresh_stale_event_context(["AAPL"], timeout_sec=0.05)
+                self.assertEqual(second["timed_out"], 0)
+                self.assertEqual(second["deferred"], 1)
+                self.assertEqual(mock_update.call_count, 1)
+            finally:
+                release.set()
+
+            # Wait until the service-owned worker has cleared the in-flight entry.
+            deadline = threading.Event()
+            for _ in range(100):
+                with self.service._event_refresh_lock:
+                    if not self.service._event_refresh_inflight:
+                        break
+                deadline.wait(0.01)
+
+            third = self.service.refresh_stale_event_context(["AAPL"], timeout_sec=1)
+
+        self.assertEqual(third["refreshed"], 1)
+        self.assertEqual(third["timed_out"], 0)
+        self.assertEqual(third["deferred"], 0)
+        self.assertEqual(mock_update.call_count, 2)
+
+    def test_timeout_defers_unscheduled_jobs_until_capacity_recovers(self):
+        started = {ticker: threading.Event() for ticker in ("A1", "A2")}
+        release = threading.Event()
+        self.service.db.get_all_earnings_dates.return_value = []
+
+        def blocked_update(ticker):
+            if ticker in started:
+                started[ticker].set()
+                release.wait()
+            return True
+
+        with patch.object(self.service, "update_earnings_data", side_effect=blocked_update) as mock_update:
+            try:
+                result = self.service.refresh_stale_event_context(["A1", "A2", "A3"], timeout_sec=0.05)
+                self.assertTrue(all(event.wait(1) for event in started.values()))
+                self.assertEqual(result["timed_out"], 2)
+                self.assertEqual(result["deferred"], 1)
+                self.assertEqual(mock_update.call_count, 2)
+
+                repeated = self.service.refresh_stale_event_context(["A1", "A2", "A3"], timeout_sec=0.05)
+                self.assertEqual(repeated["timed_out"], 0)
+                self.assertEqual(repeated["deferred"], 3)
+                self.assertEqual(mock_update.call_count, 2)
+            finally:
+                release.set()
+
+        # The third ticker was never queued because both shared workers were
+        # occupied. It is eligible after the blocked jobs finish.
+        for _ in range(100):
+            with self.service._event_refresh_lock:
+                if not self.service._event_refresh_inflight:
+                    break
+            threading.Event().wait(0.01)
+        with patch.object(self.service, "update_earnings_data", return_value=True) as mock_update:
+            recovered = self.service.refresh_stale_event_context(["A1", "A2", "A3"], timeout_sec=1)
+        self.assertEqual(recovered["refreshed"], 3)
+        self.assertEqual(recovered["timed_out"], 0)
+        self.assertEqual(recovered["deferred"], 0)
+        self.assertEqual(mock_update.call_count, 3)
+        self.assertEqual([call.args[0] for call in mock_update.call_args_list], ["A3", "A1", "A2"])
 
 
 class TestWheelRunnerEventContextHook(unittest.TestCase):

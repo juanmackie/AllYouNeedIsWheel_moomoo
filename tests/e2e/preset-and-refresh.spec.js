@@ -44,6 +44,41 @@ function trackRefreshPosts(page) {
     return posts;
 }
 
+test('saved signals and refresh controls load while the account request is blocked', async ({ page }) => {
+    await server.publish('complete_closed');
+    let releaseAccount;
+    const accountGate = new Promise((resolve) => { releaseAccount = resolve; });
+    let accountRequested = false;
+    await page.route('**/api/portfolio', async (route) => {
+        accountRequested = true;
+        await accountGate;
+        await route.continue();
+    });
+    const refreshPosts = trackRefreshPosts(page);
+
+    try {
+        await page.goto('/', { waitUntil: 'domcontentloaded' });
+        await expect.poll(() => accountRequested).toBe(true);
+        await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
+        await expect(page.locator('#run-status')).toContainText('PLANNING');
+        await expect(page.locator('#run-refresh-btn')).toBeEnabled();
+        expect(refreshPosts).toHaveLength(0);
+
+        // A newly published run must also reach the cards while account loading
+        // remains blocked, rather than waiting for dashboard initialization.
+        await server.publish('complete_closed', 'aggressive');
+        await expect(page.locator('#top-recommendations-content')).toContainText('MSFT', { timeout: 10000 });
+        expect(refreshPosts).toHaveLength(0);
+
+        // The refresh control is bound before the blocked account panel finishes.
+        await page.locator('#run-refresh-btn').click();
+        await expect.poll(() => refreshPosts.length).toBe(1);
+    } finally {
+        releaseAccount();
+        await page.unrouteAll({ behavior: 'wait' });
+    }
+});
+
 test('preset change flips the active preset and triggers a republished refresh', async ({ page }) => {
     test.setTimeout(60_000);
     await server.publish('complete_closed', 'balanced');

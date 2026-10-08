@@ -30,6 +30,7 @@
 - `test_recommendations.py` verifies complete watchlist-union scanning and deterministic capital-return-on-deployed-capital ordering with executable-bid velocity as tie-break (quality/event tiers are display-only risk info and never order); infeasible unions publish `planning` rather than truncating.
 - `test_full_watchlist_discovery.py` exercises the real broker adapter, SQLite directory, and scorer with synthetic query-only SDK responses: 69-symbol cold/warm/restart coverage, zero-cash review-only picks, fitting-first lane order, empty successful discovery, 400-code batches, date/window boundaries, and over-budget planning. Unknown/stale prices never prune discovery. `test_portfolio_context.py` covers net cash provenance through live and cached contexts.
 - Use Arrange-Act-Assert when conventional; cover success/failure/boundary; report skipped/flaky/blockers explicitly, alongside changes, verification, assumptions, and risks.
+- `test_run_model.py` verifies a blocked optional event provider cannot stall scan publication or duplicate in-flight ticker work across refreshes; service deadline, cancellation, and worker limits are covered in `test_iv_earnings_service.py`.
 - `test_probe_option_chain_cost.py` verifies the manual discovery/quote capability gate using synthetic query-only frames: missing quote fields and broker failures cannot produce a go, and fewer than 400 codes leaves capacity unmeasured.
 
 ## Verification

@@ -17,13 +17,11 @@ import { renderWeeklyIncome } from './weekly-income.js';
 import { state as optionsTableState } from './options-table-state.js';
 
 let signalPanelsInitialized = false;
+let dashboardStartupInProgress = false;
+let runPublishedDuringStartup = false;
 
 /**
- * Initialize the dashboard with progressive loading
- * Wave 1: Account data (critical path)
- * Wave 2: Positions & orders
- * Wave 3: Signals (fast path)
- * Wave 4: Visible signal panels (directly rendered on dashboard)
+ * Initialize primary signals immediately, then load account and position data.
  */
 export async function initializeDashboard() {
     try {
@@ -35,15 +33,31 @@ export async function initializeDashboard() {
                 mainContainer.prepend(contentContainer);
             }
         }
+        dashboardStartupInProgress = true;
+
+        // Start the wheel shortlist and operational state as soon as the DOM
+        // is ready. Account and position diagnostics can load independently.
+        initWatchlistPanel();
+        initRunStrip();
+        initializeTopRecommendations();
+        void Promise.resolve(loadRunStrip()).catch((error) => {
+            console.error('Initial run strip load failed:', error);
+        });
+        initializeSignalPanels();
+
+        // Register consumers and controls before the immediate shared poll.
+        // The poll starts before any broker-backed panel is awaited.
+        onRunPublished(handleRunPublished);
+        startRunStatePoll();
+        const runRefreshBtn = document.getElementById('run-refresh-btn');
+        if (runRefreshBtn && !runRefreshBtn.dataset.viewerBound) {
+            runRefreshBtn.dataset.viewerBound = 'true';
+            runRefreshBtn.addEventListener('click', () => ensureRunStatePoll());
+        }
 
         showWaveLoading('wave1', 'Loading account data...');
         try {
             await loadPortfolioData();
-        initWatchlistPanel();
-        initRunStrip();
-            // Initial operational-strip render (also fetches the active preset
-            // label once per session). The shared poll keeps it fresh after.
-            await loadRunStrip();
             await updateCashReserveStatus();
         } catch (error) { console.error('Wave 1 error:', error); }
         hideWaveLoading('wave1');
@@ -54,19 +68,11 @@ export async function initializeDashboard() {
         } catch (error) { console.error('Wave 2 error:', error); }
         hideWaveLoading('wave2');
 
-        // Signals start loading NOW — before heavier diagnostics
-        initializeTopRecommendations();
-
         showWaveLoading('wave3', 'Loading market data...');
         try {
-            await Promise.all([
-                updateIdleCashPanel()
-            ]);
+            await updateIdleCashPanel();
         } catch (error) { console.error('Wave 3 error:', error); }
         hideWaveLoading('wave3');
-
-        initializeSignalPanels();
-
 
         const cashReserveToggle = document.getElementById('cash-reserve-toggle');
         if (cashReserveToggle && !cashReserveToggle.dataset.bound) {
@@ -74,24 +80,27 @@ export async function initializeDashboard() {
             cashReserveToggle.addEventListener('change', (e) => toggleCashReserve(e.target.checked));
         }
 
-        // P1b: one shared 5s run-state poll drives the whole screen. Started at
-        // page load with an immediate first fetch, it detects every newly
-        // published run (including first-ever runs and completions before its
-        // first tick) and fans out explicit reloads to every panel. The poll
-        // only reads /api/run; the viewer never POSTs /api/run/refresh, so a
-        // publish never rolls into another broker scan.
-        onRunPublished(reloadAllPanelsAfterPublish);
-        startRunStatePoll();
-        // A manual refresh click restarts the poll if it stopped in the
-        // fresh-install idle state (no run yet, no active attempt).
-        const runRefreshBtn = document.getElementById('run-refresh-btn');
-        if (runRefreshBtn && !runRefreshBtn.dataset.viewerBound) {
-            runRefreshBtn.dataset.viewerBound = 'true';
-            runRefreshBtn.addEventListener('click', () => ensureRunStatePoll());
-        }
     } catch (error) {
         console.error('Dashboard initialization error:', error);
+    } finally {
+        dashboardStartupInProgress = false;
+        if (runPublishedDuringStartup) {
+            runPublishedDuringStartup = false;
+            void reloadSecondaryPanelsAfterPublish();
+        }
     }
+}
+
+function handleRunPublished() {
+    if (dashboardStartupInProgress) {
+        // Keep the primary shortlist current even if a secondary broker read
+        // stalls. Defer the remaining fan-out to avoid duplicate account and
+        // position reads while startup requests are still in flight.
+        void reloadPanel(() => loadTopRecommendations(false));
+        runPublishedDuringStartup = true;
+        return;
+    }
+    void reloadAllPanelsAfterPublish();
 }
 
 /**
@@ -101,11 +110,21 @@ export async function initializeDashboard() {
  * nothing here POSTs /api/run/refresh (a publish never re-triggers a scan).
  */
 async function reloadAllPanelsAfterPublish() {
+    await Promise.all([
+        reloadPanel(() => loadTopRecommendations(false)),
+        ...secondaryPanelReloads(),
+    ]);
+}
+
+async function reloadSecondaryPanelsAfterPublish() {
+    await Promise.all(secondaryPanelReloads());
+}
+
+function secondaryPanelReloads() {
     const reloads = [
         () => loadRunStrip(),
         () => loadPortfolioData(),
         () => loadPositionsCommandPanel(),
-        () => loadTopRecommendations(false),
         () => loadWatchlist(),
         () => updateCashReserveStatus(),
         () => updateIdleCashPanel(),
@@ -118,13 +137,15 @@ async function reloadAllPanelsAfterPublish() {
     if (optionsScannerLoaded()) {
         reloads.push(() => import('./options-table.js').then((mod) => mod.loadTickers()));
     }
-    await Promise.all(
-        reloads.map((reload) =>
-            Promise.resolve().then(reload).catch((err) => {
-                console.error('Panel reload failed after publish:', err);
-            })
-        )
-    );
+    return reloads.map(reloadPanel);
+}
+
+function reloadPanel(reload) {
+    return Promise.resolve()
+        .then(reload)
+        .catch((err) => {
+            console.error('Panel reload failed after publish:', err);
+        });
 }
 
 function optionsScannerLoaded() {

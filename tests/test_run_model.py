@@ -6,6 +6,7 @@ failed-refresh preservation, and snapshot persistence.
 """
 
 import copy as _copy
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -217,6 +218,122 @@ class TestRunnerFailurePreservesLastSnapshot(unittest.TestCase):
         saved = [c.args[0] for c in db.save_refresh_attempt.call_args_list]
         self.assertEqual(saved[-1].state, "failed")
         self.assertIsNone(saved[-1].run_id)
+
+
+class TestRunnerEventRefreshDoesNotBlockScan(unittest.TestCase):
+    """A stuck best-effort event provider must not stall run publication."""
+
+    def test_blocked_event_provider_does_not_block_or_stack_refreshes(self):
+        from api.services.iv_earnings_service import IVEarningsService
+
+        provider_started = threading.Event()
+        release_provider = threading.Event()
+        first_scan_finished = threading.Event()
+        first_refresh_finished = threading.Event()
+        provider_calls = []
+        scan_calls = []
+        refresh_errors = []
+
+        class EventDatabase:
+            def get_all_earnings_dates(self):
+                # Every run sees this symbol as stale while the provider is blocked.
+                return []
+
+        class AlphaVantageUnavailable:
+            available = False
+
+            @staticmethod
+            def get_status():
+                return {"available": False, "status": "missing_key"}
+
+        earnings = IVEarningsService(EventDatabase())
+        earnings._alpha_vantage = AlphaVantageUnavailable()
+
+        def blocked_update(ticker):
+            provider_calls.append(ticker)
+            provider_started.set()
+            release_provider.wait(timeout=3)
+            return False
+
+        earnings.update_earnings_data = blocked_update
+
+        db = MagicMock()
+        db.get_latest_portfolio_snapshot.return_value = None
+        db.save_portfolio_transition.return_value = True
+        options_service = MagicMock()
+        conn = MagicMock()
+        conn._get_available_accounts.return_value = [{"acc_id": "P1", "trd_env": "SIMULATE"}]
+        options_service._ensure_connection.return_value = conn
+        options_service._get_portfolio_context.return_value = {
+            "positions": {"AAPL": {"position": 100, "avg_cost": 100}},
+            "short_calls": {},
+            "short_puts": {},
+        }
+
+        def recommendations(**_kwargs):
+            scan_calls.append(True)
+            first_scan_finished.set()
+            return {
+                "generated_at": utc_now_iso(),
+                "state": "ready",
+                "scan_coverage": {"scanned": 1, "total": 1, "complete": True},
+                "signals": [],
+                "watchlist_csps": {"signals": []},
+                "covered_calls": {"signals": []},
+                "blocked_signals": [],
+                "watchlist_origins": {"AAPL": ["portfolio"]},
+                "active_watchlist": {
+                    "group_status": "ok",
+                    "tickers": [{"symbol": "AAPL", "status": "ok"}],
+                },
+                "preset": {"key": "balanced", "version": 1},
+                "capital_recovery": [],
+                "watchlist_cash_fit": {},
+                "preflight": {},
+            }
+
+        options_service.recommendation_engine.get_top_recommendations.side_effect = recommendations
+
+        def refresh_events(_portfolio):
+            return earnings.refresh_stale_event_context(["AAPL"], timeout_sec=0.05)
+
+        runner = WheelRunner(
+            db,
+            options_service,
+            {"portfolio_env": "SIMULATE", "account_id": ""},
+            event_context_refresher=refresh_events,
+        )
+
+        def run_first_refresh():
+            try:
+                runner.refresh()
+            except Exception as exc:  # captured for a useful assertion below
+                refresh_errors.append(exc)
+            finally:
+                first_refresh_finished.set()
+
+        refresh_thread = threading.Thread(target=run_first_refresh, daemon=True)
+        try:
+            refresh_thread.start()
+            self.assertTrue(provider_started.wait(timeout=1), "stale event provider was not started")
+            self.assertTrue(
+                first_refresh_finished.wait(timeout=0.3),
+                "runner is still waiting for the blocked event provider before scanning",
+            )
+            self.assertEqual(refresh_errors, [])
+            self.assertTrue(first_scan_finished.is_set())
+            self.assertIsNotNone(runner.latest(), "completed scan was not published")
+
+            # A second refresh while the first provider call is still blocked must
+            # reuse/coalesce that in-flight ticker rather than submit another call.
+            runner.refresh()
+            self.assertEqual(scan_calls, [True, True])
+            self.assertEqual(provider_calls, ["AAPL"])
+            self.assertEqual(db.save_run_snapshot.call_count, 2)
+        finally:
+            release_provider.set()
+            refresh_thread.join(timeout=3)
+        self.assertFalse(refresh_thread.is_alive(), "refresh worker did not exit after releasing provider")
 
 
 class TestRunnerRollDiagnosticsInjection(unittest.TestCase):

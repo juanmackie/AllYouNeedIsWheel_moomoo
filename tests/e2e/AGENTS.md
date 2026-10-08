@@ -23,6 +23,7 @@
 - Keep selectors stable and user-oriented.
 - The dashboard smoke opens the collapsed Market data section before asserting options-table visibility.
 - `preset-and-refresh.spec.js` verifies failure, quota, API outage, and rejected-refresh warnings remain visible above retained results and clear on recovery, including a narrow viewport. `fixture_server.py` supplies persisted test-only run scenes (`quota_partial` retains a covered call with incomplete coverage); production data paths stay unmodified.
+- The same journey holds `/api/portfolio` open to verify saved cards, run status, and a manually usable refresh control load independently; page startup never starts a scan.
 
 ## Verification
 

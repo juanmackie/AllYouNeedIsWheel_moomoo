@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-08 — Keep optional data off the signal-loading path
+
+Saved recommendation cards, run status, and refresh controls initialize before
+account, cash, and position diagnostics finish. Optional earnings/ex-dividend
+enrichment has a three-second wait budget before the broker scan proceeds;
+unfinished requests use a bounded worker pool and are not duplicated by later
+refreshes. Available event data and existing unknown/stale warnings remain in
+use, with no change to ranking, quote gates, or watchlist coverage.
+
 ## 2026-10-03 ? Whole-watchlist discovery and batched quotes
 
 Refresh discovers all contracts across the preset expiry window and then quotes

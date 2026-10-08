@@ -5,8 +5,10 @@ Uses Alpha Vantage -> yfinance provider chain.
 """
 
 import logging
+import math
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -49,6 +51,12 @@ class IVEarningsService:
         self._earnings_cache_duration_hours = 24
         self._max_stale_event_tickers = 20
         self._alpha_vantage = AlphaVantageEarningsProvider()
+        # Reuse a fixed-size pool: timed-out providers stay bounded to two
+        # workers across repeated broker refreshes.
+        self._event_refresh_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="event-context")
+        self._event_refresh_lock = threading.RLock()
+        self._event_refresh_inflight = {}
+        self._event_refresh_cursor = 0
 
     # -- small helpers -------------------------------------------------------
 
@@ -821,17 +829,39 @@ class IVEarningsService:
         max_tickers: Optional[int] = None,
         hours: Optional[int] = None,
         max_workers: int = 2,
+        timeout_sec: float = 3.0,
     ) -> Dict:
         """Best-effort refresh of event context (earnings + ex-dividend) that is
         missing, errored, or older than ``hours`` (default: the 24h per-ticker
-        cache window). Bounded to ``max_tickers`` (default 20) with low
-        concurrency. Never raises — used ahead of a broker scan so freshness is
-        improved without ever blocking or aborting it.
+        cache window). Bounded to ``max_tickers`` (default 20), two provider
+        workers, and ``timeout_sec`` (default 3 seconds). Fast results are
+        applied before return. Running jobs that exceed the budget remain in
+        flight and are deduplicated on later refreshes. ``timed_out`` counts
+        running jobs still active at return; ``deferred`` counts jobs already
+        in flight elsewhere or not started before the deadline.
+        Provider failures never abort the broker scan.
         """
+        started_at = time.monotonic()
+        try:
+            timeout_sec = float(timeout_sec)
+            if not math.isfinite(timeout_sec):
+                timeout_sec = 3.0
+            timeout_sec = max(0.0, timeout_sec)
+        except (TypeError, ValueError):
+            timeout_sec = 3.0
+        deadline = started_at + timeout_sec
         hours = self._earnings_cache_duration_hours if hours is None else int(hours)
         if max_tickers is None:
             max_tickers = self._max_stale_event_tickers
-        empty = {"refreshed": 0, "stale": 0, "skipped": 0, "errors": 0, "provider": self._alpha_vantage.get_status()}
+        empty = {
+            "refreshed": 0,
+            "stale": 0,
+            "skipped": 0,
+            "errors": 0,
+            "timed_out": 0,
+            "deferred": 0,
+            "provider": self._alpha_vantage.get_status(),
+        }
         if not tickers:
             return empty
 
@@ -871,34 +901,120 @@ class IVEarningsService:
             if parsed is None or now - parsed > timedelta(hours=hours):
                 stale.append(n)
 
-        stale = stale[: int(max_tickers)]
         if not stale:
             return {
                 "refreshed": 0,
                 "stale": 0,
                 "skipped": len(normalized),
                 "errors": 0,
+                "timed_out": 0,
+                "deferred": 0,
                 "provider": self._alpha_vantage.get_status(),
             }
 
         refreshed = 0
         failed = 0
-        workers = max(1, min(int(max_workers), len(stale)))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_map = {executor.submit(self.update_earnings_data, n): n for n in stale}
-            for future in as_completed(future_map):
-                try:
-                    if future.result():
-                        refreshed += 1
-                    else:
-                        failed += 1
-                except Exception:
+        timed_out = 0
+        deferred = 0
+        try:
+            worker_limit = max(1, min(2, int(max_workers)))
+        except (TypeError, ValueError):
+            worker_limit = 2
+
+        # Rotate the bounded stale set so repeated short budgets do not keep
+        # retrying the same early tickers while later ones remain unattempted.
+        with self._event_refresh_lock:
+            stale_count = len(stale)
+            start_index = self._event_refresh_cursor % stale_count
+            stale = stale[start_index:] + stale[:start_index]
+        stale = stale[: max(0, int(max_tickers))]
+        candidates = stale
+
+        def clear_inflight(ticker, completed):
+            with self._event_refresh_lock:
+                if self._event_refresh_inflight.get(ticker) is completed:
+                    self._event_refresh_inflight.pop(ticker, None)
+
+        submitted = {}
+        next_candidate = 0
+
+        def fill_available_slots():
+            nonlocal deferred, next_candidate
+            if time.monotonic() >= deadline:
+                return
+            with self._event_refresh_lock:
+                active_total = sum(not future.done() for future in self._event_refresh_inflight.values())
+                available = min(worker_limit - len(submitted), 2 - active_total)
+                while available > 0 and next_candidate < len(candidates):
+                    ticker = candidates[next_candidate]
+                    next_candidate += 1
+                    current = self._event_refresh_inflight.get(ticker)
+                    if current is not None and not current.done():
+                        deferred += 1
+                        continue
+                    future = self._event_refresh_executor.submit(self.update_earnings_data, ticker)
+                    self._event_refresh_inflight[ticker] = future
+                    future.add_done_callback(lambda completed, name=ticker: clear_inflight(name, completed))
+                    submitted[future] = ticker
+                    available -= 1
+
+        def record_result(future):
+            nonlocal refreshed, failed
+            try:
+                if future.result():
+                    refreshed += 1
+                else:
                     failed += 1
+            except Exception:
+                failed += 1
+
+        while next_candidate < len(candidates) or submitted:
+            fill_available_slots()
+            if not submitted:
+                # The remaining work is already running for another refresh,
+                # or the wall-clock budget expired before any slot opened.
+                deferred += len(candidates) - next_candidate
+                break
+
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                done = {future for future in submitted if future.done()}
+                pending = set(submitted) - done
+            else:
+                done, pending = wait(submitted, timeout=remaining, return_when=FIRST_COMPLETED)
+            for future in done:
+                submitted.pop(future, None)
+                record_result(future)
+
+            if pending and time.monotonic() >= deadline:
+                for future in pending:
+                    if future.cancel():
+                        # This is generally a task queued behind another
+                        # refresh; cancellation makes the ticker retryable.
+                        submitted.pop(future, None)
+                        deferred += 1
+                    elif future.done():
+                        submitted.pop(future, None)
+                        record_result(future)
+                    else:
+                        timed_out += 1
+                        submitted.pop(future, None)
+                deferred += len(candidates) - next_candidate
+                break
+
+            # Fast completions free slots for the rest of the stale ticker set.
+            # The persistent executor and shared in-flight map cap the total
+            # running provider work at two, even across overlapping refreshes.
+
+        with self._event_refresh_lock:
+            self._event_refresh_cursor = (start_index + next_candidate) % stale_count
 
         logger.info(
-            "Stale event context refreshed: %d updated, %d failed (of %d stale, %d skipped)",
+            "Stale event context refreshed: %d updated, %d failed, %d timed out, %d deferred (of %d stale, %d skipped)",
             refreshed,
             failed,
+            timed_out,
+            deferred,
             len(stale),
             len(normalized) - len(stale),
         )
@@ -907,6 +1023,8 @@ class IVEarningsService:
             "stale": len(stale),
             "skipped": len(normalized) - len(stale),
             "errors": failed,
+            "timed_out": timed_out,
+            "deferred": deferred,
             "provider": self._alpha_vantage.get_status(),
         }
 

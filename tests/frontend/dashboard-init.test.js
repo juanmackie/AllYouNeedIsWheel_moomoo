@@ -90,6 +90,7 @@ describe('dashboard signal-panel initialization', () => {
     const { state: optionsTableState } = await import('../../frontend/static/js/dashboard/options-table-state.js');
     optionsTableState.tickersData = {};
     optionsTableState.portfolioSummary = null;
+    vi.restoreAllMocks();
     vi.useRealTimers();
     document.body.innerHTML = '';
     delete global.fetch;
@@ -121,6 +122,42 @@ describe('dashboard signal-panel initialization', () => {
     await vi.dynamicImportSettled?.();
 
     expect(loadTickers).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts recommendations and run-state polling before account data resolves', async () => {
+    let releaseAccountLoad;
+    const accountLoad = new Promise((resolve) => { releaseAccountLoad = resolve; });
+    const { loadPortfolioData } = await import('../../frontend/static/js/dashboard/account.js');
+    loadPortfolioData.mockReturnValueOnce(accountLoad);
+    global.fetch = vi.fn(async (url) => url === '/api/run'
+      ? {
+        ok: true,
+        json: async () => ({
+          attempt: { state: 'succeeded' },
+          snapshot: { tradeable: true, run: { run_id: 'startup-run', status: 'ready' } },
+        }),
+      }
+      : { ok: true, json: async () => ({ positions: [] }) });
+
+    const { initializeTopRecommendations, loadTopRecommendations } = await import('../../frontend/static/js/dashboard/top-recommendations.js');
+    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    const runNotifier = await import('../../frontend/static/js/dashboard/run-notifier.js');
+    const startPoll = vi.spyOn(runNotifier, 'startRunStatePoll');
+    const { initializeDashboard } = await import('../../frontend/static/js/dashboard/dashboard-init.js');
+
+    const initialization = initializeDashboard();
+    await Promise.resolve();
+
+    expect(initializeTopRecommendations).toHaveBeenCalledTimes(1);
+    expect(loadRunStrip).toHaveBeenCalledTimes(1);
+    expect(startPoll).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(loadPortfolioData).toHaveBeenCalledTimes(1);
+    expect(loadTopRecommendations).toHaveBeenCalledWith(false);
+
+    releaseAccountLoad();
+    await initialization;
+    expect(loadPortfolioData).toHaveBeenCalledTimes(2);
   });
 
   it('P1b: a published run fans out explicit reloads to every panel', async () => {

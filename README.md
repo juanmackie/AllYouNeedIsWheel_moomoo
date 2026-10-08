@@ -36,6 +36,12 @@ manual copy-to-ticket suggestions for your broker UI.
 6. When awake around the US session, refresh again for fresh Moomoo quotes. At
    the next Australian morning, review fills and open-position verdicts.
 
+Saved signals and run status load immediately when the dashboard opens, while
+account and position panels continue loading. Optional earnings/ex-dividend
+updates get at most three seconds before the broker scan proceeds; unfinished
+provider work stays limited to two workers, and missing or stale event context
+keeps its existing warning rather than delaying the run.
+
 ## Data and actionability contract
 
 - **Moomoo/OpenD is the only actionable source.** Account, cash, positions,
