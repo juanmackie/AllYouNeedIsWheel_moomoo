@@ -85,6 +85,21 @@ class TestCapitalRecoveryCards(unittest.TestCase):
         self.assertIsNone(cards[0]["best_call_below_basis"])
         self.assertIsNone(cards[0]["best_csp_opportunity"])
 
+    def test_short_option_positions_are_excluded_from_stock_recovery_cards(self):
+        from api.services.recommendations import _build_capital_recovery_cards
+
+        option_position = {
+            "US.AAA261016C170000": {
+                "position": -1,
+                "security_type": "OPT",
+                "option_type": "CALL",
+                "strike": 170.0,
+                "avg_cost": 1.25,
+            }
+        }
+
+        self.assertEqual(_build_capital_recovery_cards(option_position, {}, None), [])
+
 
 class TestRecommendationEngine(unittest.TestCase):
     """Test RecommendationEngine with fully mocked context."""
@@ -303,6 +318,23 @@ class TestRecommendationEngine(unittest.TestCase):
             "unsupported": [],
             "fetched_at": "2026-09-10T12:00:00+00:00",
         }
+
+    def test_covered_call_data_failure_is_reported_not_silent(self):
+        """A holding whose covered-call data cannot be read is listed with a
+        reason; it must not only produce no signal."""
+        self.mock_options_data._process_ticker_for_otm.return_value = {
+            "error": "No options data available from any source"
+        }
+        engine = self._import_engine()
+
+        result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result.get("success"), result)
+        self.assertEqual(result["covered_calls"]["signals"], [])
+        rows = [row for row in result["blocked_signals"] if row["reason_code"] == "broker_data_unavailable"]
+        self.assertEqual([(row["ticker"], row["signal_type"]) for row in rows], [("AAPL", "covered_call")])
+        self.assertIn("No options data available from any source", rows[0]["reason_text"])
+        self.assertEqual(result["blocked_reason_counts"]["broker_data_unavailable"], 1)
 
     def test_incomplete_coverage_reports_partial_active_watchlist(self):
         """A ticker whose CSP fetch fails is recorded with status=error in the

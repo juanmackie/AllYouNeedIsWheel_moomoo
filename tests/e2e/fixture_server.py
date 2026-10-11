@@ -254,13 +254,22 @@ def _engine_result(preset_key, overrides=None):
         "covered_calls": {"signals": [s for s in signals if s["option_type"] == "CALL"]},
         "blocked_signals": [],
         "preset": _preset_dict(preset_key),
+        "cash_available_for_csp": 78500.0,
+        "broker_buying_power": 74000.0,
+        "cash_reserved_for_csp": 0.0,
     }
 
 
 def _preset_dict(preset_key):
     from core.presets import get_preset
 
-    return get_preset(preset_key).to_dict()
+    preset = get_preset(preset_key)
+    return {
+        "key": preset.key,
+        "version": preset.version,
+        "label": preset.label,
+        "screener_profile": preset.to_screener_profile(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -308,10 +317,10 @@ class StubWatchlistManager:
         return _tickers_for_preset(self._db.get_setting("wheel_preset") or "balanced")
 
     def get_watchlist_sources(self):
-        return {"fixture": len(self.get_effective_watchlist())}
+        return {"moomoo": self.get_effective_watchlist(), "app": [], "config": []}
 
     def get_effective_watchlist_with_origins(self):
-        return [{"symbol": t, "origin": "fixture"} for t in self.get_effective_watchlist()]
+        return [{"ticker": ticker, "origins": ["moomoo"], "scanned": True} for ticker in self.get_effective_watchlist()]
 
 
 class StubPortfolioContextHelper:
@@ -328,6 +337,9 @@ class StubPortfolioContextHelper:
             "leverage_percentage": 6.7,
             "csp_capacity_available": 78500.0,
             "reserved_short_put_collateral": 0.0,
+            "cash_available_for_csp": 78500.0,
+            "cash_reserved_for_csp": 0.0,
+            "broker_buying_power": 74000.0,
         }
 
 
@@ -402,6 +414,13 @@ class StubIVEarningsService:
 
     def get_cache_stats(self):
         return {}
+
+    def get_provider_status(self):
+        return {
+            "alpha_vantage": {"available": False, "status": "not_configured", "cache_entries": 0},
+            "yfinance": {"available": True, "note": "fixture data only"},
+            "cache": {},
+        }
 
     def get_earnings_info(self, ticker):
         return {}
@@ -561,6 +580,9 @@ def _seed_run(db, scene, preset_key="balanced"):
         preset=result["preset"],
         watchlist_origins=result["watchlist_origins"],
         signals=tuple(signals),
+        cash_available_for_csp=result["cash_available_for_csp"],
+        broker_buying_power=result["broker_buying_power"],
+        cash_reserved_for_csp=result["cash_reserved_for_csp"],
     )
     db.save_run_snapshot(snapshot)
     db.save_refresh_attempt(
@@ -620,6 +642,12 @@ def apply_patches(app):
         now_utc = _fixture_now_utc()
         quote_age = max(0, int(evidence.get("quote_age_sec", 2 * 3600) or 0))
         quote_ts = (now_utc - timedelta(seconds=quote_age)).isoformat()
+        # Real adapter shape: the broker quote time is a US Eastern string.
+        broker_time = (
+            (now_utc - timedelta(seconds=quote_age))
+            .astimezone(ZoneInfo("America/New_York"))
+            .strftime("%Y-%m-%d %H:%M:%S")
+        )
         if _snapshot_fixture().get("broker") == "down":
             return {"source": None, "option": None, "quote_fetched_at_utc": None, "error": "OpenD unavailable"}
         option = evidence.get("option")
@@ -637,11 +665,13 @@ def apply_patches(app):
                 "mid_price": 1.85,
                 "quote_timestamp": quote_ts,
                 "quote_fetched_at_utc": quote_ts,
+                "update_time": broker_time,
             }
         else:
             option = dict(option)
             option.setdefault("quote_timestamp", quote_ts)
             option.setdefault("quote_fetched_at_utc", quote_ts)
+            option.setdefault("update_time", broker_time)
         return {
             "source": source or None,
             "option": option,

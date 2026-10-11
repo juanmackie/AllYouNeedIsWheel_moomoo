@@ -66,6 +66,11 @@ establish closed-market capability. No account balances or orders are queried.
    quote age.
 2. Toggle dark and light modes and confirm text, signals, warnings, and the
    OpenD connection indicator remain readable.
+   Check the dashboard at 320px and 1440px: section links and controls remain
+   usable, long tables scroll inside their panels, and the page has no
+   horizontal overflow. Tab to the skip link and activate it to reach the
+   dashboard. Open and close Growth, Outcomes, Watchlist, and Options using the keyboard;
+   confirm the disclosure indication updates and run warnings remain visible.
 3. Confirm the effective watchlist is the complete supported canonical union,
    with option codes listed as unsupported. A feasible refresh assesses every
    underlying at any cash balance. Compare cold/warm chain-call counts; a warm
@@ -80,6 +85,10 @@ establish closed-market capability. No account balances or orders are queried.
    signals, including before the first completed run. Recover OpenD and refresh;
    confirm the failure warning clears. Interrupt the app/API connection and
    confirm a communication warning appears while displayed cards remain.
+   While refreshing, confirm the named broker step and elapsed time update
+   without suggesting a precise completion percentage. Stop the app during a
+   refresh, then restart it: the interrupted attempt should be failed with
+   retry guidance, and the last completed snapshot should remain unchanged.
    When the US market is closed, confirm the scan still produces CSP and
    covered-call candidates from fresh OpenD last-session chains (or persisted broker fallback)
    and labels the run `planning`.

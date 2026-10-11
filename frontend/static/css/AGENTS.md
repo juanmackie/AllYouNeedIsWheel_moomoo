@@ -32,6 +32,7 @@
 - Restored `.summary-panel` / `.summary-metrics-grid` / `.dashboard-summary-grid` CSS (2026-08-02 redesign left these unstyled). Panels must show clear 1px borders; metrics grids must be 4-col responsive with sentence-case labels.
 - No gradients, no soft drop shadows, no translucency beyond token soft backgrounds.
 - No analog textures: no scanlines, no mechanical noise, no halftone filters, no CRT overlays. Clean grid only.
+- Dashboard areas, grouped section navigation, native disclosures, and purpose descriptions use these same theme tokens, visible rules, and zero-radius treatment. Interactive targets are at least 44px high; keyboard focus remains visible and narrow layouts keep navigation inside its own scroll container and tables within their existing responsive wrappers.
 
 ## Component Rules
 
@@ -39,7 +40,10 @@
 - **Badges / pills (`.ft-pill`, `.badge.*` shims):** mono, uppercase, 10–11px, tight tracking, 1px solid border, transparent background with `-soft` token fill for state colors.
 - **Buttons (`.ft-btn`):** mono, uppercase, 11px, 0.1em tracking, 1px solid ink border, no radius, hover inverts to ink-on-paper.
 - **State colors (`--ft-signal`, `--ft-warn`, `--ft-down`, `--ft-info`):** must remain readable on both substrates. Read them against both `#0A0A0A` and `#F4F4F0` backgrounds; contrast ratios must stay compliant.
+- Semantic success/warning text may use neutral ink when the state hue fails contrast; the OpenD dot remains the only terminal-green element.
+- Theme-specific signal/down reds must pass text contrast on their substrate. Color changes on theme toggle happen immediately; transitions may animate transform and opacity only.
 - **Bootstrap shims preserved:** `.badge`, `.alert-*`, `.btn`, `.table`, `.d-none`, `.fade`, `.show` must not be removed while templates/JS emit those classes.
+- Preserve emitted utility shims such as `.d-flex` and `.flex-wrap`; missing utilities can turn a long watchlist into page-wide horizontal overflow on mobile.
 
 ## Safety / Contract Constraints
 
@@ -50,6 +54,6 @@
 
 ## Verification
 
-- `npm test`: all 28 frontend Vitest files must pass.
+- `npm test`: all frontend Vitest files must pass.
 - Manual smoke checklist (`tests/README.md`) must cover both dark and light modes.
 - Confirm terminal green is visible exactly once on the connection dot and never elsewhere.

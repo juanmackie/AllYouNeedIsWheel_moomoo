@@ -17,8 +17,9 @@
 - Keep route error handling explicit and user-readable.
 - Keep source-policy metadata visible for endpoints that combine Moomoo, watchlist, or optional third-party data.
 - Do not add routes that imply autonomous order execution.
-- `/api/run` and `/api/run/refresh` are the sole dashboard shortlist workflow. `GET /api/run` returns the immutable last snapshot plus a read-time effective `tradeable`/`stale` view; refresh is serialized and never overwrites the last good snapshot.
+- `/api/run` and `/api/run/refresh` are the sole dashboard shortlist workflow. `GET /api/run` returns the immutable last snapshot plus a read-time effective `tradeable`/`stale` view; refresh is serialized and never overwrites the last good snapshot. An accepted refresh persists a queued attempt before starting its worker and returns that attempt ID; the worker continues the same ID. A busy refresh returns 409 with the current attempt.
 - `GET /api/options/analytics/outcomes` serves broker-verified outcome summaries (totals + groups by preset/DTE bucket/ticker/event tier, each with sample size, coverage %, unknown count, and per-outcome fill drill-down) from local SQLite only — it never gates on live OpenD. `POST /api/options/analytics/outcomes/ingest` is the only broker-backed endpoint of the pair: it gates on the shared OpenD probe, rate-limits tightly (6/min; days ≤ 90 per the SDK history window), and only triggers query-only ingestion.
+- `GET /api/run/copy-check` blocks staging only when the broker quote time (`update_time`, US Eastern) is fresh. The app's own fetch time (`quote_fetched_at_utc`) must never be used as evidence that the market is open.
 
 ## Work Guidance
 

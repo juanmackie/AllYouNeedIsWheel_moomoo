@@ -371,6 +371,30 @@ function setButtonBusy(btn, label) {
     btn.replaceChildren(spinner, document.createTextNode(` ${label}`));
 }
 
+/**
+ * Visible copy status directly below a copy button. A tooltip on a disabled
+ * button is not enough: the user must see why a ticket was not copied.
+ * The element is created on first use, so cards and lane rows both work.
+ * Text is set with textContent only.
+ */
+function setCopyStatus(btn, text, isFailure = false) {
+    const parent = btn && btn.parentElement;
+    if (!parent) return;
+    let statusEl = Array.from(parent.children).find((el) => el.classList.contains('copy-status'));
+    if (!statusEl) {
+        if (!text) return;
+        statusEl = document.createElement('div');
+        statusEl.className = 'copy-status small mt-1';
+        statusEl.setAttribute('role', 'status');
+        btn.insertAdjacentElement('afterend', statusEl);
+    }
+    statusEl.textContent = text || '';
+    statusEl.classList.toggle('d-none', !text);
+    statusEl.classList.toggle('text-danger', Boolean(text) && isFailure);
+    statusEl.classList.toggle('fw-semibold', Boolean(text) && isFailure);
+    statusEl.classList.toggle('text-muted', Boolean(text) && !isFailure);
+}
+
 function setButtonBlocked(btn, reasons, kind = 'blocked') {
     if (!btn) return;
     btn.disabled = true;
@@ -378,6 +402,7 @@ function setButtonBlocked(btn, reasons, kind = 'blocked') {
     btn.classList.remove('btn-success', kind === 'error' ? 'btn-warning' : 'btn-danger');
     setButtonIconLabel(btn, kind === 'error' ? 'bi-exclamation-triangle' : 'bi-eye', kind === 'error' ? 'Not copied' : 'Review only');
     btn.title = ((reasons || []).filter(Boolean).join(' · ') || 'not copy eligible');
+    setCopyStatus(btn, `${kind === 'error' ? 'Not copied' : 'Copy blocked'}: ${btn.title}`, true);
 }
 
 async function copyTicket(rec, btn) {
@@ -393,6 +418,7 @@ async function copyTicket(rec, btn) {
     const originalNodes = Array.from(btn.childNodes, (node) => node.cloneNode(true));
 
     setButtonBusy(btn, 'Checking…');
+    setCopyStatus(btn, '');
 
     let reval;
     try {
@@ -462,6 +488,7 @@ async function copyTicket(rec, btn) {
         btn.disabled = false;
         setButtonIconLabel(btn, 'bi-x-circle', 'Copy failed');
         btn.classList.add('btn-danger');
+        setCopyStatus(btn, 'Copy failed: the browser did not allow clipboard access.', true);
     }
     setTimeout(() => {
         btn.replaceChildren(...originalNodes);
@@ -677,6 +704,7 @@ function createRecommendationCard(rec) {
         } else {
             copyBtn.title = 'Review only: ' + reasons.join(' · ');
             copyBtn.innerHTML = '<i class="bi bi-eye"></i> Review only';
+            setCopyStatus(copyBtn, copyBtn.title);
         }
         copyBtn.addEventListener('click', () => {
             if (canCopy) copyTicket(rec, copyBtn);
@@ -1127,7 +1155,9 @@ function applyPreset(result) {
     document.getElementById('growth-mode-objective').textContent = preset?.label ? `${preset.label} preset` : 'Balanced preset';
     document.getElementById('growth-mode-drawdown').textContent = preset?.version ? `v${preset.version}` : '';
     document.getElementById('top-recs-title').textContent = 'Wheel signals';
-    document.getElementById('top-recs-eyebrow').textContent = preset?.label?.toUpperCase() || 'BALANCED';
+    document.getElementById('top-recs-eyebrow').textContent = preset?.label
+        ? `PUBLISHED STRATEGY · ${preset.label.toUpperCase()}`
+        : 'PUBLISHED STRATEGY';
 
     // Entry timing guidance (intraday window advice, server-computed)
     const entryContext = result?.entry_context;
@@ -1322,47 +1352,49 @@ function updateBuyingPowerIndicator(result) {
     const cspCash = result?.cash_available_for_csp;
     const bp = result?.broker_buying_power;
     const reserved = result?.cash_reserved_for_csp;
-    if (cspCash != null && cspCash >= 0) {
-        bpIndicator.classList.remove('d-none');
-        const bpEl = document.getElementById('bp-amount');
-        const reservedEl = document.getElementById('bp-reserved');
-        const brokerEl = document.getElementById('bp-broker');
-        const diagnosticsEl = document.getElementById('bp-diagnostics');
-        if (bpEl) bpEl.textContent = formatCurrency(cspCash);
-        if (reservedEl) reservedEl.textContent = formatCurrency(reserved || 0);
-        if (brokerEl) brokerEl.textContent = formatCurrency(bp || 0);
-        if (diagnosticsEl) {
-            const diagnostics = result?.cash_diagnostics || {};
-            const raw = diagnostics.raw_summary_fields || {};
-            const details = [];
-            if (diagnostics.available_cash_source) {
-                details.push(`available cash source: ${diagnostics.available_cash_source}`);
-            }
-            if (diagnostics.cash_available_for_csp_source) {
-                details.push(`CSP cash source: ${diagnostics.cash_available_for_csp_source}`);
-            }
-            const rawFields = [
-                'us_avl_withdrawal_cash',
-                'us_cash',
-                'usd_net_cash_power',
-                'cash',
-                'available_cash',
-                'cash_available',
-                'buying_power',
-                'excess_liquidity',
-            ];
-            const nonZeroRaw = rawFields
-                .filter(field => raw[field] != null && Number(raw[field]) !== 0)
-                .map(field => `${field}=${formatCurrency(Number(raw[field]))}`);
-            if (nonZeroRaw.length > 0) {
-                details.push(`raw: ${nonZeroRaw.join(', ')}`);
-            }
-            diagnosticsEl.textContent = details.join(' | ');
-            diagnosticsEl.classList.toggle('d-none', details.length === 0);
+    bpIndicator.classList.remove('d-none');
+    const bpEl = document.getElementById('bp-amount');
+    const reservedEl = document.getElementById('bp-reserved');
+    const brokerEl = document.getElementById('bp-broker');
+    const diagnosticsEl = document.getElementById('bp-diagnostics');
+    if (bpEl) bpEl.textContent = formatOptionalCurrency(cspCash);
+    if (reservedEl) reservedEl.textContent = formatOptionalCurrency(reserved);
+    if (brokerEl) brokerEl.textContent = formatOptionalCurrency(bp);
+    if (diagnosticsEl) {
+        const diagnostics = result?.cash_diagnostics || {};
+        const raw = diagnostics.raw_summary_fields || {};
+        const details = [];
+        if (diagnostics.available_cash_source) {
+            details.push(`available cash source: ${diagnostics.available_cash_source}`);
         }
-    } else {
-        bpIndicator.classList.add('d-none');
+        if (diagnostics.cash_available_for_csp_source) {
+            details.push(`CSP cash source: ${diagnostics.cash_available_for_csp_source}`);
+        }
+        const rawFields = [
+            'us_avl_withdrawal_cash',
+            'us_cash',
+            'usd_net_cash_power',
+            'cash',
+            'available_cash',
+            'cash_available',
+            'buying_power',
+            'excess_liquidity',
+        ];
+        const nonZeroRaw = rawFields
+            .filter(field => raw[field] != null && Number(raw[field]) !== 0)
+            .map(field => `${field}=${formatCurrency(Number(raw[field]))}`);
+        if (nonZeroRaw.length > 0) {
+            details.push(`raw: ${nonZeroRaw.join(', ')}`);
+        }
+        diagnosticsEl.textContent = details.join(' | ');
+        diagnosticsEl.classList.toggle('d-none', details.length === 0);
     }
+}
+
+function formatOptionalCurrency(value) {
+    if (value == null || value === '') return '—';
+    const amount = Number(value);
+    return Number.isFinite(amount) ? formatCurrency(amount) : '—';
 }
 
 /**

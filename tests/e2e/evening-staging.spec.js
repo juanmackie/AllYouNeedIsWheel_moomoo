@@ -8,7 +8,7 @@
 import { test, expect } from '@playwright/test';
 import { startFixtureServer, seedClipboard, readClipboard } from './server.js';
 
-const PORT = 8101;
+const PORT = 8105;
 test.use({
     baseURL: `http://127.0.0.1:${PORT}`,
     permissions: ['clipboard-read', 'clipboard-write'],
@@ -45,6 +45,23 @@ test('evening: complete closed-market run stages a copy ticket', async ({ page }
     expect(clip).toContain('SELL TO OPEN CSP');
     expect(clip).toMatch(/PUT [A-Z]+ \d{8} \d+\.\d{2} x\d/);
     expect(clip).toContain('STAGED FOR US MARKET OPEN');
+});
+
+test('evening: fresh broker quote at copy time blocks staging without clipboard writes', async ({ page }) => {
+    await server.publish('complete_closed');
+    await page.goto('/');
+
+    const btn = page.locator('#top-recommendations-content .recommendation-card').first().locator('.copy-ticket-btn');
+    await expect(btn).toBeEnabled();
+    await expect(btn).toContainText('Stage ticket');
+    const sentinel = await seedClipboard(page);
+
+    // A fresh broker quote at copy time proves the market is open now.
+    await server.control('/__e2e/evidence', { source: 'broker', quote_age_sec: 0 });
+    await btn.click();
+    await expect(btn).toContainText('Review only');
+    await expect(btn).toHaveAttribute('title', /market appears open now/i);
+    expect(await readClipboard(page)).toBe(sentinel);
 });
 
 test('evening: planning run with partial scan coverage → review-only with visible blocker', async ({ page }) => {

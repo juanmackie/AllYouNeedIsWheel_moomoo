@@ -4,15 +4,16 @@
    unsupported symbols, holdings checked for covered calls). Mirrors the run
    strip's design system so the foot reads as part of the operational strip.
 #}
-<section class="ft-section mt-5 mb-4" id="active-watchlist-foot">
-  <div class="ft-section__head">
-    <div class="ft-section__head-left">
-      <span class="ft-section__num">FOOT &middot; ACTIVE WATCHLIST</span>
-      <h2 class="ft-section__title">Scan provenance</h2>
+<section class="ft-section dashboard-area dashboard-area--provenance mb-4" id="active-watchlist-foot">
+  <header class="ft-section__head dashboard-area__header">
+    <div class="ft-section__head-left dashboard-area__heading">
+      <span class="ft-section__num">09 &middot; SCAN PROVENANCE</span>
+      <h2 class="ft-section__title">What the latest run checked</h2>
     </div>
     <div class="d-flex align-items-center gap-2">
       <span id="active-watchlist-sync" class="badge bg-secondary">no sync yet</span>
     </div>
-  </div>
+  </header>
+  <p class="dashboard-section__description">See the saved run's Moomoo watchlist group, symbols, and scan status.</p>
   <div id="active-watchlist-render" class="small text-muted">Waiting for a run snapshot…</div>
 </section>

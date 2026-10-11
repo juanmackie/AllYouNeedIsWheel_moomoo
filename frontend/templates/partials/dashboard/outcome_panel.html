@@ -32,28 +32,28 @@
     <div id="outcome-groups">
         <div class="outcome-group">
             <h3 class="outcome-group__title">By preset</h3>
-            <div class="ft-table-wrap"><table class="ft-table">
+            <div class="ft-table-wrap" role="region" aria-label="Outcomes by preset table" tabindex="0"><table class="ft-table">
                 <thead><tr><th>Preset</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
                 <tbody id="outcome-group-preset"></tbody>
             </table></div>
         </div>
         <div class="outcome-group">
             <h3 class="outcome-group__title">By DTE bucket</h3>
-            <div class="ft-table-wrap"><table class="ft-table">
+            <div class="ft-table-wrap" role="region" aria-label="Outcomes by DTE table" tabindex="0"><table class="ft-table">
                 <thead><tr><th>Bucket</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
                 <tbody id="outcome-group-dte"></tbody>
             </table></div>
         </div>
         <div class="outcome-group">
             <h3 class="outcome-group__title">By ticker</h3>
-            <div class="ft-table-wrap"><table class="ft-table">
+            <div class="ft-table-wrap" role="region" aria-label="Outcomes by ticker table" tabindex="0"><table class="ft-table">
                 <thead><tr><th>Ticker</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
                 <tbody id="outcome-group-ticker"></tbody>
             </table></div>
         </div>
         <div class="outcome-group">
             <h3 class="outcome-group__title">By event tier</h3>
-            <div class="ft-table-wrap"><table class="ft-table">
+            <div class="ft-table-wrap" role="region" aria-label="Outcomes by event tier table" tabindex="0"><table class="ft-table">
                 <thead><tr><th>Tier</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
                 <tbody id="outcome-group-event"></tbody>
             </table></div>
@@ -63,9 +63,9 @@
     <div class="outcome-drill">
         <div class="outcome-drill__header">
             <h3 class="outcome-drill__title">Contracts <span id="outcome-records-count" class="outcome-drill__count"></span></h3>
-            <p class="outcome-drill__hint">Click a row to view the supporting fill transactions.</p>
+            <p class="outcome-drill__hint">Use Show fills to view supporting fill transactions.</p>
         </div>
-        <div class="ft-table-wrap">
+        <div class="ft-table-wrap" role="region" aria-label="Outcome contracts table" tabindex="0">
             <table class="ft-table">
                 <thead>
                     <tr>
@@ -79,7 +79,7 @@
                         <th class="ft-th-right">Capital-days</th>
                         <th class="ft-th-right">$/day</th>
                         <th class="ft-th-right">Fills</th>
-                        <th></th>
+                        <th class="ft-th-right">Details</th>
                     </tr>
                 </thead>
                 <tbody id="outcome-records"></tbody>

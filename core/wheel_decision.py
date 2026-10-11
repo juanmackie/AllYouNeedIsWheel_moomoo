@@ -25,6 +25,7 @@ from core.scoring_factors import (
     _calculate_mid_price,
     _clamp,
     _compute_expected_move_buffer,
+    _compute_max_contracts,
     _compute_profit_target_progress,
     _compute_recommended_contracts,
     _compute_roll_pressure,
@@ -700,6 +701,7 @@ def score_contract(
         decision.breakeven_buffer_pct = round(breakeven_buffer_pct, 2)
         decision.cash_required = round(cash_required, 2)
         decision.max_contracts = max(int(cash_available_for_csp // cash_required), 0)
+        decision.max_contracts = _compute_max_contracts(decision, portfolio_context, profile)
         decision.capital_efficiency = round(capital_efficiency, 1)
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
 

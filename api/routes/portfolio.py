@@ -130,7 +130,7 @@ def get_weekly_income():
 
         results = get_portfolio_service().get_weekly_option_income()
 
-        if "error" in results:
+        if results.get("error"):
             payload = {"error": results["error"], "positions": [], "total_income": 0, "positions_count": 0}
             if _is_real_account_unavailable(results["error"]):
                 payload["error_code"] = "real_account_unavailable"

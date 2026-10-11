@@ -28,6 +28,54 @@ logger = logging.getLogger("core.wheel_runner")
 
 _refresh_lock = threading.Lock()
 
+_INTERRUPTED_REFRESH_ERROR = (
+    "Previous refresh was interrupted when app stopped. Any saved results are unchanged. Refresh run to retry."
+)
+
+
+def recover_interrupted_refresh(db) -> bool:
+    """Fail a persisted in-flight attempt when startup has no worker for it.
+
+    Refresh attempts survive process restarts in SQLite, while the background
+    worker and its lock do not. Recover only from that process-lifecycle fact;
+    elapsed time is not evidence that a broker call has stalled.
+    """
+    if db is None or _background_refresh_active():
+        return False
+
+    try:
+        latest = db.get_latest_attempt()
+        if not latest or latest.get("state") not in ("queued", "refreshing"):
+            return False
+
+        finished_at = utc_now_iso()
+        attempt = RefreshAttempt(
+            attempt_id=str(latest.get("attempt_id") or ""),
+            run_id=None,
+            state="failed",
+            stage=str(latest.get("stage") or "scan"),
+            progress=float(latest.get("progress") or 0.0),
+            started_at=latest.get("started_at"),
+            finished_at=finished_at,
+            latest_error=_INTERRUPTED_REFRESH_ERROR,
+            latest_failure_at=finished_at,
+        )
+        if not attempt.attempt_id:
+            return False
+        db.save_refresh_attempt(attempt)
+        logger.info("Marked interrupted refresh attempt %s as failed", attempt.attempt_id)
+        return True
+    except Exception as exc:
+        # Recovery must not prevent the dashboard from starting. The next
+        # explicit startup can retry if the database was temporarily busy.
+        logger.warning("Failed to recover interrupted refresh attempt: %s", exc)
+        return False
+
+
+def _background_refresh_active() -> bool:
+    """Whether this process currently owns the serialized refresh worker."""
+    return _refresh_lock.locked()
+
 
 def opaque_account_id(account_id: str) -> str:
     """Non-sensitive identity: short hash of the broker account id."""
@@ -122,12 +170,19 @@ class WheelRunner:
         except Exception as exc:  # never let attempt bookkeeping kill a refresh
             logger.warning(f"Failed to persist refresh attempt: {exc}")
 
+    def queue_refresh_attempt(self) -> RefreshAttempt:
+        """Persist and return the identity for a refresh before its worker starts."""
+        attempt = RefreshAttempt(attempt_id=uuid.uuid4().hex[:16], run_id=None, state="queued")
+        self._persist_attempt(attempt)
+        return attempt
+
     # -- run -----------------------------------------------------------------
 
-    def refresh(self) -> WheelRunSnapshot:
-        attempt_id = uuid.uuid4().hex[:16]
+    def refresh(self, attempt_id: str | None = None, *, already_queued: bool = False) -> WheelRunSnapshot:
+        attempt_id = attempt_id or uuid.uuid4().hex[:16]
         started = utc_now_iso()
-        self._persist_attempt(RefreshAttempt(attempt_id=attempt_id, run_id=None, state="queued"))
+        if not already_queued:
+            self._persist_attempt(RefreshAttempt(attempt_id=attempt_id, run_id=None, state="queued"))
 
         try:
             self._persist_attempt(
@@ -374,6 +429,9 @@ class WheelRunner:
             active_watchlist=dict(active_watchlist),
             capital_recovery=tuple(result.get("capital_recovery", []) or []),
             watchlist_cash_fit=dict(result.get("watchlist_cash_fit") or {}),
+            cash_available_for_csp=result.get("cash_available_for_csp"),
+            broker_buying_power=result.get("broker_buying_power"),
+            cash_reserved_for_csp=result.get("cash_reserved_for_csp"),
             preflight=dict(result.get("preflight") or {}),
         )
 
@@ -425,19 +483,40 @@ class WheelRunner:
             logger.warning("Portfolio state persistence skipped for run %s: %s", run_id, exc)
 
 
-def start_background_refresh(runner: WheelRunner) -> bool:
-    """Start one background refresh if none is running. Returns True if started."""
+def start_background_refresh(runner: WheelRunner) -> RefreshAttempt | None:
+    """Start one refresh and return its already-persisted queued attempt, or None if busy."""
     if not _refresh_lock.acquire(blocking=False):
         logger.info("Refresh already running; skipping")
-        return False
+        return None
 
-    def _run():
-        try:
-            runner.refresh()
-        except Exception as exc:
-            logger.error(f"Background refresh failed: {exc}")
-        finally:
-            _refresh_lock.release()
+    attempt = None
+    try:
+        attempt = runner.queue_refresh_attempt()
 
-    threading.Thread(target=_run, name="wheel-refresh", daemon=True).start()
-    return True
+        def _run():
+            try:
+                runner.refresh(attempt_id=attempt.attempt_id, already_queued=True)
+            except Exception as exc:
+                logger.error(f"Background refresh failed: {exc}")
+            finally:
+                _refresh_lock.release()
+
+        threading.Thread(target=_run, name="wheel-refresh", daemon=True).start()
+    except Exception as exc:
+        if attempt is not None:
+            failed_at = utc_now_iso()
+            runner._persist_attempt(
+                RefreshAttempt(
+                    attempt_id=attempt.attempt_id,
+                    run_id=None,
+                    state="failed",
+                    stage="idle",
+                    finished_at=failed_at,
+                    latest_error="Could not start refresh worker.",
+                    latest_failure_at=failed_at,
+                )
+            )
+        _refresh_lock.release()
+        logger.error("Could not start background refresh worker: %s", exc)
+        raise
+    return attempt

@@ -399,7 +399,11 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         market_clock.assert_called_once_with()
 
     def test_put_expirations_use_growth_dte_window_when_toggle_enabled(self):
+        from zoneinfo import ZoneInfo
+
         from moomoo import RET_OK
+
+        from api.services import options_data
 
         service = self._make_service(
             {
@@ -423,11 +427,12 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
             "preferred_dte": 37,
         }
 
+        market_now = datetime(2026, 10, 11, 12, 0, tzinfo=ZoneInfo("America/New_York"))
         expirations = [
-            (date.today() + timedelta(days=14)).strftime("%Y-%m-%d"),
-            (date.today() + timedelta(days=37)).strftime("%Y-%m-%d"),
-            (date.today() + timedelta(days=45)).strftime("%Y-%m-%d"),
-            (date.today() + timedelta(days=50)).strftime("%Y-%m-%d"),
+            (market_now.date() + timedelta(days=14)).strftime("%Y-%m-%d"),
+            (market_now.date() + timedelta(days=37)).strftime("%Y-%m-%d"),
+            (market_now.date() + timedelta(days=45)).strftime("%Y-%m-%d"),
+            (market_now.date() + timedelta(days=50)).strftime("%Y-%m-%d"),
         ]
         conn = MagicMock()
         conn.get_option_expiration_dates.return_value = (
@@ -436,7 +441,8 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         )
         service._connection_provider._ensure_connection.return_value = conn
 
-        result = service.get_option_expirations("INTC", "PUT")
+        with patch.object(options_data, "market_now", return_value=market_now):
+            result = service.get_option_expirations("INTC", "PUT")
 
         self.assertEqual(
             [item["dte"] for item in result["expirations"]],

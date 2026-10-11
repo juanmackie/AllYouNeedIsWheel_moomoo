@@ -27,10 +27,14 @@
 - Prefer pure functions and small data transformations for scoring/risk logic.
 - Keep thresholds, weights, and profile choices explicit and covered by regression tests.
 - Decision helpers for read-only panels should prefer plain-English blockers/rationale and preserve the ability to surface research-only outcomes.
+- CSP `max_contracts` is bounded by net broker cash, the preset cash budget, and remaining per-underlying exposure. It is distinct from the recommended quantity; buying power must not enlarge cash-secured capacity.
 - Avoid import-time network calls, thread starts, or DB writes.
 - Reuse `ticker_utils`, `rate_limiter`, and logging helpers instead of local one-off versions.
-- `MoomooConnection.get_option_contracts` discovers both option rights in inclusive ranges of at most 30 days through the chain limiter and gate. `OptionChainCache` reuses covered ranges only on the exact US market date; quote force-refresh never invalidates this metadata. `get_option_quotes` batches fresh snapshots at 400 codes and preserves broker timestamps. Core never persists directories; services supply SQLite read-through.
+- `MoomooConnection.get_option_contracts` discovers both option rights in inclusive ranges of at most 30 days through the chain limiter and gate. `OptionChainCache` reuses covered ranges only on the exact US market date; quote force-refresh never invalidates this metadata. `get_option_quotes` batches fresh snapshots at 400 codes and preserves broker timestamps. Core never persists directories; services supply SQLite read-through. A failed discovery stores the broker reason by code in `_contract_discovery_errors` for service diagnostics.
 - `WheelRunner` persists discovery progress separately from its immutable published snapshot; snapshot `preflight` reports discovery-budget arithmetic independently of quote freshness.
+- `WheelRunSnapshot` preserves recommendation-result `cash_available_for_csp`, `broker_buying_power`, and `cash_reserved_for_csp` for published-run display. Missing legacy fields stay `None`; measured zero remains zero.
+- `recover_interrupted_refresh` runs only at explicit application startup. It fails persisted queued/refreshing attempts when no process-local worker owns the refresh lock, leaves published snapshots unchanged, and never infers failure from elapsed time alone. The app is single-process; do not reuse this process-local ownership check for a multi-worker deployment.
+- `start_background_refresh` persists the accepted queued attempt before starting the worker. The worker continues that same attempt ID without writing a second queued row; if worker startup fails, the attempt is marked failed and the process-local lock is released.
 - Cross-layer composition (e.g. roll diagnostics needing registered services) is injected as a provider callable at factory time (`api/__init__.py` → `WheelRunner(roll_diagnostics_provider=...)`); never import `api` from `core`.
 
 ## Verification

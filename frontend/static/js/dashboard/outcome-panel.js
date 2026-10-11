@@ -178,7 +178,7 @@ function fillRow(fill) {
   return row;
 }
 
-function recordRow(record) {
+function recordRow(record, index) {
   const fills = Array.isArray(record.fills) ? record.fills : [];
   const net = _optNum(record.net_pnl);
   const efficiency = _optNum(record.owner_efficiency);
@@ -186,16 +186,16 @@ function recordRow(record) {
   const status = String(record.outcome_status || 'pending');
   const row = document.createElement('tr');
   row.className = 'outcome-record-row';
-  row.dataset.expandable = 'true';
-  row.tabIndex = 0;
-  row.setAttribute('aria-expanded', 'false');
+  row.dataset.expandable = String(fills.length > 0);
   const cell = (text, className = '') => {
     const td = document.createElement('td');
     td.className = className;
     td.textContent = text;
     return td;
   };
-  row.appendChild(cell(plainContractLabel(record), 'ft-td-bold'));
+  const contractCell = cell(plainContractLabel(record), 'ft-td-bold');
+  contractCell.id = `outcome-contract-${index}`;
+  row.appendChild(contractCell);
   row.appendChild(cell(String(record.signal_type || '—')));
   const statusCell = document.createElement('td');
   const badge = document.createElement('span');
@@ -220,9 +220,18 @@ function recordRow(record) {
     fillsCell.appendChild(open);
   }
   row.appendChild(fillsCell);
-  const chevron = cell(fills.length ? '▸' : '', 'ft-td-center ft-td-mute');
-  chevron.setAttribute('aria-hidden', 'true');
-  row.appendChild(chevron);
+  const toggleCell = cell('', 'ft-td-center');
+  if (fills.length) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ft-btn ft-btn--ghost outcome-fill-toggle';
+    button.id = `outcome-fill-toggle-${index}`;
+    button.textContent = 'Show fills';
+    button.setAttribute('aria-labelledby', `${button.id} ${contractCell.id}`);
+    button.setAttribute('aria-expanded', 'false');
+    toggleCell.appendChild(button);
+  }
+  row.appendChild(toggleCell);
   return [row, ...fills.map(fillRow)];
 }
 
@@ -361,16 +370,18 @@ function renderRecords(outcomes) {
     _recordsBody.appendChild(row);
     return;
   }
-  for (const record of list) _recordsBody.append(...recordRow(record));
+  for (const [index, record] of list.entries()) _recordsBody.append(...recordRow(record, index));
 }
 
 /** Toggle a contract's supporting-fills detail rows (all adjacent fill rows). */
 function toggleFillDetail(rowEl) {
   if (!rowEl) return;
-  const expanded = rowEl.getAttribute('aria-expanded') === 'true';
-  rowEl.setAttribute('aria-expanded', String(!expanded));
-  const chevron = rowEl.querySelector('[aria-hidden="true"]');
-  if (chevron) chevron.textContent = expanded ? '▸' : '▾';
+  const button = rowEl.querySelector('.outcome-fill-toggle');
+  if (!button) return;
+  const expanded = button.getAttribute('aria-expanded') === 'true';
+  button.setAttribute('aria-expanded', String(!expanded));
+  rowEl.dataset.expanded = String(!expanded);
+  button.textContent = expanded ? 'Show fills' : 'Hide fills';
   let sibling = rowEl.nextElementSibling;
   while (sibling && sibling.classList.contains('outcome-fill-row')) {
     sibling.style.display = expanded ? 'none' : '';
@@ -380,17 +391,11 @@ function toggleFillDetail(rowEl) {
 
 function bindExpand() {
   if (!_recordsBody) return;
-  for (const row of _recordsBody.querySelectorAll('.outcome-record-row')) {
+  for (const row of _recordsBody.querySelectorAll('.outcome-record-row[data-expandable="true"]')) {
     if (row.dataset.bound) continue;
     row.dataset.bound = 'true';
     const openDetail = () => toggleFillDetail(row);
     row.addEventListener('click', openDetail);
-    row.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openDetail();
-      }
-    });
   }
 }
 

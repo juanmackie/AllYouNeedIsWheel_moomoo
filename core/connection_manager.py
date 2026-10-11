@@ -275,6 +275,9 @@ class MoomooConnection:
             broker_cache_after_hours=self._broker_cache_after_hours,
         )
         self._pending_requests = PendingRequestCoordinator(result_ttl_seconds=1.0)
+        # Last broker reason for a failed contract discovery, by Moomoo code.
+        # The scan service reads it to explain a symbol that has no evidence.
+        self._contract_discovery_errors = {}
 
         self._connection_created_at = datetime.now()
         self._cash_diagnostics_logged = False
@@ -802,6 +805,7 @@ class MoomooConnection:
             raise ValueError("Contract discovery requires an inclusive window of at most 30 days")
         symbol = self._format_symbol(symbol)
         if not self._ensure_quote_context():
+            self._contract_discovery_errors[symbol] = "OpenD quote connection unavailable"
             return None
         self._acquire_option_chain_gate(f"contracts:{symbol}:{start_date}:{end_date}")
         try:
@@ -815,6 +819,9 @@ class MoomooConnection:
             if ret != RET_OK or data is None:
                 if _is_rate_limit_response(data):
                     self._option_chain_rate_limiter.record_rate_limit(_safe_str(data))
+                reason = (_safe_str(data) if data is not None else "broker returned no data")[:200]
+                self._contract_discovery_errors[symbol] = reason
+                logger.warning("Contract discovery failed for %s: %s", symbol, reason)
                 return None
             contracts = []
             for _, row in data.iterrows():
@@ -829,10 +836,12 @@ class MoomooConnection:
                     {"code": str(row["code"]), "strike": strike, "expiration": expiration, "option_type": right}
                 )
             self._quote_cache.cache_contracts(symbol, start_date, end_date, contracts)
+            self._contract_discovery_errors.pop(symbol, None)
             return contracts
         except Exception as exc:
             if _is_rate_limit_response(exc):
                 self._option_chain_rate_limiter.record_rate_limit(_safe_str(exc))
+            self._contract_discovery_errors[symbol] = _safe_str(exc)[:200]
             logger.warning("Contract discovery failed for %s: %s", symbol, _safe_str(exc))
             return None
         finally:

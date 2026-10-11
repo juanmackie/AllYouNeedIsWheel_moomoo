@@ -901,6 +901,32 @@ class TestScoreContractCSPBuyingPower(unittest.TestCase):
         self.assertFalse(result.hard_blockers)
         self.assertGreater(result.annualized_return, 0)
 
+    def test_aggressive_csp_max_quantity_respects_underlying_cap_in_public_candidate(self):
+        from api.services.recommendation_ranking import format_recommendation
+        from api.services.recommendations import _format_decision_to_candidate
+        from core.presets import get_preset
+
+        option = dict(self.base_option, strike=65.0)
+        profile = get_preset("aggressive").to_screener_profile()
+        portfolio = {
+            "cash_available_for_csp": 31240.92,
+            "account_value": 62100.18,
+            "underlying_capital_exposure": {"AXTI": 0.0},
+        }
+
+        decision = score_contract(
+            ticker="AXTI",
+            option=option,
+            stock_price=68.5,
+            profile=profile,
+            portfolio_context=portfolio,
+        )
+        candidate = _format_decision_to_candidate("AXTI", 68.5, decision)
+        public_candidate = format_recommendation(candidate, 1)
+
+        self.assertEqual(public_candidate["recommended_contracts"], 2)
+        self.assertEqual(public_candidate["max_contracts"], 2)
+
     def test_percentage_iv_produces_reasonable_delta(self):
         """score_contract with percentage IV (50.0) should produce non-zero delta after normalization"""
         future_date = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
@@ -1140,13 +1166,18 @@ class TestQuoteFreshness(unittest.TestCase):
 
     @patch.object(_wd_module, "is_market_open", return_value=True)
     def test_bid_premium_velocity_and_tiers(self, _mock_open):
+        from zoneinfo import ZoneInfo
+
+        market_now = datetime(2026, 10, 11, 12, 0, tzinfo=ZoneInfo("America/New_York"))
         opt = dict(
             self.base,
+            expiration=(market_now + timedelta(days=21)).strftime("%Y%m%d"),
             ask=2.10,
-            update_time=self.fresh_ts,
-            quote_fetched_at_utc=datetime.now().astimezone().isoformat(),
+            update_time=market_now.strftime("%Y-%m-%d %H:%M:%S"),
+            quote_fetched_at_utc=market_now.astimezone(timezone.utc).isoformat(),
         )
-        res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
+        with patch.object(_wd_module, "market_now", return_value=market_now):
+            res = score_contract("AAPL", opt, 100.0, self.profile, self.portfolio)
         self.assertFalse(res.hard_blockers)
         self.assertEqual(res.bid_premium_per_contract, 200.0)
         self.assertEqual(res.limit_target_per_contract, 205.0)

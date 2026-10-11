@@ -201,6 +201,49 @@ describe('top-recommendations empty state', () => {
     expect(warning.textContent.toLowerCase()).toContain('copy blocked');
   });
 
+  it('renders missing cash fields as unavailable, preserves explicit zero, and clears legacy values', async () => {
+    const { initializeTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    const { fetchRunState } = await import('../../frontend/static/js/dashboard/api-run.js');
+    const envelope = (cashFields) => ({
+      attempt: {},
+      taken_links: [],
+      snapshot: {
+        signals: [], count: 0, run: { generated_at: '2026-09-27T12:00:00' },
+        ...cashFields,
+      },
+    });
+    fetchRunState.mockResolvedValue(envelope({
+      cash_available_for_csp: 5000,
+      cash_reserved_for_csp: null,
+      broker_buying_power: null,
+    }));
+
+    await initializeTopRecommendations();
+    await vi.waitFor(() => expect(document.getElementById('buying-power-indicator').classList.contains('d-none')).toBe(false));
+    expect(document.getElementById('bp-amount').textContent).toBe('$5000.00');
+    expect(document.getElementById('bp-reserved').textContent).toBe('—');
+    expect(document.getElementById('bp-broker').textContent).toBe('—');
+
+    fetchRunState.mockResolvedValue(envelope({
+      cash_available_for_csp: 0,
+      cash_reserved_for_csp: 0,
+      broker_buying_power: 0,
+    }));
+    await loadTopRecommendations(false);
+    expect(document.getElementById('bp-amount').textContent).toBe('$0.00');
+    expect(document.getElementById('bp-reserved').textContent).toBe('$0.00');
+    expect(document.getElementById('bp-broker').textContent).toBe('$0.00');
+
+    fetchRunState.mockResolvedValue(envelope({}));
+    await loadTopRecommendations(false);
+    expect(document.getElementById('bp-amount').textContent).toBe('—');
+    expect(document.getElementById('bp-reserved').textContent).toBe('—');
+    expect(document.getElementById('bp-broker').textContent).toBe('—');
+    expect(document.getElementById('bp-diagnostics').textContent).toBe('');
+  });
+
   it('hides the watchlist cash-fit warning when all names can fit', async () => {
     const { initializeTopRecommendations } = await import(
       '../../frontend/static/js/dashboard/top-recommendations.js'
@@ -1000,6 +1043,25 @@ describe('C03 copy eligibility at the point of use', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows the review-only reason as visible text on the card, not only in a tooltip', async () => {
+    await renderWith({
+      success: true,
+      tradeable: false,
+      status: 'partial',
+      run: { run_id: 'c03-run', market_state: 'closed', status: 'partial', coverage_scanned: 64, coverage_total: 67 },
+      signals: [{ ...candidate, eligibility: { mode: 'review_only', reasons: ['partial coverage (64/67 symbols; missing: <b>AMD</b>, LRCX, TSLA) — copy blocked'] } }],
+      count: 1, generated_at: '2026-05-24T12:00:00',
+    });
+    const status = document.querySelector('.recommendation-card .copy-status');
+    expect(status).toBeTruthy();
+    expect(status.classList.contains('d-none')).toBe(false);
+    expect(status.textContent).toBe(
+      'Review only: partial coverage (64/67 symbols; missing: <b>AMD</b>, LRCX, TSLA) — copy blocked'
+    );
+    expect(status.querySelector('b')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
   it('blocks staging when the run is stale during an open market', async () => {
     const { writeText } = await renderWith({
       success: true,
@@ -1128,6 +1190,32 @@ describe('P1a revalidate-then-copy', () => {
     expect(writeText).not.toHaveBeenCalled();
     expect(fetchRunState.mock.calls.length).toBe(1); // no auto-refresh after review_only
     await vi.waitFor(() => expect(btn.textContent).toContain('Review only'));
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the copy-time block reason as visible text on the card', async () => {
+    const { writeText, revalidateCopy } = await renderWith(
+      { ...candidate, eligibility: { mode: 'staged', reasons: [] } },
+      {
+        ok: true, matched_run: true, matched_contract: true,
+        mode: 'review_only', run_id: 'c03-run',
+        reasons: ['market appears open now (fresh broker quotes) — refresh for live copy; staging blocked'],
+        verified_at: '2026-05-24T12:00:01',
+      }
+    );
+    // A copyable card shows no status text before the click.
+    expect(document.querySelector('.recommendation-card .copy-status')).toBeNull();
+    const btn = document.querySelector('.copy-ticket-btn');
+    btn.click();
+    await vi.waitFor(() => expect(revalidateCopy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(document.querySelector('.recommendation-card .copy-status')).toBeTruthy());
+    const status = document.querySelector('.recommendation-card .copy-status');
+    expect(status.textContent).toBe(
+      'Copy blocked: market appears open now (fresh broker quotes) — refresh for live copy; staging blocked'
+    );
+    expect(status.classList.contains('text-danger')).toBe(true);
+    expect(status.classList.contains('d-none')).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
@@ -1281,6 +1369,7 @@ describe('top-recommendations strategy lanes (preset rules + two sections)', () 
 
     const ruleEl = document.getElementById('strategy-rules');
     expect(ruleEl.classList.contains('d-none')).toBe(false);
+    expect(document.getElementById('top-recs-eyebrow').textContent).toBe('PUBLISHED STRATEGY · WHEEL CONSERVATIVE');
     const text = document.getElementById('strategy-rules-text').textContent;
     expect(text).toContain('WHEEL CONSERVATIVE v2');
     expect(text).toContain('CSP Δ 0.25 ±0.05');

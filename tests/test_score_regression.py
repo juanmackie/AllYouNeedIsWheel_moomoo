@@ -200,7 +200,8 @@ class TestScoreRegression(unittest.TestCase):
         result = score_contract("AAPL", option, 60.0, profile, portfolio)
 
         self.assertFalse(result.hard_blockers)
-        self.assertEqual(result.max_contracts, 20)
+        # The hard maximum follows the 10% CSP budget ($10,000), not all cash.
+        self.assertEqual(result.max_contracts, 2)
         self.assertEqual(result.recommended_contracts, 2)
 
     def test_yfinance_fallback_warns(self):

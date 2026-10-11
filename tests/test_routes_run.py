@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from flask import Flask
 
 from api.routes.run import bp
+from core.run_model import RefreshAttempt
 
 
 def _taken_row(run_id, link_key="link-1"):
@@ -93,16 +94,36 @@ class TestRunRoute(unittest.TestCase):
         self.assertEqual(payload["snapshot"]["run"]["run_id"], "run-a")
 
     @patch("api.routes.run._get_runner")
-    @patch("api.routes.run.start_background_refresh", return_value=True)
+    @patch("api.routes.run.start_background_refresh")
     def test_refresh_starts_one_runner_attempt(self, mock_refresh, mock_get_runner):
-        self.db.get_latest_attempt.return_value = {"state": "refreshing"}
+        accepted_attempt = RefreshAttempt(attempt_id="accepted-123", run_id=None, state="queued")
+        mock_refresh.return_value = accepted_attempt
+        self.db.get_latest_attempt.return_value = {"attempt_id": "previous-456", "state": "succeeded"}
         mock_get_runner.return_value = MagicMock()
 
         with self.app.test_client() as client:
             response = client.post("/api/run/refresh")
 
         self.assertEqual(response.status_code, 202)
-        self.assertTrue(response.get_json()["started"])
+        payload = response.get_json()
+        self.assertTrue(payload["started"])
+        self.assertEqual(payload["attempt"]["attempt_id"], "accepted-123")
+        self.db.get_latest_attempt.assert_not_called()
+        mock_refresh.assert_called_once()
+
+    @patch("api.routes.run._get_runner")
+    @patch("api.routes.run.start_background_refresh", return_value=None)
+    def test_refresh_returns_conflict_with_current_attempt_when_worker_is_busy(self, mock_refresh, mock_get_runner):
+        current_attempt = {"attempt_id": "running-123", "state": "refreshing"}
+        self.db.get_latest_attempt.return_value = current_attempt
+        mock_get_runner.return_value = MagicMock()
+
+        with self.app.test_client() as client:
+            response = client.post("/api/run/refresh")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.get_json()["started"])
+        self.assertEqual(response.get_json()["attempt"], current_attempt)
         mock_refresh.assert_called_once()
 
     def test_get_run_exposes_lanes_rejected_portfolio_and_combined_signals(self):
@@ -249,7 +270,10 @@ class TestRunCopyCheck(unittest.TestCase):
                 "strike": 140.0,
                 "bid": 2.7,
                 "ask": 3.2,
-                "quote_fetched_at_utc": (now_utc - timedelta(hours=3)).isoformat(),
+                # Real adapter shape: the fetch instant is always "now". Only the
+                # broker update_time (US Eastern) shows a last-session quote.
+                "quote_fetched_at_utc": now_utc.isoformat(),
+                "update_time": (now_et - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S"),
             },
         }
         with self.app.test_client() as client:
@@ -289,6 +313,8 @@ class TestRunCopyCheck(unittest.TestCase):
                 "strike": 140.0,
                 "bid": 2.7,
                 "quote_fetched_at_utc": now_utc.isoformat(),
+                # The broker itself reports a quote from this minute: market is open.
+                "update_time": now_et.strftime("%Y-%m-%d %H:%M:%S"),
             },
         }
         with self.app.test_client() as client:

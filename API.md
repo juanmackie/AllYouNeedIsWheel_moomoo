@@ -19,7 +19,7 @@ There is no order, unlock, or trading-password endpoint.
 - `GET /api/system/opend-status` — OpenD probe
 
 ### Wheel run
-- `GET /api/run` — latest refresh attempt plus immutable last-good snapshot; response recomputes effective `tradeable`, `effective_status`, and stale symbols at read time. Closed-market snapshots may contain broker last-session chains and remain planning-only/staged. The snapshot's `capital_recovery` list is read-only portfolio context: it compares fetched covered-call scenarios against the best qualifying CSP return/day and uses Moomoo average cost conservatively; historical option credits are excluded until fill-history completeness can be proven. Call comparisons are limited to the broker strike slice fetched by the existing scan, not an exhaustive chain search. `watchlist_cash_fit` summarizes watchlist names with no affordable OTM CSP strike at current CSP cash and the maximum affordable strike; the dashboard uses it as a warning only. Recommendation cards omit the unused `iv_adjusted_return` and `remaining_gap_to_target` metrics; covered-call expected value is unavailable (`null`) until assignment-aware modeling exists.
+- `GET /api/run` — latest refresh attempt plus immutable last-good snapshot; response recomputes effective `tradeable`, `effective_status`, and stale symbols at read time. Closed-market runs normally publish `planning` status but may stage tickets with complete coverage and direct broker evidence, subject to copy-time OpenD confirmation; incomplete coverage and persisted fallback remain review-only. The snapshot's optional `cash_available_for_csp`, `broker_buying_power`, and `cash_reserved_for_csp` preserve the scan's broker-derived capital for card calculations and the cash header; older snapshots without these fields report them unavailable. Its `capital_recovery` list is read-only stock portfolio context: it compares fetched covered-call scenarios against the best qualifying CSP return/day and uses Moomoo average cost conservatively; historical option credits are excluded until fill-history completeness can be proven. Call comparisons are limited to the broker strike slice fetched by the existing scan, not an exhaustive chain search. `watchlist_cash_fit` summarizes watchlist names with no affordable OTM CSP strike at current CSP cash and the maximum affordable strike; the dashboard uses it as a warning only. Recommendation cards omit the unused `iv_adjusted_return` and `remaining_gap_to_target` metrics; covered-call expected value is unavailable (`null`) until assignment-aware modeling exists.
 - `POST /api/run/refresh` — start one background refresh (202; 409 if running); failed attempts never overwrite the last-good snapshot
 - `POST /api/run/taken` — validate and persist an owner-confirmed recommendation/trade link for a published run; never places or modifies an order.
 
@@ -31,15 +31,24 @@ incomplete, and every signal is review-only. CSP feasibility charges uncached co
 `ranges_per_symbol`, `estimated_scan_sec`, `discovery_budget_sec`, quota/spacing
 configuration, feasibility, and estimated capacity. `freshness_window_sec` is
 retired. `RefreshAttempt.stage="discover"` reports discovery progress.
+Attempt `progress` is a stage-weight estimate, not a precise completion
+percentage; the dashboard displays the stage and elapsed time instead.
+Explicit application startup marks a persisted queued/refreshing attempt
+failed when no process-local refresh worker owns it. This recovery preserves
+the last-good snapshot and reports an interruption reason for manual retry.
 Unaffordable names appear in `watchlist_cash_fit`, but still get discovery and
 scoring; their published picks have zero contracts and review-only eligibility.
 Successful empty contract windows count as assessed (`no_contracts_in_window`).
+A symbol with no broker evidence after one retry appears in `rejected` with
+reason code `broker_data_unavailable`; the coverage reason names the missing
+symbols. A covered-call holding whose option data cannot be read appears in
+`rejected` with the same reason code and `signal_type` `covered_call`.
 Option-contract watchlist entries are listed as unsupported and excluded from
 the underlying coverage total.
 
 ### Settings
 - `GET /api/settings` — presets, active key, effective read-only values
-- `POST /api/settings/preset` — persist `{preset: conservative|balanced|aggressive}`
+- `POST /api/settings/preset` — persist `{preset: conservative|balanced|aggressive}`; service startup uses a valid saved selection before the configured default
 
 ### Watchlist
 - `GET /api/watchlist` — sources (moomoo/app/config), canonical union, origins
@@ -59,6 +68,7 @@ the underlying coverage total.
 - `GET /api/portfolio/history` — persisted portfolio snapshot history (one per completed run) plus 5x growth pace
 - `GET /api/portfolio/projection?horizon_days=1460&paths=2000&seed=` — Moomoo-calibrated Monte Carlo NAV trajectory (local SQLite only, no OpenD gate). GBM fitted to daily-collapsed snapshot history with the active preset's target multiple; returns P10/P50/P90 bands, hit probabilities, median ETA, calibration stats, and option-leg fill corroboration. Deterministic default seed; horizons clamp to 30..1825 days, paths to 200..5000. Projection only — never a promise.
 - `GET /api/portfolio/roll-pressure` — roll/hold/close/rotate diagnostics for option positions. Held-option Greeks and bid/ask/last come from the existing Moomoo position market snapshot; missing delta is returned as `null` and accompanied by a warning that delta-based close protection is unavailable. `ROLL` and `ROTATE` include a named `roll_target` only from a fresh, eligible same-underlying/same-side candidate in the latest published run; `ROLL` is suppressed when no target exists. `ROTATE` requires a 2× net return/day hurdle after close-at-ask, open-at-bid, and known per-contract fees; unknown fees explicitly suppress it.
+- The dashboard displays roll verdicts and targets for review, with clipboard controls disabled: this endpoint has no copy-time revalidation against the current published run.
 - `GET /api/portfolio/alerts`
 
 ### Earnings calendar (risk metadata for the earnings gate)

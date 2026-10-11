@@ -4,54 +4,122 @@
 {% block body_class %}page-dashboard{% endblock %}
 
 {% block content %}
-{# ZONE 1 — Always visible: operational state + primary signals #}
-{% include "partials/dashboard/run_strip.html" %}
-
-<div class="ft-section mt-5 mb-5" style="border-top:2px solid var(--ft-ink); padding-top:24px;">
-  <div class="app-section__header" style="border-bottom:0; padding-bottom:8px;">
-    <h2 style="font-size:clamp(1.4rem,3.5vw,1.8rem);">Signals</h2>
-    <p class="text-muted small" style="margin:4px 0 0; max-width:720px;">Top watchlist wheel signals ranked by executable return on deployed capital per day. Review before copying.</p>
-  </div>
-  {% include "partials/dashboard/top_recommendations.html" %}
-</div>
-
-{% include "partials/dashboard/account_summary.html" %}
-{% include "partials/dashboard/weekly_income.html" %}
-
-{# ZONE 2 — Live positions (visible, operational) #}
-{% include "partials/dashboard/position_monitor.html" %}
-
-{# ZONE 3 — Collapsible analytics (growth / outcomes / watchlist) #}
-<details class="ft-section mt-4" style="border:1px solid var(--ft-rule); padding:0; background:transparent;">
-  <summary style="list-style:none; cursor:pointer; padding:14px 16px; background:var(--ft-paper); border-bottom:1px solid var(--ft-rule-soft); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-    <div>
-      <span class="app-section__eyebrow">Analytics</span>
-      <h2 style="font-size:18px; margin:0;">Growth · Outcomes · Watchlist</h2>
+<section class="dashboard-area dashboard-area--operations" id="scan-status" aria-labelledby="scan-status-title">
+  <header class="dashboard-area__header">
+    <div class="dashboard-area__heading">
+      <span class="ft-section__num">01 · SCAN STATUS</span>
+      <h1 class="dashboard-area__title" id="scan-status-title">Check the latest run</h1>
+      <p class="dashboard-area__description">Confirm the scan state, data freshness, and any limits before reviewing signals.</p>
     </div>
-    <span class="ft-btn ft-btn--ghost" style="font-size:10px; padding:4px 10px; white-space:nowrap;">Open details</span>
+  </header>
+  {% include "partials/dashboard/run_strip.html" %}
+  <div id="run-progress-details" class="run-progress-details" hidden role="status" aria-live="polite" aria-atomic="true">
+    <span class="run-progress-details__label">Refresh progress</span>
+    <span class="run-progress-details__stage">Stage: <span id="run-progress-stage"></span></span>
+    <span class="run-progress-details__elapsed">Elapsed: <span id="run-progress-elapsed"></span></span>
+    <span class="run-progress-details__updated">Last update: <span id="run-progress-updated"></span></span>
+    <span class="run-progress-details__message">Message: <span id="run-progress-message"></span></span>
+  </div>
+</section>
+
+<nav class="dashboard-section-nav" aria-label="Dashboard sections">
+  <div class="dashboard-section-nav__group" role="group" aria-label="Review">
+    <span class="dashboard-section-nav__label">Review</span>
+    <a href="#top-recommendations-section">Signals</a>
+    <a href="#account-capital">Account &amp; income</a>
+    <a href="#position-area">Positions</a>
+  </div>
+  <div class="dashboard-section-nav__group" role="group" aria-label="Explore">
+    <span class="dashboard-section-nav__label">Explore</span>
+    <a href="#growth-area">Growth</a>
+    <a href="#outcomes-area">Outcomes</a>
+    <a href="#watchlist-area">Watchlist</a>
+    <a href="#market-data-section">Options</a>
+    <a href="#active-watchlist-foot">Provenance</a>
+  </div>
+</nav>
+
+{# Primary signals remain visible and own their feature heading. #}
+{% include "partials/dashboard/top_recommendations.html" %}
+
+<section class="dashboard-area dashboard-area--account dashboard-capital-group" id="account-capital" aria-labelledby="account-area-title">
+  <header class="dashboard-area__header">
+    <div class="dashboard-area__heading">
+      <span class="ft-section__num" id="account-area-title">03 · ACCOUNT &amp; INCOME</span>
+      <p class="dashboard-area__description">Broker-reported capital, buying power, and recorded premium.</p>
+    </div>
+  </header>
+  {% include "partials/dashboard/account_summary.html" %}
+  {% include "partials/dashboard/weekly_income.html" %}
+</section>
+
+<section class="dashboard-area dashboard-area--positions" id="position-area" aria-labelledby="position-area-title">
+  <header class="dashboard-area__header">
+    <div class="dashboard-area__heading">
+      <span class="ft-section__num" id="position-area-title">04 · OPEN POSITIONS</span>
+    </div>
+  </header>
+  {% include "partials/dashboard/position_monitor.html" %}
+</section>
+
+<div id="analytics-section">
+<details class="ft-section dashboard-disclosure dashboard-area--secondary mt-4" id="growth-area">
+  <summary class="dashboard-disclosure__summary">
+    <div>
+      <span class="ft-section__num">05 · GROWTH</span>
+      <h2>Portfolio growth</h2>
+      <span class="dashboard-disclosure__description">Review account history, realized pace, and the calibrated projection.</span>
+    </div>
+    <span class="dashboard-disclosure__state" aria-hidden="true"><span class="dashboard-disclosure__closed">Show growth</span><span class="dashboard-disclosure__open">Hide growth</span></span>
   </summary>
-  <div style="padding:8px 0 0;">
+  <div class="dashboard-disclosure__content">
     {% include "partials/dashboard/growth_panel.html" %}
-    {% include "partials/dashboard/outcome_panel.html" %}
-    {% include "partials/dashboard/watchlist_panel.html" %}
   </div>
 </details>
 
-{# ZONE 4 — Deep options table, collapsed by default #}
-<details class="ft-section mt-4" style="border:1px solid var(--ft-rule); padding:0; background:transparent;">
-  <summary style="list-style:none; cursor:pointer; padding:14px 16px; background:var(--ft-paper); border-bottom:1px solid var(--ft-rule-soft); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+<details class="ft-section dashboard-disclosure dashboard-area--secondary mt-3" id="outcomes-area">
+  <summary class="dashboard-disclosure__summary">
     <div>
-      <span class="app-section__eyebrow">Market data</span>
-      <h2 style="font-size:18px; margin:0;">Options table</h2>
+      <span class="ft-section__num">06 · OUTCOMES</span>
+      <h2>Outcome history</h2>
+      <span class="dashboard-disclosure__description">Compare quoted signals with fills, fees, and measured outcomes.</span>
     </div>
-    <span class="ft-btn ft-btn--ghost" style="font-size:10px; padding:4px 10px; white-space:nowrap;">Open scan</span>
+    <span class="dashboard-disclosure__state" aria-hidden="true"><span class="dashboard-disclosure__closed">Show outcomes</span><span class="dashboard-disclosure__open">Hide outcomes</span></span>
   </summary>
-  <div style="padding:8px 0 0;">
+  <div class="dashboard-disclosure__content">
+    {% include "partials/dashboard/outcome_panel.html" %}
+  </div>
+</details>
+
+<details class="ft-section dashboard-disclosure dashboard-area--secondary mt-3" id="watchlist-area">
+  <summary class="dashboard-disclosure__summary">
+    <div>
+      <span class="ft-section__num">07 · WATCHLIST</span>
+      <h2>Watchlist controls</h2>
+      <span class="dashboard-disclosure__description">Review symbols in the Moomoo watchlist group used by the scan.</span>
+    </div>
+    <span class="dashboard-disclosure__state" aria-hidden="true"><span class="dashboard-disclosure__closed">Show watchlist</span><span class="dashboard-disclosure__open">Hide watchlist</span></span>
+  </summary>
+  <div class="dashboard-disclosure__content">
+    {% include "partials/dashboard/watchlist_panel.html" %}
+  </div>
+</details>
+</div>
+
+<details class="ft-section dashboard-disclosure dashboard-area--secondary mt-3" id="market-data-section">
+  <summary class="dashboard-disclosure__summary">
+    <div>
+      <span class="ft-section__num">08 · OPTIONS DATA</span>
+      <h2>Options table</h2>
+      <span class="dashboard-disclosure__description">Load a supplementary watchlist table for comparison; it does not change shortlist eligibility or rank.</span>
+    </div>
+    <span class="dashboard-disclosure__state" aria-hidden="true"><span class="dashboard-disclosure__closed">Show options</span><span class="dashboard-disclosure__open">Hide options</span></span>
+  </summary>
+  <div class="dashboard-disclosure__content">
     {% include "partials/dashboard/options_table.html" %}
   </div>
 </details>
 
-{# ZONE 5 — Page foot: active watchlist scan provenance #}
 {% include "partials/dashboard/active_watchlist.html" %}
 {% endblock %}
 

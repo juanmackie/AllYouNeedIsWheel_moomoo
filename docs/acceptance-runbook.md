@@ -124,8 +124,9 @@ cold/warm latency and limiter metrics at the **current** `connection.json` value
    must not reorder cards.
 6. For every card record the ticket branch: **staged** (complete coverage and usable
    last-session broker evidence) or **visible blocker** with its exact reason text.
-   A complete closed-market run persists `planning` and can have staged tickets;
-   incomplete coverage, missing quotes, or insufficient capacity keep tickets review-only.
+   A complete closed-market run with direct broker evidence publishes `planning`
+   and can stage after copy-time OpenD confirmation. Incomplete coverage,
+   persisted fallback, missing evidence, and insufficient capacity keep tickets review-only.
 7. Closed-market timings measure complete discovery and quote scanning, including CSPs
    at zero cash. Fresh live-session quote checks and tradeable-path timing remain Session
    2's job.
@@ -147,6 +148,10 @@ staged-vs-blocked branch per card.
 | # | connection.json values | union size | market_state | run state | cold total (s) | warm total (s) | CSP lane (s) | CC lane (s) | coverage % | quote reqs | chain reqs | limiter waits | adapted | staged | blocked (reason) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | S1 automated, 2026-10-03, All / aggressive | Existing quota 10/30 s; spacing 1.0 s; discovery budget 900 s; no quota changes | 67 supported underlyings | closed | planning, complete | 234.04 | 8.93 | 4.44 (final warm verification) | 1.18 (final warm verification) | 100%, no errors | Final: 9 option batches / 3,287 codes; other quote requests unknown | Cold 67; immediate warm 0; restart 0 | unknown | unknown | Final: 4 CSP + 1 CC | Final: 6 CSP review-only; 4 unaffordable, 2 other capacity gates |
+
+The Session-1 row records behavior measured on 2026-10-03. Its planning/staged
+combination is consistent with complete closed-market coverage; the planning
+label alone is not a blocker or proof of staging eligibility.
 
 The cold and immediate warm runs measured the new discovery path before a quote-source
 provenance defect was corrected. Final verification with that correction took **11.76 s**
@@ -182,7 +187,8 @@ quantity/collateral checks. This is **the only session that may exercise a live 
    - Event tier visible (event_safe / not_applicable / earnings-before-expiry /
      event_unknown); a card with `event_unknown` or earnings in window carries a visible
      warning line on the ticket.
-   - `recommended_contracts` quantity vs max affordable by cash (100 × strike per contract)
+   - `recommended_contracts` quantity vs `max_contracts`; the maximum must
+     respect the preset cash budget and remaining per-underlying exposure room
      and vs 100-share owned for covered calls.
    - Cash required vs `cash_available_for_csp`; gross broker cash subtracts reserved
      short-put collateral once, while net available-cash fields are used directly.
@@ -453,7 +459,7 @@ Session 1.
 - Promote tuned `chain_*` defaults to `config.py` only after a second clean session.
 - If a session exposes a bug, fix it as its own tested change (regression test, ruff,
   `scripts/ci_pytest.py tests/ -q` for the narrow file, then `npm test` only if frontend).
-- When Sessions 1–3 pass, tick the live-verification box in `plans/repo-review-todo-2026-08-26.md`.
+- When Sessions 1–3 pass, update the "Known gaps" section of the root `AGENTS.md`.
 ---
 > **Status note (2026-09, P2b reconciliation):** This runbook remains the required
 > owner-run acceptance procedure referenced by `PLAN.md` step 11 and “Remaining

@@ -6,12 +6,18 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const ELEMENT_IDS = [
   'run-env',
+  'run-preset',
+  'run-snapshot-preset',
   'run-market',
   'run-status',
   'run-last-success',
   'run-coverage',
   'run-freshness',
   'run-refresh-btn',
+  'run-progress-stage',
+  'run-progress-elapsed',
+  'run-progress-updated',
+  'run-progress-message',
   'run-warning-title',
   'run-warning-reason',
   'run-warning-action',
@@ -20,11 +26,12 @@ const ELEMENT_IDS = [
 function setupDOM() {
   document.body.innerHTML = ELEMENT_IDS.map((id) =>
     id === 'run-refresh-btn' ? `<button id="${id}">Refresh run</button>` : `<span id="${id}"></span>`
-  ).join('') + '<div id="run-warning-banner" class="alert d-none" role="alert"></div>';
+  ).join('') + '<div id="run-progress-details" hidden></div><div id="run-warning-banner" class="alert d-none" role="alert"></div>';
   const els = {};
   for (const id of ELEMENT_IDS) {
     els[id] = document.getElementById(id);
   }
+  els['run-progress-details'] = document.getElementById('run-progress-details');
   els['run-warning-banner'] = document.getElementById('run-warning-banner');
   for (const id of ['run-warning-title', 'run-warning-reason', 'run-warning-action']) {
     els['run-warning-banner'].append(els[id]);
@@ -53,6 +60,35 @@ afterEach(() => {
 });
 
 describe('run-strip freshness rendering', () => {
+  it.each(['refreshing', 'failed'])('distinguishes current and published presets after a %s attempt', async (state) => {
+    const els = setupDOM();
+    // Current settings are owned by preset-selector; the run poll must not
+    // replace this newer value with a stale second settings request.
+    els['run-preset'].textContent = 'CURRENT PRESET Aggressive';
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === '/api/run') return { ok: true, json: async () => ({
+        attempt: { state, stage: state === 'refreshing' ? 'discover' : undefined },
+        snapshot: {
+          tradeable: false,
+          effective_status: 'stale',
+          run: {
+            env: 'REAL', market_state: 'closed', status: 'ready',
+            coverage_scanned: 67, coverage_total: 67, quote_fetched_at: {},
+          },
+          preset: { key: 'balanced', label: 'Balanced', version: 7 },
+        },
+      }) };
+      return { ok: false, json: async () => ({}) };
+    }));
+
+    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    await loadRunStrip();
+
+    expect(els['run-preset'].textContent).toBe('CURRENT PRESET Aggressive');
+    expect(els['run-snapshot-preset'].textContent).toBe('PUBLISHED SNAPSHOT Balanced v7');
+    expect(els['run-status'].textContent).toBe(state.toUpperCase());
+  });
+
   it('shows quote stale instead of NaN when quote_fetched_at is empty (market closed)', async () => {
     const els = setupDOM();
     stubFetch({
@@ -153,11 +189,13 @@ describe('run-strip freshness rendering', () => {
       return { ok: false, json: async () => ({}) };
     }));
 
-    const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    const { loadRunStrip, renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    renderRunStrip({ state: 'refreshing', stage: 'discover', started_at: new Date().toISOString() }, null);
     await loadRunStrip();
 
     expect(els['run-status'].textContent).toBe('COMM ERROR');
     expect(els['run-coverage'].textContent).toBe('cannot reach run API');
+    expect(els['run-progress-details'].hidden).toBe(true);
     expect(els['run-warning-banner'].classList.contains('d-none')).toBe(false);
     expect(els['run-warning-action'].textContent).toMatch(/retry automatically/i);
   });
@@ -220,6 +258,42 @@ const GOOD_SNAPSHOT = {
 };
 
 describe('visible run warnings and recovery', () => {
+  it('shows stage and advancing elapsed time when reported progress stays at 41%', async () => {
+    const els = setupDOM();
+    const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    const now = Date.parse('2026-10-11T02:00:00Z');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    const attempt = {
+      state: 'refreshing',
+      stage: 'discover',
+      progress: 0.413,
+      started_at: '2026-10-11T01:58:59Z',
+    };
+
+    renderRunStrip(attempt, GOOD_SNAPSHOT);
+    expect(els['run-status'].textContent).toBe('REFRESHING');
+    expect(els['run-progress-details'].hidden).toBe(false);
+    expect(els['run-progress-stage'].textContent).toBe('Discovering option contracts');
+    expect(els['run-progress-elapsed'].textContent).toBe('1m 1s');
+    expect(els['run-progress-updated'].textContent).toBe('');
+
+    clock.mockReturnValue(now + 65_000);
+    renderRunStrip(attempt, GOOD_SNAPSHOT);
+    expect(els['run-status'].textContent).toBe('REFRESHING');
+    expect(els['run-progress-elapsed'].textContent).toBe('2m 6s');
+  });
+
+  it('shows progress details for a first refresh before any snapshot exists', async () => {
+    const els = setupDOM();
+    const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    renderRunStrip({ state: 'refreshing', stage: 'portfolio', started_at: new Date(Date.now() - 3000).toISOString() }, null);
+
+    expect(els['run-status'].textContent).toBe('REFRESHING');
+    expect(els['run-progress-details'].hidden).toBe(false);
+    expect(els['run-progress-stage'].textContent).toBe('Loading portfolio context');
+    expect(els['run-progress-elapsed'].textContent).toBe('3s');
+  });
+
   it('shows a failed first refresh even when there is no completed snapshot', async () => {
     const els = setupDOM();
     const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
@@ -303,6 +377,77 @@ describe('visible run warnings and recovery', () => {
     await vi.waitFor(() => expect(els['run-refresh-btn'].disabled).toBe(false));
     renderRunStrip({ state: 'succeeded' }, { ...GOOD_SNAPSHOT, run: { ...GOOD_SNAPSHOT.run, run_id: 'recovered' } });
     expect(els['run-warning-banner'].classList.contains('d-none')).toBe(true);
+  });
+
+  it('shows a blocking banner naming symbols with no broker data and clears it on full coverage', async () => {
+    const els = setupDOM();
+    const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    const partialSnapshot = {
+      ...GOOD_SNAPSHOT,
+      effective_status: 'partial',
+      run: {
+        ...GOOD_SNAPSHOT.run, run_id: 'partial-run', status: 'partial',
+        coverage_scanned: 64, coverage_total: 67, coverage_complete: false,
+      },
+      eligibility: { coverage: { truth: 'partial', reasons: ['partial coverage (64/67 symbols; missing: AMD, LRCX, TSLA) — copy blocked'] } },
+      rejected: [
+        { ticker: 'AMD', reason_code: 'broker_data_unavailable', reason_text: 'Contract discovery failed (2 attempts): request timeout' },
+        { ticker: 'NVDA', reason_code: 'wide_spread', reason_text: 'Spread too wide' },
+        { ticker: 'LRCX', reason_code: 'broker_data_unavailable', reason_text: 'Contract discovery failed (2 attempts): request timeout' },
+        { ticker: 'TSLA', reason_code: 'broker_data_unavailable', reason_text: '<b>Option quotes missing</b> for 2 of 40 contracts (2 attempts)' },
+      ],
+    };
+    renderRunStrip({ state: 'succeeded' }, partialSnapshot);
+    expect(els['run-warning-banner'].classList.contains('d-none')).toBe(false);
+    expect(els['run-warning-banner'].className).toContain('alert-danger');
+    expect(els['run-warning-title'].textContent).toBe('Copy blocked: broker data missing for 3 of 67 watchlist symbols');
+    expect(els['run-warning-reason'].textContent).toBe(
+      'AMD, LRCX: Contract discovery failed (2 attempts): request timeout; ' +
+      'TSLA: <b>Option quotes missing</b> for 2 of 40 contracts (2 attempts)'
+    );
+    expect(els['run-warning-banner'].querySelector('b')).toBeNull();
+    expect(els['run-warning-action'].textContent).toContain('Refresh run');
+    expect(els['run-coverage'].textContent).toBe('coverage 64/67 INCOMPLETE');
+    expect(els['run-coverage'].classList.contains('text-danger')).toBe(true);
+    renderRunStrip({ state: 'succeeded' }, GOOD_SNAPSHOT);
+    expect(els['run-warning-banner'].classList.contains('d-none')).toBe(true);
+    expect(els['run-coverage'].textContent).toBe('coverage 2/2');
+    expect(els['run-coverage'].classList.contains('text-danger')).toBe(false);
+  });
+
+  it('uses the coverage reason for a partial run saved without per-symbol rows', async () => {
+    const els = setupDOM();
+    const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    const coverageReason = 'partial coverage (64/67 symbols; missing: AMD, LRCX, TSLA) — copy blocked';
+    renderRunStrip({ state: 'succeeded' }, {
+      ...GOOD_SNAPSHOT,
+      run: { ...GOOD_SNAPSHOT.run, status: 'partial', coverage_scanned: 64, coverage_total: 67, coverage_complete: false },
+      eligibility: { coverage: { truth: 'partial', reasons: [coverageReason] } },
+      rejected: [{ ticker: 'AMD', reason_code: 'no_cash_fit', reason_text: 'No CSP strike fits buying power' }],
+    });
+    expect(els['run-warning-banner'].classList.contains('d-none')).toBe(false);
+    expect(els['run-warning-title'].textContent).toMatch(/^Copy blocked/);
+    expect(els['run-warning-reason'].textContent).toBe(coverageReason);
+  });
+
+  it('warns without blocking when only a covered-call holding has no broker data', async () => {
+    const els = setupDOM();
+    const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    renderRunStrip({ state: 'succeeded' }, {
+      ...GOOD_SNAPSHOT,
+      eligibility: { coverage: { truth: 'complete', reasons: [] } },
+      rejected: [{
+        ticker: 'ORCL', signal_type: 'covered_call', reason_code: 'broker_data_unavailable',
+        reason_text: 'Covered call not assessed: No options data available from any source',
+      }],
+    });
+    expect(els['run-warning-banner'].classList.contains('d-none')).toBe(false);
+    expect(els['run-warning-banner'].className).toContain('alert-warning');
+    expect(els['run-warning-title'].textContent).toBe('Broker data missing for 1 symbol');
+    expect(els['run-warning-reason'].textContent).toBe(
+      'ORCL: Covered call not assessed: No options data available from any source'
+    );
+    expect(els['run-warning-action'].textContent).toMatch(/not affected/i);
   });
 
   it('treats an already-running refresh (409) as normal progress', async () => {

@@ -211,3 +211,75 @@ def test_fitting_candidates_precede_review_only_but_keep_rank_key(scan):
                 if not pick.get("research_only")
             )
     assert all(pick["chain_source"] == "broker" and pick["price_source"] == "broker" for pick in picks)
+
+
+def _fail_chain(conn, failing_code, *, times):
+    """Make contract discovery fail for one underlying on its first ``times`` calls."""
+    real = conn.quote_ctx.get_option_chain.side_effect
+    remaining = {"count": times}
+
+    def chain(code, start, end, option_type):
+        if code == failing_code and remaining["count"] > 0:
+            remaining["count"] -= 1
+            return -1, "request timeout"
+        return real(code, start, end, option_type)
+
+    conn.quote_ctx.get_option_chain.side_effect = chain
+
+
+def test_transient_discovery_failure_is_retried_in_the_same_run(scan):
+    engine, conn, db, portfolio, tickers = scan
+    _fail_chain(conn, "US.TICK3", times=1)
+    result = engine.get_top_recommendations()
+    assert result["scan_coverage"] == {"scanned": 69, "total": 69, "complete": True}, result["blocked_reason_counts"]
+    assert conn.quote_ctx.get_option_chain.call_count == 70
+    assert "broker_data_unavailable" not in result["blocked_reason_counts"]
+
+
+def test_persistent_discovery_failure_stays_partial_and_names_the_symbol(scan):
+    engine, conn, db, portfolio, tickers = scan
+    _fail_chain(conn, "US.TICK3", times=99)
+    result = engine.get_top_recommendations()
+    assert result["scan_coverage"] == {"scanned": 68, "total": 69, "complete": False}
+    # Exactly one retry: 69 first calls plus one more for the failed symbol.
+    assert conn.quote_ctx.get_option_chain.call_count == 70
+    blocked = [row for row in result["blocked_signals"] if row["reason_code"] == "broker_data_unavailable"]
+    assert [row["ticker"] for row in blocked] == ["TICK3"]
+    assert "request timeout" in blocked[0]["reason_text"]
+    with patch("core.wheel_runner.is_market_open", return_value=False):
+        snapshot = WheelRunner(db, MagicMock(), {})._build_snapshot("SIMULATE", "test", "", result, portfolio, [])
+    assert snapshot.run.partial_symbols == ("TICK3",)
+    effective = recompute_effective_snapshot(snapshot.to_dict())
+    assert effective["eligibility"]["coverage"]["truth"] == "partial"
+    assert "TICK3" in effective["eligibility"]["coverage"]["reasons"][0]
+    assert effective["csp_picks"]
+    assert all(pick["eligibility"]["mode"] == "review_only" for pick in effective["csp_picks"])
+
+
+def test_discovery_is_not_retried_when_every_symbol_fails(scan):
+    engine, conn, db, portfolio, tickers = scan
+    conn.quote_ctx.get_option_chain.side_effect = None
+    conn.quote_ctx.get_option_chain.return_value = (-1, "request timeout")
+    result = engine.get_top_recommendations()
+    assert result["scan_coverage"] == {"scanned": 0, "total": 69, "complete": False}
+    assert conn.quote_ctx.get_option_chain.call_count == 69
+    assert result["blocked_reason_counts"]["broker_data_unavailable"] == 69
+
+
+def test_missing_option_quote_is_requested_again(scan):
+    engine, conn, db, portfolio, tickers = scan
+    real = conn.quote_ctx.get_market_snapshot.side_effect
+    dropped = []
+
+    def snapshots(codes):
+        ret, frame = real(codes)
+        puts = [code for code in codes if code.endswith("PUT")]
+        if puts and not dropped:
+            dropped.append(puts[0])
+            frame = frame[frame["code"] != puts[0]]
+        return ret, frame
+
+    conn.quote_ctx.get_market_snapshot.side_effect = snapshots
+    result = engine.get_top_recommendations()
+    assert dropped
+    assert result["scan_coverage"] == {"scanned": 69, "total": 69, "complete": True}, result["blocked_reason_counts"]

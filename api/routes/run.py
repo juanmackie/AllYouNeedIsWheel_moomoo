@@ -23,6 +23,7 @@ from core.run_model import (
     resolve_coverage_truth,
     resolve_session_context,
 )
+from core.scoring_factors import parse_broker_timestamp
 from core.utils import market_now
 from core.utils import normalize_expiration as _normalize_expiration
 from core.wheel_runner import start_background_refresh
@@ -85,9 +86,13 @@ def _taken_links_for_run(db, view, env, account_id) -> list:
 def refresh():
     """Start one bounded background refresh; returns 202 with attempt state."""
     runner = _get_runner()
-    started = start_background_refresh(runner)
+    accepted_attempt = start_background_refresh(runner)
     db = _get_db()
-    attempt = db.get_latest_attempt() if db is not None else None
+    started = accepted_attempt is not None
+    if started:
+        attempt = accepted_attempt.to_dict()
+    else:
+        attempt = db.get_latest_attempt() if db is not None else None
     return jsonify({"started": started, "attempt": attempt}), (202 if started else 409)
 
 
@@ -228,17 +233,16 @@ def _find_contract(view: dict, ticker, option_type, expiration, strike):
     return None, None
 
 
-def _fresh_option_age_sec(option: dict, now_utc: datetime) -> float | None:
-    """Age (seconds) of a broker quote timestamp; None when not parseable."""
-    ts = option.get("quote_fetched_at_utc") or option.get("quote_timestamp") or option.get("quote_update_time") or ""
-    if not ts:
+def _broker_quote_age_sec(option: dict, now_utc: datetime) -> float | None:
+    """Age (seconds) of the BROKER quote time; None when missing or not parseable.
+
+    ``quote_fetched_at_utc`` is the instant this app read the quote. After a
+    live copy-time fetch it is always seconds old, so it cannot show whether
+    the market is open. Only the broker ``update_time`` (US Eastern) can.
+    """
+    parsed = parse_broker_timestamp(option.get("update_time") or option.get("quote_update_time"))
+    if parsed is None:
         return None
-    try:
-        parsed = datetime.fromisoformat(str(ts))
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
     return (now_utc - parsed.astimezone(timezone.utc)).total_seconds()
 
 
@@ -339,7 +343,7 @@ def evaluate_copy_check(
             )
         # The broker IS serving current-session quotes => market is open; never stage.
         option = evidence.get("option") or {}
-        age = _fresh_option_age_sec(option, now_utc)
+        age = _broker_quote_age_sec(option, now_utc)
         if age is not None and age < _max_tradeable_age_sec(run):
             return (
                 MODE_REVIEW_ONLY,

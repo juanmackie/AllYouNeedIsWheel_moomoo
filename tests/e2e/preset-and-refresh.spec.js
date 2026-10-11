@@ -79,12 +79,84 @@ test('saved signals and refresh controls load while the account request is block
     }
 });
 
+test('mobile and desktop layouts keep all disclosure content inside the viewport', async ({ page }) => {
+    await server.publish('complete_closed');
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.goto('/');
+    await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
+
+    // Exercise the actual flex-wrap utility with the largest normal watchlist
+    // shape without changing scan coverage or fixture signal identity.
+    await page.locator('#watchlist-tags').evaluate((tags) => {
+        tags.replaceChildren(...Array.from({ length: 67 }, (_, index) => {
+            const tag = document.createElement('span');
+            tag.className = 'badge bg-secondary';
+            tag.textContent = `SYMBOL${String(index).padStart(2, '0')}`;
+            return tag;
+        }));
+    });
+
+    for (const width of [320, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const open of [true, false]) {
+            await page.locator('details').evaluateAll((sections, shouldOpen) => {
+                sections.forEach((section) => { section.open = shouldOpen; });
+            }, open);
+            await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+                .toBeLessThanOrEqual(width);
+        }
+    }
+});
+
+test('dashboard panels receive successful API responses, including the opened market-data panel', async ({ page }) => {
+    await server.publish('complete_closed');
+    const responses = new Map();
+    page.on('response', (response) => {
+        const url = new URL(response.url());
+        if (url.pathname.startsWith('/api/')) {
+            const path = url.pathname.replace(/\/+$/, '');
+            responses.set(`${response.request().method()} ${path}`, response.status());
+        }
+    });
+    await page.goto('/');
+    await page.locator('#market-data-section > summary').click();
+    await page.locator('#load-options-scanner').click();
+
+    const expected = [
+        'GET /api/settings',
+        'GET /api/run',
+        'GET /api/system/opend-status',
+        'GET /api/portfolio',
+        'GET /api/portfolio/positions',
+        'GET /api/portfolio/alerts',
+        'GET /api/portfolio/roll-pressure',
+        'GET /api/portfolio/weekly-income',
+        'GET /api/options/cash-status',
+        'GET /api/portfolio/history',
+        'GET /api/portfolio/projection',
+        'GET /api/options/analytics/lifecycle',
+        'GET /api/options/analytics/outcomes',
+        'GET /api/earnings/status',
+        'GET /api/watchlist',
+        'GET /api/options/screening-config',
+        'GET /api/options/watchlist-tickers',
+    ];
+    await expect.poll(() => expected.every((key) => responses.has(key)), { timeout: 20000 }).toBe(true);
+    for (const key of expected) expect(responses.get(key), key).toBe(200);
+
+    await expect(page.locator('#weekly-income-section')).toBeVisible();
+    await expect(page.locator('#position-monitor-body')).toContainText(/No open short option positions/i);
+    await expect(page.locator('#watchlist-tags')).toContainText('AAPL');
+    await expect(page.locator('#options-table-container')).toBeVisible();
+});
+
 test('preset change flips the active preset and triggers a republished refresh', async ({ page }) => {
     test.setTimeout(60_000);
     await server.publish('complete_closed', 'balanced');
     await page.goto('/');
 
     await expect(page.locator('#run-preset')).toContainText('Balanced');
+    await expect(page.locator('#run-snapshot-preset')).toContainText('Balanced v7');
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
     await expect(page.locator('#top-recommendations-content')).toContainText('AAPL');
 
@@ -101,14 +173,35 @@ test('preset change flips the active preset and triggers a republished refresh',
     await expect
         .poll(() => page.locator('#preset-effective').innerText())
         .not.toBe(effectiveBefore);
+    await expect(page.locator('#preset-buttons [data-preset]')).toHaveCount(3);
+    await expect(page.locator('[data-preset="aggressive"]')).toHaveClass(/btn-primary/);
 
     // The new run is adopted: Aggressive label, new publish, aggressive cards.
     await expect(page.locator('#run-preset')).toContainText('Aggressive', { timeout: 20000 });
+    await expect(page.locator('#run-snapshot-preset')).toContainText('Aggressive v7', { timeout: 20000 });
     await expect
         .poll(() => page.locator('#run-last-success').innerText())
         .not.toBe(lastSuccessBefore);
     await expect(page.locator('#top-recommendations-content')).toContainText('MSFT', { timeout: 20000 });
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
+    await expect(page.locator('#strategy-rules-text')).toContainText('AGGRESSIVE v7');
+    await expect(page.locator('#strategy-rules-text')).toContainText('0.35');
+    await expect(page.locator('#strategy-rules-text')).toContainText('0.15');
+    await expect(page.locator('#strategy-rules-text')).toContainText('CSP DTE 7-35 (pref 14)');
+    await expect(page.locator('#strategy-rules-text')).toContainText('CSP OTM 3-15%');
+    await expect(page.locator('#strategy-rules-text')).toContainText('CC OTM 12%');
+    await expect(page.locator('#strategy-rules-text')).toContainText('min CSP buying power $3,000.00');
+    await expect(page.locator('#strategy-rules-text')).toContainText('90% buying power per CSP');
+    await expect(page.locator('#strategy-rules-text')).toContainText('min premium $5.00');
+    await expect(page.locator('#strategy-rules-text')).toContainText('min mid $0.03');
+    await expect(page.locator('#strategy-rules-text')).toContainText('max spread 70%');
+    await expect(page.locator('#strategy-rules-text')).toContainText('min OI 5');
+    await expect(page.locator('#strategy-rules-text')).toContainText('cash-fit required');
+    await expect(page.locator('#bp-amount')).toHaveText('$78,500.00');
+    await expect(page.locator('#bp-broker')).toHaveText('$74,000.00');
+    await expect(page.locator('#bp-reserved')).toHaveText('$0.00');
+    await expect(page.locator('.csp-cash-after').first()).toHaveText('$59,500.00');
+    await expect(page.locator('.csp-cash-pct').first()).toHaveText('24.2%');
 });
 
 test('first-ever run: NO RUN → refresh → PLANNING with cards', async ({ page }) => {
@@ -142,23 +235,28 @@ test('scan longer than 60s keeps REFRESHING over the retained run until adoption
     await page.locator('#run-refresh-btn').click();
 
     // The strip shows progress while the scan is in-flight (70s window).
-    await expect(page.locator('#run-status')).toContainText(/REFRESHING \d+%/, { timeout: 20000 });
+    await expect(page.locator('#run-status')).toHaveText('REFRESHING', { timeout: 20000 });
+    await expect(page.locator('#run-progress-details')).toBeVisible();
+    await expect(page.locator('#run-progress-stage')).toContainText('Preparing watchlist scan');
+    const elapsedBefore = await page.locator('#run-progress-elapsed').innerText();
 
     // Prove the poll did not give up before the 60s mark. The scan lasts 70s,
     // so keep re-asserting REFRESHING (plus the retained last-good run) until
     // 61.5s of scan time have elapsed since the click. Measuring from the click
     // (not from the first REFRESHING observation) makes this exact.
     while (Date.now() - clickedAt < 61_500) {
-        await expect(page.locator('#run-status')).toContainText(/REFRESHING \d+%/, { timeout: 5000 });
+        await expect(page.locator('#run-status')).toHaveText('REFRESHING', { timeout: 5000 });
         await expect(page.locator('#run-last-success')).toHaveText(lastSuccessBefore);
         await page.waitForTimeout(1000);
     }
     // A final observation strictly past the 60s mark.
-    await expect(page.locator('#run-status')).toContainText(/REFRESHING \d+%/, { timeout: 5000 });
+    await expect(page.locator('#run-status')).toHaveText('REFRESHING', { timeout: 5000 });
+    await expect(page.locator('#run-progress-elapsed')).not.toHaveText(elapsedBefore);
     await expect(page.locator('#run-last-success')).toHaveText(lastSuccessBefore);
 
     // Scan finally completes and is adopted.
     await expect(page.locator('#run-status')).toContainText('PLANNING', { timeout: 20000 });
+    await expect(page.locator('#run-progress-details')).toBeHidden();
     await expect(page.locator('#run-last-success')).not.toHaveText(lastSuccessBefore);
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
 });

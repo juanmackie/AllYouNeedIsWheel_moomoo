@@ -120,7 +120,12 @@ def resolve_coverage_truth(run: dict | None, session_state: str) -> tuple[str, l
         return "planning_quota", [
             "planning/limited run — coverage incomplete (quota or preview) so nothing can be staged"
         ]
-    return "partial", [f"partial coverage ({scanned}/{total} symbols) — copy blocked"]
+    missing = [str(symbol) for symbol in (run.get("partial_symbols") or [])]
+    named = ""
+    if missing:
+        extra = f" +{len(missing) - 5} more" if len(missing) > 5 else ""
+        named = f"; missing: {', '.join(missing[:5])}{extra}"
+    return "partial", [f"partial coverage ({scanned}/{total} symbols{named}) — copy blocked"]
 
 
 def compute_signal_eligibility(
@@ -352,6 +357,11 @@ class WheelRunSnapshot:
     capital_recovery: tuple[dict, ...] = ()
     # Per-watchlist cash-fit summary; default keeps pre-field snapshots loadable.
     watchlist_cash_fit: dict = field(default_factory=dict)
+    # Authoritative net cash available for new CSP collateral in this run.
+    # None keeps legacy snapshots explicit when no broker cash evidence exists.
+    cash_available_for_csp: Optional[float] = None
+    broker_buying_power: Optional[float] = None
+    cash_reserved_for_csp: Optional[float] = None
     preflight: dict = field(default_factory=dict)
 
     @property
@@ -405,6 +415,9 @@ class WheelRunSnapshot:
             "active_watchlist": dict(self.active_watchlist or {}),
             "capital_recovery": list(self.capital_recovery),
             "watchlist_cash_fit": dict(self.watchlist_cash_fit or {}),
+            "cash_available_for_csp": self.cash_available_for_csp,
+            "broker_buying_power": self.broker_buying_power,
+            "cash_reserved_for_csp": self.cash_reserved_for_csp,
             "preflight": dict(self.preflight or {}),
         }
 

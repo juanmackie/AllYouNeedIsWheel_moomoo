@@ -308,6 +308,44 @@ describe('C09 position P&L with unknown marks', () => {
     expect(html).toContain('ROLL → AAPL PUT 95.00 2026-10-16');
   });
 
+  it('blocks copy-roll when no fresh eligible target is present', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    await renderPositions([{
+      symbol: 'SPCX261016C12', ticker: 'SPCX', option_type: 'CALL', strike: 12,
+      expiration: '20261016', position: -1, exit_verdict: 'HOLD', roll_target: null,
+    }]);
+    const button = document.querySelector('.copy-roll-btn');
+
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe('Review only');
+    expect(button.title).toMatch(/fresh eligible roll target/i);
+    button.click();
+    await Promise.resolve();
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('keeps even a screened target review-only until run-bound validation exists', async () => {
+    const html = await renderPositions([{
+      symbol: 'SPCX261016C12', ticker: 'SPCX', option_type: 'CALL', strike: 12,
+      expiration: '20261016', position: -1, roll_pressure: 71,
+      roll_target: { ticker: 'SPCX', option_type: 'CALL', strike: 13, expiration: '20261016' },
+    }]);
+    expect(html).toContain('disabled');
+    expect(html).toContain('Roll tickets have no current-run copy revalidation.');
+  });
+
+  it('labels the roll-pressure progress bar for assistive technology', async () => {
+    const html = await renderPositions([{
+      symbol: 'SPCX261016C12', ticker: 'SPCX', option_type: 'CALL', strike: 12,
+      expiration: '20261016', position: -1, roll_pressure: 71,
+    }]);
+    expect(html).toContain('aria-label="Roll pressure for SPCX: 71 out of 100"');
+  });
+
   it('renders ROTATE as a distinct exit verdict', async () => {
     const html = await renderPositions([{
       symbol: 'ORCL261016C185', ticker: 'ORCL', option_type: 'CALL', strike: 185, position: -1,

@@ -19,21 +19,29 @@ class TestCoreImport(unittest.TestCase):
         # Capture any file writes to the moomoo log directory
         moomoo_log_dir = os.path.expanduser("~/AppData/Roaming/com.moomoo.OpenD/Log")
 
-        # Force a fresh import so the test actually exercises module import side effects.
-        for name in [
-            module_name for module_name in list(sys.modules) if module_name == "core" or module_name.startswith("core.")
-        ]:
-            sys.modules.pop(name, None)
+        # Exercise a fresh import without leaving duplicate core module objects
+        # beside already-imported functions that still reference the originals.
+        original_core_modules = {
+            name: module for name, module in sys.modules.items() if name == "core" or name.startswith("core.")
+        }
+        try:
+            for name in original_core_modules:
+                sys.modules.pop(name, None)
 
-        before = 0
-        if os.path.exists(moomoo_log_dir):
-            before = len([f for f in os.listdir(moomoo_log_dir) if f.startswith("py_")])
+            before = 0
+            if os.path.exists(moomoo_log_dir):
+                before = len([f for f in os.listdir(moomoo_log_dir) if f.startswith("py_")])
 
-        importlib.import_module("core")
+            importlib.import_module("core")
 
-        after = 0
-        if os.path.exists(moomoo_log_dir):
-            after = len([f for f in os.listdir(moomoo_log_dir) if f.startswith("py_")])
+            after = 0
+            if os.path.exists(moomoo_log_dir):
+                after = len([f for f in os.listdir(moomoo_log_dir) if f.startswith("py_")])
+        finally:
+            for name in list(sys.modules):
+                if (name == "core" or name.startswith("core.")) and name not in original_core_modules:
+                    sys.modules.pop(name, None)
+            sys.modules.update(original_core_modules)
 
         # Importing core should not create new moomoo log files
         self.assertEqual(before, after, f"Importing core created {after - before} new moomoo log files")

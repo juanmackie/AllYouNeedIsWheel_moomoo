@@ -86,6 +86,11 @@ def _build_capital_recovery_cards(positions, calls_by_ticker, best_csp, availabl
 
     cards = []
     for ticker, position in (positions or {}).items():
+        # Portfolio context also carries individual OPT rows for roll and exit
+        # diagnostics. Recovery cards describe share inventory, so option
+        # contracts must never be interpreted as stock quantity or basis.
+        if str((position or {}).get("security_type", "STK") or "STK").upper() != "STK":
+            continue
         key = canonical_underlying(ticker).upper()
         shares = safe_float((position or {}).get("position"))
         basis = safe_float((position or {}).get("avg_cost"))
@@ -281,9 +286,19 @@ class RecommendationEngine:
         self._yfinance_cache = {}
         self._yfinance_cache_ttl = 300  # 5 minutes
         # Versioned risk preset (replaces growth mode + granular overrides)
-        from core.presets import get_preset
+        from core.presets import WHEEL_PRESETS, get_preset
 
-        self._preset = get_preset((self.config or {}).get("wheel_preset"))
+        try:
+            persisted_preset = self.db.get_setting("wheel_preset")
+        except Exception:
+            persisted_preset = None
+        configured_preset = (self.config or {}).get("wheel_preset")
+        active_preset = (
+            persisted_preset
+            if isinstance(persisted_preset, str) and persisted_preset in WHEEL_PRESETS
+            else configured_preset
+        )
+        self._preset = get_preset(active_preset)
         self._preset_profile = self._preset.to_screener_profile()
         self._scan_security_types = {}
 
@@ -534,11 +549,17 @@ class RecommendationEngine:
         )
 
     def _collect_watchlist_csp_evidence_batch(self, conn, tickers, prices, portfolio_context, progress_callback=None):
-        """Discover the whole window first, then quote all selected puts in batches."""
+        """Discover the whole window first, then quote all selected puts in batches.
+
+        Returns ``{ticker: reason}`` for each symbol that has no evidence. A
+        failed discovery or a missing quote gets one retry in the same run, so
+        one transient broker failure does not leave the whole run partial.
+        """
         start, end = self._csp_discovery_window()
         today = market_now().date()
         selected = {}
         discovered = {}
+        failures = {}
         codes = []
         discovery_started = time.perf_counter()
         calls_before = conn._option_chain_rate_limiter.get_stats()["api_calls_count"]
@@ -557,12 +578,39 @@ class RecommendationEngine:
             finally:
                 if progress_callback is not None:
                     progress_callback("discover", index + 1, len(tickers))
+        # One retry pass through the same chain limiter and gate. It is skipped
+        # when every symbol failed (broker down) and stops at the discovery budget.
+        retried = set()
+        if discovered:
+            discovery_budget = float(self.config.get("scan_discovery_budget_sec", 900) or 900)
+            for ticker in tickers:
+                if ticker in discovered:
+                    continue
+                if time.perf_counter() - discovery_started >= discovery_budget:
+                    break
+                retried.add(ticker)
+                try:
+                    contracts = get_contract_directory(conn, self.db, ticker, start, end)
+                except Exception:
+                    logger.warning("Contract directory retry failed for %s", ticker, exc_info=True)
+                    continue
+                if contracts is not None:
+                    discovered[ticker] = contracts
+        broker_errors = getattr(conn, "_contract_discovery_errors", None)
+        for ticker in tickers:
+            if ticker in discovered:
+                continue
+            broker_reason = broker_errors.get(conn._format_symbol(ticker)) if isinstance(broker_errors, dict) else None
+            attempts = "2 attempts" if ticker in retried else "1 attempt"
+            detail = f": {str(broker_reason)[:200]}" if broker_reason else ""
+            failures[ticker] = f"Contract discovery failed ({attempts}){detail}"
         calls_after = conn._option_chain_rate_limiter.get_stats()["api_calls_count"]
         logger.info(
-            "[TIMING] Contract discovery: %.2fs (calls=%s, cached=%d, symbols=%d)",
+            "[TIMING] Contract discovery: %.2fs (calls=%s, cached=%d, retried=%d, symbols=%d)",
             time.perf_counter() - discovery_started,
             calls_after - calls_before,
             cached,
+            len(retried),
             len(tickers),
         )
         # A slow discovery must not leave underlying prices older than the live
@@ -574,6 +622,7 @@ class RecommendationEngine:
         for ticker, contracts in discovered.items():
             price = safe_float(prices.get(ticker, {}).get("last_price"))
             if not isfinite(price) or price <= 0:
+                failures[ticker] = "No valid broker price for strike selection"
                 continue
             puts = [
                 row
@@ -588,14 +637,22 @@ class RecommendationEngine:
         codes = list(dict.fromkeys(codes))
         quotes_started = time.perf_counter()
         quotes = conn.get_option_quotes(codes)
+        # One retry for codes with no snapshot: a failed batch or a dropped row
+        # must not remove a whole symbol from coverage.
+        missing_codes = [code for code in codes if code not in quotes]
+        if missing_codes:
+            quotes = {**quotes, **conn.get_option_quotes(missing_codes)}
         logger.info(
-            "[TIMING] Option quotes: %.2fs (codes=%d, batches=%d)",
+            "[TIMING] Option quotes: %.2fs (codes=%d, batches=%d, requested_again=%d)",
             time.perf_counter() - quotes_started,
             len(codes),
             (len(codes) + 399) // 400,
+            len(missing_codes),
         )
         for ticker, (price, puts) in selected.items():
-            if any(row["code"] not in quotes for row in puts):
+            unquoted = sum(row["code"] not in quotes for row in puts)
+            if unquoted:
+                failures[ticker] = f"Option quotes missing for {unquoted} of {len(puts)} contracts (2 attempts)"
                 continue
             chains = {}
             for row in puts:
@@ -630,6 +687,7 @@ class RecommendationEngine:
                     )
                 ]
             self._set_cached_watchlist_evidence(ticker, evidence)
+        return failures
 
     def _score_watchlist_csp_evidence(self, evidence, ticker, portfolio_context):
         """
@@ -920,6 +978,7 @@ class RecommendationEngine:
             ticker_diagnostics = {}
             scan_quote_fetched_at = {}
             scan_status_by_ticker = {}
+            covered_call_failures = []
 
             # ════════════════════════════════════════════════════════════
             # LANE 1: Watchlist CSPs — short-circuit when no cash to deploy
@@ -938,6 +997,7 @@ class RecommendationEngine:
             preflight = None
             planning = False
             planning_message = ""
+            evidence_failures = {}
             if scan_universe_ok:
                 prechecked, prices = self._precheck_watchlist_cash_fit(conn, effective_watchlist, portfolio_context)
                 scan_quote_fetched_at = {ticker: datetime.now(timezone.utc).isoformat() for ticker in prices}
@@ -980,8 +1040,11 @@ class RecommendationEngine:
                     )
                     scan_watchlist = []
                 else:
-                    self._collect_watchlist_csp_evidence_batch(
-                        conn, scan_watchlist, prices, portfolio_context, progress_callback
+                    evidence_failures = (
+                        self._collect_watchlist_csp_evidence_batch(
+                            conn, scan_watchlist, prices, portfolio_context, progress_callback
+                        )
+                        or {}
                     )
             elif wl_group_status != "ok":
                 logger.warning(
@@ -1010,6 +1073,13 @@ class RecommendationEngine:
                 if results is None:
                     watchlist_errors += 1
                     scan_status_by_ticker[ticker] = "error"
+                    skipped_csp_diagnostics.append(
+                        self._make_skip_diagnostic(
+                            ticker,
+                            "broker_data_unavailable",
+                            evidence_failures.get(ticker) or "Broker data unavailable for this symbol",
+                        )
+                    )
                     continue
                 if is_evidence_cached:
                     watchlist_cached += 1
@@ -1084,6 +1154,7 @@ class RecommendationEngine:
 
                         if not stock_price or stock_price <= 0:
                             logger.warning(f"Skipping {ticker}: Unable to get stock price")
+                            covered_call_failures.append((ticker, "No valid stock price"))
                             continue
 
                         # Get position data
@@ -1127,6 +1198,7 @@ class RecommendationEngine:
 
                         if "error" in result:
                             logger.warning(f"Error processing {ticker}: {result['error']}")
+                            covered_call_failures.append((ticker, str(result["error"])[:200]))
                             continue
 
                         recovery_call_candidates_by_ticker[ticker] = result.get(
@@ -1152,6 +1224,7 @@ class RecommendationEngine:
 
                     except Exception as e:
                         logger.error(f"Error processing {ticker} for signals: {e}")
+                        covered_call_failures.append((ticker, str(e)[:200]))
                         continue
 
             cc_elapsed = time.time() - cc_start
@@ -1359,6 +1432,21 @@ class RecommendationEngine:
                         "reason_code": rcode,
                         "reason_text": diag.get("reason_text", ""),
                         "signal_type": "csp",
+                        "actionable": False,
+                    }
+                )
+
+            # A holding whose covered-call data cannot be read is a visible
+            # failure, not a silent absence of signals.
+            for cc_ticker, cc_reason in covered_call_failures:
+                reason_counts["broker_data_unavailable"] = reason_counts.get("broker_data_unavailable", 0) + 1
+                blocked_signals.append(
+                    {
+                        "ticker": cc_ticker,
+                        "ticker_count": 1,
+                        "reason_code": "broker_data_unavailable",
+                        "reason_text": f"Covered call not assessed: {cc_reason}",
+                        "signal_type": "covered_call",
                         "actionable": False,
                     }
                 )

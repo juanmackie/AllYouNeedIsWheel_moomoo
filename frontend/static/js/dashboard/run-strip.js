@@ -31,6 +31,53 @@ const STATUS_CLASSES = {
     failed: 'bg-danger',
 };
 
+const REFRESH_STAGE_LABELS = {
+    account: 'Checking OpenD account',
+    portfolio: 'Loading portfolio context',
+    scan: 'Preparing watchlist scan',
+    discover: 'Discovering option contracts',
+    csp: 'Scoring cash-secured puts',
+    cc: 'Scoring covered calls',
+    roll: 'Checking roll pressure',
+    publish: 'Publishing completed run',
+};
+
+function formatElapsed(startedAt, nowMs = Date.now()) {
+    const startedMs = Date.parse(startedAt || '');
+    if (!Number.isFinite(startedMs)) return 'time unavailable';
+    const totalSeconds = Math.max(0, Math.floor((nowMs - startedMs) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+function renderRefreshProgress(attempt) {
+    const details = document.getElementById('run-progress-details');
+    if (!details) return;
+
+    const active = attempt?.state === 'refreshing' || attempt?.state === 'queued';
+    details.hidden = !active;
+    if (!active) return;
+
+    const stage = String(attempt.stage || attempt.state || 'refreshing');
+    const stageEl = document.getElementById('run-progress-stage');
+    if (stageEl) stageEl.textContent = REFRESH_STAGE_LABELS[stage] || stage;
+
+    const elapsedEl = document.getElementById('run-progress-elapsed');
+    if (elapsedEl) elapsedEl.textContent = formatElapsed(attempt.started_at);
+
+    const updatedEl = document.getElementById('run-progress-updated');
+    if (updatedEl) {
+        const updatedMs = Date.parse(attempt.updated_at || '');
+        updatedEl.textContent = Number.isFinite(updatedMs) ? `${utcHms(updatedMs)}Z` : '';
+    }
+
+    const messageEl = document.getElementById('run-progress-message');
+    if (messageEl) {
+        messageEl.textContent = 'Progress advances as each broker step completes.';
+    }
+}
+
 function setBadge(id, text, cls) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -50,6 +97,50 @@ function setRunWarning(warning) {
         setTextIfChanged(document.getElementById(`run-warning-${field}`), warning?.[field] || '');
     }
     setAlertState(banner, { tone: warning?.tone || 'danger', visible: Boolean(warning) });
+}
+
+const MAX_NAMED_FAILURE_GROUPS = 5;
+
+/**
+ * Broker-data failures recorded in the snapshot. Coverage truth comes from
+ * the server (`eligibility.coverage`), never from browser arithmetic.
+ * Symbols that share a reason are grouped so the banner stays short.
+ */
+function describeBrokerDataFailure(snapshot) {
+    const run = snapshot?.run;
+    if (!run) return null;
+    const failures = (snapshot.rejected || []).filter((item) => item?.reason_code === 'broker_data_unavailable');
+    const coverage = snapshot.eligibility?.coverage;
+    const partial = coverage?.truth === 'partial';
+    if (!partial && !failures.length) return null;
+
+    const groups = new Map();
+    for (const item of failures) {
+        const reason = item.reason_text || 'Broker data unavailable';
+        groups.set(reason, [...(groups.get(reason) || []), item.ticker || 'unknown']);
+    }
+    const named = Array.from(groups.entries())
+        .slice(0, MAX_NAMED_FAILURE_GROUPS)
+        .map(([reason, tickers]) => `${tickers.join(', ')}: ${reason}`);
+    if (groups.size > MAX_NAMED_FAILURE_GROUPS) named.push('more in Ticker diagnostics');
+    const reason = named.join('; ') || coverage?.reasons?.[0] || 'Some watchlist symbols have no broker data.';
+
+    if (partial) {
+        const total = run.coverage_total || 0;
+        const missing = Math.max(total - (run.coverage_scanned || 0), 0);
+        return {
+            title: `Copy blocked: broker data missing for ${missing} of ${total} watchlist symbols`,
+            reason,
+            action: 'No pick can be copied until every watchlist symbol is covered. Select Refresh run to try again. ' +
+                'Contract discovery from today is reused, so the retry is faster.',
+        };
+    }
+    return {
+        title: `Broker data missing for ${failures.length} symbol${failures.length === 1 ? '' : 's'}`,
+        reason,
+        action: 'These symbols were not assessed in this run. Other picks are not affected. Select Refresh run to try again.',
+        tone: 'warning',
+    };
 }
 
 function renderRunWarning(attempt, snapshot) {
@@ -80,6 +171,11 @@ function renderRunWarning(attempt, snapshot) {
             action: 'Contract discovery needs more time than the configured scan budget. Review the discovery estimate, then select Refresh run. Copy actions stay blocked until coverage is complete; covered-call results are review only.',
             tone: 'warning',
         });
+        return;
+    }
+    const dataFailure = describeBrokerDataFailure(snapshot);
+    if (dataFailure) {
+        setRunWarning(dataFailure);
         return;
     }
     setRunWarning(null);
@@ -119,10 +215,16 @@ export function renderRunStrip(attempt, snapshot, opts = {}) {
     if (!envEl) return;
 
     if (opts.presetLabel) {
-        setBadge('run-preset', opts.presetLabel, 'bg-secondary');
+        setBadge('run-preset', `CURRENT PRESET ${opts.presetLabel}`, 'bg-secondary');
     }
+    const snapshotPreset = snapshot?.preset;
+    const snapshotPresetLabel = snapshotPreset?.label
+        ? `${snapshotPreset.label}${snapshotPreset.version ? ` v${snapshotPreset.version}` : ''}`
+        : '--';
+    setBadge('run-snapshot-preset', `PUBLISHED SNAPSHOT ${snapshotPresetLabel}`, 'bg-secondary');
 
     const active = attempt?.state === 'refreshing' || attempt?.state === 'queued';
+    renderRefreshProgress(attempt);
     const runId = snapshot?.run?.run_id ?? null;
     if (active || runId !== lastRenderedRunId) refreshRequestError = null;
     lastRenderedRunId = runId;
@@ -147,7 +249,7 @@ export function renderRunStrip(attempt, snapshot, opts = {}) {
 
     // Retain last-good metadata even while a refresh is active or failed.
     if (active) {
-        setBadge('run-status', `REFRESHING ${Math.round((attempt.progress || 0) * 100)}%`, STATUS_CLASSES.refreshing);
+        setBadge('run-status', 'REFRESHING', STATUS_CLASSES.refreshing);
     } else if (attempt?.state === 'failed' || refreshRequestError) {
         setBadge('run-status', 'FAILED', STATUS_CLASSES.failed);
     } else {
@@ -163,11 +265,16 @@ export function renderRunStrip(attempt, snapshot, opts = {}) {
     }
     const coverageEl = document.getElementById('run-coverage');
     if (coverageEl) {
+        const incomplete = !active && run.coverage_total > 0 && run.coverage_scanned < run.coverage_total;
         coverageEl.textContent = active
             ? `stage: ${attempt.stage || attempt.state}`
             : run.coverage_total > 0
-                ? `coverage ${run.coverage_scanned}/${run.coverage_total}`
+                ? `coverage ${run.coverage_scanned}/${run.coverage_total}${incomplete ? ' INCOMPLETE' : ''}`
                 : 'coverage n/a';
+        // Incomplete coverage blocks copy, so it must not look like routine muted text.
+        coverageEl.classList.toggle('text-danger', incomplete);
+        coverageEl.classList.toggle('fw-semibold', incomplete);
+        coverageEl.classList.toggle('text-muted', !incomplete);
     }
     const freshnessEl = document.getElementById('run-freshness');
     if (freshnessEl) {
@@ -181,6 +288,8 @@ export function renderRunCommunicationError() {
     setBadge('run-status', 'COMM ERROR', 'bg-danger');
     const coverageEl = document.getElementById('run-coverage');
     if (coverageEl) coverageEl.textContent = 'cannot reach run API';
+    const progressDetails = document.getElementById('run-progress-details');
+    if (progressDetails) progressDetails.hidden = true;
     setRunWarning({
         title: 'Run status unavailable',
         reason: 'Cannot reach or read the run API. Displayed results may be outdated.',
@@ -217,21 +326,10 @@ export async function loadRunStrip() {
         return;
     }
 
-    // The active preset label is static per session; fetch it once here rather
-    // than on every 5s poll tick.
-    let presetLabel = null;
-    try {
-        const settingsResp = await fetch('/api/settings');
-        if (settingsResp.ok) {
-            const settings = await settingsResp.json();
-            const activePreset = settings.active || 'balanced';
-            presetLabel = (settings.presets && settings.presets[activePreset]?.label) || activePreset;
-        }
-    } catch (err) {
-        console.debug('Preset label unavailable:', err);
-    }
-
-    renderRunStrip(attempt, snapshot, { presetLabel });
+    // The preset selector owns the current-settings label. Keeping this run
+    // poll independent prevents a delayed settings response from overwriting a
+    // newer preset selection.
+    renderRunStrip(attempt, snapshot);
 }
 
 export function initRunStrip() {

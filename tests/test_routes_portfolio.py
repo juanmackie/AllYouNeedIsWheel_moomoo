@@ -101,6 +101,7 @@ class TestPortfolioRoutes(unittest.TestCase):
             "open_short_positions_count": 3,
             "open_short_contracts_count": 13,
             "open_short_total_income": 2450.0,
+            "error": None,
         }
         mock_get_ps.return_value = mock_ps
         response = self.client.get("/api/portfolio/weekly-income")

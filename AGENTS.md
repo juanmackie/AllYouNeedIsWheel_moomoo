@@ -10,7 +10,7 @@
 
 AllYouNeedIsWheel scans the user's Moomoo watchlist for the top 3 cash-secured put and covered-call opportunities ranked by executable return on deployed capital per day, via local Moomoo OpenD. Signals-only: it never places, modifies, or cancels orders; outputs are manual copy-to-ticket suggestions. The scan universe is the watchlist union, never a broad market scan.
 
-- `app.py` — Flask application factory, config load, SQLite data layer, one-screen dashboard, redirects for retired /portfolio and /options paths. Runtime services start only via explicit entry points (`run_api.py`, `python app.py`); importing never opens the DB or starts threads.
+- `app.py` — Flask application factory, config load, SQLite data layer, one-screen dashboard, redirects for retired /portfolio and /options paths. Explicit application startup recovers persisted active refresh attempts when no process-local worker owns them, preserving published snapshots. Runtime services start only via explicit entry points (`run_api.py`, `python app.py`); importing never opens the DB or starts threads.
 - `config.py` — application defaults and environment overrides, including the wheel risk preset default.
 - `api/` — route blueprints and service orchestration (run, settings, watchlist, options, portfolio, roll pressure, alerts, earnings, ledger, source policy); `api/services/recommendation_ranking.py` owns shortlist ordering.
 - `core/` — trading, scoring, connection, cache, wheel runner, immutable run model, presets, exit playbook, growth math, decision logic.

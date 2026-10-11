@@ -10,6 +10,8 @@ Covers:
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from core.growth_mode import (
     classify_covered_call_intent,
@@ -613,47 +615,52 @@ class TestGrowthModeCSPProfile(unittest.TestCase):
         # ordering input after the hard gates.
         self.assertGreater(result_a.capital_velocity_per_day, result_b.capital_velocity_per_day)
 
-    def test_growth_mode_put_enforces_strict_dte_and_otm_range(self):
+    @patch("core.wheel_decision.is_market_open", return_value=False)
+    def test_growth_mode_put_enforces_strict_dte_and_otm_range(self, _market_closed):
         """Growth Mode CSPs should block outside the 30-45 DTE / 5-15% OTM window."""
         portfolio = dict(self.portfolio)
+        market_now = datetime(2026, 10, 11, 12, 0, tzinfo=ZoneInfo("America/New_York"))
 
         valid = _make_option(strike=90, bid=2.20, ask=2.40, oi=700, vol=300, delta=-0.20, iv=0.30, option_type="PUT")
-        valid["expiration"] = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
-        valid_result = score_contract(
-            "AAPL",
-            valid,
-            100.0,
-            self.growth_profile,
-            portfolio,
-            growth_profile=self.gp,
-        )
+        valid["expiration"] = (market_now + timedelta(days=37)).strftime("%Y%m%d")
+        with patch("core.wheel_decision.market_now", return_value=market_now):
+            valid_result = score_contract(
+                "AAPL",
+                valid,
+                100.0,
+                self.growth_profile,
+                portfolio,
+                growth_profile=self.gp,
+            )
         self.assertIsNotNone(valid_result)
         self.assertFalse(valid_result.hard_blockers)
 
         bad_dte = _make_option(strike=90, bid=2.20, ask=2.40, oi=700, vol=300, delta=-0.20, iv=0.30, option_type="PUT")
-        bad_dte["expiration"] = (datetime.now() + timedelta(days=29)).strftime("%Y%m%d")
-        bad_dte_result = score_contract(
-            "AAPL",
-            bad_dte,
-            100.0,
-            self.growth_profile,
-            portfolio,
-            growth_profile=self.gp,
-        )
+        bad_dte["expiration"] = (market_now + timedelta(days=29)).strftime("%Y%m%d")
+        with patch("core.wheel_decision.market_now", return_value=market_now):
+            bad_dte_result = score_contract(
+                "AAPL",
+                bad_dte,
+                100.0,
+                self.growth_profile,
+                portfolio,
+                growth_profile=self.gp,
+            )
         self.assertIsNotNone(bad_dte_result)
         self.assertTrue(bad_dte_result.hard_blockers)
         self.assertIn("outside_csp_dte_range", bad_dte_result.blocked_reason_codes)
 
         bad_otm = _make_option(strike=96, bid=1.40, ask=1.60, oi=700, vol=300, delta=-0.20, iv=0.30, option_type="PUT")
-        bad_otm["expiration"] = (datetime.now() + timedelta(days=37)).strftime("%Y%m%d")
-        bad_otm_result = score_contract(
-            "AAPL",
-            bad_otm,
-            100.0,
-            self.growth_profile,
-            portfolio,
-            growth_profile=self.gp,
-        )
+        bad_otm["expiration"] = (market_now + timedelta(days=37)).strftime("%Y%m%d")
+        with patch("core.wheel_decision.market_now", return_value=market_now):
+            bad_otm_result = score_contract(
+                "AAPL",
+                bad_otm,
+                100.0,
+                self.growth_profile,
+                portfolio,
+                growth_profile=self.gp,
+            )
         self.assertIsNotNone(bad_otm_result)
         self.assertTrue(bad_otm_result.hard_blockers)
         self.assertIn("outside_csp_otm_range", bad_otm_result.blocked_reason_codes)

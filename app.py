@@ -76,6 +76,13 @@ def create_application():
     options_db = OptionsDatabase(db_path)
     app.config["database"] = options_db
 
+    # Refresh attempts are durable, but their worker thread is process-local.
+    # On explicit application startup, close an attempt left active by a prior
+    # process so the dashboard does not display a permanent REFRESHING state.
+    from core.wheel_runner import recover_interrupted_refresh
+
+    recover_interrupted_refresh(options_db)
+
     # Store connection config in the app
     app.config["connection_config"] = connection_config
     _redacted = {

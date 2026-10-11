@@ -21,7 +21,7 @@ from core.run_model import (
     resolve_session_context,
     utc_now_iso,
 )
-from core.wheel_runner import WheelRunner, opaque_account_id, resolve_account
+from core.wheel_runner import WheelRunner, opaque_account_id, resolve_account, start_background_refresh
 
 
 def _make_snapshot(status="ready", coverage_complete=True, quote_age_sec=10, errors=()):
@@ -56,8 +56,82 @@ def _make_snapshot(status="ready", coverage_complete=True, quote_age_sec=10, err
 
 class TestSnapshotCapitalRecovery(unittest.TestCase):
     def test_legacy_snapshot_serializes_empty_capital_recovery(self):
-        self.assertEqual(_make_snapshot().to_dict()["capital_recovery"], [])
-        self.assertEqual(_make_snapshot().to_dict()["watchlist_cash_fit"], {})
+        payload = _make_snapshot().to_dict()
+        self.assertEqual(payload["capital_recovery"], [])
+        self.assertEqual(payload["watchlist_cash_fit"], {})
+        self.assertIsNone(payload["cash_available_for_csp"])
+        self.assertIsNone(payload["broker_buying_power"])
+        self.assertIsNone(payload["cash_reserved_for_csp"])
+
+    def test_csp_cash_available_survives_snapshot_build_and_serialization(self):
+        runner = WheelRunner(MagicMock(), MagicMock(), {"portfolio_env": "SIMULATE", "account_id": ""})
+        result = {
+            "generated_at": utc_now_iso(),
+            "scan_coverage": {"scanned": 1, "total": 1, "complete": True},
+            "watchlist_origins": {"AAA": ["moomoo"]},
+            "quote_fetched_at": {"AAA": utc_now_iso()},
+            "cash_available_for_csp": 20000.0,
+            "broker_buying_power": 30000.0,
+            "cash_reserved_for_csp": 0.0,
+            "signals": [
+                {
+                    "ticker": "AAA",
+                    "option_type": "PUT",
+                    "strike": 65.0,
+                    "cash_required": 6500.0,
+                    "recommended_contracts": 2,
+                }
+            ],
+            "watchlist_csps": {"signals": []},
+            "covered_calls": {"signals": []},
+        }
+
+        with patch("core.wheel_runner.is_market_open", return_value=True):
+            snapshot = runner._build_snapshot("REAL", "opaque", utc_now_iso(), result, {"account_value": 50000.0}, [])
+
+        payload = snapshot.to_dict()
+        self.assertEqual(payload["cash_available_for_csp"], 20000.0)
+        self.assertEqual(payload["broker_buying_power"], 30000.0)
+        self.assertEqual(payload["cash_reserved_for_csp"], 0.0)
+
+
+class TestBackgroundRefreshAttemptIdentity(unittest.TestCase):
+    def test_worker_continues_the_synchronously_queued_attempt_once(self):
+        db = MagicMock()
+        options_service = MagicMock()
+        options_service._ensure_connection.return_value = None
+        runner = WheelRunner(db, options_service, {"portfolio_env": "SIMULATE", "account_id": ""})
+
+        with patch("core.wheel_runner.threading.Thread") as thread_factory:
+            accepted = start_background_refresh(runner)
+            worker_target = thread_factory.call_args.kwargs["target"]
+            worker_target()
+
+        attempts = [call.args[0] for call in db.save_refresh_attempt.call_args_list]
+        self.assertEqual([item.state for item in attempts], ["queued", "refreshing", "failed"])
+        self.assertEqual({item.attempt_id for item in attempts}, {accepted.attempt_id})
+
+    def test_worker_start_failure_marks_attempt_failed_and_releases_lock(self):
+        from core.wheel_runner import _background_refresh_active
+
+        db = MagicMock()
+        runner = WheelRunner(db, MagicMock(), {"portfolio_env": "SIMULATE", "account_id": ""})
+
+        try:
+            with patch("core.wheel_runner.threading.Thread.start", side_effect=RuntimeError("thread start failed")):
+                with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                    start_background_refresh(runner)
+
+            attempts = [call.args[0] for call in db.save_refresh_attempt.call_args_list]
+            self.assertEqual([item.state for item in attempts], ["queued", "failed"])
+            self.assertEqual(attempts[0].attempt_id, attempts[1].attempt_id)
+            self.assertEqual(attempts[1].latest_error, "Could not start refresh worker.")
+            self.assertFalse(_background_refresh_active())
+        finally:
+            if _background_refresh_active():
+                from core.wheel_runner import _refresh_lock
+
+                _refresh_lock.release()
 
 
 class TestOpaqueIdentity(unittest.TestCase):
@@ -371,6 +445,72 @@ class TestRunnerRollDiagnosticsInjection(unittest.TestCase):
         result = runner._build_roll_decisions(ctx, conn, fresh_candidates)
         provider.assert_called_once_with(ctx, conn, fresh_candidates)
         self.assertEqual(result, [{"ticker": "AAPL"}])
+
+
+class TestInterruptedRefreshRecovery(unittest.TestCase):
+    def test_startup_marks_persisted_active_attempt_failed_when_no_worker_is_running(self):
+        from core.wheel_runner import recover_interrupted_refresh
+
+        db = MagicMock()
+        db.get_latest_attempt.return_value = {
+            "attempt_id": "attempt-interrupted",
+            "run_id": None,
+            "state": "refreshing",
+            "stage": "discover",
+            "progress": 0.413,
+            "started_at": "2026-10-11T01:12:06+00:00",
+        }
+
+        with patch("core.wheel_runner._background_refresh_active", return_value=False):
+            recovered = recover_interrupted_refresh(db)
+
+        self.assertTrue(recovered)
+        saved = db.save_refresh_attempt.call_args.args[0]
+        self.assertEqual(saved.attempt_id, "attempt-interrupted")
+        self.assertEqual(saved.state, "failed")
+        self.assertEqual(saved.stage, "discover")
+        self.assertEqual(saved.progress, 0.413)
+        self.assertIn("app stopped", saved.latest_error.lower())
+        self.assertIsNotNone(saved.finished_at)
+        db.save_run_snapshot.assert_not_called()
+
+    def test_startup_marks_queued_attempt_failed_when_no_worker_is_running(self):
+        from core.wheel_runner import recover_interrupted_refresh
+
+        db = MagicMock()
+        db.get_latest_attempt.return_value = {
+            "attempt_id": "attempt-queued",
+            "state": "queued",
+            "stage": "idle",
+            "progress": 0.0,
+        }
+
+        with patch("core.wheel_runner._background_refresh_active", return_value=False):
+            self.assertTrue(recover_interrupted_refresh(db))
+
+        self.assertEqual(db.save_refresh_attempt.call_args.args[0].state, "failed")
+
+    def test_startup_leaves_missing_or_settled_attempts_unchanged(self):
+        from core.wheel_runner import recover_interrupted_refresh
+
+        for attempt in (None, {"state": "succeeded"}, {"state": "failed"}):
+            with self.subTest(attempt=attempt):
+                db = MagicMock()
+                db.get_latest_attempt.return_value = attempt
+                with patch("core.wheel_runner._background_refresh_active", return_value=False):
+                    self.assertFalse(recover_interrupted_refresh(db))
+                db.save_refresh_attempt.assert_not_called()
+
+    def test_startup_does_not_fail_attempt_while_background_worker_is_active(self):
+        from core.wheel_runner import recover_interrupted_refresh
+
+        db = MagicMock()
+        with patch("core.wheel_runner._background_refresh_active", return_value=True):
+            recovered = recover_interrupted_refresh(db)
+
+        self.assertFalse(recovered)
+        db.get_latest_attempt.assert_not_called()
+        db.save_refresh_attempt.assert_not_called()
 
 
 class TestAttemptModel(unittest.TestCase):

@@ -12,18 +12,20 @@ manual copy-to-ticket suggestions for your broker UI.
 ## The one daily workflow
 
 1. Start OpenD and log in, then launch the app.
-2. Open the dashboard: operational strip (env, read-only, market state, run
-   status, coverage, quote freshness) → portfolio summary → growth panel
-   (path to 5x: equity curve, pace, ETA) → outcomes panel (broker-verified
-   signal results: quoted vs. filled credit, slippage, net-of-fee outcomes,
-   owner $/day) → watchlist union → top-three CSP
-   picks with contract sizing and entry-timing advice → position monitor
-   (open short options with exit-playbook verdicts) → covered-call/roll
-   actions → diagnostics.
+2. Open the dashboard and check scan status (environment, read-only state,
+   market state, coverage, quote freshness). Review the cash-secured put and
+   covered-call signals, then account capital, weekly premium, and open short
+   options with exit-playbook verdicts. Section links help you move through
+   the page through grouped Review and Explore links. Growth, Outcomes,
+   Watchlist, and Options each have their own expandable area.
+   The active watchlist and scan provenance remain visible at the page foot.
+   During refresh, check the current broker step and elapsed time; a long
+   discovery call can stay on the same step. Restarting the app marks an
+   interrupted attempt failed with retry guidance and retains saved results.
 3. Choose a risk preset (Conservative / Balanced / Aggressive; **Balanced by
    default**; effective values are read-only). Each preset carries a growth
    objective (`target_account_multiple`; all presets target **5x**) that drives
-   pace math.
+   pace math. The saved selection also applies after an app restart.
 4. Refresh before bed in the Australian evening. The closed-market scan fetches
    the freshest available last-session Moomoo chains and publishes a `planning`
    snapshot with the full CSP/covered-call shortlist, visible math, and stale-data
@@ -76,9 +78,13 @@ keeps its existing warning rather than delaying the run.
   `America/New_York`; UTC fetch time is carried separately. Missing/invalid/
   stale broker time blocks actionable candidates while the market is open.
   Midpoint is shown only as a non-guaranteed limit target.
-- Market-closed results are planning previews: visible, read-only, and staged for
-  manual review. Their last-session Moomoo quotes are explicitly not live; verify
-  the quote before placing a resting limit order.
+- Complete market-closed results can stage tickets for manual review, even with
+  a PLANNING label. Incomplete coverage and persisted fallback remain review-only.
+  Last-session Moomoo quotes are explicitly not live; verify the live quote at
+  market open before manual placement.
+- Open-position roll verdicts and targets are review-only. Their clipboard
+  controls remain disabled because roll tickets have no copy-time revalidation
+  against the current published run.
 
 ## Architecture
 
@@ -156,8 +162,9 @@ explicit `account_id` in `connection.json`; missing or ambiguous accounts
 hard-fail with a clear message. Dashboard assets are served locally, so the
 screen does not depend on a font/icon/Bootstrap CDN. Option-chain quota
 defaults are conservative; tune them only after observing connection
-diagnostics. Closed-market scans remain planning-only but still fetch broker
-last-session chains for the Australian-evening review.
+diagnostics. Closed-market scans fetch broker last-session chains for the
+Australian-evening review. Complete closed runs may stage tickets; persisted
+fallback evidence stays planning and review-only.
 
 ## Configuration
 

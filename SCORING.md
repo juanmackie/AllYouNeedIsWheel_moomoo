@@ -31,6 +31,9 @@ A hard-gate-passing candidate receives:
   and indexes, `earnings_before_expiry`, or `event_unknown`;
 - a safe backend `recommended_contracts` quantity. Zero cash/share capacity
   produces zero, never an invented one-contract ticket;
+- `max_contracts` is the hard per-candidate ceiling after the preset cash
+  budget and per-underlying exposure cap. `recommended_contracts` is sized
+  separately and may be lower;
 - machine-readable blockers, rationale, source, broker timestamp, and UTC
   fetch timestamp.
 
@@ -136,12 +139,12 @@ means a read-only clipboard draft — no order is ever placed by the app.
 | Run state | market_state | Copy? | Ticket meaning |
 |-----------|--------------|-------|----------------|
 | `ready` + tradeable (fresh, complete) | open | Yes | live explicit limit draft on the current broker quote |
-| `ready` + tradeable (fresh, complete) | closed | Yes | staged for US market open; premium labelled last broker quote, “verify live quote at open” note |
+| complete coverage + copy-eligible broker candidate (normally `planning`) | closed | Yes, after OpenD confirmation | staged for US market open; premium labelled last broker quote, “verify live quote at open” note |
 | `ready` but not tradeable (coverage incomplete or quotes stale while open) | open | No | review-only; blocked by missing/stale quote gate |
 | session unknown (no broker quote evidence in the run) | any | No | review-only; cannot even confirm the market session |
 | holiday-shortened (scheduled-open by wall clock but quotes not fresh) | open-expected | No live | live blocked; staged only after a successful copy-time OpenD confirmation |
 | `planning` (preflight infeasible / persisted broker snapshot fallback) | any | No | review-only; verify then re-refresh — do not stage |
-| `partial` or `stale` | any | No | review-only; missing/stale evidence or cross-market |
+| incomplete or unknown coverage | any | No | review-only; coverage blocks both live and staged drafts |
 | any state with yfinance fallback | any | No | review-only (non-Moomoo provenance) |
 | any state, insufficient capacity | any | No | review-only (zero capacity → zero recommended contracts) |
 | any state, research-only mode | any | No | signals only |
@@ -153,8 +156,13 @@ every read, `compute_signal_eligibility` labels each signal `live` / `staged` /
 `review_only`, and `api/routes/run.py::evaluate_copy_check` revalidates against
 the current snapshot plus live OpenD evidence immediately before any clipboard
 write — a run that changed between load and click requires a second click, and
-a stale/persisted-fallback run can never stage. Only a `ready` run can copy,
-and staging happens only when the market is closed (`SESSION_STAGED_STATES`).
+persisted fallback evidence cannot authorize staging. The stored run status alone
+does not determine copy permission: complete closed-market runs normally have
+`planning` status and may stage; quota-limited planning runs may not. Staging
+happens only in `SESSION_STAGED_STATES`, with copy-time OpenD confirmation.
+The copy-time market-open test uses the broker quote time (`update_time`,
+US Eastern). The time at which the app read the quote is not evidence of an
+open market.
 
 Each allowed ticket surfaces event risk (`earnings_before_expiry`, unknown
 event) as a warning in both the dashboard card and clipboard text — never
@@ -304,25 +312,28 @@ error-free.
 
 Any candidate that is `qualified` **or `marginal`**, has Moomoo provenance (not a
 yfinance fallback), and a positive backend `recommended_contracts` is
-`copy_eligible`. Copy is allowed regardless of market state so an Australia-based
-trader can prepare tickets during US overnight hours:
+`copy_eligible` at the candidate level. The run must also have complete coverage
+and pass read-time and copy-time evidence checks. An Australia-based
+trader can prepare eligible tickets during US overnight hours:
 
 - **Live run** (tradeable): the copied ticket is an explicit limit draft on the
   current broker quote.
-- **Closed / stale run**: the ticket is *staged for US market open* — the premium
+- **Closed run with complete broker evidence** (normally `planning`): the ticket is *staged for US market open* — the premium
   is labelled as the last broker quote (not live) with a "verify live quote at
   open" note. Event risk (`event_unknown`, `earnings_before_expiry`) is surfaced
   as a warning in the ticket, never silently dropped.
 
-Hard trust gates still block copy: crossed markets, missing/stale quotes while
-open, yfinance fallback, insufficient capacity, and research-only mode all keep
+Hard trust gates still block copy: incomplete or unknown coverage, crossed markets,
+missing/stale live quote evidence, yfinance fallback, insufficient capacity, and research-only mode all keep
 a signal review-only. Copy text uses the bid credit and the midpoint only as a
 labelled non-guaranteed limit target.
 
 During closed-market review, both CSP and covered-call lanes request the freshest
 available last-session chain from OpenD first, then fall back to a persisted broker
-snapshot only if OpenD fails. The resulting run remains `planning`; its staged ticket
-must be verified against the live quote before a manual Moomoo order is placed.
+snapshot only if OpenD fails. Complete closed-market broker reads publish `planning`
+runs that may stage. Persisted fallback evidence remains review-only; it cannot
+authorize staging. Staged tickets require copy-time OpenD confirmation and
+verification of the live quote at market open before manual placement in Moomoo.
 
 ## Evidence and freshness
 
@@ -331,6 +342,9 @@ free CSP cash. Option-contract codes are unsupported underlying symbols and do
 not enter the coverage denominator. Successful discovery with no contracts in
 the expiry/OTM window counts as assessed (`no_contracts_in_window`); broker
 failures keep coverage incomplete.
+A failed discovery or a missing option quote gets one retry in the same
+refresh. A symbol that still has no broker evidence is listed with reason
+code `broker_data_unavailable`.
 
 Contract discovery requests both option types in inclusive ranges of at most
 30 days, once per symbol/range per US market date. Memory and SQLite reuse only

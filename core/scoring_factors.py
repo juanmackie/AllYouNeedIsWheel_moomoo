@@ -285,8 +285,8 @@ def _compute_size_fit(decision, portfolio_context: dict) -> float:
     return round(fit, 1)
 
 
-def _compute_recommended_contracts(decision, portfolio_context: dict, sizing_profile: dict | None = None) -> int:
-    """Compute an affordable recommendation using the active sizing contract.
+def _compute_max_contracts(decision, portfolio_context: dict, sizing_profile: dict | None = None) -> int:
+    """Compute the maximum contract count allowed by hard cash/exposure limits.
 
     CSP capacity is constrained by true unreserved cash and the preset's
     ``max_buying_power_pct_per_csp``. Missing or invalid sizing configuration
@@ -334,6 +334,15 @@ def _compute_recommended_contracts(decision, portfolio_context: dict, sizing_pro
             return 0
         by_budget = min(by_budget, floor(remaining_exposure / cash_required))
     return min(by_budget, max_contracts)
+
+
+def _compute_recommended_contracts(decision, portfolio_context: dict, sizing_profile: dict | None = None) -> int:
+    """Compute the recommended size within the hard maximum capacity.
+
+    Kept as a separate policy seam so recommendation sizing can become more
+    conservative than the hard ceiling without changing ``max_contracts``.
+    """
+    return _compute_max_contracts(decision, portfolio_context, sizing_profile)
 
 
 def _compute_expected_move_buffer(decision) -> float:

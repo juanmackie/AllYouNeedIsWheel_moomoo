@@ -15,6 +15,7 @@ import { renderGrowthPanel } from './growth-panel.js';
 import { renderOutcomePanel } from './outcome-panel.js';
 import { renderWeeklyIncome } from './weekly-income.js';
 import { state as optionsTableState } from './options-table-state.js';
+import { initializeSectionNavigation } from './section-navigation.js';
 
 let signalPanelsInitialized = false;
 let dashboardStartupInProgress = false;
@@ -25,6 +26,7 @@ let runPublishedDuringStartup = false;
  */
 export async function initializeDashboard() {
     try {
+        initializeSectionNavigation();
         if (!document.querySelector('.content-container')) {
             const mainContainer = document.querySelector('main .container') || document.querySelector('main');
             if (mainContainer) {
@@ -228,39 +230,6 @@ function hideWaveLoading(waveId) {
     if (el) el.classList.add('d-none');
 }
 
-function copyRollTicket(pos, btn) {
-    const expiry = String(pos.expiration || '').replace(/-/g, '');
-    const strike = (Number(pos.strike) || 0).toFixed(2);
-    const ticker = pos.ticker || '?';
-    const rawType = String(pos.option_type || '').toUpperCase();
-    const type = rawType === 'PUT' || rawType === 'P' ? 'PUT' : 'CALL';
-    const qty = Math.max(1, Math.abs(Number(pos.position || 0)) || 1);
-    const pressure = pos.roll_pressure != null ? Number(pos.roll_pressure).toFixed(0) : '?';
-    const target = pos.roll_target;
-    const targetExpiry = target && /^\d{8}$/.test(String(target.expiration || '')) ? String(target.expiration) : '';
-    const targetStrike = Number(target?.strike);
-    const targetLine = target && target.ticker && target.option_type && targetExpiry && Number.isFinite(targetStrike)
-        ? `STO: ${String(target.option_type).toUpperCase()} ${target.ticker} ${targetExpiry} ${targetStrike.toFixed(2)} x${qty}`
-        : `STO: ${type} ${ticker} <fresh eligible target required> ${strike} x${qty}`;
-    const text = [
-        `${String(pos.exit_verdict || 'ROLL').toUpperCase()} — ${ticker}`,
-        `BTC: ${type} ${ticker} ${expiry} ${strike} x${qty}`,
-        targetLine,
-        `Reason: roll pressure ${pressure}/100`,
-        'Source: Moomoo positions (read-only)',
-    ].join('\n');
-    const original = btn.textContent;
-    navigator.clipboard.writeText(text).then(() => {
-        btn.textContent = 'Copied';
-        btn.classList.add('btn-success');
-    }).catch(() => {
-        btn.textContent = 'Failed';
-        btn.classList.add('btn-danger');
-    }).finally(() => {
-        setTimeout(() => { btn.textContent = original; btn.classList.remove('btn-success', 'btn-danger'); }, 2000);
-    });
-}
-
 function setPositionMessage(tbody, message, className = 'text-muted') {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
@@ -359,6 +328,7 @@ function renderPositionRow(pos) {
     progress.setAttribute('aria-valuenow', pressure.toFixed(0));
     progress.setAttribute('aria-valuemin', '0');
     progress.setAttribute('aria-valuemax', '100');
+    progress.setAttribute('aria-label', `Roll pressure for ${pos.ticker || pos.symbol || 'position'}: ${pressure.toFixed(0)} out of 100`);
     const bar = document.createElement('div');
     bar.className = `progress-bar ${pressure >= 70 ? 'bg-warning' : 'bg-secondary'}`;
     bar.style.width = `${Math.min(pressure, 100)}%`;
@@ -404,10 +374,18 @@ function renderPositionRow(pos) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'btn btn-outline-secondary btn-sm copy-roll-btn';
-    button.title = 'Copy roll ticket (manual, read-only)';
-    button.textContent = 'Copy roll';
-    button.addEventListener('click', () => copyRollTicket(pos, button));
+    button.disabled = true;
+    button.textContent = 'Review only';
+    const copyBlocker = targetLabel
+        ? 'Roll tickets have no current-run copy revalidation.'
+        : 'No fresh eligible roll target is available.';
+    button.title = copyBlocker;
+    button.setAttribute('aria-label', `Roll ticket unavailable. ${copyBlocker}`);
     actionCell.appendChild(button);
+    const copyReason = document.createElement('small');
+    copyReason.className = 'd-block text-muted mt-1 roll-copy-reason';
+    copyReason.textContent = copyBlocker;
+    actionCell.appendChild(copyReason);
     row.appendChild(actionCell);
     return row;
 }

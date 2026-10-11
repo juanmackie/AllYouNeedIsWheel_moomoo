@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark light">
     <title>{% block title %}AYNIWHEEL{% endblock %}</title>
     <meta name="description" content="Premium-velocity cash-secured put and covered call signals from your Moomoo watchlist. Review, then execute in your broker.">
 
@@ -14,6 +15,7 @@
     {% block extra_head %}{% endblock %}
 </head>
 <body class="app-body {% block body_class %}{% endblock %}">
+    <a class="ft-skip-link" href="#main-content">Skip to main content</a>
     <div class="app-layout">
 
         {% set _now = now|default('', true) %}
@@ -26,8 +28,8 @@
                 </div>
                 <div class="ft-masthead__wordmark">AYNIWHEEL</div>
                 <div class="ft-masthead__meta ft-masthead__meta--right">
-                    <span style="margin-left:8px;">CASH ACCOUNT <span class="ft-masthead__dot" aria-label="Live connection"></span></span>
-                    <button type="button" onclick="cycleTheme()" class="ft-btn" style="margin-left:12px; font-size:9px; padding:2px 8px;" aria-label="Cycle theme: auto, dark, light">THEME</button>
+                    <span style="margin-left:8px;">CASH ACCOUNT <span class="ft-masthead__dot" role="status" aria-label="OpenD live connection indicator"></span></span>
+                    <button type="button" onclick="cycleTheme()" class="ft-btn ft-theme-toggle" aria-label="Cycle theme: auto, dark, light">Theme</button>
                 </div>
             </div>
             <div class="ft-masthead__rule"></div>
@@ -42,7 +44,7 @@
             <div class="ft-masthead__rule ft-masthead__rule--heavy"></div>
         </header>
 
-        <main class="app-main">
+        <main class="app-main" id="main-content" tabindex="-1">
             <div class="container app-shell">
 
                 <div id="global-error-boundary" role="alert" aria-live="polite"></div>

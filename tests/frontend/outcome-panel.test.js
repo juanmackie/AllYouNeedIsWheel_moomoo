@@ -301,17 +301,26 @@ describe('outcome-panel rendering', () => {
     await renderOutcomePanel();
 
     const row = document.querySelector('.outcome-record-row');
-    expect(row.getAttribute('aria-expanded')).toBe('false');
+    const button = row.querySelector('button');
+    expect(row.hasAttribute('aria-expanded')).toBe(false);
+    expect(row.hasAttribute('tabindex')).toBe(false);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.getAttribute('aria-labelledby')).toBe(`${button.id} ${row.firstElementChild.id}`);
+    expect(row.firstElementChild.textContent).toContain('NVDA');
+    expect(document.querySelectorAll('.outcome-fill-toggle')).toHaveLength(1);
     const detail = row.nextElementSibling;
     expect(detail.classList.contains('outcome-fill-row')).toBe(true);
     expect(detail.style.display).toBe('none');
 
-    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(row.getAttribute('aria-expanded')).toBe('true');
+    button.click();
+    expect(button.getAttribute('aria-expanded')).toBe('true');
     expect(detail.style.display).not.toBe('none');
     expect(detail.textContent).toContain('F1');
     expect(detail.textContent).toContain('SELL');
     expect(detail.textContent).toContain('2 × $1.18');
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(detail.style.display).toBe('none');
   });
 
   it('shows only the saved 21–45 DTE comparison and an explicit unavailable state', async () => {

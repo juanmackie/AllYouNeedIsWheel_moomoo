@@ -10,6 +10,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from api import is_loopback_host, is_loopback_origin
+from core.run_model import RefreshAttempt
+
+_ACCEPTED_REFRESH = RefreshAttempt(attempt_id="accepted-attempt", run_id=None, state="queued")
 
 
 class TestLoopbackHost(unittest.TestCase):
@@ -73,7 +76,7 @@ class TestLoopbackTrustBoundaryRoutes(unittest.TestCase):
         self.client = self.app.test_client()
 
     @patch("api.routes.run._get_runner")
-    @patch("api.routes.run.start_background_refresh", return_value=True)
+    @patch("api.routes.run.start_background_refresh", return_value=_ACCEPTED_REFRESH)
     def test_post_with_foreign_origin_rejected(self, mock_refresh, mock_get_runner):
         mock_get_runner.return_value = MagicMock()
         response = self.client.post(
@@ -87,7 +90,7 @@ class TestLoopbackTrustBoundaryRoutes(unittest.TestCase):
         mock_refresh.assert_not_called()
 
     @patch("api.routes.run._get_runner")
-    @patch("api.routes.run.start_background_refresh", return_value=True)
+    @patch("api.routes.run.start_background_refresh", return_value=_ACCEPTED_REFRESH)
     def test_post_with_invalid_host_rejected(self, mock_refresh, mock_get_runner):
         mock_get_runner.return_value = MagicMock()
         response = self.client.post(
@@ -99,7 +102,7 @@ class TestLoopbackTrustBoundaryRoutes(unittest.TestCase):
         mock_refresh.assert_not_called()
 
     @patch("api.routes.run._get_runner")
-    @patch("api.routes.run.start_background_refresh", return_value=True)
+    @patch("api.routes.run.start_background_refresh", return_value=_ACCEPTED_REFRESH)
     def test_post_loopback_origin_allowed(self, mock_refresh, mock_get_runner):
         mock_get_runner.return_value = MagicMock()
         response = self.client.post(
@@ -110,7 +113,7 @@ class TestLoopbackTrustBoundaryRoutes(unittest.TestCase):
         mock_refresh.assert_called_once()
 
     @patch("api.routes.run._get_runner")
-    @patch("api.routes.run.start_background_refresh", return_value=True)
+    @patch("api.routes.run.start_background_refresh", return_value=_ACCEPTED_REFRESH)
     def test_post_nonbrowser_client_without_origin_allowed(self, mock_refresh, mock_get_runner):
         # curl / Python requests send no Origin header; they are preserved.
         mock_get_runner.return_value = MagicMock()

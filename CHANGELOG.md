@@ -1,5 +1,77 @@
 # Changelog
 
+## 2026-10-11 — Functional sweep and Aggressive startup
+
+The scanner now loads the saved preset when services start. Previously the
+settings could show Aggressive while a new scan used the configured Balanced
+default. Preset buttons remain available after switching, and delayed run
+polling cannot overwrite the newly selected preset label.
+
+CSP maximum quantities now respect the preset cash budget and remaining
+per-underlying exposure. Weekly-income responses with `error: null` are treated
+as successful. Refresh responses identify the newly accepted attempt before its
+background worker starts.
+
+Watchlist tags and section links wrap within mobile screens. Roll-pressure
+meters have accessible names. Open-position roll copying is review-only until
+there is copy-time revalidation against the current run; placeholder drafts
+are no longer copied. See `docs/functional-sweep.md` for verification.
+
+## 2026-10-11 — CSP cash and published-strategy clarity
+
+New run snapshots preserve broker-derived CSP cash so signal cards can show cash
+remaining and cash allocation. Older snapshots without this value continue to
+report it unavailable. Capital recovery comparisons exclude option positions.
+The dashboard distinguishes the currently selected preset from the strategy
+that produced the displayed published snapshot during a refresh.
+
+Actionability documentation now matches the server gates: complete closed-market
+broker runs may stage tickets despite a planning label; incomplete coverage and
+persisted fallback remain review-only. Ranking and broker safety gates
+are unchanged.
+
+## 2026-10-11 — Clearer dashboard sections
+
+The dashboard uses numbered areas for scan status, signals, account and income,
+and open positions. Grouped Review and Explore links and a keyboard skip link
+improve navigation. Growth, outcomes, watchlist, and option data each have their
+own disclosure, with controls that reflect their state.
+Spacing, mobile layout, and dark/light readability follow the existing local
+design system, informed by SBB's UX principles.
+
+Refresh feedback now shows the broker step and elapsed time rather than a
+stage-weight percentage that can appear stuck during contract discovery.
+Explicit app startup marks abandoned active attempts failed with retry
+guidance, preserving the last successful snapshot and healthy active workers.
+Additional UI references and local design decisions are recorded in
+`docs/ui-reference-review.md`.
+
+## 2026-10-10 — Staged tickets can be copied while the market is closed
+
+The copy check decided "market open" from the time the app read the quote,
+which is always a few seconds old after a live fetch. Every staged copy was
+therefore rejected with "market appears open now", also on weekends. The check
+now uses the broker quote time (`update_time`, US Eastern). A fresh broker
+quote time still blocks staging. No other copy gate changed.
+
+## 2026-10-10 — Retry failed symbols and name the missing ones
+
+A contract discovery failure or a missing option quote now gets one retry in
+the same refresh, through the same chain limiter and gate. The discovery retry
+is skipped when every symbol failed and stops at the discovery budget. A symbol
+that still has no broker evidence appears in the blocked list with reason code
+`broker_data_unavailable` and the broker reason, and the partial-coverage
+message names the missing symbols. Complete coverage still gates copy; ranking,
+quote gates, and quotas are unchanged.
+
+The dashboard shows a red banner below the run strip when a run has partial
+coverage. The banner names the symbols with no broker data, gives the broker
+reason, and gives the recovery step. The coverage count shows INCOMPLETE in
+red. A covered-call holding whose option data cannot be read is now listed
+with the same reason code and shown in an amber banner; it does not block
+other picks. Each card now shows the reason a ticket cannot be copied as
+visible text below the copy button; before, the reason was only a tooltip.
+
 ## 2026-10-08 — Keep optional data off the signal-loading path
 
 Saved recommendation cards, run status, and refresh controls initialize before

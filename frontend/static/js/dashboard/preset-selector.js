@@ -5,6 +5,7 @@
  */
 
 let _presetState = null;
+const PRESET_LABELS = { conservative: 'Conservative', balanced: 'Balanced', aggressive: 'Aggressive' };
 
 export async function initPresetSelector(onPresetChanged) {
     const buttonsEl = document.getElementById('preset-buttons');
@@ -25,16 +26,21 @@ function renderPresetSelector(onPresetChanged) {
     const effectiveEl = document.getElementById('preset-effective');
     if (!buttonsEl || !_presetState) return;
     buttonsEl.innerHTML = '';
-    const labels = { conservative: 'Conservative', balanced: 'Balanced', aggressive: 'Aggressive' };
     for (const [key, preset] of Object.entries(_presetState.presets || {})) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-sm ' + (key === _presetState.active ? 'btn-primary' : 'btn-outline-secondary');
-        btn.textContent = labels[key] || preset.label || key;
+        btn.textContent = presetLabel(key, preset);
         btn.dataset.preset = key;
         btn.addEventListener('click', () => selectPreset(key, onPresetChanged));
         buttonsEl.appendChild(btn);
     }
+    const activeLabel = presetLabel(
+        _presetState.active,
+        _presetState.presets?.[_presetState.active]
+    );
+    const activeBadge = document.getElementById('run-preset');
+    if (activeBadge) activeBadge.textContent = `CURRENT PRESET ${activeLabel}`;
     if (effectiveEl) {
         const eff = _presetState.effective || {};
         effectiveEl.textContent =
@@ -42,6 +48,10 @@ function renderPresetSelector(onPresetChanged) {
             `delta ${eff.csp_target_delta}±${eff.csp_delta_tolerance}, OTM ${eff.csp_min_otm_pct}-${eff.csp_max_otm_pct}%, ` +
             `min BP $${Math.round(eff.min_csp_buying_power || 0)}, max ${eff.max_buying_power_pct_per_csp || 0}% BP per CSP — read-only`;
     }
+}
+
+function presetLabel(key, preset) {
+    return PRESET_LABELS[key] || preset?.label || key || '--';
 }
 
 async function selectPreset(key, onPresetChanged) {
@@ -52,7 +62,12 @@ async function selectPreset(key, onPresetChanged) {
             body: JSON.stringify({ preset: key }),
         });
         if (!resp.ok) return;
-        _presetState = await resp.json();
+        const update = await resp.json();
+        _presetState = {
+            ..._presetState,
+            ...update,
+            presets: update.presets ?? _presetState.presets,
+        };
         renderPresetSelector(onPresetChanged);
         if (typeof onPresetChanged === 'function') onPresetChanged();
     } catch (err) {

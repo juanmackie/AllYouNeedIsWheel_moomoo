@@ -4,6 +4,7 @@
             <div>
                 <span class="app-section__eyebrow">Monitoring</span>
                 <h2>Open short options</h2>
+                <p class="dashboard-section__description">Review live position risk and exit-playbook suggestions. Any action remains manual in Moomoo.</p>
             </div>
             <button id="refresh-position-monitor" class="btn btn-outline-secondary btn-sm" type="button">
                 <i class="bi bi-arrow-clockwise"></i> Refresh
@@ -12,7 +13,7 @@
 
         <div id="position-monitor-loading" class="text-muted small mb-2 d-none"></div>
 
-        <div class="table-responsive">
+        <div class="table-responsive" role="region" aria-label="Open position table" tabindex="0">
             <table class="table table-sm align-middle mb-0" aria-label="Open short option positions">
                 <thead>
                     <tr>

@@ -9,8 +9,7 @@
 ## Ownership
 
 - `base.html` owns the masthead, theme-toggle hook (`data-theme`), navigation shell, and global markup.
-- `dashboard.html` owns the dashboard page structure (3-zone layout: visible primary signals + live positions; collapsible analytics details; collapsible options-table details). Preserve all partial IDs and class names.
-- `dashboard.html` owns the dashboard page structure.
+- `dashboard.html` owns the dashboard page structure: numbered, bordered areas keep scan state first, followed by the visible shortlist, account and income, and live positions; growth, outcomes, watchlist controls, and supplementary options data are separate native disclosures collapsed by default; scan provenance remains visible at the page end. The compact section navigation groups primary review links separately from exploration links. Preserve all partial IDs and class names.
 - `partials/common/` owns shared tables and footer-level common UI.
 - `partials/components/` owns reusable modal/component fragments.
 - `partials/dashboard/` owns dashboard-specific panels and tables.
@@ -26,7 +25,10 @@
 
 - Keep templates presentation-focused; route/service layers should provide data contracts.
 - Preserve accessibility basics: labels, button text, modal semantics, and readable empty/error states.
+- `base.html` provides the skip link and focusable main landmark. Dashboard anchor navigation targets stable section IDs; native disclosures use visible labels that match their open/closed state.
+- Horizontal table scrollers have a visible focus target and an accessible region name; keep their labels aligned with the table content.
 - `partials/dashboard/run_strip.html` keeps `#run-warning-banner` directly below the operational strip, outside collapsible details. Its title, reason, and recovery action use stable `run-warning-*` IDs and an atomic alert role. Visible alerts require the existing `.show` shim; `.d-none` hides recovered warnings.
+- `#run-preset` identifies the current selection; `#run-snapshot-preset` identifies the retained published strategy. Both remain visible during refresh.
 - Signal cards use `<details>` to collapse `.recommendation-details` (metrics detail rows); hero/reward/warnings/source remain visible. Preserve `.recommendation-card`, `.copy-ticket-btn`, `.signal-data-source`, `.missing-risk-badge`, `.d-none` visibility contracts.
 - Keep script/style dependencies consistent with `base.html`.
 - Do not alter class names that frontend tests (`tests/frontend/`) depend on (e.g. `.recommendation-card`, `.ticker-badge`, `.table-responsive`).
