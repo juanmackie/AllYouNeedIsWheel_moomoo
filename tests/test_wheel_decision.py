@@ -126,18 +126,15 @@ class TestComputeRollPressure(unittest.TestCase):
 class TestComputeProfitTargetProgress(unittest.TestCase):
     """Test _compute_profit_target_progress function"""
 
-    def test_full_progress(self):
-        """Test profit progress with low DTE (high progress)"""
-        decision = WheelDecision(dte=5, premium_per_contract=2.0)
+    def test_progress_uses_realized_premium_capture_not_time(self):
+        decision = WheelDecision(dte=5, premium_per_contract=200.0, captured_profit_pct=25.0)
         progress = _compute_profit_target_progress(decision)
-        self.assertGreater(progress, 50.0)
+        self.assertEqual(progress, 50.0)
         self.assertLessEqual(progress, 100.0)
 
-    def test_expired(self):
-        """Test profit progress with expired option"""
-        decision = WheelDecision(dte=0, premium_per_contract=2.0)
-        progress = _compute_profit_target_progress(decision)
-        self.assertEqual(progress, 100.0)
+    def test_unknown_profit_progress_is_zero(self):
+        decision = WheelDecision(dte=0, premium_per_contract=200.0)
+        self.assertEqual(_compute_profit_target_progress(decision), 0.0)
 
 
 class TestScoreContract(unittest.TestCase):
@@ -443,7 +440,7 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result.hard_blockers)
 
-    def test_call_below_broker_cost_basis_is_blocked_and_reports_if_called_pnl(self):
+    def test_call_below_broker_cost_basis_is_income_if_bid_recovers_basis(self):
         future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
         option = dict(
             self.base_option,
@@ -458,8 +455,9 @@ class TestScoreContractEdgeCases(unittest.TestCase):
 
         result = score_contract("AAPL", option, 100.0, self.base_profile, portfolio)
 
-        self.assertIn("below_cost_basis", result.blocked_reason_codes)
-        self.assertFalse(result.copy_eligible)
+        self.assertNotIn("below_cost_basis", result.blocked_reason_codes)
+        self.assertFalse(result.hard_blockers)
+        self.assertEqual(result.covered_call_intent, "income")
         self.assertEqual(result.broker_cost_basis, 105.0)
         self.assertEqual(result.if_called_pnl_vs_basis, 100.0)
 
@@ -1168,7 +1166,7 @@ class TestQuoteFreshness(unittest.TestCase):
     def test_bid_premium_velocity_and_tiers(self, _mock_open):
         from zoneinfo import ZoneInfo
 
-        market_now = datetime(2026, 10, 11, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+        market_now = datetime.now(ZoneInfo("America/New_York"))
         opt = dict(
             self.base,
             expiration=(market_now + timedelta(days=21)).strftime("%Y%m%d"),

@@ -75,10 +75,10 @@ class TestDeploymentPlan(unittest.TestCase):
                 "bid_premium_per_contract": 80,
             },
         ]
-        plan = deployment_plan(candidates, 10_000)
-        self.assertEqual([item["ticker"] for item in plan], ["AAA"])
-        self.assertEqual(plan[0]["deployment_income"], 120)
-        self.assertEqual(plan[0]["deployment_cash_remaining"], 4_000)
+        plan = deployment_plan(candidates, 10_000, reserve_pct=0, per_underlying_cap_pct=100, group_cap_pct=100)
+        self.assertEqual([item["ticker"] for item in plan["lines"]], ["AAA"])
+        self.assertEqual(plan["lines"][0]["deployment_income"], 120)
+        self.assertEqual(plan["cash_left"], 4_000)
 
     def test_ignores_calls_and_duplicate_underlyings(self):
         candidates = [
@@ -86,9 +86,67 @@ class TestDeploymentPlan(unittest.TestCase):
             {"ticker": "AAA", "option_type": "PUT", "cash_required": 2_000, "recommended_contracts": 1},
             {"ticker": "AAA", "option_type": "PUT", "cash_required": 1_000, "recommended_contracts": 1},
         ]
-        plan = deployment_plan(candidates, 5_000)
-        self.assertEqual(len(plan), 1)
-        self.assertEqual(plan[0]["ticker"], "AAA")
+        plan = deployment_plan(candidates, 5_000, reserve_pct=0, per_underlying_cap_pct=100, group_cap_pct=100)
+        self.assertEqual(len(plan["lines"]), 1)
+        self.assertEqual(plan["lines"][0]["ticker"], "AAA")
+
+    def test_cash_plan_reserve_ticker_and_leveraged_group_caps(self):
+        candidates = [
+            {
+                "ticker": "AAA",
+                "option_type": "PUT",
+                "strike": 10,
+                "expiration": "20261218",
+                "cash_required": 1_000,
+                "recommended_contracts": 3,
+                "bid_premium_per_contract": 100,
+                "capital_velocity_per_day": 0.01,
+            },
+            {
+                "ticker": "SOXL",
+                "option_type": "PUT",
+                "strike": 10,
+                "expiration": "20261218",
+                "cash_required": 1_000,
+                "recommended_contracts": 3,
+                "bid_premium_per_contract": 100,
+                "capital_velocity_per_day": 0.01,
+            },
+            {
+                "ticker": "SOXS",
+                "option_type": "PUT",
+                "strike": 10,
+                "expiration": "20261218",
+                "cash_required": 1_000,
+                "recommended_contracts": 3,
+                "bid_premium_per_contract": 100,
+                "capital_velocity_per_day": 0.01,
+            },
+        ]
+        plan = deployment_plan(
+            candidates,
+            10_000,
+            reserve_pct=10,
+            per_underlying_cap_pct=35,
+            group_cap_pct=35,
+            leveraged_tickers={"SOXL", "SOXS"},
+        )
+        self.assertEqual(
+            [(line["ticker"], line["deployment_contracts"]) for line in plan["lines"]], [("AAA", 3), ("SOXL", 3)]
+        )
+        self.assertEqual(plan["total_cash"], 6_000)
+        self.assertEqual(plan["reserve_cash"], 1_000)
+        self.assertEqual(plan["cash_left"], 4_000)
+        self.assertTrue(
+            any(row["ticker"] == "SOXS" and row["reason_code"] == "leveraged_group_cap" for row in plan["skipped"])
+        )
+
+    def test_cash_plan_skips_held_underlying_below_adjusted_basis(self):
+        candidate = {"ticker": "AAA", "option_type": "PUT", "cash_required": 1_000, "recommended_contracts": 1}
+        context = {"positions": {"AAA": {"position": 100, "market_value": 900, "adjusted_basis": 12}}}
+        plan = deployment_plan([candidate], 5_000, reserve_pct=0, portfolio_context=context)
+        self.assertEqual(plan["lines"], [])
+        self.assertEqual(plan["skipped"][0]["reason_code"], "held_below_adjusted_basis")
 
 
 if __name__ == "__main__":

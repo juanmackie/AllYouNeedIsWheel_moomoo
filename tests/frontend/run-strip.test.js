@@ -21,6 +21,7 @@ const ELEMENT_IDS = [
   'run-warning-title',
   'run-warning-reason',
   'run-warning-action',
+  'next-actions-content',
 ];
 
 function setupDOM() {
@@ -60,6 +61,19 @@ afterEach(() => {
 });
 
 describe('run-strip freshness rendering', () => {
+  it('renders next actions from the strip snapshot sink without another run poll', async () => {
+    setupDOM();
+    const { renderRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
+    renderRunStrip({ state: 'succeeded' }, {
+      tradeable: false,
+      effective_status: 'planning',
+      run: { run_id: 'action-run', env: 'REAL', market_state: 'closed', status: 'planning', coverage_scanned: 1, coverage_total: 1, quote_fetched_at: {} },
+      next_actions: [{ rank: 1, underlying: 'AAPL', verdict: 'DEPLOY_CASH', reasons: ['Cash is available'] }],
+    });
+    expect(document.getElementById('next-actions-content').textContent).toContain('1. AAPL');
+    expect(document.getElementById('next-actions-content').textContent).toContain('Cash is available');
+  });
+
   it.each(['refreshing', 'failed'])('distinguishes current and published presets after a %s attempt', async (state) => {
     const els = setupDOM();
     // Current settings are owned by preset-selector; the run poll must not

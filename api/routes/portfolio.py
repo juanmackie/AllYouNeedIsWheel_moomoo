@@ -2,6 +2,10 @@
 Portfolio API routes
 """
 
+import hashlib
+import json
+import math
+
 from flask import Blueprint, current_app, jsonify, request
 
 from api.routes.source_policy import attach_source_policy, build_account_source_policy
@@ -20,6 +24,29 @@ def get_portfolio_service():
 
 
 logger = get_logger("api.routes.portfolio", "api")
+
+
+def _positive_nav_history(history):
+    """Drop invalid NAV samples before charting or pace calculations."""
+    result = []
+    for snapshot in history or []:
+        if not isinstance(snapshot, dict):
+            continue
+        try:
+            nav = float(snapshot.get("net_liquidation", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(nav) or nav <= 0:
+            continue
+        result.append({**snapshot, "net_liquidation": nav})
+    return result
+
+
+def _growth_baseline_key(env, account_id):
+    """Opaque, durable setting key scoped to one broker environment/account."""
+    identity = f"{str(env or '').strip().upper()}|{str(account_id or '').strip()}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    return f"growth_baseline:{digest}"
 
 
 def _is_real_account_unavailable(message):
@@ -170,7 +197,9 @@ def get_portfolio_history():
         from api.services.config import get_current_identity
 
         identity_env, identity_account = get_current_identity()
-        history = db.get_portfolio_history(limit=limit, env=identity_env, account_id=identity_account)
+        history = _positive_nav_history(
+            db.get_portfolio_history(limit=limit, env=identity_env, account_id=identity_account)
+        )
         from core.growth_mode import growth_pace
         from core.presets import WHEEL_PRESETS, get_preset
 
@@ -187,7 +216,28 @@ def get_portfolio_history():
         # full history, independent of the chart ``limit``. The chart series stays
         # limited to ``limit`` points, but pace is derived from the unbounded
         # history so the goal never shifts as the account accumulates snapshots.
-        pace_history = db.get_portfolio_history(unbounded=True, env=identity_env, account_id=identity_account)
+        pace_history = _positive_nav_history(
+            db.get_portfolio_history(unbounded=True, env=identity_env, account_id=identity_account)
+        )
+        baseline_key = _growth_baseline_key(identity_env, identity_account)
+        baseline = None
+        try:
+            stored_baseline = db.get_setting(baseline_key)
+            if isinstance(stored_baseline, str) and stored_baseline:
+                parsed = json.loads(stored_baseline)
+                if isinstance(parsed, dict) and float(parsed.get("net_liquidation", 0) or 0) > 0:
+                    baseline = parsed
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            baseline = None
+        if baseline is None and pace_history:
+            baseline = {
+                "net_liquidation": pace_history[0]["net_liquidation"],
+                "captured_at": pace_history[0].get("captured_at", ""),
+            }
+            try:
+                db.set_setting(baseline_key, json.dumps(baseline, separators=(",", ":")))
+            except AttributeError:
+                pass
 
         # Chart-ready series plus the full snapshot payloads.
         series = [
@@ -205,7 +255,7 @@ def get_portfolio_history():
             "count": len(history),
             "series": series,
             "snapshots": history,
-            "pace": growth_pace(pace_history, target_multiple=target_multiple),
+            "pace": growth_pace(pace_history, target_multiple=target_multiple, baseline=baseline),
             "target_multiple": target_multiple,
         }
         return jsonify(attach_source_policy(payload, build_account_source_policy("portfolio_history"))), 200

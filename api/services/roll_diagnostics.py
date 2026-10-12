@@ -24,10 +24,12 @@ def build_roll_decisions(portfolio_context, conn, fresh_candidates=None):
         if not option_positions:
             return []
         from api import get_service
-        from api.services.portfolio_scoring import build_portfolio_context, score_position
+        from api.services.portfolio_scoring import score_position
 
-        ps = get_service("portfolio")
-        ctx, _, _ = build_portfolio_context(option_positions, ps)
+        ctx = dict(portfolio_context)
+        profile = ctx.get("exit_profile") or {}
+        ctx.update(profile)
+        ctx["exit_roll_dte"] = profile.get("roll_dte", 21)
         iv_earnings = get_service("ivearnings")
         decisions = []
         for pos in option_positions:
@@ -49,6 +51,10 @@ def build_roll_decisions(portfolio_context, conn, fresh_candidates=None):
                     "exit_reasons": decision.exit_reasons,
                     "roll_target": decision.roll_target,
                     "warnings": decision.warnings,
+                    "bid": decision.bid,
+                    "ask": decision.ask,
+                    "quantity": abs(float(pos.get("position", 0) or 0)),
+                    "exit_reason_codes": getattr(decision, "exit_reason_codes", []),
                     "wheel_decision": decision.to_dict(),
                 }
             )

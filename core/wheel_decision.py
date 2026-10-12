@@ -99,6 +99,7 @@ class WheelDecision:
     broker_cost_basis: Optional[float] = None  # CALL: conservative Moomoo avg-cost floor
     if_called_pnl_vs_basis: Optional[float] = None  # CALL: per contract, includes current bid credit
     basis_source: str = "unknown"
+    loss_if_called: Optional[float] = None  # positive loss amount per contract, for repair calls
 
     # -- Size / portfolio fit -----------------------------------------------
     size_fit: float = 0.0  # 0-100: how well the contract fits the portfolio
@@ -110,9 +111,11 @@ class WheelDecision:
     roll_pressure: float = 0.0  # 0-100: urgency to roll
     exit_verdict: str = ""  # HOLD | TAKE_PROFIT | ROLL | ROTATE | CLOSE (exit playbook)
     exit_reasons: list[str] = field(default_factory=list)  # ranked reasons for the verdict
+    exit_reason_codes: list[str] = field(default_factory=list)
     roll_target: Optional[dict] = None  # fresh, eligible same-underlying replacement contract
     extrinsic_remaining: float = 0.0  # Remaining extrinsic value ($)
     profit_target_progress: float = 0.0  # 0-100: how close to profit target
+    captured_profit_pct: Optional[float] = None  # evidence-based realized premium capture; None when unknown
 
     # -- Environment --------------------------------------------------------
     iv_rank: float = 0.0  # 0-100
@@ -179,7 +182,7 @@ class WheelDecision:
     risk_budget_used_pct: float = 0.0
     stress_loss: float = 0.0
     confidence_score: float = 0.0
-    covered_call_intent: str = ""  # income | profit-taking | upside-capping risk
+    covered_call_intent: str = ""  # income | repair | upside-capping risk (legacy classifier if basis unknown)
     score_rationale: str = ""
 
     # -- Internal tracking --------------------------------------------------
@@ -410,9 +413,9 @@ def score_contract(
             ticker, option_type, strike, expiration, f"Premium too low: {premium_per_contract}"
         )
 
-    if open_interest < profile.get("min_open_interest", 10) and volume < profile.get("min_volume", 1):
+    if open_interest < profile.get("min_open_interest", 10):
         return _create_failed_decision(
-            ticker, option_type, strike, expiration, "Open interest and volume too low", ["low_liquidity"]
+            ticker, option_type, strike, expiration, "Open interest below hard liquidity floor", ["low_liquidity"]
         )
 
     # -- Enrich Greeks if missing --------------------------------------
@@ -462,6 +465,7 @@ def score_contract(
     position = portfolio_context.get("positions", {}).get(ticker, {})
     shares_owned = float(position.get("position", 0) or 0)
     avg_cost = float(position.get("avg_cost", 0) or 0)
+    adjusted_basis = float(position.get("adjusted_basis", avg_cost) or avg_cost)
     cash_balance = float(portfolio_context.get("cash_balance", 0) or 0)
     available_cash = float(portfolio_context.get("available_cash", cash_balance) or 0)
     cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", available_cash) or 0)
@@ -585,14 +589,32 @@ def score_contract(
         if_called_return = (((strike - stock_price) + bid) / stock_price) * 100 if stock_price > 0 else 0
         decision.otm_pct = round(otm_pct, 2)
         decision.if_called_return = round(if_called_return, 2)
-        if avg_cost > 0:
-            decision.broker_cost_basis = avg_cost
-            decision.basis_source = "moomoo_avg_cost"
-            decision.if_called_pnl_vs_basis = round((strike - avg_cost) * 100 + bid * 100, 2)
-            if strike < avg_cost:
-                reason = f"Covered-call strike ${strike:.2f} is below Moomoo cost basis ${avg_cost:.2f}"
-                decision.hard_blockers.append(reason)
-                decision.blocked_reason_codes.append("below_cost_basis")
+        if adjusted_basis > 0:
+            decision.broker_cost_basis = adjusted_basis
+            decision.basis_source = str(position.get("basis_source", "moomoo_avg_cost") or "moomoo_avg_cost")
+            decision.if_called_pnl_vs_basis = round((strike - adjusted_basis) * 100 + bid * 100, 2)
+            if decision.if_called_pnl_vs_basis >= 0:
+                decision.covered_call_intent = "income"
+            else:
+                decision.covered_call_intent = "repair"
+                decision.loss_if_called = round(abs(decision.if_called_pnl_vs_basis), 2)
+                max_repair_delta = float(profile.get("repair_call_max_delta", 0.20) or 0.20)
+                if abs(delta) > max_repair_delta:
+                    reason = f"Repair call delta {abs(delta):.2f} exceeds {max_repair_delta:.2f} maximum"
+                    decision.hard_blockers.append(reason)
+                    decision.blocked_reason_codes.append("repair_delta_too_high")
+                days_to_earnings = earnings_info.get("days_to_earnings")
+                is_fund = security_type in {"etf", "index"}
+                earnings_safe = False
+                if days_to_earnings is not None:
+                    try:
+                        earnings_safe = int(days_to_earnings) > dte
+                    except (TypeError, ValueError):
+                        earnings_safe = False
+                if not is_fund and not earnings_safe:
+                    reason = "Repair call expiry crosses earnings or the earnings date is unknown"
+                    decision.hard_blockers.append(reason)
+                    decision.blocked_reason_codes.append("repair_earnings_before_expiry")
         decision.size_fit = _compute_size_fit(decision, portfolio_context)
 
         # Warnings
@@ -600,8 +622,8 @@ def score_contract(
             decision.warnings.append(f"Wide bid/ask spread ({spread_pct:.0f}%)")
         if open_interest < profile.get("ideal_open_interest", 500):
             decision.warnings.append("Below ideal open interest")
-        if avg_cost > 0 and strike < avg_cost:
-            decision.warnings.append("Strike below stock cost basis")
+        if decision.covered_call_intent == "repair":
+            decision.warnings.append("Assignment would realize a loss against adjusted basis")
         if iv_status_str == "extreme_low":
             decision.warnings.append(f"IV extremely low ({decision.iv_rank:.0f}%) - poor risk/reward")
         elif iv_status_str == "low":
@@ -885,7 +907,7 @@ def _apply_growth_scoring(
     if option_type == "CALL":
         shares_owned = float(portfolio_context.get("positions", {}).get(ticker, {}).get("position", 0) or 0)
         avg_cost = float(portfolio_context.get("positions", {}).get(ticker, {}).get("avg_cost", 0) or 0)
-        decision.covered_call_intent = classify_covered_call_intent(
+        style_intent = classify_covered_call_intent(
             strike=strike,
             stock_price=stock_price,
             premium_per_contract=premium_per_contract,
@@ -894,9 +916,9 @@ def _apply_growth_scoring(
             avg_cost=avg_cost,
         )
 
-        if decision.covered_call_intent == "upside-capping risk" and annualized_return_raw < 12:
+        if style_intent == "upside-capping risk" and annualized_return_raw < 12:
             decision.warnings.append("Low-premium CC caps upside without meaningful growth acceleration")
-        elif decision.covered_call_intent == "income" and annualized_return_raw < 6:
+        elif style_intent == "income" and annualized_return_raw < 6:
             decision.warnings.append("Low premium relative to growth target")
 
     rationale_parts = []

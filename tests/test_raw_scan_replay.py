@@ -294,7 +294,7 @@ def test_settings_preset_flows_through_scan_snapshot_and_copy(preset_key, expect
     candidates = result["watchlist_csps"]["signals"]
     assert {candidate["ticker"] for candidate in candidates} == expected_tickers
     assert result["preset"]["key"] == preset_key
-    assert result["preset"]["version"] == 7
+    assert result["preset"]["version"] == 9
 
     preset = get_preset(preset_key)
     used_profile = engine._watchlist_provider.screening_profiles[0]
@@ -306,7 +306,7 @@ def test_settings_preset_flows_through_scan_snapshot_and_copy(preset_key, expect
 
     view = _snapshot_view(result, scenario)
     assert view["run"]["preset_key"] == preset_key
-    assert view["preset"]["version"] == 7
+    assert view["preset"]["version"] == 9
     assert view["preset"]["screener_profile"] == preset.to_screener_profile()
     assert view["preset"]["screener_profile"]["csp_min_dte"] == preset.csp_min_dte
     assert view["preset"]["screener_profile"]["max_account_exposure_pct_per_underlying"] == 25.0
@@ -331,7 +331,7 @@ def test_persisted_aggressive_preset_is_hydrated_by_options_service_before_scan(
     assert result["preset"]["key"] == "aggressive"
     view = _snapshot_view(result, scenario)
     assert view["run"]["preset_key"] == "aggressive"
-    assert view["preset"]["version"] == 7
+    assert view["preset"]["version"] == 9
     assert view["preset"]["screener_profile"] == get_preset("aggressive").to_screener_profile()
     aggressive_candidate = next(item for item in candidates if item["ticker"] == "AGGRESSIVE")
     assert _copy_check(view, aggressive_candidate, scenario)["mode"] == "live"

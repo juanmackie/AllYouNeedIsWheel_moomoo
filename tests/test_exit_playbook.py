@@ -5,6 +5,7 @@ import unittest
 from core.exit_playbook import (
     VERDICT_CLOSE,
     VERDICT_HOLD,
+    VERDICT_LET_ASSIGN,
     VERDICT_ROLL,
     VERDICT_ROTATE,
     VERDICT_TAKE_PROFIT,
@@ -189,6 +190,32 @@ class TestEvaluateExit(unittest.TestCase):
             option_type="PUT", dte=35, delta=-0.20, otm_pct=8.0, captured_profit_pct=30.0, thresholds=t
         )
         self.assertEqual(verdict.verdict, VERDICT_TAKE_PROFIT)
+
+    def test_profitable_assignment_changes_close_to_let_assign(self):
+        verdict = evaluate_exit(
+            option_type="CALL", dte=20, delta=0.8, otm_pct=-16, assignment_pnl=250.0, assignment_strike=100
+        )
+        self.assertEqual(verdict.verdict, VERDICT_LET_ASSIGN)
+        self.assertIn("+$250.00", verdict.reasons[0])
+
+    def test_threatened_repair_rolls_with_target_or_closes_without_one(self):
+        target = {"ticker": "AAA", "option_type": "CALL", "strike": 105, "expiration": "20261218"}
+        verdict = evaluate_exit(
+            option_type="CALL",
+            dte=8,
+            delta=0.45,
+            otm_pct=-1,
+            assignment_pnl=-500,
+            covered_call_intent="repair",
+            roll_target=target,
+        )
+        self.assertEqual(verdict.verdict, VERDICT_ROLL)
+        self.assertIs(verdict.roll_target, target)
+        verdict = evaluate_exit(
+            option_type="CALL", dte=8, delta=0.45, otm_pct=-1, assignment_pnl=-500, covered_call_intent="repair"
+        )
+        self.assertEqual(verdict.verdict, VERDICT_CLOSE)
+        self.assertIn("repair_call_threatened", verdict.reason_codes)
 
 
 class TestCapturedProfitPct(unittest.TestCase):

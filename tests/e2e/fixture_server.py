@@ -238,6 +238,36 @@ def _engine_result(preset_key, overrides=None):
     ]
     ts = _fresh_ts()
     quote_fetched_at = {t: ts for t in tickers}
+    csp = next(signal for signal in signals if signal["option_type"] == "PUT")
+    next_actions = [
+        {
+            "action_id": f"cash:{csp['ticker']}",
+            "rank": 1,
+            "urgency": "routine",
+            "underlying": "CASH",
+            "wheel_state": "CASH",
+            "verdict": "DEPLOY_CASH",
+            "reason_codes": [],
+            "reasons": ["Allocate free broker cash in rank order."],
+            "ticket": {
+                "kind": "open",
+                "lane": "csp_picks",
+                "net_credit": 125.0,
+                "legs": [
+                    {
+                        "ticker": csp["ticker"],
+                        "side": "SELL",
+                        "option_type": "PUT",
+                        "strike": csp["strike"],
+                        "expiration": csp["expiration"],
+                        "quantity": 1,
+                        "executable_price": csp["bid_premium_per_contract"],
+                        "limit_target": csp["limit_target_per_contract"],
+                    }
+                ],
+            },
+        }
+    ]
     return {
         "generated_at": ts,
         "state": overrides.get("state", "planning"),
@@ -257,6 +287,10 @@ def _engine_result(preset_key, overrides=None):
         "cash_available_for_csp": 78500.0,
         "broker_buying_power": 74000.0,
         "cash_reserved_for_csp": 0.0,
+        "campaigns": [],
+        "roll_candidates": [],
+        "deployment_plan": {"lines": []},
+        "next_actions": next_actions,
     }
 
 
@@ -583,6 +617,10 @@ def _seed_run(db, scene, preset_key="balanced"):
         cash_available_for_csp=result["cash_available_for_csp"],
         broker_buying_power=result["broker_buying_power"],
         cash_reserved_for_csp=result["cash_reserved_for_csp"],
+        campaigns=tuple(result["campaigns"]),
+        roll_candidates=tuple(result["roll_candidates"]),
+        deployment_plan=result["deployment_plan"],
+        next_actions=tuple(result["next_actions"]),
     )
     db.save_run_snapshot(snapshot)
     db.save_refresh_attempt(

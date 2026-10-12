@@ -30,10 +30,10 @@
 - `dashboard/top-recommendations.js` shows every copy block as visible text in `.copy-status` below the copy button: the read-time review-only reason on cards, and every copy-time block on cards and lane rows. A `title` tooltip alone is not sufficient. Text is set with `textContent`.
 - Preset labels distinguish current settings from the published snapshot's strategy during pending or failed refreshes. `preset-selector.js` updates the current label after settings changes. The CSP cash header renders missing cash, collateral, and buying power as unavailable and preserves measured zero.
 - `run-strip.js` must not refetch active preset settings; `preset-selector.js` is the sole owner of the current-preset label so a delayed run poll cannot overwrite a newer selection.
-- Position-monitor roll tickets remain review-only until a current-run copy revalidation contract exists. Keep the exit verdict and any screened target visible, but disable clipboard actions and show the reason. Label progress bars for assistive technology.
+- Position-monitor tickets use the matching current-run action and shared `ticket.js`. Enable only with server live/staged eligibility, then validate every leg before clipboard writing. Unmatched actions remain review-only with visible reasons. Label progress bars for assistive technology.
 - `dashboard/run-notifier.js` feeds both status and communication warnings from its single shared poll; warning rendering must not trigger another scan or an extra status request.
 - `dashboard/dashboard-init.js` starts recommendations, the operational strip, and the shared run-state poll before awaiting account, cash, or position diagnostics; a run published during startup refreshes the shortlist immediately while secondary panel reloads are coalesced until those initial reads finish.
-- Outcome panel reads `/api/options/analytics/outcomes` (local SQLite, no OpenD gate) and renders it through `escapeHtml`; the only broker action is the explicit `Pull broker fills` button (query-only `POST /api/options/analytics/outcomes/ingest`).
+- Outcome panel reads `/api/options/analytics/outcomes` (local SQLite, no OpenD gate) and renders it through `escapeHtml`; manual broker ingestion uses the explicit `Pull broker fills` button (query-only `POST /api/options/analytics/outcomes/ingest`).
 - Supporting outcome fills expand through a named native button with `aria-expanded`; table rows retain table semantics. Rows without fills have no disclosure control.
 - Empty states for signal panels should surface the dominant blockers or scan diagnostics when the payload provides them.
 - CSP cash-fit warnings are display-only: every underlying is assessed, unaffordable picks are review-only, and quota warnings refer to the contract-discovery budget rather than quote freshness.
@@ -46,3 +46,5 @@
 - Route alert/banner tone and visibility through `utils/status-alert.js` (`setAlertState`, `setTextIfChanged`); never assign banner `className` directly and never use `data-bs-dismiss` for dismiss.
 - Keep DOM selectors stable when tests depend on them.
 - Avoid large cross-feature files; place behavior near the feature folder that owns it.
+
+- `next-actions.js` renders from the single run-strip poll sink with textContent. Shared `ticket.js` owns eligibility, fingerprints, taken state, ticket formatting, and copying for all panels. Cash plans revalidate every line; close/roll copies use fresh ask/bid and explicit manual-only wording.

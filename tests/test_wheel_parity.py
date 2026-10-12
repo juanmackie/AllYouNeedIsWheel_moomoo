@@ -217,7 +217,7 @@ class TestHardGatesParity(unittest.TestCase):
     def test_low_liquidity_blocks(self):
         decision = score_contract(
             "AAPL",
-            _option(open_interest=1, volume=0),
+            _option(open_interest=1, volume=1_000_000),
             150.0,
             {**_profile(), **{"min_open_interest": 10}},
             _portfolio(),
@@ -257,8 +257,8 @@ class TestPresetParity(unittest.TestCase):
     def test_balanced_default_and_versions(self):
         preset = get_preset(None)
         self.assertEqual(preset.key, "balanced")
-        # Version 7: preset delta bands and per-underlying exposure are versioned.
-        self.assertEqual(preset.version, 7)
+        # Version 9 includes liquidity, cash-plan, repair, and exit thresholds.
+        self.assertEqual(preset.version, 9)
         self.assertTrue(preset.to_screener_profile()["require_cash_fit"])
 
 

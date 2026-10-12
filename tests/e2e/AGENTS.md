@@ -26,6 +26,8 @@
 - `preset-and-refresh.spec.js` verifies failure, quota, API outage, and rejected-refresh warnings remain visible above retained results and clear on recovery, including a narrow viewport. `fixture_server.py` supplies persisted test-only run scenes (`quota_partial` retains a covered call with incomplete coverage); production data paths stay unmodified.
 - The same journey holds `/api/portfolio` open to verify saved cards, run status, and a manually usable refresh control load independently; page startup never starts a scan.
 
+- The evening journey verifies the cash action and clipboard output only after direct broker revalidation; preset journeys assert the active v9 contract. Disconnect recovery allows both broker-status poll cycles within its 60-second timeout.
+
 ## Verification
 
 - Run `npm run test:e2e` (Playwright, chromium; app must be running on 127.0.0.1:8000 — set `E2E_BASE_URL` to override).

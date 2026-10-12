@@ -2,6 +2,7 @@
 Database module for SQLite logging of trades
 """
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -30,7 +31,6 @@ DEFAULT_RETENTION_DAYS = {
     "refresh_attempts": ("created_at", 365),
     "portfolio_snapshots": ("captured_at", 365),
     "trade_events": ("timestamp", 365),
-    "option_fills": ("captured_at", 365),
     "account_cash_flows": ("clearing_date", 365),
     "scan_ledger": ("timestamp", 365),
     # IV rank/percentile read a 1-year window. The previous 45-day cap made that
@@ -122,6 +122,51 @@ class OptionsDatabase:
                 (key, value),
             )
             conn.commit()
+
+    @staticmethod
+    def _history_coverage_key(env, account_id):
+        identity = f"{str(env or '')}\0{str(account_id or '')}".encode("utf-8")
+        return f"broker_history:{hashlib.sha256(identity).hexdigest()[:20]}:coverage"
+
+    def get_history_fill_coverage(self, env, account_id):
+        """Return this broker identity's fill-pull state without exposing its ID in keys."""
+        raw = self.get_setting(self._history_coverage_key(env, account_id), "")
+        if not raw:
+            return {}
+        try:
+            result = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return result if isinstance(result, dict) else {}
+
+    def set_history_fill_coverage(self, env, account_id, state):
+        """Persist a sanitized fill-pull state for one opaque broker identity."""
+        payload = {
+            key: state[key]
+            for key in ("status", "last_attempt_at", "last_success_at", "first_covered_date", "reason")
+            if isinstance(state, dict) and key in state
+        }
+        self.set_setting(self._history_coverage_key(env, account_id), json.dumps(payload, sort_keys=True))
+
+    def get_history_capability(self, env, account_id):
+        """Return measured broker-history capability for one account identity."""
+        key = self._history_coverage_key(env, account_id).replace(":coverage", ":capability")
+        raw = self.get_setting(key, "")
+        try:
+            result = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            return {}
+        return result if isinstance(result, dict) else {}
+
+    def set_history_capability(self, env, account_id, capability):
+        """Store aggregate-only gate evidence; raw fills and identifiers are excluded."""
+        key = self._history_coverage_key(env, account_id).replace(":coverage", ":capability")
+        payload = {
+            field: capability[field]
+            for field in ("measured", "expired_worthless_supported", "assignment_pair_supported", "measured_at")
+            if isinstance(capability, dict) and field in capability
+        }
+        self.set_setting(key, json.dumps(payload, sort_keys=True))
 
     # --- App-managed watchlist symbols (SQLite) ---
 

@@ -263,7 +263,12 @@ class OptionsDataService:
         hard_blockers = getattr(decision, "hard_blockers", []) or []
         raw_blocked_codes = getattr(decision, "blocked_reason_codes", []) or []
         blocked_codes = set(raw_blocked_codes) if isinstance(raw_blocked_codes, (list, tuple, set)) else set()
-        below_basis_only = bool(hard_blockers) and blocked_codes == {"below_cost_basis"}
+        below_basis_only = bool(hard_blockers) and blocked_codes <= {
+            "below_cost_basis",
+            "repair_delta_too_high",
+            "repair_earnings_before_expiry",
+            "repair_earnings_unknown",
+        }
         if decision and hard_blockers and not (include_below_basis_for_recovery and below_basis_only):
             logger.debug(
                 "Filtered %s %s %s %s due to hard blockers: %s",
@@ -582,6 +587,7 @@ class OptionsDataService:
                 portfolio_context,
                 option_type,
                 include_recovery_calls=include_recovery_calls,
+                screening_profile=screening_profile,
             )
             result.update(formatted_data)
         except Exception as exc:
@@ -599,6 +605,7 @@ class OptionsDataService:
         portfolio_context,
         option_type=None,
         include_recovery_calls=False,
+        screening_profile=None,
     ):
         try:
             result = {
@@ -630,9 +637,13 @@ class OptionsDataService:
                 if option_type and option_type != side:
                     continue
 
-                profile = self._screening_profile_provider.get_screening_profile(
-                    side,
-                    growth_mode_config=self._get_config().get("growth_mode", {}),
+                profile = (
+                    dict(screening_profile)
+                    if screening_profile is not None
+                    else self._screening_profile_provider.get_screening_profile(
+                        side,
+                        growth_mode_config=self._get_config().get("growth_mode", {}),
+                    )
                 )
                 candidates = []
                 recovery_candidates = []
@@ -661,6 +672,11 @@ class OptionsDataService:
                                 continue
                         candidates.append(candidate)
 
+                income = [
+                    c for c in candidates if (c.get("wheel_decision") or {}).get("covered_call_intent") != "repair"
+                ]
+                if side == "CALL" and income:
+                    candidates = income
                 result["calls" if side == "CALL" else "puts"] = rank_candidates(candidates)[:5]
                 if include_recovery_calls and side == "CALL":
                     result["recovery_calls"] = recovery_candidates

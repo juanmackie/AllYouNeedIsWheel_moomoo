@@ -268,7 +268,7 @@ class TestOptionsDataServiceCandidateFiltering(unittest.TestCase):
         analysis_candidate = getattr(service, "_build_candidate")(**recovery_args)
 
         self.assertIsNotNone(analysis_candidate)
-        self.assertIn("below_cost_basis", analysis_candidate["blocked_reason_codes"])
+        self.assertIn("repair_earnings_before_expiry", analysis_candidate["blocked_reason_codes"])
         self.assertFalse(analysis_candidate["copy_eligible"])
         self.assertEqual(analysis_candidate["if_called_pnl_vs_basis"], -300.0)
 

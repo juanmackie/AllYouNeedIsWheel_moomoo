@@ -64,17 +64,27 @@ class TestScoreRegression(unittest.TestCase):
         warning_text = " ".join(result.warnings)
         self.assertNotIn("cost basis", warning_text.lower())
 
-    def test_cc_below_cost_basis_is_hard_blocked(self):
-        """CC below the conservative broker-cost floor cannot be copied."""
+    def test_cc_below_cost_basis_is_repair_and_fails_closed_without_earnings(self):
+        """Repair calls remain visible but unknown earnings blocks actionability."""
         option, profile, portfolio, expected = get_cc_below_cost_basis()
         stock_price = 150.0
         result = score_contract(
             "AAPL", option, stock_price, profile, portfolio, iv_status_str="extreme_low", iv_rank=0.15
         )
         self.assertIsNotNone(result)
-        self.assertIn("below_cost_basis", result.blocked_reason_codes)
+        self.assertIn("repair_delta_too_high", result.blocked_reason_codes)
+        self.assertIn("repair_earnings_before_expiry", result.blocked_reason_codes)
+        self.assertEqual(result.covered_call_intent, "repair")
         self.assertFalse(result.copy_eligible)
         self.assertEqual(result.broker_cost_basis, 170.0)
+
+    def test_repair_call_passes_with_low_delta_and_known_post_expiry_earnings(self):
+        option, profile, portfolio, _ = get_cc_below_cost_basis()
+        option["delta"] = 0.18
+        result = score_contract("AAPL", option, 155.0, profile, portfolio, earnings_info={"days_to_earnings": 40})
+        self.assertFalse(result.hard_blockers)
+        self.assertEqual(result.covered_call_intent, "repair")
+        self.assertEqual(result.loss_if_called, 650.0)
 
     # -- Cash-Secured Put scenarios -----------------------
 

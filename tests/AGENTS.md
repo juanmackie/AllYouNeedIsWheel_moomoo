@@ -47,3 +47,5 @@
 - `frontend/AGENTS.md` - Vitest browser-module tests.
 - `e2e/AGENTS.md` - Browser smoke tests.
 - `fixtures/AGENTS.md` - Shared deterministic scenarios.
+
+- Wheel-desk verification covers pure action order, allocation reserves/caps, basis confidence and reconciliation, repair earnings/delta gates, LET_ASSIGN, immutable schema-3 defaults, all-leg copy checks, and staged manual tickets without execution controls. G1 live measurements remain separate from synthetic tests.

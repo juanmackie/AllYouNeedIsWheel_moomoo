@@ -21,6 +21,9 @@ DEFAULT_CONNECTION_CONFIG = {
     "auto_launch_opend": False,
     "opend_path": "",
     "cash_reserve_enabled": True,
+    # Leveraged ETFs share a combined cash-plan exposure cap. Owners may
+    # override this list in connection.json as the leveraged wheel universe changes.
+    "leveraged_etf_tickers": ["SOXL", "SOXS", "MSTU", "TSLL", "CONL", "ETHU"],
     "watchlist_mode": "static",  # 'static' or 'moomoo' (dynamic/hybrid screening removed 2026-08)
     "moomoo_watchlist_group": "My Watchlist",
     "broker_cache_after_hours": True,  # use cached broker data outside US market hours

@@ -81,7 +81,7 @@ ordering contract above is unchanged.
 Preset delta qualification uses `abs(delta)` for puts and calls and accepts the
 inclusive interval `[max(0, target_delta - delta_tolerance),
 min(1, target_delta + delta_tolerance)]`. Candidates outside it receive the
-`outside_delta_band` blocker. All immutable preset versions are v7; the delta
+`outside_delta_band` blocker. The active immutable presets are v9; the delta
 band and per-underlying exposure-cap changes were versioned rather than silently
 changing v5/v6 behavior.
 
@@ -98,9 +98,8 @@ descending executable return on deployed capital per day
 → option type
 ```
 
-Quality and event tiers are carried as display-only risk information (visible
-labels/warnings on the surfaced signal); they never gate or reorder the
-shortlist. Delta controls eligibility only and does not rank qualifying signals.
+Quality and event tiers remain display-only labels and never reorder the
+shortlist. The explicit repair-call policy independently gates earnings risk. Delta controls eligibility only and does not rank qualifying signals.
 The midpoint and composite score are never part of the sort key.
 
 The existing underlying-diversity safeguard is applied after this ordering,
@@ -122,8 +121,9 @@ After hard gates it orders purely by capital return:
 3. canonical ticker, then expiration, then strike, then option type
 ```
 
-Quality/event tiers are display-only risk information and never gate or
-influence ordering. The midpoint and composite score are intentionally absent
+Quality/event tier labels do not gate or influence ordering. Repair calls
+independently require known earnings strictly after expiry or broker ETF/index
+classification. The midpoint and composite score are intentionally absent
 from the key: they may qualify or explain a candidate, never break a velocity
 tie. Review item S03 is RESOLVED on both halves: the ranking decision (owner
 decision: capital return primary, as implemented in `rank_key`) and the
@@ -166,8 +166,8 @@ open market.
 
 Each allowed ticket surfaces event risk (`earnings_before_expiry`, unknown
 event) as a warning in both the dashboard card and clipboard text — never
-silently dropped. The same display-only warning applies to all presets;
-earnings overlap does not hard-block CSPs or affect shortlist ordering.
+silently dropped. Earnings overlap does not hard-block CSPs or income calls
+or affect shortlist ordering. Repair calls must pass their separate earnings gate.
 
 ## Capital-aware sizing on every pick
 
@@ -379,3 +379,52 @@ Aged snapshots remain visible for diagnosis but cannot copy.
 This methodology does not claim positive expectancy. The scan ledger records
 versioned inputs, tiers, bid basis, blockers, and top-signal evidence for
 observability only.
+
+## Wheel desk policy (2026-10-11)
+
+Preset v9 combines the v8 liquidity/cash/exit changes and v9 repair policy.
+
+| Value | Conservative | Balanced | Aggressive |
+|---|---:|---:|---:|
+| Maximum spread (%) | 15 | 20 | 25 |
+| Minimum open interest | 100 | 75 | 50 |
+| Roll window (DTE) | 21 | 10 | 5 |
+
+Open interest is an independent hard floor. Volume is a quality warning;
+`min_volume` is removed. All presets retain one cash-plan strike per ticker,
+35% of free CSP cash per ticker, a 35% combined leveraged-ETF cap, and a 10%
+reserve. The configured leveraged list starts SOXL, SOXS, MSTU, TSLL, CONL,
+ETHU. Existing 25% account-exposure safety caps still constrain every CSP.
+The sole allocator consumes published `csp_picks` in rank order, skips shares
+below effective basis, and reports quantities, credit, capital-weighted daily
+return, cash left, and named skips.
+
+Covered-call economics use `(strike - effective_basis + bid) * 100`. A
+nonnegative result is an income call/no-loss exit. Otherwise it is a repair
+call: delta <= 0.20 and known earnings strictly after expiry (broker ETF/index
+exempt). A qualifying income call suppresses repairs for that holding; rank_key
+within the eligible class is unchanged. Repair loss-if-called is explicit.
+Threatened repairs (ITM, delta >= 0.40, or <=3 DTE within 2% of strike) get a
+screened net-credit up/out ROLL, otherwise CLOSE. Profitable exit calls get
+LET_ASSIGN in cases that would otherwise CLOSE. A covered-call TAKE_PROFIT
+without a different qualifying follow-up is HOLD with a named reason.
+
+Effective basis preserves broker avg_cost. Reconciled, account-scoped closed
+option premium may reduce it only with current-refresh ingestion, known fees,
+reconciled open shorts/stock lots, and measured history capability. G1 expiry
+behavior remains unmeasured; automatic pulls and inferred worthless expiries
+are disabled, so production uses broker average cost with reasons. See
+`docs/broker-history-capability.md`. Profit progress is actual premium captured;
+unknown entry/mark is unavailable.
+
+| Ticket kind | Copy-time evidence |
+|---|---|
+| open | Current run + qualified retained opening candidate; session/coverage gates; staged direct broker recheck; repair calls recheck delta, basis, and free shares |
+| close | Current run + exact current broker short quantity + fresh direct broker bid/ask |
+| roll | Close checks + qualified later-expiry target + call strike not lower + nonnegative fresh net credit (known fees deducted) |
+
+All tickets remain manual text. Incomplete coverage, unknown session, stale
+open-session broker timestamps, changed positions, and missing direct evidence
+block copying. Closed-session 300-second age does not invalidate a roll target;
+copy-time confirmation remains mandatory. Replacement-only contracts cannot be
+copied as standalone opening tickets.

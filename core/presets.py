@@ -40,7 +40,6 @@ class WheelPreset:
     max_spread_pct: float
     min_premium_per_contract: float
     min_open_interest: int
-    min_volume: int
     ideal_open_interest: int
     ideal_volume: int
     ideal_spread_pct: float
@@ -48,6 +47,15 @@ class WheelPreset:
     # Sizing caps (%): per CSP buying power and account capital per underlying.
     max_buying_power_pct_per_csp: float
     max_account_exposure_pct_per_underlying: float
+    repair_call_max_delta: float
+    repair_defend_delta: float
+    repair_defend_dte: int
+    repair_defend_otm_pct: float
+    roll_dte: int
+    plan_max_strikes_per_underlying: int
+    plan_max_cash_pct_per_underlying: float
+    plan_group_cap_pct: float
+    plan_cash_reserve_pct: float
     # Long-horizon growth objective this preset is tuned for (e.g., 10x capital).
     target_account_multiple: float
 
@@ -59,7 +67,7 @@ class WheelPreset:
 
         This is the ONLY screening-profile source: it carries neutral reader
         keys (``target_delta``, ``delta_tolerance``, ``default_otm_pct``,
-        ``ideal_*``, ``min_volume``, ``max_expirations``) as well as the
+        ``ideal_*`` and ``max_expirations``) as well as the
         side-specific ``csp_*`` / ``call_*`` originals, so a reader that
         subscripts a key can never hit a missing-key path.
         """
@@ -80,13 +88,21 @@ class WheelPreset:
             "max_spread_pct": self.max_spread_pct,
             "min_premium_per_contract": self.min_premium_per_contract,
             "min_open_interest": self.min_open_interest,
-            "min_volume": self.min_volume,
             "ideal_open_interest": self.ideal_open_interest,
             "ideal_volume": self.ideal_volume,
             "ideal_spread_pct": self.ideal_spread_pct,
             "max_expirations": self.max_expirations,
             "max_buying_power_pct_per_csp": self.max_buying_power_pct_per_csp,
             "max_account_exposure_pct_per_underlying": self.max_account_exposure_pct_per_underlying,
+            "repair_call_max_delta": self.repair_call_max_delta,
+            "repair_defend_delta": self.repair_defend_delta,
+            "repair_defend_dte": self.repair_defend_dte,
+            "repair_defend_otm_pct": self.repair_defend_otm_pct,
+            "roll_dte": self.roll_dte,
+            "plan_max_strikes_per_underlying": self.plan_max_strikes_per_underlying,
+            "plan_max_cash_pct_per_underlying": self.plan_max_cash_pct_per_underlying,
+            "plan_group_cap_pct": self.plan_group_cap_pct,
+            "plan_cash_reserve_pct": self.plan_cash_reserve_pct,
             "target_account_multiple": self.target_account_multiple,
             "max_watchlist_tickers": 25,
             "require_cash_fit": True,
@@ -101,7 +117,7 @@ class WheelPreset:
 WHEEL_PRESETS: dict[str, WheelPreset] = {
     "conservative": WheelPreset(
         key="conservative",
-        version=7,
+        version=9,
         label="Conservative",
         description="Stricter liquidity, smaller allocations, farther OTM strikes.",
         target_account_multiple=5.0,
@@ -117,20 +133,28 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         call_delta_tolerance=0.18,
         min_csp_buying_power=7500.0,
         min_mid_price=0.10,
-        max_spread_pct=45.0,
+        max_spread_pct=15.0,
         min_premium_per_contract=15.0,
-        min_open_interest=25,
-        min_volume=1,
+        min_open_interest=100,
         ideal_open_interest=500,
         ideal_volume=100,
         ideal_spread_pct=12.0,
         max_expirations=2,
         max_buying_power_pct_per_csp=50.0,
         max_account_exposure_pct_per_underlying=25.0,
+        repair_call_max_delta=0.20,
+        repair_defend_delta=0.40,
+        repair_defend_dte=3,
+        repair_defend_otm_pct=2.0,
+        roll_dte=21,
+        plan_max_strikes_per_underlying=1,
+        plan_max_cash_pct_per_underlying=35.0,
+        plan_group_cap_pct=35.0,
+        plan_cash_reserve_pct=10.0,
     ),
     "balanced": WheelPreset(
         key="balanced",
-        version=7,
+        version=9,
         label="Balanced",
         description="Moderate DTE/delta/liquidity and position-size limits (default).",
         target_account_multiple=5.0,
@@ -146,20 +170,28 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         call_delta_tolerance=0.18,
         min_csp_buying_power=5000.0,
         min_mid_price=0.05,
-        max_spread_pct=60.0,
+        max_spread_pct=20.0,
         min_premium_per_contract=10.0,
-        min_open_interest=10,
-        min_volume=1,
+        min_open_interest=75,
         ideal_open_interest=500,
         ideal_volume=100,
         ideal_spread_pct=12.0,
         max_expirations=2,
         max_buying_power_pct_per_csp=80.0,
         max_account_exposure_pct_per_underlying=25.0,
+        repair_call_max_delta=0.20,
+        repair_defend_delta=0.40,
+        repair_defend_dte=3,
+        repair_defend_otm_pct=2.0,
+        roll_dte=10,
+        plan_max_strikes_per_underlying=1,
+        plan_max_cash_pct_per_underlying=35.0,
+        plan_group_cap_pct=35.0,
+        plan_cash_reserve_pct=10.0,
     ),
     "aggressive": WheelPreset(
         key="aggressive",
-        version=7,
+        version=9,
         label="Aggressive",
         description="Shorter DTE, broader deltas, and larger allocations.",
         target_account_multiple=5.0,
@@ -175,16 +207,24 @@ WHEEL_PRESETS: dict[str, WheelPreset] = {
         call_delta_tolerance=0.18,
         min_csp_buying_power=3000.0,
         min_mid_price=0.03,
-        max_spread_pct=70.0,
+        max_spread_pct=25.0,
         min_premium_per_contract=5.0,
-        min_open_interest=5,
-        min_volume=1,
+        min_open_interest=50,
         ideal_open_interest=500,
         ideal_volume=100,
         ideal_spread_pct=12.0,
         max_expirations=2,
         max_buying_power_pct_per_csp=90.0,
         max_account_exposure_pct_per_underlying=25.0,
+        repair_call_max_delta=0.20,
+        repair_defend_delta=0.40,
+        repair_defend_dte=3,
+        repair_defend_otm_pct=2.0,
+        roll_dte=5,
+        plan_max_strikes_per_underlying=1,
+        plan_max_cash_pct_per_underlying=35.0,
+        plan_group_cap_pct=35.0,
+        plan_cash_reserve_pct=10.0,
     ),
 }
 

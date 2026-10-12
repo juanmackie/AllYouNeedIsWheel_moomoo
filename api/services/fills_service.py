@@ -16,7 +16,7 @@ This service owns OpenD/error handling; the attribution math lives in pure
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from core.connection_constants import _infer_security_type_from_code, _parse_option_code_metadata
 from core.ticker_utils import parse_moomoo_symbol
@@ -65,7 +65,7 @@ def normalize_deal_row(row, env: str, opaque_account: str):
     if security_type == "OPT":
         metadata = _parse_option_code_metadata(code)
         if not metadata:
-            logger.warning("Deal %s has undecodable option code %r; skipping", deal_id, code)
+            logger.warning("Skipping a deal with an undecodable option contract code")
             return None
         ticker = metadata["underlying"]
         option_type = metadata["option_type"]
@@ -113,66 +113,174 @@ class FillsService:
     def _identity(self):
         return self._connection.resolve_portfolio_identity()
 
-    def ingest_history_fills(self, days: int = 90) -> dict:
+    def ingest_history_fills(self, days: int | None = None) -> dict:
         """Ingest recent fills incrementally; idempotent per broker deal id.
 
         The 90-day cap is the SDK's history window; repeated ingestion is
         cheap because existing fill_ids are ignored on insert.
         """
+        now = datetime.now()
         try:
             env, opaque_account = self._identity()
         except Exception as exc:
-            return {"ok": False, "error": f"Account resolution failed: {exc}", "ingested": 0}
+            logger.warning("Fill ingestion skipped: account identity unavailable (%s)", type(exc).__name__)
+            return {"ok": False, "reason": "account_identity_unavailable", "ingested": 0}
 
-        start = (datetime.now() - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
-        ret_rows = self._connection.get_history_deals(start=start, end="")
+        coverage = self._db.get_history_fill_coverage(env, opaque_account)
+        last_success = coverage.get("last_success_at")
+        if days is None:
+            try:
+                days_since = max(0, (now.date() - date.fromisoformat(str(last_success)[:10])).days)
+            except (TypeError, ValueError):
+                days_since = 90
+            query_days = min(90, max(1, days_since + 2))
+        else:
+            query_days = min(90, max(1, int(days)))
+        start = (now - timedelta(days=query_days)).strftime("%Y-%m-%d")
+        attempt_at = now.isoformat(timespec="seconds")
+        self._db.set_history_fill_coverage(
+            env,
+            opaque_account,
+            {
+                "status": "in_progress",
+                "last_attempt_at": attempt_at,
+                "last_success_at": last_success,
+                "first_covered_date": coverage.get("first_covered_date") or start,
+                "reason": "",
+            },
+        )
+        try:
+            ret_rows = self._connection.get_history_deals(start=start, end="")
+        except Exception as exc:
+            self._record_failure(env, opaque_account, attempt_at, "history_query_failed", last_success, start)
+            logger.error("Fill ingestion aborted: history query raised %s", type(exc).__name__)
+            return {"ok": False, "reason": "history_query_failed", "ingested": 0}
         if ret_rows is None:
-            error = getattr(self._connection, "last_error", "") or "history deal query failed"
-            logger.error("Fill ingestion aborted: %s", error)
-            return {"ok": False, "error": error, "ingested": 0}
+            self._record_failure(env, opaque_account, attempt_at, "history_query_failed", last_success, start)
+            logger.error("Fill ingestion aborted: history query failed")
+            return {"ok": False, "reason": "history_query_failed", "ingested": 0}
 
         rows = []
         for raw in ret_rows:
             normalized = normalize_deal_row(raw, env, opaque_account)
             if normalized is not None:
                 rows.append(normalized)
-        inserted = self._db.save_fills(rows)
-        fees_updated = self._backfill_fees(env, opaque_account)
-        logger.info(
-            "Fill ingestion complete: %d deal row(s) seen, %d new, env=%s account=%s",
-            len(ret_rows),
-            inserted,
+        try:
+            inserted = self._db.save_fills(rows)
+            fees_updated, fees_ok = self._backfill_fees(env, opaque_account, start, rows)
+        except Exception as exc:
+            self._record_failure(env, opaque_account, attempt_at, "persistence_failed", last_success, start)
+            logger.error("Fill ingestion failed while persisting data (%s)", type(exc).__name__)
+            return {"ok": False, "reason": "persistence_failed", "ingested": 0}
+        if not fees_ok:
+            success_at = datetime.now().isoformat(timespec="seconds")
+            self._db.set_history_fill_coverage(
+                env,
+                opaque_account,
+                {
+                    "status": "success",
+                    "last_attempt_at": attempt_at,
+                    "last_success_at": success_at,
+                    "first_covered_date": coverage.get("first_covered_date") or start,
+                    "reason": "fee_query_incomplete",
+                },
+            )
+            return {
+                "ok": True,
+                "fees_complete": False,
+                "reason": "fee_query_failed",
+                "seen": len(ret_rows),
+                "ingested": inserted,
+                "fees_updated": fees_updated,
+                "query_days": query_days,
+                "covered_from": start,
+            }
+        success_at = datetime.now().isoformat(timespec="seconds")
+        first_covered = coverage.get("first_covered_date") or start
+        self._db.set_history_fill_coverage(
             env,
             opaque_account,
+            {
+                "status": "success",
+                "last_attempt_at": attempt_at,
+                "last_success_at": success_at,
+                "first_covered_date": first_covered,
+                "reason": "",
+            },
         )
-        return {"ok": True, "seen": len(ret_rows), "ingested": inserted, "fees_updated": fees_updated}
+        logger.info(
+            "Fill ingestion complete: %d deal row(s) seen, %d new",
+            len(ret_rows),
+            inserted,
+        )
+        return {
+            "ok": True,
+            "fees_complete": True,
+            "seen": len(ret_rows),
+            "ingested": inserted,
+            "fees_updated": fees_updated,
+            "query_days": query_days,
+            "covered_from": start,
+        }
 
-    def _backfill_fees(self, env: str, opaque_account: str) -> int:
+    def _record_failure(self, env, account_id, attempt_at, reason, last_success, start):
+        coverage = self._db.get_history_fill_coverage(env, account_id)
+        self._db.set_history_fill_coverage(
+            env,
+            account_id,
+            {
+                "status": "failed",
+                "last_attempt_at": attempt_at,
+                "last_success_at": last_success,
+                "first_covered_date": coverage.get("first_covered_date") or start,
+                "reason": reason,
+            },
+        )
+
+    def _backfill_fees(self, env: str, opaque_account: str, start: str, current_rows=None) -> tuple[int, bool]:
         """Resolve order-level fees and allocate them across each order's fills.
 
         Allocation rule (deterministic): an order's fee is distributed across
         its fills proportionally to gross fill value; when all fills in the
         order have zero value, it is split equally by count.
         """
-        missing = self._db.get_order_ids_missing_fees(env=env, account_id=opaque_account)
+        recent_fills = self._db.get_fills(
+            env=env,
+            account_id=opaque_account,
+            start=start,
+            limit=5000,
+        )
+        missing = sorted(
+            {
+                str(fill.get("order_id", ""))
+                for fill in [*(current_rows or []), *recent_fills]
+                if fill.get("order_id") and fill.get("fees") is None
+            }
+        )
+        if len(missing) > 40:
+            logger.warning("Fee backfill budget exceeded for this refresh")
+            return 0, False
         if not missing:
-            return 0
-        fee_rows = self._connection.get_order_fees(missing)
-        if fee_rows is None:
-            logger.warning("Fee backfill skipped: %s", getattr(self._connection, "last_error", ""))
-            return 0
-        fee_by_order = {str(row.get("order_id", "")): float(row.get("fee_amount", 0) or 0) for row in fee_rows}
-        if not fee_by_order:
-            return 0
-
+            return 0, True
         updated = 0
-        for order_id, fee_total in fee_by_order.items():
-            fills = self._db.get_fills(env=env, account_id=opaque_account, order_id=order_id)
-            if not fills:
-                continue
-            allocation = self._allocate_order_fee(fee_total, fills)
-            updated += self._db.update_fill_fees(allocation)
-        return updated
+        complete = True
+        for offset in range(0, len(missing), 20):
+            order_ids = missing[offset : offset + 20]
+            fee_rows = self._connection.get_order_fees(order_ids)
+            if fee_rows is None:
+                logger.warning("Fee backfill stopped after a broker fee-query failure")
+                return updated, False
+            fee_by_order = {str(row.get("order_id", "")): float(row.get("fee_amount", 0) or 0) for row in fee_rows}
+            for order_id in order_ids:
+                if order_id not in fee_by_order:
+                    logger.warning("Fee backfill incomplete: broker omitted one or more order fees")
+                    complete = False
+                    continue
+                fills = self._db.get_fills(env=env, account_id=opaque_account, order_id=order_id)
+                if fills:
+                    allocation = self._allocate_order_fee(fee_by_order[order_id], fills)
+                    updated += self._db.update_fill_fees(allocation)
+        return updated, complete
 
     @staticmethod
     def _allocate_order_fee(fee_total: float, fills: list) -> dict:

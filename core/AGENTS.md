@@ -14,6 +14,7 @@
 - Own OpenD connection lifecycle helpers and shared runtime utilities. `MoomooConnection` additionally exposes the read-only deal/fee/cash-flow queries (`get_history_deals`, `get_order_fees`, `get_cash_flow`, plus `resolve_portfolio_identity` for account-scoped persistence); these remain query-only members of `broker_protocol.QUERY_SDK_MEMBERS`.
 - Own the growth cockpit pure logic: `exit_playbook` (HOLD/TAKE_PROFIT/ROLL/CLOSE verdicts, including the 2x loss stop and ex-dividend early-assignment rule for ITM short calls; `captured_profit_pct_for_short` is signed — negative is a loss — because a zero floor makes a stop unreachable), `position_diff` + `portfolio_snapshot` (per-run snapshots and trade-event inference), `sizing` (exposure/concentration arithmetic), `growth_mode.growth_pace` (path-to-target math), and `monte_carlo` (Moomoo-snapshot-calibrated GBM NAV fan chart: daily collapse, irregular-gap MLE drift/vol, deterministic seed; fills corroboration is option-leg totals only). All are pure and broker-free.
 - Own pure broker-verified outcome attribution in `outcome_attribution.py`: combined per-recommendation net P&L (option premium P&L + underlying share P&L − fees), slippage/leakage, capital-days accounting, and the owner-efficiency summary (net P&L / capital-days, net dollars, open losses, drawdown). Missing cost basis ⇒ explicitly UNKNOWN (never fabricated); deposits/withdrawals never enter trading P&L; the capital-days denominator uses per-tranche arithmetic so partial closes and assignments cannot flatter results (rules documented in the module docstring).
+- `wheel_campaign.py` owns pure holdings basis math from broker positions and account-scoped fills. It preserves Moomoo `avg_cost`, excludes open-leg credits from realized basis, and requires reconciled shares, current successful fill evidence, known counted fees, reconciled open short options, and explicit measured capability evidence before using adjusted basis. G1 capability defaults off; never infer worthless expiry while it is unmeasured.
 
 ## Local Contracts
 
@@ -47,3 +48,7 @@
 ## Child DOX Index
 
 No child DOX files yet.
+
+- `action_plan.py` owns deterministic holding/free-lot/odd-lot/cash next actions with manual open/close/roll text tickets. Snapshot schema 3 preserves defaulted `campaigns`, `roll_candidates`, `deployment_plan`, and `next_actions` sections. `wheel_campaign.py` owns pure reconciled premium/basis math with a fail-closed capability gate.
+- The exit playbook supports LET_ASSIGN for profitable call assignment and defends threatened repair calls with a screened net-credit roll or close. Profit progress uses captured premium, never elapsed DTE. Preset v9 roll windows are 21/10/5 days.
+- `sizing.deployment_plan` is the sole combined allocator: published CSP lane, one strike per ticker, 35% ticker/group caps, 10% reserve, rank-order sizing, and named skips for underwater share holdings.

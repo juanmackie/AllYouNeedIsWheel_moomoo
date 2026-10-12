@@ -133,3 +133,22 @@ Startup and refresh responsiveness checks:
   wait budget. Missing or stale event context stays labelled; quote and coverage
   copy gates still apply. Repeat the refresh and confirm pending provider work
   is not duplicated.
+
+## Wheel desk smoke
+
+1. Run the query-only history probe and record G1 evidence in
+   `docs/broker-history-capability.md`; do not enable inferred expiry behavior
+   from synthetic fixtures or missing deal rows.
+2. Refresh with logged-in OpenD. Scan status/warnings stay first; Next actions
+   show each held short, free share lot, odd lot, and combined cash plan.
+3. Check v9 liquidity floors, one strike per ticker, 35% ticker/leveraged caps,
+   10% reserve, and named underwater-holding skips against broker cash.
+4. With the market closed, copy a staged close/roll and combined cash plan.
+   Confirm every leg is checked, close ask/open bid are fresh, changed quantities
+   and debit rolls block, and the ticket says to place manually in Moomoo.
+5. Compare repair delta/earnings/loss-if-called, no-loss assignment economics,
+   and campaign basis confidence/reasons with broker evidence. G1 pending means
+   Moomoo average cost; no adjusted-basis claim may appear.
+6. Verify HOLD/WAIT reasons, unknown measured win rate, invalid-NAV filtering,
+   outcome expiry/assignment labels, and persistent growth baseline. No order,
+   cancel, modify, or unlock control may appear.

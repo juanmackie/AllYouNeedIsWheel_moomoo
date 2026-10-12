@@ -39,7 +39,7 @@ def _load_fresh_roll_candidates():
         if not isinstance(view, dict):
             return []
         candidates = []
-        for lane in ("signals", "csp_picks", "cc_decisions"):
+        for lane in ("signals", "csp_picks", "cc_decisions", "roll_candidates"):
             candidates.extend(item for item in (view.get(lane) or []) if isinstance(item, dict))
         return candidates
     except Exception as exc:
@@ -66,9 +66,26 @@ def get_roll_pressure():
 
         ps = _get_portfolio_service()
         portfolio_context, _, _ = build_portfolio_context(option_positions, ps)
+        options = api.get_service("options")
+        helper = getattr(options, "portfolio_context_helper", None)
+        if helper is not None:
+            actual = helper.get_portfolio_context(refresh=True)
+            if isinstance(actual, dict):
+                portfolio_context = actual
+        profile = getattr(getattr(options, "recommendation_engine", None), "_preset_profile", {})
+        if isinstance(profile, dict):
+            portfolio_context.update(profile)
+            portfolio_context["exit_roll_dte"] = profile.get("roll_dte", 21)
         conn = ps._ensure_connection()
         iv_earnings_service = api.get_service("ivearnings")
         fresh_candidates = _load_fresh_roll_candidates()
+        from api.services.config import get_current_identity
+        from core.run_model import recompute_effective_snapshot
+
+        db = _get_db()
+        env, identity = get_current_identity()
+        action_view = recompute_effective_snapshot(db.get_latest_snapshot(env=env, account_id=identity)) if db else {}
+        action_view = action_view if isinstance(action_view, dict) else {}
 
         scored_positions = []
         for pos in option_positions:
@@ -81,6 +98,16 @@ def get_roll_pressure():
             raw_symbol = pos.get("symbol") or decision.ticker
             option_code = decision.ticker or raw_symbol
             underlying = earnings_underlying_ticker(raw_symbol or option_code)
+            action = next(
+                (
+                    a
+                    for a in action_view.get("next_actions") or []
+                    if a.get("underlying") == underlying
+                    and str((a.get("held_contract") or {}).get("expiration")) == str(decision.expiration)
+                    and _safe_float((a.get("held_contract") or {}).get("strike")) == decision.strike
+                ),
+                {},
+            )
 
             scored_positions.append(
                 {
@@ -107,11 +134,15 @@ def get_roll_pressure():
                     "otm_pct": decision.otm_pct,
                     "size_fit": decision.size_fit,
                     "expected_move_buffer": decision.expected_move_buffer,
-                    "exit_verdict": decision.exit_verdict,
-                    "exit_reasons": decision.exit_reasons,
+                    "exit_verdict": action.get("verdict", decision.exit_verdict),
+                    "exit_reasons": action.get("reasons", decision.exit_reasons),
                     "roll_target": decision.roll_target,
                     "warnings": decision.warnings,
                     "wheel_decision": decision.to_dict(),
+                    "run_id": (action_view.get("run") or {}).get("run_id"),
+                    "eligibility": action.get("eligibility")
+                    or {"mode": "review_only", "reasons": ["No matching current run action"]},
+                    "ticket": action.get("ticket"),
                 }
             )
 

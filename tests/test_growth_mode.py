@@ -19,6 +19,7 @@ from core.growth_mode import (
     compute_risk_budget_used,
     compute_stress_loss,
     estimate_target_gap,
+    growth_pace,
     should_block_for_data_quality,
 )
 from core.wheel_decision import score_contract
@@ -133,6 +134,29 @@ class TestRiskBudgetUsed(unittest.TestCase):
             max_drawdown_pct=0.40,
         )
         self.assertAlmostEqual(pct, 50.0, places=1)
+
+
+class TestGrowthPace(unittest.TestCase):
+    def test_nonpositive_and_nonfinite_nav_samples_are_excluded(self):
+        history = [
+            {"captured_at": "2026-01-01T00:00:00", "net_liquidation": 0},
+            {"captured_at": "2026-01-02T00:00:00", "net_liquidation": 1000},
+            {"captured_at": "2026-01-03T00:00:00", "net_liquidation": -1},
+            {"captured_at": "2026-01-04T00:00:00", "net_liquidation": 1200},
+        ]
+        pace = growth_pace(history, target_multiple=5)
+        self.assertEqual(pace["baseline_nav"], 1000)
+        self.assertEqual(pace["current_nav"], 1200)
+        self.assertEqual(pace["first_captured_at"], "2026-01-02T00:00:00")
+        self.assertEqual(pace["last_captured_at"], "2026-01-04T00:00:00")
+
+    def test_explicit_baseline_survives_shortened_history(self):
+        pace = growth_pace(
+            [{"captured_at": "2026-10-01T00:00:00", "net_liquidation": 1500}],
+            baseline={"net_liquidation": 1000, "captured_at": "2026-01-01T00:00:00"},
+        )
+        self.assertEqual(pace["baseline_nav"], 1000)
+        self.assertEqual(pace["target_nav"], 5000)
 
 
 class TestConfidenceScore(unittest.TestCase):
@@ -370,12 +394,12 @@ class TestGrowthModeScoringIntegration(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         # Low-premium CC near stock price on strong holding should be
-        # classified as "upside-capping risk" with low annualized return,
-        # triggering a hard blocker
+        # classified as an income call by if-called basis economics. The legacy
+        # growth-style classifier remains a display warning only.
         self.assertEqual(
             result.covered_call_intent,
-            "upside-capping risk",
-            f"Expected upside-capping risk, got: {result.covered_call_intent}",
+            "income",
+            f"Expected an income-class call, got: {result.covered_call_intent}",
         )
         self.assertFalse(
             result.hard_blockers, f"Expected low-premium CC to warn, not hard-block, got: {result.hard_blockers}"

@@ -397,16 +397,29 @@ def _register_services():
         options_service = get_service("options")
         iv_earnings = get_service("ivearnings")
 
+        def _refresh_campaign_evidence():
+            # G1 did not establish expired-worthless encoding or a bounded
+            # trade-query deadline. Do not make automatic SDK calls until
+            # that gate is measured; never reuse a previous manual pull as
+            # successful evidence belonging to this refresh.
+            result = {"ok": False, "reason": "broker_history_capability_unmeasured"}
+            helper = getattr(options_service, "portfolio_context_helper", None)
+            if helper is not None:
+                helper.set_campaign_refresh_evidence(result)
+            return result
+
         def _refresh_stale_event_context(portfolio_context) -> dict:
             """Best-effort, bounded refresh of stale earnings/ex-dividend context
             ahead of a broker scan. Composed in the api layer (the injected
             callable contract keeps core free of api imports)."""
+            from core.ticker_utils import earnings_underlying_ticker
+
             tickers = set()
             if isinstance(portfolio_context, dict):
                 for key in ("positions", "short_calls", "short_puts"):
                     slot = portfolio_context.get(key) or {}
                     if isinstance(slot, dict):
-                        tickers.update(k for k in slot.keys() if isinstance(k, str))
+                        tickers.update(earnings_underlying_ticker(k) for k in slot.keys() if isinstance(k, str))
             service = getattr(iv_earnings, "refresh_stale_event_context", None)
             if service is None:
                 return {"refreshed": 0, "errors": 0, "skipped": len(tickers)}
@@ -418,6 +431,7 @@ def _register_services():
             config=config,
             roll_diagnostics_provider=build_roll_decisions,
             event_context_refresher=_refresh_stale_event_context,
+            fills_ingest_provider=_refresh_campaign_evidence,
         )
 
     register_service("wheel_runner", _create_wheel_runner)

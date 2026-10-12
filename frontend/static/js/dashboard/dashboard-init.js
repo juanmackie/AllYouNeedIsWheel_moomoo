@@ -16,6 +16,7 @@ import { renderOutcomePanel } from './outcome-panel.js';
 import { renderWeeklyIncome } from './weekly-income.js';
 import { state as optionsTableState } from './options-table-state.js';
 import { initializeSectionNavigation } from './section-navigation.js';
+import { copyEligibility, copyTicket } from './ticket.js';
 
 let signalPanelsInitialized = false;
 let dashboardStartupInProgress = false;
@@ -374,17 +375,33 @@ function renderPositionRow(pos) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'btn btn-outline-secondary btn-sm copy-roll-btn';
-    button.disabled = true;
-    button.textContent = 'Review only';
-    const copyBlocker = targetLabel
-        ? 'Roll tickets have no current-run copy revalidation.'
-        : 'No fresh eligible roll target is available.';
-    button.title = copyBlocker;
-    button.setAttribute('aria-label', `Roll ticket unavailable. ${copyBlocker}`);
+    const action = {
+        underlying: pos.underlying || pos.symbol || pos.ticker,
+        eligibility: pos.eligibility,
+        ticket: pos.ticket,
+    };
+    const eligibility = copyEligibility(action);
+    const actionableKind = ['close', 'roll'].includes(String(pos.ticket?.kind || '').toLowerCase());
+    const canCopy = actionableKind && eligibility.canCopy && Boolean(pos.run_id);
+    button.disabled = !canCopy;
+    button.textContent = canCopy ? (eligibility.staged ? 'Stage ticket' : 'Copy ticket') : 'Review only';
+    const copyBlocker = !actionableKind
+        ? (targetLabel ? 'Roll tickets have no current-run copy revalidation.' : 'No fresh eligible roll target is available.')
+        : !pos.run_id ? 'No current run id is available for copy revalidation.'
+            : eligibility.reasons.join(' · ');
+    button.title = canCopy ? 'Manual close/roll ticket — revalidated against Moomoo before copy.' : copyBlocker;
+    button.setAttribute('aria-label', canCopy ? `${button.textContent} for ${action.underlying}` : `Roll ticket unavailable. ${copyBlocker}`);
+    if (canCopy) {
+        button.addEventListener('click', () => copyTicket(action, button, { runId: pos.run_id }));
+    }
     actionCell.appendChild(button);
     const copyReason = document.createElement('small');
-    copyReason.className = 'd-block text-muted mt-1 roll-copy-reason';
-    copyReason.textContent = copyBlocker;
+    copyReason.className = 'd-block text-muted mt-1 roll-copy-reason copy-status';
+    copyReason.setAttribute('role', 'status');
+    copyReason.dataset.signalsOnly = 'true';
+    copyReason.textContent = canCopy
+        ? `Ready for copy-time revalidation. Signal only — place manually in Moomoo`
+        : `Copy blocked: ${copyBlocker}. Signal only — place manually in Moomoo`;
     actionCell.appendChild(copyReason);
     row.appendChild(actionCell);
     return row;

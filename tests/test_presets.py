@@ -39,7 +39,7 @@ class TestPresetContract(unittest.TestCase):
 
     def test_exposure_cap_is_25_percent_in_new_immutable_preset_versions(self):
         for preset in WHEEL_PRESETS.values():
-            self.assertEqual(preset.version, 7)
+            self.assertEqual(preset.version, 9)
             self.assertEqual(preset.max_account_exposure_pct_per_underlying, 25.0)
             self.assertEqual(preset.to_screener_profile()["max_account_exposure_pct_per_underlying"], 25.0)
 
@@ -66,7 +66,15 @@ class TestPresetContract(unittest.TestCase):
             "max_spread_pct",
             "min_premium_per_contract",
             "min_open_interest",
-            "min_volume",
+            "repair_call_max_delta",
+            "repair_defend_delta",
+            "repair_defend_dte",
+            "repair_defend_otm_pct",
+            "roll_dte",
+            "plan_max_strikes_per_underlying",
+            "plan_max_cash_pct_per_underlying",
+            "plan_group_cap_pct",
+            "plan_cash_reserve_pct",
             "ideal_open_interest",
             "ideal_volume",
             "ideal_spread_pct",
@@ -82,6 +90,22 @@ class TestPresetContract(unittest.TestCase):
             self.assertIn(key, profile, f"missing {key}")
         self.assertTrue(profile["require_cash_fit"])
         self.assertEqual(profile["target_delta"], profile["csp_target_delta"])
+        self.assertNotIn("min_volume", profile)
+
+    def test_liquidity_floors_and_cash_plan_defaults(self):
+        expected = {
+            "conservative": (15.0, 100),
+            "balanced": (20.0, 75),
+            "aggressive": (25.0, 50),
+        }
+        for key, (spread, open_interest) in expected.items():
+            preset = get_preset(key)
+            self.assertEqual(preset.max_spread_pct, spread)
+            self.assertEqual(preset.min_open_interest, open_interest)
+            self.assertEqual(preset.plan_max_strikes_per_underlying, 1)
+            self.assertEqual(preset.plan_max_cash_pct_per_underlying, 35.0)
+            self.assertEqual(preset.plan_group_cap_pct, 35.0)
+            self.assertEqual(preset.plan_cash_reserve_pct, 10.0)
 
     def test_presets_do_not_weaken_safety_constraints(self):
         """No preset may disable cash-fit or drop the buying-power cap."""

@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from core.ticker_utils import earnings_underlying_ticker
 from core.utils import market_now, safe_float
 
 ACTIONABLE_STATES = ("ready",)
@@ -184,7 +185,7 @@ def _max_tradeable_age_sec(run: dict) -> int:
 # Candidate lanes that share the same read-time eligibility + copy surface as
 # the combined shortlist. ``roll_decisions`` is intentionally excluded: it is a
 # position-management panel, not a copy-addressable wheel candidate.
-CANDIDATE_LANES = ("signals", "csp_picks", "cc_decisions")
+CANDIDATE_LANES = ("signals", "csp_picks", "cc_decisions", "roll_candidates")
 
 
 def _candidate_quote_age_sec(candidate: dict, now_utc: datetime) -> float | None:
@@ -228,6 +229,15 @@ def _attach_candidate_capital_view(candidate: dict, now_utc: datetime) -> None:
             candidate["collateral"] = round(float(cash_required), 2) if cash_required not in (None, "") else None
         except (TypeError, ValueError):
             candidate["collateral"] = None
+
+
+def _ticket_contract_key(candidate):
+    return (
+        earnings_underlying_ticker(str(candidate.get("ticker") or "")).upper(),
+        str(candidate.get("expiration") or "").replace("-", ""),
+        safe_float(candidate.get("strike")),
+        str(candidate.get("option_type") or "").upper(),
+    )
 
 
 def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: datetime | None = None) -> dict:
@@ -275,6 +285,36 @@ def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: 
             )
             candidate["eligibility"] = {"mode": mode, "reasons": reasons}
             _attach_candidate_capital_view(candidate, now_utc)
+    candidates_by_contract = {}
+    for lane in CANDIDATE_LANES:
+        for candidate in view.get(lane) or []:
+            if isinstance(candidate, dict):
+                candidates_by_contract.setdefault(_ticket_contract_key(candidate), candidate)
+    for action in view.get("next_actions") or []:
+        legs = (action.get("ticket") or {}).get("legs") or []
+        modes, reasons = [], []
+        for leg in legs:
+            if leg.get("side") == "SELL":
+                candidate = candidates_by_contract.get(_ticket_contract_key(leg), {})
+                eligibility = candidate.get("eligibility") or {}
+                mode = eligibility.get("mode", MODE_REVIEW_ONLY)
+                why = eligibility.get("reasons", ["contract unavailable in current run"])
+            else:
+                has_quote = safe_float(leg.get("executable_price"), -1) > 0
+                mode, why = compute_signal_eligibility(
+                    {"copy_eligible": has_quote, "recommended_contracts": leg.get("quantity", 0)},
+                    session_state=session_state,
+                    coverage_truth=coverage_truth,
+                    quotes_fresh=fresh,
+                    coverage_reasons=coverage_reasons,
+                    session_reasons=session_reasons,
+                )
+            modes.append(mode)
+            reasons.extend(why)
+        mode = MODE_REVIEW_ONLY
+        if modes and MODE_REVIEW_ONLY not in modes:
+            mode = MODE_STAGED if MODE_STAGED in modes else MODE_LIVE
+        action["eligibility"] = {"mode": mode, "reasons": list(dict.fromkeys(reasons))}
     return view
 
 
@@ -329,7 +369,7 @@ class RunMetadata:
     max_tradeable_age_sec: int = 300
     coverage_scanned: int = 0
     coverage_total: int = 0
-    schema_version: int = 2
+    schema_version: int = 3
 
     @property
     def coverage_complete(self) -> bool:
@@ -363,6 +403,10 @@ class WheelRunSnapshot:
     broker_buying_power: Optional[float] = None
     cash_reserved_for_csp: Optional[float] = None
     preflight: dict = field(default_factory=dict)
+    campaigns: tuple[dict, ...] = ()
+    roll_candidates: tuple[dict, ...] = ()
+    deployment_plan: dict = field(default_factory=dict)
+    next_actions: tuple[dict, ...] = ()
 
     @property
     def tradeable(self) -> bool:
@@ -419,6 +463,10 @@ class WheelRunSnapshot:
             "broker_buying_power": self.broker_buying_power,
             "cash_reserved_for_csp": self.cash_reserved_for_csp,
             "preflight": dict(self.preflight or {}),
+            "campaigns": list(self.campaigns),
+            "roll_candidates": list(self.roll_candidates),
+            "deployment_plan": dict(self.deployment_plan or {}),
+            "next_actions": list(self.next_actions),
         }
 
 

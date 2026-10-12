@@ -15,6 +15,7 @@
 
 import { fetchWithTimeout, readJsonSafely } from './api-core.js';
 import { renderActiveWatchlist } from './active-watchlist.js';
+import { renderNextActions } from './next-actions.js';
 import { refreshRun } from './api-run.js';
 import { setAlertState, setTextIfChanged } from '../utils/status-alert.js';
 
@@ -229,6 +230,7 @@ export function renderRunStrip(attempt, snapshot, opts = {}) {
     if (active || runId !== lastRenderedRunId) refreshRequestError = null;
     lastRenderedRunId = runId;
     renderRunWarning(attempt, snapshot);
+    renderNextActions(snapshot);
     renderActiveWatchlist(snapshot);
 
     if (!snapshot?.run) {

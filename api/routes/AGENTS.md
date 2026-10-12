@@ -27,6 +27,8 @@
 - Match existing response naming conventions in neighboring routes.
 - Keep route modules import-safe; tests should be able to import them without starting background jobs or network calls.
 
+- Repair-call opening copies recheck fresh delta, current broker basis, and free covered-call capacity. Position-monitor verdicts use the matching published held-contract action.
+
 ## Verification
 
 - Run the specific route test for changed endpoints (e.g. `tests/test_routes_earnings.py` for earnings routes).
@@ -37,3 +39,5 @@
 
 No child DOX files yet.
 
+
+- Copy-check accepts `kind=open|close|roll` (open default). Close requires exact current broker quantity. Roll additionally names the closing strike/expiry and returns both fresh executable quotes and per-share net credit. None of these routes executes an order.

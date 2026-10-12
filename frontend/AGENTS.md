@@ -43,3 +43,5 @@
 - `static/css/AGENTS.md` - Visual styling, responsive layout, theme tokens, and CSS compatibility shims.
 - `static/js/AGENTS.md` - Browser JavaScript modules, API clients, state, rendering, and UI events.
 - `templates/AGENTS.md` - Jinja pages, partials, and server-rendered UI structure.
+
+- The dashboard presents next actions immediately after scan status. `next-actions.js` renders holding verdicts, a combined cash plan, and campaign/break-even records. `ticket.js` is the shared manual-ticket copy boundary; every required leg is revalidated before clipboard access.

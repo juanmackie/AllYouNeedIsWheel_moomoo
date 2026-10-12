@@ -741,6 +741,7 @@ class TestRecommendationEngine(unittest.TestCase):
                 "max_contracts": 1,
                 "profile_type": "monthly",
                 "research_only": False,
+                "copy_eligible": True,
                 "warnings": [],
             }
 
@@ -762,10 +763,16 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertGreaterEqual(len(result["signals"]), 2)
         self.assertEqual(result["signals"][0]["ticker"], "HIGH")
         # Remaining-cash deployment plan follows the same ranked order.
-        deployment = result["deployment_plan"]["signals"]
+        deployment = result["deployment_plan"]["lines"]
         self.assertGreaterEqual(len(deployment), 2)
-        self.assertEqual(deployment[0]["ticker"], "LOW")
-        self.assertEqual(deployment[1]["ticker"], "LOW2")
+        self.assertEqual([d["ticker"] for d in deployment], ["HIGH", "MID", "LOW", "LOW2"])
+        self.assertTrue(
+            all(
+                d in result["watchlist_csps"]["signals"]
+                or any(d["ticker"] == pick["ticker"] for pick in result["watchlist_csps"]["signals"])
+                for d in deployment
+            )
+        )
 
     def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
@@ -1131,7 +1138,7 @@ class TestRecommendationEngineSignals(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["blocked_reason_counts"].get("data_quality_blocked", 0), 0)
-        self.assertFalse(result["blocked_signals"])
+        self.assertFalse([r for r in result["blocked_signals"] if r.get("signal_type") != "covered_call"])
         self.assertTrue(result["signals"][0]["research_only"])
         self.assertTrue(any("yfinance" in warning.lower() for warning in result["signals"][0]["warnings"]))
 

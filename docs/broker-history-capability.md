@@ -1,44 +1,56 @@
 # Broker history capability (OpenD, read-only)
 
-What the Moomoo OpenD API actually exposes for outcome attribution, and what that
-implies. Measured with `tools/probe_broker_history.py` (query-only — it uses the
-app's structurally read-only `MoomooConnection`, the same surface
-`core/broker_protocol.py` and `tests/test_no_execution_surface.py` enforce).
+Findings from `tools/probe_broker_history.py`, which uses the app's structurally
+read-only `MoomooConnection`. The probe prints aggregate counts and timings;
+it does not print account identifiers, contract codes, order/deal identifiers,
+or private fill rows.
 
-Observed on 2026-09-20 against a live REAL account (`FUTUAU`), 89-day request:
+## Latest measurement
 
-| Question | Answer |
+Measured on 2026-10-11 against the configured live OpenD session. The probe
+requested the maximum 90-day deal window and sampled fees for 20 of the 55
+orders returned.
+
+| Question | Observation |
 |---|---|
-| OpenD reachable / account resolvable | Yes (loopback, REAL, opaque account id resolved) |
-| Historical fills (`history_deal_list_query`) | **45 fills**, 2026-06-23 → 2026-09-17 |
-| Order history (`history_order_list_query`) | 94 orders over the same window |
-| Fees (`order_fee_query`) | Available per order, itemised (Commission, Platform, Options Regulatory, OCC, …); **not on the deal row** |
-| Cash movements (`get_acc_cash_flow`) | 1 row (depth to 2026-09-02); one clearing date per query |
-| Positions (`position_list_query`) | 9 |
+| OpenD reachable | Yes; account identity resolved (identity value omitted) |
+| Deal history | 59 rows, 2026-07-13 through 2026-10-06; no fee field on deal rows |
+| Deal query time | 0.184 seconds for one 90-day query |
+| Fee history | 20 of 20 sampled orders returned fee rows |
+| Fee query time | 0.250 seconds for one 20-order query |
+| Local trade-query limiter | 45 requests per 60 seconds; burst threshold 20 per 10 seconds |
+| Expired short contracts | 18 had sell fills; 15 were bought back before expiry, 2 had a zero-price buy on/after expiry, 1 had another buy on/after expiry; none remained net short |
+| Zero-price option buys | 3; each had a stock fill within 2 seconds at the strike, with matching side and share count |
 
-## Implications for attribution
+The three zero-price option and stock matches are evidence consistent with
+assignment deliveries. They do not establish all assignment encodings. The
+two zero-price closes on/after expiry were both paired with matching stock
+fills, so the sample contains no confirmed expired-worthless contract. This
+run cannot determine whether such an option is omitted, reported as a
+zero-price close without shares, or shown another way. The SDK call timings
+are one sample per query type; the local limiter is an application guardrail,
+not a measurement of the broker's actual trade-API quota. G1 therefore
+remains **unmeasured** for worthless expiry behavior and the authoritative
+API quota.
 
-1. **A single query covers at most 90 days.** Older trades cannot be pulled by
-   the same call, so realized P&L is only ever attributable inside that window.
-   The owner's own broker export spanned April → September: anything before the
-   window is permanently unattributable through the API.
-2. **Fills carry no fees.** Premium P&L is exact from the deal row; net P&L needs
-   one `order_fee_query` per order, allocated across that order's fills (the app
-   allocates proportionally to gross fill value, and leaves fees `NULL` — never
-   `0.0` — when a fee row is missing).
-3. **Deal rows are the join key to recommendations.** `code` decodes to
-   underlying/expiry/type/strike, which is the same contract identity the
-   recommendation signals use; nothing else in the payload names the contract.
-4. **Fills alone never say which recommendation they came from.** The window
-   above contained 45 fills and zero exact matches against 208 recorded
-   recommendations — hence the owner-recorded "taken" link
-   (`api/services/taken_links.py`) as the explicit, non-inferred attribution path.
+## Implications
+
+1. A history request covers at most 90 days. Incremental pulls can preserve
+   continuity only while the app successfully refreshes inside that window.
+2. Deal rows do not include fees. Fees require `order_fee_query`; ingestion
+   allocates returned order fees over that order's fills and keeps unknown fees
+   unknown.
+3. Do not infer expired-worthless status from an absent deal. Expiry handling
+   and refresh-time ingestion remain disabled until a later probe has positive,
+   owner-confirmed lifecycle evidence and bounded query behavior.
+4. The current campaign implementation defaults to Moomoo average cost and
+   labels the capability reason while G1 is unmeasured.
 
 ## Re-running
 
-```
-.venv/Scripts/python tools/probe_broker_history.py
+```powershell
+uv run python tools/probe_broker_history.py
 ```
 
-It prints the same counts as JSON. A missing/empty result is a finding, never a
-fabricated row.
+The probe uses one history query and at most one fee query over 20 order IDs.
+It is query-only and emits aggregate measurements only.

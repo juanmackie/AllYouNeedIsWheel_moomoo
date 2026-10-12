@@ -29,6 +29,8 @@
 - `outcome-panel.test.js` covers the outcome panel rendering (totals/groups/records, empty + error states, XSS escaping of contract/strategy/group text, expandable supporting-fills drill-down, and the read-only ingest trigger).
 - Outcome disclosure checks verify named native controls, valid table-row semantics, expansion/collapse, and no empty disclosure for contracts without fills.
 
+- `next-actions.test.js`, `ticket.test.js`, and `growth-panel.test.js` cover campaign labels, allocation ticket legs, copy-time evidence, and unknown win rate. Shared ticket text remains manual-only.
+
 ## Verification
 
 - Run `npm test` or the relevant Vitest file.

@@ -22,9 +22,12 @@
   </div>
 </section>
 
+{% include "partials/dashboard/next_actions.html" %}
+
 <nav class="dashboard-section-nav" aria-label="Dashboard sections">
   <div class="dashboard-section-nav__group" role="group" aria-label="Review">
     <span class="dashboard-section-nav__label">Review</span>
+    <a href="#next-actions-section">Next actions</a>
     <a href="#top-recommendations-section">Signals</a>
     <a href="#account-capital">Account &amp; income</a>
     <a href="#position-area">Positions</a>
@@ -45,7 +48,7 @@
 <section class="dashboard-area dashboard-area--account dashboard-capital-group" id="account-capital" aria-labelledby="account-area-title">
   <header class="dashboard-area__header">
     <div class="dashboard-area__heading">
-      <span class="ft-section__num" id="account-area-title">03 · ACCOUNT &amp; INCOME</span>
+      <span class="ft-section__num" id="account-area-title">04 · ACCOUNT &amp; INCOME</span>
       <p class="dashboard-area__description">Broker-reported capital, buying power, and recorded premium.</p>
     </div>
   </header>
@@ -56,7 +59,7 @@
 <section class="dashboard-area dashboard-area--positions" id="position-area" aria-labelledby="position-area-title">
   <header class="dashboard-area__header">
     <div class="dashboard-area__heading">
-      <span class="ft-section__num" id="position-area-title">04 · OPEN POSITIONS</span>
+      <span class="ft-section__num" id="position-area-title">05 · OPEN POSITIONS</span>
     </div>
   </header>
   {% include "partials/dashboard/position_monitor.html" %}
@@ -66,7 +69,7 @@
 <details class="ft-section dashboard-disclosure dashboard-area--secondary mt-4" id="growth-area">
   <summary class="dashboard-disclosure__summary">
     <div>
-      <span class="ft-section__num">05 · GROWTH</span>
+      <span class="ft-section__num">06 · GROWTH</span>
       <h2>Portfolio growth</h2>
       <span class="dashboard-disclosure__description">Review account history, realized pace, and the calibrated projection.</span>
     </div>
@@ -80,7 +83,7 @@
 <details class="ft-section dashboard-disclosure dashboard-area--secondary mt-3" id="outcomes-area">
   <summary class="dashboard-disclosure__summary">
     <div>
-      <span class="ft-section__num">06 · OUTCOMES</span>
+      <span class="ft-section__num">07 · OUTCOMES</span>
       <h2>Outcome history</h2>
       <span class="dashboard-disclosure__description">Compare quoted signals with fills, fees, and measured outcomes.</span>
     </div>
@@ -94,7 +97,7 @@
 <details class="ft-section dashboard-disclosure dashboard-area--secondary mt-3" id="watchlist-area">
   <summary class="dashboard-disclosure__summary">
     <div>
-      <span class="ft-section__num">07 · WATCHLIST</span>
+      <span class="ft-section__num">08 · WATCHLIST</span>
       <h2>Watchlist controls</h2>
       <span class="dashboard-disclosure__description">Review symbols in the Moomoo watchlist group used by the scan.</span>
     </div>
@@ -109,7 +112,7 @@
 <details class="ft-section dashboard-disclosure dashboard-area--secondary mt-3" id="market-data-section">
   <summary class="dashboard-disclosure__summary">
     <div>
-      <span class="ft-section__num">08 · OPTIONS DATA</span>
+      <span class="ft-section__num">09 · OPTIONS DATA</span>
       <h2>Options table</h2>
       <span class="dashboard-disclosure__description">Load a supplementary watchlist table for comparison; it does not change shortlist eligibility or rank.</span>
     </div>

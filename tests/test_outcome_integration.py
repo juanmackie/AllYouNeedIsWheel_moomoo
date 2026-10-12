@@ -196,8 +196,8 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
 
         self.assertEqual(summary["totals"]["sample_size"], 2)  # AAPL signal + MSFT unmatched
         # Any fill-backed contract is evidenced; only closed (realized) legs
-        # count as measured. Open obligations report net=None and land in
-        # unknown_count — collected premium is unrealized context, never profit.
+        # count as measured. The unmatched MSFT contract has expired by the
+        # current as-of date, but expiry does not imply an option-leg P&L.
         self.assertEqual(summary["totals"]["measured_count"], 1)
         self.assertEqual(summary["totals"]["unknown_count"], 1)
         self.assertAlmostEqual(summary["totals"]["net_dollars"], 73.0)  # only realized AAPL leg
@@ -219,8 +219,9 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         self.assertEqual(msft["signal_type"], "unmatched")
         self.assertEqual(msft["attribution"], "unattributed")
         self.assertIsNone(msft["quoted_credit_per_contract"])
-        self.assertEqual(msft["outcome_status"], "open")  # open short: premium is unrealized
-        self.assertTrue(msft["open"])
+        self.assertEqual(msft["outcome_status"], "expired")
+        self.assertEqual(msft["lifecycle_status"], "expired")
+        self.assertFalse(msft["open"])
         self.assertIsNone(msft["net_pnl"])
         self.assertIsNone(msft["gross_premium_pnl"])
         self.assertAlmostEqual(msft["unrealized_premium_dollars"], 80.0)  # 0.80/share × 100, qty 1
@@ -246,7 +247,11 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         self.assertEqual(summary["totals"]["unknown_count"], 1)
         self.assertEqual(summary["totals"]["measured_count"], 0)
         self.assertIsNone(summary["outcomes"][0]["net_pnl"])
-        self.assertTrue(summary["outcomes"][0]["open"])
+        # The AAPL expiry is in the past. Missing fees keep P&L unknown even
+        # after expiry; the lifecycle state must not be reported as open.
+        self.assertEqual(summary["outcomes"][0]["outcome_status"], "expired")
+        self.assertEqual(summary["outcomes"][0]["lifecycle_status"], "expired")
+        self.assertFalse(summary["outcomes"][0]["open"])
 
     def test_signal_without_fills_is_pending(self):
         self._publish_signal_run()
@@ -479,7 +484,9 @@ class TestOwnerLinkedAttribution(_OutcomeIntegrationBase):
 
         uber = next(r for r in summary["outcomes"] if r["ticker"] == "UBER")
         self.assertEqual(uber["attribution"], "unattributed")
-        self.assertEqual(uber["outcome_status"], "open")
+        self.assertEqual(uber["outcome_status"], "expired")
+        self.assertEqual(uber["lifecycle_status"], "expired")
+        self.assertFalse(uber["open"])
         self.assertIsNone(uber["net_pnl"])  # collected premium is never realized
 
         # Marked taken but no broker fill yet: labelled, never credited with P&L.

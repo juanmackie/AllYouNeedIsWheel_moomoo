@@ -10,7 +10,7 @@ from math import isfinite
 
 from core.logging_config import get_logger
 from core.ticker_utils import canonical_underlying, earnings_underlying_ticker, parse_moomoo_symbol
-from core.utils import market_now, parse_position_qty, safe_float
+from core.utils import is_market_open, market_now, parse_position_qty, safe_float
 
 logger = get_logger("api.services.portfolio_scoring", "api")
 
@@ -95,13 +95,23 @@ def _select_fresh_roll_candidate(pos, ticker, option_type, fresh_candidates):
                 continue
         age = safe_float(age, None)
         strike_value = safe_float(candidate.get("strike"), None)
-        velocity = safe_float(candidate.get("capital_velocity_per_day"), 0.0)
-        if age is None or not isfinite(age) or age < 0 or age > 300:
+        if age is None or not isfinite(age) or age < 0 or (is_market_open() and age > 300):
             continue
         if strike_value is None or not isfinite(strike_value) or strike_value <= 0:
             continue
-        key = (velocity if isfinite(velocity) else 0.0, expiration, -strike_value)
-        if selected is None or key > selected[0]:
+        held_ask = safe_float(pos.get("ask"), None)
+        target_bid = safe_float(candidate.get("bid"), None)
+        if held_ask is None or target_bid is None or held_ask <= 0 or target_bid <= 0:
+            continue
+        fees = sum(safe_float(r.get("expected_fee_per_contract")) for r in (pos, candidate)) / 100
+        if target_bid - held_ask - fees < 0:
+            continue
+        if option_type == "CALL" and strike_value < safe_float(pos.get("strike")):
+            continue
+        from api.services.recommendation_ranking import rank_key
+
+        key = rank_key(candidate)
+        if selected is None or key < selected[0]:
             selected = (key, candidate)
     return selected[1] if selected else None
 
@@ -173,6 +183,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service, fresh_cand
         }
 
     delta = safe_float(pos.get("delta"), None)
+    stock = (portfolio_context.get("positions") or {}).get(underlying) or {}
     pos_data = {
         "option_type": option_type,
         "roll_target": roll_target,
@@ -190,6 +201,7 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service, fresh_cand
         # Entry credit per contract (average cost) -- required by the exit
         # playbook to decide profit-taking / roll / close (C02).
         "avg_cost": safe_float(pos.get("avg_cost")),
+        "adjusted_basis": stock.get("adjusted_basis", stock.get("avg_cost")),
     }
 
     iv = safe_float(pos.get("implied_volatility"))

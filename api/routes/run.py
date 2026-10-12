@@ -252,6 +252,7 @@ def evaluate_copy_check(
     now_utc: datetime | None = None,
     now_et: datetime | None = None,
     fetch_live_chain=None,
+    fetch_live_positions=None,
 ) -> dict:
     """Read-only copy revalidation against the CURRENT snapshot view.
 
@@ -263,6 +264,27 @@ def evaluate_copy_check(
     now_et = now_et or market_now()
     now_utc = now_utc or now_et.astimezone(timezone.utc)
     view = view or {}
+    kind = str(requested.get("kind") or "open").lower()
+    if kind in {"close", "roll"}:
+        from api.services.ticket_validation import validate_exit_ticket
+
+        return validate_exit_ticket(
+            view,
+            requested,
+            now_et=now_et,
+            now_utc=now_utc,
+            fetch_quote=fetch_live_chain,
+            fetch_positions=fetch_live_positions,
+            find_contract=_find_contract,
+        )
+    if kind != "open":
+        return {
+            "ok": False,
+            "matched_run": False,
+            "matched_contract": False,
+            "mode": MODE_REVIEW_ONLY,
+            "reasons": ["invalid ticket kind"],
+        }
     run = view.get("run") or {}
     payload = {
         "ok": True,
@@ -306,6 +328,23 @@ def evaluate_copy_check(
         payload["reasons"] = ["contract no longer in the current signal shortlist"]
         return payload
     payload["signal_lane"] = signal_lane
+    if signal_lane == "roll_candidates":
+        payload["reasons"] = ["replacement contract requires a roll ticket and current short-position confirmation"]
+        payload["contract"] = contract
+        return payload
+    quantity = requested.get("quantity")
+    if quantity is not None:
+        try:
+            quantity = float(quantity)
+            if (
+                quantity <= 0
+                or quantity != int(quantity)
+                or quantity > int(contract.get("recommended_contracts", 0) or 0)
+            ):
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            payload["reasons"] = ["requested quantity exceeds the current recommendation"]
+            return payload
 
     def _stage_decision():
         # staged requires complete coverage + a copy-eligible candidate
@@ -350,6 +389,17 @@ def evaluate_copy_check(
                 ["market appears open now (fresh broker quotes) — refresh for live copy; staging blocked"],
                 evidence,
             )
+        from api.services.ticket_validation import repair_open_blocker
+
+        blocker = repair_open_blocker(
+            contract,
+            option,
+            quantity or int(contract.get("recommended_contracts", 0) or 0),
+            view.get("preset") or {},
+            fetch_live_positions,
+        )
+        if blocker:
+            return MODE_REVIEW_ONLY, [blocker], evidence
         return MODE_STAGED, list(session_reasons or []), evidence
 
     if session_state == SESSION_UNKNOWN:
@@ -374,6 +424,34 @@ def evaluate_copy_check(
             payload["reasons"] = ["candidate is not copy eligible"]
             payload["contract"] = contract
             return payload
+        intent = contract.get("covered_call_intent") or (contract.get("wheel_decision") or {}).get(
+            "covered_call_intent"
+        )
+        if intent == "repair":
+            from api.services.ticket_validation import repair_open_blocker
+
+            try:
+                evidence = fetch_live_chain(ticker=ticker, expiration=expiration, right="C", strike=strike)
+                quote = evidence.get("option") or {}
+                age = _broker_quote_age_sec(quote, now_utc)
+                blocker = (
+                    "fresh broker repair quote unavailable"
+                    if evidence.get("source") != "broker" or age is None or age < 0 or age > _max_tradeable_age_sec(run)
+                    else repair_open_blocker(
+                        contract,
+                        quote,
+                        quantity or int(contract.get("recommended_contracts", 0) or 0),
+                        view.get("preset") or {},
+                        fetch_live_positions,
+                    )
+                )
+            except Exception:
+                blocker = "fresh broker repair quote unavailable"
+            if blocker:
+                payload["reasons"] = [blocker]
+                payload["contract"] = contract
+                return payload
+            contract = {**contract, **quote}
         payload["mode"] = "live"
         payload["contract"] = contract
         payload["reasons"] = []
@@ -430,6 +508,9 @@ def run_copy_check():
     except (TypeError, ValueError):
         strike = 0.0
     run_id = request.args.get("run_id", "").strip()
+    kind = str(request.args.get("kind") or "open").lower()
+    if kind not in {"open", "close", "roll"}:
+        return error_response("Invalid ticket kind", status_code=400)
 
     if not ticker or option_type not in ("CALL", "PUT") or not expiration or strike <= 0:
         return error_response("Invalid copy-check parameters", status_code=400)
@@ -462,10 +543,20 @@ def run_copy_check():
             "option_type": option_type,
             "expiration": expiration,
             "strike": strike,
+            "kind": kind,
+            "quantity": request.args.get("quantity"),
+            "close_expiration": _normalize_expiration(request.args.get("close_expiration", "")),
+            "close_strike": request.args.get("close_strike"),
         },
         fetch_live_chain=_options_service_fetch_live_chain,
+        fetch_live_positions=_options_service_fetch_live_positions,
     )
     return jsonify(payload)
+
+
+def _options_service_fetch_live_positions():
+    service = _get_options_service()
+    return service._get_portfolio_context(refresh=True)
 
 
 def _options_service_fetch_live_chain(*, ticker, expiration, right, strike):

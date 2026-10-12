@@ -8,7 +8,7 @@ implemented but never firing).
 
 import unittest
 
-from core.exit_playbook import VERDICT_CLOSE, VERDICT_HOLD, VERDICT_TAKE_PROFIT
+from core.exit_playbook import VERDICT_CLOSE, VERDICT_HOLD, VERDICT_LET_ASSIGN, VERDICT_ROLL, VERDICT_TAKE_PROFIT
 from core.position_scorer import score_existing_position
 
 PORTFOLIO_CONTEXT = {
@@ -97,6 +97,24 @@ class TestExitBridge(unittest.TestCase):
         decision = _score(_position("PUT", 100.0, 95.0, 40, 1.95, 2.05, 0.0, -0.50), 95.0)
         self.assertNotEqual(decision.exit_verdict, VERDICT_CLOSE)
         self.assertNotEqual(decision.exit_verdict, VERDICT_TAKE_PROFIT)
+
+    def test_profitable_assignment_is_let_assign(self):
+        position = _position("CALL", 104.0, 120.0, 20, 0.50, 0.60, 1.00, 0.80)
+        position["adjusted_basis"] = 100.0
+        decision = _score(position, 120.0)
+        self.assertEqual(decision.exit_verdict, VERDICT_LET_ASSIGN)
+        self.assertTrue(any("+$500.00" in reason for reason in decision.exit_reasons))
+
+    def test_threatened_repair_rolls_to_injected_target(self):
+        position = _position("CALL", 104.0, 105.0, 8, 0.50, 0.60, 1.00, 0.45)
+        position.update(
+            adjusted_basis=110.0,
+            covered_call_intent="repair",
+            roll_target={"ticker": "AAPL", "option_type": "CALL", "strike": 105, "expiration": "20261218"},
+        )
+        decision = _score(position, 105.0)
+        self.assertEqual(decision.exit_verdict, VERDICT_ROLL)
+        self.assertEqual(decision.roll_target["strike"], 105)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from math import isfinite
 
 # Minimum observation window (in days) before we annualize a growth ratio.
 # Annualizing a 1-minute or even 1-day move blows up to nonsense (or overflows)
@@ -23,7 +24,7 @@ MIN_OBSERVATION_DAYS = 1.0
 # ---------------------------------------------------------------------------
 
 
-def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
+def growth_pace(history: list[dict], target_multiple: float = 5.0, baseline: dict | None = None) -> dict:
     """Compute path-to-target pace from persisted portfolio snapshots.
 
     No fixed deadline: the verdict is derived from realized pace, not a
@@ -37,7 +38,16 @@ def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
         progress_pct (0-100 from baseline toward target), annualized_pace
         (decimal), eta_days, required_premium_per_day, on_track (bool|None).
     """
-    snaps = [s for s in (history or []) if isinstance(s, dict)]
+    snaps = []
+    for snapshot in history or []:
+        if not isinstance(snapshot, dict):
+            continue
+        try:
+            nav = float(snapshot.get("net_liquidation", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if isfinite(nav) and nav > 0:
+            snaps.append({**snapshot, "net_liquidation": nav})
     if not snaps:
         return {
             "current_nav": 0.0,
@@ -53,11 +63,18 @@ def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
             "on_track": None,
         }
 
-    # C07: the first snapshot in the account's history is the durable baseline.
-    # Every goal metric derives from it, so progress, target, and pace agree
-    # instead of the target moving as NAV grows.
+    # A persisted account baseline survives snapshot retention. Callers may
+    # pass it explicitly; pure callers default to the first valid sample.
     first, last = snaps[0], snaps[-1]
-    first_nav = float(first.get("net_liquidation", 0) or 0)
+    baseline = baseline if isinstance(baseline, dict) else {}
+    try:
+        first_nav = float(baseline.get("net_liquidation", 0) or 0)
+    except (TypeError, ValueError):
+        first_nav = 0.0
+    if not isfinite(first_nav) or first_nav <= 0:
+        first_nav = float(first["net_liquidation"])
+        baseline = first
+    baseline_at = baseline.get("captured_at") or baseline.get("first_captured_at")
     baseline_nav = first_nav
     current_nav = float(last.get("net_liquidation", 0) or 0)
     target_nav = baseline_nav * target_multiple
@@ -65,7 +82,7 @@ def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
 
     elapsed_days = 0.0
     try:
-        t0 = datetime.fromisoformat(str(first.get("captured_at", "")))
+        t0 = datetime.fromisoformat(str(baseline_at or first.get("captured_at", "")))
         t1 = datetime.fromisoformat(str(last.get("captured_at", "")))
         elapsed_days = max((t1 - t0).total_seconds() / 86_400.0, 0.0)
     except (TypeError, ValueError):
@@ -123,7 +140,7 @@ def growth_pace(history: list[dict], target_multiple: float = 5.0) -> dict:
         "target_nav": round(target_nav, 2),
         "reached": reached,
         "status": status,
-        "first_captured_at": first.get("captured_at", ""),
+        "first_captured_at": baseline_at or first.get("captured_at", ""),
         "last_captured_at": last.get("captured_at", ""),
         "elapsed_days": round(elapsed_days, 2),
         "progress_pct": round(progress_pct, 2),

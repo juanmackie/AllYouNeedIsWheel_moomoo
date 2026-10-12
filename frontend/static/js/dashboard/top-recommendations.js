@@ -2,7 +2,9 @@
  * Top Recommendations Module
  * Displays the highest-scoring option opportunities with auto-refresh
  */
-import { fetchRunState, refreshRun, revalidateCopy, markRecommendationTaken } from './api-run.js';
+import { fetchRunState, refreshRun, markRecommendationTaken } from './api-run.js';
+import { buildTicketText, copyEligibility, contractFingerprint, isTaken as ticketIsTaken, copyTicket as copySharedTicket } from './ticket.js';
+export { buildTicketText, copyEligibility, contractFingerprint, isTaken } from './ticket.js';
 import { initPresetSelector } from './preset-selector.js';
 import { formatCurrency, formatPercent } from '../utils/formatters.js';
 import { showPanelLoading, finishPanelLoading, failPanelLoading } from './options-table-rendering.js';
@@ -199,80 +201,6 @@ function formatQuoteAge(sec) {
  * @param {Object} rec - Recommendation data
  * @returns {HTMLElement} Card element
  */
-/**
- * Build an explicit copy-to-ticket payload for a signal. No order is placed;
- * this is manual ticket text for the broker UI.
- */
-function buildTicketText(rec, { staged = false } = {}) {
-    const wd = rec.wheel_decision || {};
-    const action = getSignalType(rec) === 'covered_call' ? 'SELL TO OPEN COVERED CALL' : 'SELL TO OPEN CSP';
-    const optionType = rec.option_type || wd.option_type || '';
-    const ticker = rec.ticker || '?';
-    const expiry = (rec.expiration || '').replace(/-/g, '');
-    const strike = rec.strike != null ? Number(rec.strike).toFixed(2) : '?';
-    const qty = Number(rec.recommended_contracts || 0);
-    const limit = rec.limit_target_per_contract != null
-        ? (Number(rec.limit_target_per_contract) / 100).toFixed(2)
-        : (rec.mid_price != null ? Number(rec.mid_price).toFixed(2) : '?');
-    const premium = rec.bid_premium_per_contract != null
-        ? Number(rec.bid_premium_per_contract).toFixed(2)
-        : (rec.premium_per_contract != null ? Number(rec.premium_per_contract).toFixed(2) : '?');
-    const dte = rec.dte != null ? rec.dte : '?';
-    const cashRequired = rec.cash_required != null
-        ? 'Cash required: $' + Number(rec.cash_required).toFixed(2)
-        : (rec.strike != null ? 'Cash required: $' + (Number(rec.strike) * 100).toFixed(2) : '');
-    const sourceInfo = getDataSourceInfo(rec);
-    const chainSource = rec.chain_source || wd.chain_source || 'moomoo';
-    const freshness = sourceInfo.freshness || 'unknown age';
-    const lines = [
-        action + ' — ' + ticker,
-        optionType + ' ' + ticker + ' ' + expiry + ' ' + strike + ' x' + qty,
-        'Limit $' + limit + ' (midpoint, not guaranteed) — executable bid $' + premium + '/contract, DTE ' + dte,
-        cashRequired,
-        'Source: ' + chainSource + ' (Moomoo) — quote ' + freshness,
-    ];
-    if (staged) {
-        lines.push('STAGED FOR US MARKET OPEN — premium is the last broker quote, NOT live; verify the live quote before placing.');
-    }
-    const eventTier = rec.event_tier || wd.event_tier || '';
-    if (eventTier === 'event_unknown') {
-        lines.push('EVENT RISK: earnings status unknown — verify the earnings date before placing.');
-    } else if (eventTier === 'earnings_before_expiry') {
-        lines.push('EVENT RISK: earnings before expiry — high risk, confirm before placing.');
-    }
-    return lines.filter(Boolean).join('\n');
-}
-
-/**
- * Copy eligibility for a candidate, derived from the backend-computed
- * eligibility object attached to every signal at read time.
- *   live  -> copy now (market session open, complete coverage, fresh broker quotes)
- *   staged-> stage for next market open (market closed; re-validated against
- *            OpenD immediately before the clipboard write)
- *   review_only -> never copyable; reasons are surfaced on the disabled button
- */
-function copyEligibility(rec) {
-    const el = (rec && rec.eligibility) || {};
-    const mode = (el.mode === 'live' || el.mode === 'staged') ? el.mode : 'review_only';
-    const reasons = Array.isArray(el.reasons) && el.reasons.length
-        ? el.reasons.slice()
-        : ['candidate is not copy eligible'];
-    const canCopy = mode === 'live' || mode === 'staged';
-    return { canCopy, mode, reasons, staged: mode === 'staged' };
-}
-
-function contractFingerprint(rec) {
-    const exp = String((rec && rec.expiration) || '').replace(/-/g, '');
-    const strike = Number(rec && rec.strike);
-    if (!rec || !rec.ticker || !rec.option_type || !exp || !Number.isFinite(strike)) return '';
-    return [String(rec.ticker).toUpperCase(), String(rec.option_type).toUpperCase(), exp, strike.toFixed(2)].join('|');
-}
-
-/**
- * Build the set of recommended-contract keys the owner has marked taken.
- * Only the recommendation identity is keyed: the card is the recommendation,
- * whatever strike was actually traded.
- */
 function buildTakenKeySet(links) {
     const keys = new Set();
     (Array.isArray(links) ? links : []).forEach((link) => {
@@ -280,11 +208,6 @@ function buildTakenKeySet(links) {
         if (key) keys.add(key);
     });
     return keys;
-}
-
-function isTaken(rec) {
-    const key = contractFingerprint(rec);
-    return Boolean(key) && takenRecommendedKeys.has(key);
 }
 
 function setButtonIconLabel(btn, iconName, label) {
@@ -304,7 +227,7 @@ function setTakenStatus(statusEl, message, isError = false) {
  * Render the taken control for one card from module state (never a guess).
  */
 function renderTakenState(rec, btn, input, statusEl) {
-    const taken = isTaken(rec);
+    const taken = ticketIsTaken(rec, takenRecommendedKeys);
     btn.disabled = taken;
     if (input) input.disabled = taken;
     if (taken) {
@@ -405,96 +328,12 @@ function setButtonBlocked(btn, reasons, kind = 'blocked') {
     setCopyStatus(btn, `${kind === 'error' ? 'Not copied' : 'Copy blocked'}: ${btn.title}`, true);
 }
 
-async function copyTicket(rec, btn) {
-    // Revalidate against the CURRENT run/candidate before writing the clipboard
-    // (P1a C03): a fresh read-only GET awaited right before the write. A run
-    // change, re-ranked/replaced contract, review_only outcome, fetch failure,
-    // or a market open/close transition all abort the copy (never silently
-    // copying a different value) and require a second click after a refresh.
-    const { canCopy, mode: intent } = copyEligibility(rec);
-    if (!canCopy) return;
 
-    const displayedRunId = (signalsData && signalsData.run && signalsData.run.run_id) || '';
-    const originalNodes = Array.from(btn.childNodes, (node) => node.cloneNode(true));
-
-    setButtonBusy(btn, 'Checking…');
-    setCopyStatus(btn, '');
-
-    let reval;
-    try {
-        reval = await revalidateCopy({
-            run_id: displayedRunId,
-            ticker: rec.ticker,
-            option_type: rec.option_type,
-            expiration: rec.expiration,
-            strike: rec.strike,
-        });
-    } catch (err) {
-        console.error('Copy revalidation failed:', err);
-        setButtonBlocked(btn, ['revalidation request failed — verify and retry'], 'error');
-        return; // never write to clipboard
-    }
-
-    const currentRunId = (reval && reval.run_id) || '';
-    if (reval && reval.matched_run === false) {
-        // The run changed under the click: never copy, refresh the card, second click.
-        setButtonBlocked(btn, ['run changed — review and click again'], 'error');
-        loadTopRecommendations(false);
-        return;
-    }
-    if (displayedRunId && currentRunId && displayedRunId !== currentRunId) {
-        // Redundant safety net for the same transition above.
-        setButtonBlocked(btn, ['run changed — review and click again'], 'error');
-        loadTopRecommendations(false);
-        return;
-    }
-
-    if (!reval || reval.ok === false) {
-        setButtonBlocked(btn, (reval && reval.reasons) || ['copy check failed'], 'error');
-        return;
-    }
-    if (reval.mode === 'review_only') {
-        setButtonBlocked(btn, reval.reasons || ['not copy eligible'], 'blocked');
-        return; // write nothing
-    }
-
-    if (reval.matched_contract === false) {
-        // The contract left the shortlist (re-ranked or replaced).
-        setButtonBlocked(btn, ['contract changed — review and click again'], 'error');
-        loadTopRecommendations(false);
-        return;
-    }
-    if (reval.mode !== intent) {
-        // Market open/close transition between page load and the click.
-        setButtonBlocked(
-            btn,
-            [`market ${reval.mode === 'staged' ? 'closed' : 'opened'} since page load — review and click again`],
-            'error'
-        );
-        loadTopRecommendations(false);
-        return;
-    }
-
-    // Copy the CURRENT contract + mode from the revalidated response.
-    const current = (reval.contract && Object.keys(reval.contract).length) ? reval.contract : rec;
-    const text = buildTicketText({ ...rec, ...current }, { staged: reval.mode === 'staged' });
-    try {
-        await navigator.clipboard.writeText(text);
-        btn.disabled = false;
-        setButtonIconLabel(btn, 'bi-check-circle', 'Copied');
-        btn.classList.add('btn-success');
-    } catch (err) {
-        console.error('Clipboard failed:', err);
-        btn.disabled = false;
-        setButtonIconLabel(btn, 'bi-x-circle', 'Copy failed');
-        btn.classList.add('btn-danger');
-        setCopyStatus(btn, 'Copy failed: the browser did not allow clipboard access.', true);
-    }
-    setTimeout(() => {
-        btn.replaceChildren(...originalNodes);
-        btn.disabled = !canCopy;
-        btn.classList.remove('btn-success', 'btn-danger', 'btn-warning');
-    }, 2000);
+function copyTicket(rec, btn) {
+    return copySharedTicket(rec, btn, {
+        runId: signalsData?.run?.run_id || '',
+        onStale: () => loadTopRecommendations(false),
+    });
 }
 
 function createRecommendationCard(rec) {
@@ -1279,6 +1118,13 @@ function renderCapitalRecovery(result) {
     const section = document.getElementById('capital-recovery-section');
     const container = document.getElementById('capital-recovery-cards');
     if (!section || !container) return;
+    // The campaign record now owns basis and break-even guidance for the same
+    // held lots. Retire the legacy card only when the replacement has data.
+    if (Array.isArray(result?.campaigns) && result.campaigns.length > 0) {
+        section.classList.add('d-none');
+        container.replaceChildren();
+        return;
+    }
 
     const cards = Array.isArray(result?.capital_recovery) ? result.capital_recovery : [];
     if (cards.length === 0) {

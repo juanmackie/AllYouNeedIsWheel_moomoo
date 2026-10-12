@@ -42,3 +42,5 @@
 
 No child DOX files yet.
 
+
+- Historical `option_fills` are not age-deleted: long holding campaigns need early credits. Account-scoped fill coverage and the durable growth baseline use existing settings; snapshot schema 3 requires no database migration.

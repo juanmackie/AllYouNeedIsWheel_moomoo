@@ -47,6 +47,7 @@ VERDICT_TAKE_PROFIT = "TAKE_PROFIT"
 VERDICT_ROLL = "ROLL"
 VERDICT_ROTATE = "ROTATE"
 VERDICT_CLOSE = "CLOSE"
+VERDICT_LET_ASSIGN = "LET_ASSIGN"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,9 @@ class ExitThresholds:
     deep_itm_pct: float = 15.0  # ITM beyond this % -> close
     stop_loss_pct: float = -100.0  # captured % at or below -> close (-100 = 2x entry credit)
     rotate_min_multiplier: float = 2.0  # fresh net return/day must be at least 2x held rate
+    repair_defend_delta: float = 0.40
+    repair_defend_dte: int = 3
+    repair_defend_otm_pct: float = 2.0
 
 
 @dataclass
@@ -66,9 +70,15 @@ class ExitVerdict:
     verdict: str
     reasons: list[str] = field(default_factory=list)
     roll_target: dict | None = None
+    reason_codes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"verdict": self.verdict, "reasons": list(self.reasons), "roll_target": self.roll_target}
+        return {
+            "verdict": self.verdict,
+            "reasons": list(self.reasons),
+            "roll_target": self.roll_target,
+            "reason_codes": list(self.reason_codes),
+        }
 
 
 def _target_label(target: dict | None) -> str:
@@ -97,6 +107,9 @@ def evaluate_exit(
     thresholds: ExitThresholds | None = None,
     rotation_comparison: dict | None = None,
     roll_target: dict | None = None,
+    assignment_pnl: float | None = None,
+    assignment_strike: float | None = None,
+    covered_call_intent: str | None = None,
 ) -> ExitVerdict:
     """Evaluate exit rules for one open short option position.
 
@@ -134,9 +147,45 @@ def evaluate_exit(
         otm = 0.0
     is_itm = otm < 0
     reasons: list[str] = []
+    reason_codes: list[str] = []
 
     def _verdict(verdict: str, target: dict | None = None) -> ExitVerdict:
-        return ExitVerdict(verdict=verdict, reasons=reasons, roll_target=target)
+        actual_verdict = verdict
+        if verdict == VERDICT_CLOSE and option_type.upper() == "CALL" and assignment_pnl is not None:
+            try:
+                pnl = float(assignment_pnl)
+            except (TypeError, ValueError):
+                pnl = -1.0
+            if isfinite(pnl) and pnl >= 0:
+                strike_label = f"${float(assignment_strike):g}" if assignment_strike is not None else "the strike"
+                actual_verdict = VERDICT_LET_ASSIGN
+                reasons.insert(0, f"Assignment at {strike_label} exits at +${pnl:,.2f} against adjusted basis")
+        return ExitVerdict(verdict=actual_verdict, reasons=reasons, roll_target=target, reason_codes=list(reason_codes))
+
+    # A losing-basis repair call is defended before ordinary exit rules. The
+    # target must have been validated by the caller for credit and policy.
+    try:
+        assignment_value = float(assignment_pnl) if assignment_pnl is not None else None
+    except (TypeError, ValueError):
+        assignment_value = None
+    threatened_repair = (
+        option_type.upper() == "CALL"
+        and covered_call_intent == "repair"
+        and assignment_value is not None
+        and assignment_value < 0
+        and (
+            is_itm
+            or (delta_available and abs_delta >= t.repair_defend_delta)
+            or (0 <= dte <= t.repair_defend_dte and 0 <= otm < t.repair_defend_otm_pct)
+        )
+    )
+    if threatened_repair:
+        reason_codes.append("repair_call_threatened")
+        if roll_target:
+            reasons.append(f"Repair call threatened; roll up and out to {_target_label(roll_target)}")
+            return _verdict(VERDICT_ROLL, roll_target)
+        reasons.append("Repair call threatened; no eligible net-credit roll target, close the call")
+        return _verdict(VERDICT_CLOSE)
 
     # 1. Earnings before expiry while at risk.
     if days_to_earnings is not None and 0 <= days_to_earnings <= max(dte, 0):

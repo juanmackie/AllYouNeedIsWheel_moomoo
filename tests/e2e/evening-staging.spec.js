@@ -47,6 +47,26 @@ test('evening: complete closed-market run stages a copy ticket', async ({ page }
     expect(clip).toContain('STAGED FOR US MARKET OPEN');
 });
 
+test('evening: next-action cash ticket is visible and stages only after copy revalidation', async ({ page }) => {
+    await server.publish('complete_closed');
+    await page.goto('/');
+    await expect(page.locator('#run-status')).toContainText('PLANNING');
+    const action = page.locator('#next-actions-content').locator('.next-action-card').first();
+    await expect(action).toContainText('DEPLOY_CASH');
+    await expect(action).toContainText('Source: Moomoo OpenD');
+    await expect(action).toContainText('Signal only — place manually in Moomoo');
+    const btn = action.locator('.next-action-copy-btn');
+    await expect(btn).toBeEnabled();
+    await expect(btn).toContainText('Stage manual ticket');
+    await btn.click();
+    await expect(btn).toContainText('Copied');
+    const clipboard = await readClipboard(page);
+    expect(clipboard).toContain('AAPL');
+    expect(clipboard).toContain('STAGED FOR US MARKET OPEN');
+    expect(clipboard).toContain('Signal only — place manually in Moomoo');
+    await expect(page.getByRole('button', { name: /place order|submit order/i })).toHaveCount(0);
+});
+
 test('evening: fresh broker quote at copy time blocks staging without clipboard writes', async ({ page }) => {
     await server.publish('complete_closed');
     await page.goto('/');

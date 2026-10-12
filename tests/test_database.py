@@ -56,6 +56,16 @@ class TestOptionsDatabase(unittest.TestCase):
         self.assertEqual(self.db.get_contracts("US.EMPTY", "2026-10-03", "2026-10-10", "2026-11-07"), [])
         self.assertEqual(self.db.get_setting("preserve"), "yes")
 
+    def test_fill_coverage_is_identity_scoped_and_option_fills_are_not_retained_away(self):
+        first = {"status": "success", "last_success_at": "2026-10-11T12:00:00", "first_covered_date": "2026-07-13"}
+        second = {"status": "failed", "reason": "history_query_failed"}
+        self.db.set_history_fill_coverage("REAL", "opaque-a", first)
+        self.db.set_history_fill_coverage("REAL", "opaque-b", second)
+
+        self.assertEqual(self.db.get_history_fill_coverage("REAL", "opaque-a"), first)
+        self.assertEqual(self.db.get_history_fill_coverage("REAL", "opaque-b"), second)
+        self.assertNotIn("option_fills", self.db.prune_retained_data())
+
     def test_database_creation(self):
         """Test that database and tables are created"""
         self.assertTrue(os.path.exists(self.db_path))
@@ -772,7 +782,7 @@ class TestTradeEventsRepositoryDirect(unittest.TestCase):
         analytics = self.repo.get_trade_analytics()
         self.assertEqual(analytics["total_exits"], 0)
         self.assertEqual(analytics["wins"], 0)
-        self.assertEqual(analytics["win_rate"], 0)
+        self.assertIsNone(analytics["win_rate"])
         self.assertEqual(analytics["avg_leakage"], 0)
         self.assertEqual(analytics["roll_count"], 0)
         self.assertEqual(analytics["per_symbol"], [])

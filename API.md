@@ -58,7 +58,7 @@ the underlying coverage total.
 ### Options / research
 - `GET /api/options/otm`, `/api/options/expirations`, `/api/options/stock-price`,
   `/api/options/cash-status`, `/api/options/analytics/lifecycle` — broker-only research views. Shortlist cards are served only by `/api/run`; there is no parallel recommendation cache endpoint.
-- `GET /api/options/analytics/outcomes` — broker-verified outcome journal (local SQLite; no OpenD gate). Joins published recommendation signals to ingested option fills: quoted vs. filled credit, slippage, net-of-fee outcomes (unknown fees ⇒ unknown outcome), capital-days, owner $/day, and groups by preset / DTE bucket / ticker / event tier (display-only). Also returns `link_suggestions` for short fills sharing ticker and option type within 7 days before/after a published run; these are suggestions only and persist only after owner confirmation through `POST /api/run/taken`. `dte_comparisons` compares matching 21–45 DTE owner fills with candidates retained in that run's saved shortlist; missing candidates are marked unavailable. This is comparison-only, never fetches extra chains, and is not a full-chain ranking. Filter params: `ticker`, `preset`, `event_tier`, `dte_bucket`, `limit`.
+- `GET /api/options/analytics/outcomes` — broker-verified outcome journal (local SQLite; no OpenD gate). Joins published recommendation signals to ingested option fills: quoted vs. filled credit, slippage, net-of-fee outcomes (unknown fees ⇒ unknown outcome), capital-days, owner $/day, and groups by preset / DTE bucket / ticker / event tier (display-only). Also returns `link_suggestions` for short fills sharing ticker and option type within 7 days after a preceding published run, with one best match per short fill; these are suggestions only and persist only after owner confirmation through `POST /api/run/taken`. `dte_comparisons` compares matching 21–45 DTE owner fills with candidates retained in that run's saved shortlist; comparisons with no retained alternative are omitted. This is comparison-only, never fetches extra chains, and is not a full-chain ranking. Filter params: `ticker`, `preset`, `event_tier`, `dte_bucket`, `limit`.
 - `POST /api/options/analytics/outcomes/ingest?days=90&cash_flow_days=7` — query-only pull of broker fills, order fees, and cash movements from OpenD (OpenD-gated, 6/min, `days` capped at the SDK 90-day window). Ingestion only ever reads; nothing is placed, modified, or cancelled.
 
 ### Portfolio / positions
@@ -84,3 +84,29 @@ the underlying coverage total.
 `/api/earnings/vol-signals`, `/api/risk/*`, `/api/signals/*`, `/api/macro/*`,
 `/api/llm/*`, `/api/options/prefilled-close`. See docs/migration-ledger.md.
 
+
+## Wheel desk snapshot and manual tickets (schema 3)
+
+`GET /api/run` includes defaulted `campaigns`, `roll_candidates`,
+`deployment_plan` (lines, skipped reasons, total_cash, total_credit, reserve_cash,
+cash_left, capital_weighted_return_per_day), and `next_actions`. Old snapshots
+load with empty sections. Actions carry holding state, verdict, reasons,
+optional manual ticket legs, follow-up, campaign, and read-time eligibility.
+The old `capital_recovery` field remains compatible for saved snapshots; the
+screen uses campaign records. Presets are v9; settings still expose one tunable.
+
+`GET /api/run/copy-check` adds `kind=open|close|roll` (default open).
+All kinds send run_id,ticker,option_type,expiration,strike. Close also sends the
+exact held quantity. Roll's contract fields identify the target and additionally
+send close_expiration,close_strike,quantity. Responses retain mode, reasons,
+matched_run,matched_contract,contract; rolls add close_contract and net_credit
+in dollars per share. Close and roll query the current broker short position
+and direct executable bid/ask, reject stale open-session quotes/changed quantity,
+and never execute an order. Cash-plan copying checks every line separately.
+
+Fill history remains manually ingestible while G1 is unmeasured. Missing fees
+produce unknown outcomes and block adjusted basis; they do not invalidate
+successfully ingested deal history. Outcome suggestions use preceding runs and
+one best match per fill; empty DTE comparisons are omitted. Growth baselines
+persist per account through snapshot retention, and invalid NAV samples are
+excluded.

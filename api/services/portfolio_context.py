@@ -96,6 +96,110 @@ class PortfolioContext:
         self._config_provider = config_provider
         self.config = config_provider.config if config_provider and hasattr(config_provider, "config") else {}
         self._portfolio_service = None
+        self._campaign_refresh_evidence = {"ok": False, "reason": "fill_pull_not_successful_this_refresh"}
+        self._campaign_service = None
+
+    def set_campaign_refresh_evidence(self, result):
+        """Attach the fill pull result belonging to the current refresh only."""
+        result = dict(result or {}) if isinstance(result, dict) else {}
+        self._campaign_refresh_evidence = {"ok": bool(result.get("ok")), "reason": result.get("reason", "")}
+        if self._campaign_service is not None:
+            self._campaign_service.set_refresh_evidence(self._campaign_refresh_evidence)
+
+    def set_campaign_capability(self, capability):
+        """Pass through stored, account-scoped G1 evidence from the refresh owner."""
+        if self._campaign_service is not None:
+            self._campaign_service.set_capability(capability)
+        else:
+            self._campaign_capability = dict(capability or {}) if isinstance(capability, dict) else {}
+
+    def _get_campaign_service(self):
+        if self._campaign_service is not None:
+            return self._campaign_service
+        database = getattr(self._portfolio_service_provider, "db", None)
+        if database is None:
+            return None
+        from api.services.campaign_service import CampaignService
+
+        self._campaign_service = CampaignService(database)
+        self._campaign_service.set_refresh_evidence(self._campaign_refresh_evidence)
+        self._campaign_service.set_capability(getattr(self, "_campaign_capability", {}))
+        return self._campaign_service
+
+    def _attach_campaigns(self, context, portfolio_service, stock_positions=None, option_positions=None):
+        campaign_service = self._get_campaign_service()
+        stock_positions = [dict(row) for row in (stock_positions or []) if isinstance(row, dict)]
+        if not stock_positions:
+            stock_positions = [
+                dict(row)
+                for row in context.get("positions", {}).values()
+                if isinstance(row, dict) and str(row.get("security_type", "") or "").upper() == "STK"
+            ]
+        if not stock_positions:
+            context["campaigns"] = []
+            return context
+        open_option_positions = [dict(row) for row in (option_positions or []) if isinstance(row, dict)]
+        if not open_option_positions:
+            open_option_positions = [
+                dict(row)
+                for row in context.get("positions", {}).values()
+                if isinstance(row, dict) and str(row.get("security_type", "") or "").upper() == "OPT"
+            ]
+        from core.wheel_campaign import build_campaigns
+
+        identity = self._configured_campaign_identity()
+        if campaign_service is None or identity is None:
+            campaigns = build_campaigns(
+                stock_positions,
+                [],
+                fill_pull_ok=False,
+                open_option_positions=open_option_positions,
+            )
+            context["campaigns"] = campaigns
+            self._merge_campaign_basis(context, campaigns)
+            return context
+        env, account_id = identity
+        try:
+            campaigns = campaign_service.get_campaigns(
+                stock_positions,
+                env,
+                account_id,
+                fill_pull_ok=self._campaign_refresh_evidence["ok"],
+                open_option_positions=open_option_positions,
+            )
+        except Exception as exc:
+            logger.debug("Campaign fill read unavailable (%s)", type(exc).__name__)
+            campaigns = build_campaigns(
+                stock_positions,
+                [],
+                fill_pull_ok=False,
+                open_option_positions=open_option_positions,
+            )
+        context["campaigns"] = campaigns
+        self._merge_campaign_basis(context, campaigns)
+        return context
+
+    def _configured_campaign_identity(self):
+        """Resolve the already configured account identity without broker I/O."""
+        account_id = self.config.get("account_id") if isinstance(self.config, dict) else None
+        if not account_id:
+            return None
+        from core.wheel_runner import opaque_account_id
+
+        env = str((self.config.get("portfolio_env") or self.config.get("env") or "SIMULATE")).upper()
+        return env, opaque_account_id(str(account_id))
+
+    @staticmethod
+    def _merge_campaign_basis(context, campaigns):
+        by_ticker = {row["ticker"]: row for row in campaigns}
+        for key, row in list(context.get("positions", {}).items()):
+            ticker = parse_moomoo_symbol(str(row.get("symbol", key) or ""))
+            campaign = by_ticker.get(ticker)
+            if campaign:
+                row["adjusted_basis"] = campaign["adjusted_basis"]
+                row["basis_source"] = campaign["basis_source"]
+                row["basis_confidence"] = campaign["basis_confidence"]
+                row["basis_reasons"] = list(campaign["basis_reasons"])
 
     def _get_portfolio_service(self):
         if self._portfolio_service is not None:
@@ -303,7 +407,10 @@ class PortfolioContext:
                 if not portfolio:
                     return context
 
-                return self._build_context_from_cached_portfolio(portfolio)
+                context = self._build_context_from_cached_portfolio(portfolio)
+                # Cached context has no live identity guarantee; campaign basis
+                # is attached only on an explicit broker refresh.
+                return context
             except Exception as exc:
                 logger.debug(f"Error building cached portfolio context: {exc}")
                 return context
@@ -409,7 +516,12 @@ class PortfolioContext:
         except Exception as exc:
             logger.error(f"Error building portfolio context for options scoring: {exc}")
 
-        return context
+        return self._attach_campaigns(
+            context,
+            portfolio_service,
+            stock_positions=stock_positions,
+            option_positions=option_positions,
+        )
 
     def _get_position_snapshot(self, portfolio_context, ticker):
         symbol = parse_moomoo_symbol(str(ticker or ""))

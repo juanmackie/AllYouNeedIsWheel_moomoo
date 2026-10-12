@@ -222,12 +222,15 @@ function wireMcHorizonButtons() {
 
 function renderEquityCurve(container, series) {
     container.innerHTML = '';
-    if (!series || series.length < 2) {
+    const validSeries = (Array.isArray(series) ? series : []).filter((point) =>
+        Number.isFinite(Number(point?.net_liquidation)) && Number(point.net_liquidation) > 0,
+    );
+    if (validSeries.length < 2) {
         container.textContent =
             'Not enough history yet — the curve builds one snapshot per completed run.';
         return;
     }
-    const navs = series.map((point) => point.net_liquidation).filter((v) => Number.isFinite(v));
+    const navs = validSeries.map((point) => Number(point.net_liquidation));
     const width = Math.min(720, Math.max(280, container.clientWidth || 480));
     const height = 120;
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -269,9 +272,9 @@ function renderEquityCurve(container, series) {
 
     const caption = document.createElement('p');
     caption.className = 'mb-0 mt-1 text-muted small';
-    caption.textContent = `${_fmtDate(series[0].captured_at)} → ${_fmtDate(
-        series[series.length - 1].captured_at,
-    )} · ${series.length} snapshots`;
+    caption.textContent = `${_fmtDate(validSeries[0].captured_at)} → ${_fmtDate(
+        validSeries[validSeries.length - 1].captured_at,
+    )} · ${validSeries.length} snapshots`;
     container.appendChild(caption);
 }
 
@@ -289,7 +292,10 @@ function renderPace(payload, series) {
     const etaLabelEl = document.getElementById('growth-eta-label');
     if (headingEl) headingEl.textContent = `Path to ${targetMultiple}x`;
     if (etaLabelEl) etaLabelEl.textContent = `ETA to ${targetMultiple}x`;
-    const latest = series && series.length ? series[series.length - 1] : null;
+    const validSeries = (Array.isArray(series) ? series : []).filter((point) =>
+        Number.isFinite(Number(point?.net_liquidation)) && Number(point.net_liquidation) > 0,
+    );
+    const latest = validSeries.length ? validSeries[validSeries.length - 1] : null;
 
     if (!latest) {
         if (badge) {
@@ -301,7 +307,7 @@ function renderPace(payload, series) {
         return;
     }
 
-    const currentNav = Number(latest.net_liquidation) || 0;
+    const currentNav = Number(latest.net_liquidation);
     // C07/S04: render the server's durable target and status — never recompute a
     // moving target from current NAV on the client.
     const serverPace0 = payload?.pace || {};
@@ -379,7 +385,17 @@ function renderJournal(payload) {
         return;
     }
     const winRate = analytics.win_rate;
-    winRateEl.textContent = typeof winRate === 'number' ? `${winRate.toFixed(0)}%` : '—';
+    const measuredExits = Number(analytics.measured_exit_count ?? analytics.measured_exits ?? 0);
+    const totalExits = Number(analytics.total_exits ?? 0);
+    const measuredWins = Number(analytics.measured_wins ?? analytics.wins);
+    winRateEl.textContent = measuredExits > 0 && Number.isFinite(winRate)
+        ? `${winRate.toFixed(0)}%`
+        : '—';
+    const winRateDetail = document.getElementById('journal-win-rate-detail');
+    if (winRateDetail) {
+        const count = Number.isFinite(totalExits) ? totalExits : 0;
+        winRateDetail.textContent = `${Number.isFinite(measuredWins) ? measuredWins : 0} wins · ${measuredExits} of ${count} exits measured`;
+    }
     const exitsEl = document.getElementById('journal-exits');
     if (exitsEl) exitsEl.textContent = String(analytics.total_exits ?? 0);
     const rollsEl = document.getElementById('journal-rolls');

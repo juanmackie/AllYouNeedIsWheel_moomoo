@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-10-11 — Wheel desk
+
+Next actions now precede the shortlist: holding verdicts, manual close/roll/open
+tickets, one capped cash plan, and campaign break-even records. Preset v9 raises
+liquidity floors, adds cash reserve/group/ticker limits, and sets exit roll windows.
+Repair calls use delta/earnings safeguards with explicit assignment loss; profitable
+exit calls may LET_ASSIGN. Every cash-plan leg and close/roll ticket is revalidated
+before copying. No broker execution capability was added.
+
+Profit alerts use captured premium. Unknown win-rate evidence stays unavailable,
+invalid NAV is excluded, and the account growth baseline is durable. Outcomes
+omit duplicate/future-run suggestions and empty comparisons; unmatched puts
+retain strike-based capital-days. Historical fills are retained.
+
+The read-only broker-history probe reached OpenD, but G1 expiry behavior remains
+unmeasured. Automatic ingestion and inferred expired-worthless basis are disabled;
+production campaigns use broker basis with named reasons pending that gate.
+
+
 ## 2026-10-11 — Functional sweep and Aggressive startup
 
 The scanner now loads the saved preset when services start. Previously the

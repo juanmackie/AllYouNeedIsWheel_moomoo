@@ -464,3 +464,36 @@ Session 1.
 > **Status note (2026-09, P2b reconciliation):** This runbook remains the required
 > owner-run acceptance procedure referenced by `PLAN.md` step 11 and “Remaining
 > open work”. It is not itself a code checklist; track its completion in `PLAN.md`.
+
+## Wheel desk acceptance addendum (2026-10-11)
+
+Use the Wheel desk smoke steps in `tests/README.md` for schema-3 sections,
+v9 liquidity/allocation, campaign reasons, and every manual ticket kind.
+G1 history results are recorded separately in `docs/broker-history-capability.md`;
+unmeasured expired-worthless encoding keeps automatic ingestion and inferred
+basis disabled. Compare current broker holdings rather than hard-coding the
+illustrative AA/SOFI/SPCX/UBER plan values. Copying remains a manual owner action;
+automated query-only checks never imply an order was placed.
+
+### Wheel desk verification, 2026-10-12
+
+- Ruff lint and format checks and the diff whitespace check passed.
+- Python verification passed 1,078 tests and 53 subtests. Frontend verification
+  passed 148 tests. The browser suite passed 22 checks with one stale preset
+  assertion; after correcting the v9 spread/OI expectation, its focused rerun
+  passed. All 23 browser checks therefore passed, with the real open-session
+  check skipped because the US market was closed. The five evening checks
+  also passed again after cash ticket credits began using revalidated bids.
+- A query-only refresh using the configured local OpenD covered all 67 union
+  watchlist names and persisted schema 3, six next actions, and four campaigns.
+  Direct close and roll copy checks confirmed the current broker short
+  quantities and returned staged mode. No clipboard copy or order was issued
+  in this live acceptance check.
+- Desktop and 390-pixel mobile browser inspection found no JavaScript errors
+  or horizontal overflow. Campaigns explain unverified history in plain text
+  and use Moomoo average cost without claiming banked premium.
+- G1 remains unmeasured for confirmed worthless expiry and authoritative
+  trade-query quota/deadline behavior. Automatic refresh-time history pulls,
+  inferred expiry credits, and production premium-adjusted basis remain
+  disabled. This closed-market check does not complete the runbook's separate
+  open-session acceptance requirements.

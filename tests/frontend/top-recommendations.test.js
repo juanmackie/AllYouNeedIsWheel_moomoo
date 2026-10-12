@@ -1209,6 +1209,7 @@ describe('P1a revalidate-then-copy', () => {
     btn.click();
     await vi.waitFor(() => expect(revalidateCopy).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(document.querySelector('.recommendation-card .copy-status')).toBeTruthy());
+    await vi.waitFor(() => expect(document.querySelector('.recommendation-card .copy-status').textContent).toContain('Copy blocked:'));
     const status = document.querySelector('.recommendation-card .copy-status');
     expect(status.textContent).toBe(
       'Copy blocked: market appears open now (fresh broker quotes) — refresh for live copy; staging blocked'

@@ -169,6 +169,14 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
         response = self.client.get("/api/portfolio/history")
         self.assertEqual(response.status_code, 503)
 
+    def test_growth_baseline_setting_key_is_identity_scoped_and_opaque(self):
+        from api.routes.portfolio import _growth_baseline_key
+
+        first = _growth_baseline_key("REAL", "account-secret-id")
+        self.assertNotIn("account-secret-id", first)
+        self.assertNotEqual(first, _growth_baseline_key("SIMULATE", "account-secret-id"))
+        self.assertNotEqual(first, _growth_baseline_key("REAL", "other-account"))
+
     @patch("api.services.config.get_config", return_value={"portfolio_env": "SIMULATE", "account_id": ""})
     def test_history_success_and_source_policy(self, mock_get_config):
         mock_db = MagicMock()
@@ -213,6 +221,11 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
         chunk = [dict(c.kwargs) for c in mock_db.get_portfolio_history.call_args_list]
         self.assertIn({"limit": 10, "env": "SIMULATE", "account_id": ""}, chunk)
         self.assertIn({"unbounded": True, "env": "SIMULATE", "account_id": ""}, chunk)
+        mock_db.set_setting.assert_called()
+        baseline_call = next(
+            call for call in mock_db.set_setting.call_args_list if str(call.args[0]).startswith("growth_baseline:")
+        )
+        self.assertIn('"net_liquidation":1000.0', baseline_call.args[1])
 
     def test_history_invalid_limit(self):
         mock_db = MagicMock()
@@ -264,6 +277,34 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
         )
         self.assertEqual(small["pace"]["baseline_nav"], 1000.0)
         self.assertEqual(small["pace"]["target_nav"], 5000.0)
+
+    @patch("api.services.config.get_config", return_value={"portfolio_env": "SIMULATE", "account_id": ""})
+    def test_nonpositive_nav_is_excluded_from_equity_curve(self, mock_get_config):
+        mock_db = MagicMock()
+        mock_db.get_setting.return_value = '{"net_liquidation": 1000, "captured_at": "2026-01-01T00:00:00"}'
+        samples = [
+            {
+                "run_id": "bad",
+                "captured_at": "2026-08-19T15:00:00+00:00",
+                "net_liquidation": 0,
+                "cash_available": 0,
+                "cash_available_for_csp": 0,
+                "cash_reserved_for_csp": 0,
+            },
+            {
+                "run_id": "good",
+                "captured_at": "2026-08-20T15:00:00+00:00",
+                "net_liquidation": 1200,
+                "cash_available": 0,
+                "cash_available_for_csp": 0,
+                "cash_reserved_for_csp": 0,
+            },
+        ]
+        mock_db.get_portfolio_history.return_value = samples
+        self.app.config["database"] = mock_db
+        payload = json.loads(self.client.get("/api/portfolio/history").data)
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual([item["run_id"] for item in payload["series"]], ["good"])
 
 
 class TestScorePositionExitInputs(unittest.TestCase):

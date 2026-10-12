@@ -243,17 +243,15 @@ def _compute_roll_pressure(decision) -> float:
 
 def _compute_profit_target_progress(decision, target_pct: float = 50.0) -> float:
     """
-    Compute how close the position is to a profit target (0-100).
-    Uses DTE decay as proxy when entry data is unavailable.
-    """
-    if decision.premium_per_contract <= 0:
-        return 0.0
-    if decision.dte <= 0:
-        return 100.0
+    Compute progress toward the premium capture target from measured P&L.
 
-    entry_dte_estimate = 30
-    progress = _clamp(1 - (decision.dte / entry_dte_estimate)) * 100
-    return round(progress, 1)
+    Unknown entry credit stays at zero progress; elapsed time and expiration
+    never stand in for profit.
+    """
+    captured = getattr(decision, "captured_profit_pct", None)
+    if captured is None or target_pct <= 0:
+        return 0.0
+    return round(_clamp(float(captured) / float(target_pct)) * 100, 1)
 
 
 def _compute_size_fit(decision, portfolio_context: dict) -> float:

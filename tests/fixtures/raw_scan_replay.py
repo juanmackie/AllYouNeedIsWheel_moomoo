@@ -75,7 +75,7 @@ def build_raw_scan_replay():
 
 
 def build_preset_flow_replay():
-    """Return broker evidence at each v7 preset's inclusive CSP boundary."""
+    """Return broker evidence at each v9 preset's inclusive CSP boundary."""
     scenario = build_raw_scan_replay()
     scenario["watchlist"] = ["COMMON", "BALANCED", "AGGRESSIVE"]
     scenario["preset_key"] = "balanced"
@@ -86,11 +86,11 @@ def build_preset_flow_replay():
 
     contract_specs = (
         # Conservative's inclusive minimum DTE/OTM and upper delta boundary.
-        ("COMMON", 21, 7.0, -0.33, 0.15, 0.16, 25, 1),
+        ("COMMON", 21, 7.0, -0.33, 0.15, 0.16, 100, 1),
         # Balanced's inclusive minimum DTE/OTM and upper delta boundary.
-        ("BALANCED", 14, 5.0, -0.42, 0.10, 0.15, 10, 1),
+        ("BALANCED", 14, 5.0, -0.42, 0.10, 0.12, 75, 1),
         # Aggressive's inclusive DTE/OTM/delta, premium, OI, and spread edges.
-        ("AGGRESSIVE", 7, 3.0, -0.50, 0.05, 0.10, 5, 1),
+        ("AGGRESSIVE", 7, 3.0, -0.50, 0.05, 0.06, 50, 1),
     )
     stock_price = 100.0
     for ticker, dte, otm_pct, delta, bid, ask, open_interest, volume in contract_specs:

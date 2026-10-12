@@ -179,6 +179,9 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "stress_loss": wd.get("stress_loss", 0),
         "confidence_score": wd.get("confidence_score", 100),
         "covered_call_intent": wd.get("covered_call_intent", ""),
+        "loss_if_called": wd.get("loss_if_called"),
+        "if_called_pnl_vs_basis": wd.get("if_called_pnl_vs_basis"),
+        "basis_source": wd.get("basis_source"),
         # Signal-only fields
         "signal_type": "covered_call" if is_covered_call else ("csp" if is_csp_signal else opt_type.lower()),
         "strategy": "wheel",

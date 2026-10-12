@@ -54,7 +54,7 @@ import logging
 from collections import deque
 from datetime import datetime, timedelta
 
-from api.services.recommendation_ranking import rank_candidates
+from api.services.recommendation_ranking import rank_candidates, rank_key
 from api.services.taken_links import read_taken_links
 from core.outcome_attribution import (
     broker_price_to_contract_credit,
@@ -159,10 +159,18 @@ def build_link_suggestions(
     except (TypeError, ValueError):
         return []
     already_linked = set()
+    linked_traded_identities = set()
     for link in taken_links or []:
         if not isinstance(link, dict):
             continue
         identity = signal_identity(link.get("recommendation"))
+        traded_identity = signal_identity(link.get("traded"))
+        if traded_identity is not None:
+            linked_traded_identities.add(traded_identity)
+        elif identity is not None:
+            # Older owner links may not persist a distinct traded contract.
+            # Retain their existing suppression behavior as a safe fallback.
+            linked_traded_identities.add(identity)
         run_id = str(link.get("run_id") or "").strip()
         if identity is not None and run_id:
             already_linked.add((run_id, identity))
@@ -192,15 +200,15 @@ def build_link_suggestions(
     grouped = {}
     for fill in option_fills or []:
         identity = fill_identity(fill)
-        if identity is None or str(fill.get("side") or "").upper() != "SELL":
+        if identity is None or identity in linked_traded_identities or str(fill.get("side") or "").upper() != "SELL":
             continue
         fill_time = parse_timestamp(fill.get("captured_at"))
         if fill_time is None:
             continue
         ticker, _expiration, option_type, _strike = identity
         for run_id, generated_at, run_time, candidates in candidate_runs:
-            delta_days = (fill_time.date() - run_time.date()).days
-            if abs(delta_days) > window:
+            delta_days = (fill_time - run_time).total_seconds() / 86_400.0
+            if delta_days <= 0 or delta_days > window:
                 continue
             for recommendation_identity, recommendation in candidates.items():
                 if (recommendation_identity[0], recommendation_identity[2]) != (ticker, option_type):
@@ -229,6 +237,9 @@ def build_link_suggestions(
                         "_qty": 0.0,
                         "_weighted_price": 0.0,
                         "_best_distance": None,
+                        # Keep ranking evidence private until selection is
+                        # complete; public link suggestions remain unchanged.
+                        "_rank_key": rank_key(recommendation),
                     },
                 )
                 qty = abs(safe_float(fill.get("qty"), 0.0))
@@ -249,17 +260,24 @@ def build_link_suggestions(
             suggestion["traded"]["price"] = weighted_price / qty
         suggestion["days_from_run"] = round(delta_days, 2)
         results.append(suggestion)
-    return sorted(
-        results,
+    # Keep only the top-ranked recommendation for each traded contract; a
+    # single fill must never produce a wall of alternative explanations.
+    results.sort(
         key=lambda item: (
+            item["_rank_key"],
             abs(item["days_from_run"]),
             item["run_generated_at"],
-            item["recommendation"]["ticker"],
-            item["recommendation"]["option_type"],
-            item["recommendation"]["expiration"],
-            item["recommendation"]["strike"],
-        ),
+        )
     )
+    best_by_fill = {}
+    for item in results:
+        traded = item["traded"]
+        key = (traded["ticker"], traded["expiration"], traded["option_type"], traded["strike"])
+        best_by_fill.setdefault(key, item)
+    selected = list(best_by_fill.values())
+    for item in selected:
+        item.pop("_rank_key", None)
+    return selected
 
 
 def build_dte_comparisons(run_snapshots, option_fills, window_days=TRADE_LINK_SUGGESTION_WINDOW_DAYS) -> list[dict]:
@@ -300,13 +318,12 @@ def build_dte_comparisons(run_snapshots, option_fills, window_days=TRADE_LINK_SU
             run_time = parse_timestamp(generated_at)
             if not run_id or run_time is None:
                 continue
-            days_from_run = (fill_time.date() - run_time.date()).days
-            if abs(days_from_run) > window:
+            days_from_run = (fill_time - run_time).total_seconds() / 86_400.0
+            if days_from_run <= 0 or days_from_run > window:
                 continue
             fill_key = (run_id, identity)
             if fill_key in seen:
                 continue
-            seen.add(fill_key)
 
             candidates_by_identity = {}
             for lane in ("signals", "csp_picks", "cc_decisions"):
@@ -330,18 +347,19 @@ def build_dte_comparisons(run_snapshots, option_fills, window_days=TRADE_LINK_SU
                 ):
                     matching.append(candidate)
             ranked = rank_candidates(matching)
-            best = None
-            if ranked:
-                candidate = ranked[0]
-                best = {
-                    "ticker": str(candidate.get("ticker") or "").upper(),
-                    "option_type": str(candidate.get("option_type") or "").upper(),
-                    "expiration": normalize_expiration_key(candidate.get("expiration")),
-                    "strike": safe_float(candidate.get("strike"), default=0.0),
-                    "dte": int(safe_float(candidate.get("dte"), default=0.0)),
-                    "saved_sample_rank": 1,
-                    "capital_velocity_per_day": safe_float(candidate.get("capital_velocity_per_day"), default=None),
-                }
+            if not ranked:
+                continue
+            seen.add(fill_key)
+            candidate = ranked[0]
+            best = {
+                "ticker": str(candidate.get("ticker") or "").upper(),
+                "option_type": str(candidate.get("option_type") or "").upper(),
+                "expiration": normalize_expiration_key(candidate.get("expiration")),
+                "strike": safe_float(candidate.get("strike"), default=0.0),
+                "dte": int(safe_float(candidate.get("dte"), default=0.0)),
+                "saved_sample_rank": 1,
+                "capital_velocity_per_day": safe_float(candidate.get("capital_velocity_per_day"), default=None),
+            }
             comparisons.append(
                 {
                     "run_id": run_id,
@@ -522,6 +540,43 @@ def _recommendation_precedes_first_fill(candidate, first_fill_timestamp) -> bool
     return generated < first
 
 
+def _has_assignment_stock_pair(option_fill, ticker, option_type, strike, stock_fills) -> bool:
+    """Require explicit broker stock movement within two seconds of a zero close.
+
+    A short put assignment buys shares; a short call assignment sells them.
+    This identifies lifecycle only. It does not claim assignment P&L or expiry
+    premium treatment while the broker history capability gate is unresolved.
+    """
+    expected_side = "BUY" if str(option_type).upper() == "PUT" else "SELL"
+    option_time = parse_timestamp(option_fill.get("captured_at"))
+    if option_time is None:
+        return False
+    try:
+        required_shares = abs(float(option_fill.get("qty", 0) or 0)) * 100
+    except (TypeError, ValueError):
+        return False
+    for stock in stock_fills:
+        if not isinstance(stock, dict):
+            continue
+        if str(stock.get("security_type", "") or "").upper() not in {"STK", "STOCK", "EQUITY"}:
+            continue
+        if str(stock.get("ticker", "") or "").strip().upper() != str(ticker).upper():
+            continue
+        if str(stock.get("side", "") or "").upper() != expected_side:
+            continue
+        try:
+            if abs(float(stock.get("qty", 0) or 0)) < required_shares:
+                continue
+            if abs(float(stock.get("price", 0) or 0) - float(strike)) > 0.01:
+                continue
+        except (TypeError, ValueError):
+            continue
+        stock_time = parse_timestamp(stock.get("captured_at"))
+        if stock_time is not None and abs((stock_time - option_time).total_seconds()) <= 2:
+            return True
+    return False
+
+
 def _select_candidate(candidates, fills) -> tuple[dict | None, str]:
     """Pick the recommendation that may explain a fill run, or None.
 
@@ -614,7 +669,7 @@ def _link_context(link) -> dict:
     }
 
 
-def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=None) -> list[dict]:
+def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=None, stock_fills=None) -> list[dict]:
     """Join recommendation signals to option fills and attribute outcomes.
 
     ``run_snapshots``: published snapshot dicts (any order; recommendations
@@ -626,7 +681,8 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
     traded contract to it (``owner-linked``). Returns one record per unique
     contract identity — the signal identity when a recommendation can be
     attributed, otherwise an unattributed evidence record for orphan fills
-    (never dropped).
+    (never dropped). ``stock_fills`` is used only to identify an explicit
+    assignment pair; it never supplies or implies P&L.
     """
     now = now or datetime.now()
 
@@ -682,20 +738,32 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
         link, linked_meta = _resolve_owner_link(links, candidates_by_run_identity)
         if linked_meta is not None:
             record = _build_record(
-                linked_meta["signal"], linked_meta, ticker, expiration, option_type, strike, fills, now
+                linked_meta["signal"],
+                linked_meta,
+                ticker,
+                expiration,
+                option_type,
+                strike,
+                fills,
+                now,
+                stock_fills=stock_fills,
             )
             record["attribution"] = ATTRIBUTION_OWNER_LINKED
         else:
             meta, attribution = _select_candidate(candidates, fills)
             if attribution != "unattributed" and meta is not None:
-                record = _build_record(meta["signal"], meta, ticker, expiration, option_type, strike, fills, now)
+                record = _build_record(
+                    meta["signal"], meta, ticker, expiration, option_type, strike, fills, now, stock_fills=stock_fills
+                )
                 record["attribution"] = attribution
             else:
                 # Orphan/unattributed fills are still real transactions: surfaced
                 # as matched evidence only, never silently dropped, never given a
                 # fabricated quoted price or a recommendation identity.
                 empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
-                record = _build_record(None, empty_meta, ticker, expiration, option_type, strike, fills, now)
+                record = _build_record(
+                    None, empty_meta, ticker, expiration, option_type, strike, fills, now, stock_fills=stock_fills
+                )
                 record["signal_type"] = "unmatched"
                 record["attribution"] = "unattributed"
         if link is not None:
@@ -720,7 +788,7 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
     return records
 
 
-def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, now) -> dict:
+def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, now, stock_fills=None) -> dict:
     quoted = quoted_credit_per_contract(signal) if signal is not None else None
     dte = signal.get("dte") if signal is not None else None
 
@@ -756,11 +824,43 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
     fees_known = bool(fills) and all(f.get("fees") is not None for f in fills)
     fees_total = sum(float(f.get("fees", 0) or 0) for f in fills) if fees_known else None
 
-    capital_per = _capital_per_contract(signal, option_type, strike) if signal is not None else None
+    capital_per = _capital_per_contract(signal, option_type, strike)
     capital_days = None
     if fills:
         if capital_per is not None:
             capital_days = capital_days_from_lots(lots, capital_per, as_of=now)
+
+    zero_price_buys = [fill for fill in close_fills if safe_float(fill.get("price"), default=None) == 0]
+    assignment_evidence = ""
+    if any(
+        _has_assignment_stock_pair(fill, ticker, option_type, strike, stock_fills or []) for fill in zero_price_buys
+    ):
+        lifecycle_status = "assigned"
+        assignment_evidence = "paired_stock_fill"
+    else:
+        try:
+            expiry_date = datetime.strptime(expiration, "%Y%m%d").date()
+        except ValueError:
+            expiry_date = None
+        as_of_date = now.date() if isinstance(now, datetime) else datetime.now().date()
+        if expiry_date is not None and expiry_date < as_of_date and (open_contracts > 0 or zero_price_buys):
+            lifecycle_status = "expired"
+        elif zero_price_buys:
+            lifecycle_status = "unresolved_zero_price_close"
+        elif open_contracts > 0:
+            lifecycle_status = "open"
+        else:
+            lifecycle_status = "closed" if fills else "pending"
+
+    if lifecycle_status in {"assigned", "expired", "unresolved_zero_price_close"}:
+        open_contracts = 0.0
+        open = False
+        if lifecycle_status == "expired" and capital_per is not None:
+            expiry_close = f"{expiration[:4]}-{expiration[4:6]}-{expiration[6:8]}T23:59:59"
+            lots = [(entry, exit_at or expiry_close, qty) for entry, exit_at, qty in lots]
+            capital_days = capital_days_from_lots(lots, capital_per, as_of=now)
+    else:
+        open = open_contracts > 0
 
     # Realized option-leg outcome (never fabricated):
     #  - no fills                     → pending (signal awaits evidence)
@@ -773,7 +873,13 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
     #  - fully closed                 → measured (realized)
     gross_premium_pnl = None
     net_pnl = None
-    if not fills:
+    if lifecycle_status == "assigned":
+        status = "assigned"
+    elif lifecycle_status == "expired":
+        status = "expired"
+    elif lifecycle_status == "unresolved_zero_price_close":
+        status = "unknown"
+    elif not fills:
         status = "pending"
     elif not fees_known:
         status = "unknown"
@@ -812,12 +918,14 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
         "gross_premium_pnl": gross_premium_pnl,  # realized option-leg gross (before fees)
         "net_pnl": net_pnl,  # realized option-leg net (after fees); None while unclosed/unknown
         "outcome_status": status,
+        "lifecycle_status": lifecycle_status,
+        "assignment_evidence": assignment_evidence,
         "pnl_scope": "option_leg" if fills else None,  # supported scope only; share/expiration/assignment stay unknown
         "collected_premium_dollars": collected_premium_dollars,
         "unrealized_premium_dollars": unrealized_premium_dollars,
         "capital_days": capital_days,
         "owner_efficiency": owner_efficiency(net_pnl, capital_days) if net_pnl is not None else None,
-        "open": bool(fills) and open_contracts > 0,
+        "open": bool(fills) and open,
         "attribution": "",  # set by build_outcome_records
         "fills": [_fill_transaction(f) for f in sorted(fills, key=lambda f: str(f.get("captured_at", "") or ""))],
     }
@@ -849,9 +957,15 @@ def aggregate_group(records) -> dict:
     """
     records = [r for r in records if isinstance(r, dict)]
     sample_size = len(records)
-    evidenced = [r for r in records if r.get("outcome_status") in ("measured", "open", "unknown")]
+    evidenced = [
+        r for r in records if r.get("outcome_status") in ("measured", "open", "unknown", "assigned", "expired")
+    ]
     realized = [r for r in records if r.get("net_pnl") is not None]
-    unknown = [r for r in records if r.get("outcome_status") in ("open", "unknown") and r.get("net_pnl") is None]
+    unknown = [
+        r
+        for r in records
+        if r.get("outcome_status") in ("open", "unknown", "assigned", "expired") and r.get("net_pnl") is None
+    ]
     pending = [r for r in records if r.get("outcome_status") == "pending"]
 
     # The summary walks every evidenced record: net_dollars sums only realized
@@ -990,6 +1104,12 @@ class OutcomeService:
             security_type="OPT",
             limit=max(1, int(fill_limit)),
         )
+        stock_fills = self._db.get_fills(
+            env=env,
+            account_id=account_id,
+            security_type="STK",
+            limit=max(1, int(fill_limit)),
+        )
         snapshots = self._db.get_run_snapshots(env=env, account_id=account_id, limit=max(1, int(snapshot_limit)))
         taken_links = read_taken_links(self._db, env, account_id)
         link_suggestions = build_link_suggestions(snapshots, fills, taken_links=taken_links)
@@ -998,7 +1118,7 @@ class OutcomeService:
             ticker_filter = str(ticker).upper()
             link_suggestions = [item for item in link_suggestions if item["recommendation"]["ticker"] == ticker_filter]
             dte_comparisons = [item for item in dte_comparisons if item["traded"]["ticker"] == ticker_filter]
-        records = build_outcome_records(snapshots, fills, taken_links=taken_links)
+        records = build_outcome_records(snapshots, fills, taken_links=taken_links, stock_fills=stock_fills)
         records = filter_records(
             records, ticker=ticker, preset=preset, event_tier=event_tier, dte_bucket_filter=dte_bucket
         )

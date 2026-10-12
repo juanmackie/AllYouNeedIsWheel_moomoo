@@ -74,7 +74,7 @@ def get_position_alerts():
                     }
                 )
 
-            if decision.profit_target_progress >= 50:
+            if decision.profit_target_progress is not None and decision.profit_target_progress >= 50:
                 alerts.append(
                     {
                         "ticker": decision.ticker,

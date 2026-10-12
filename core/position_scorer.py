@@ -115,11 +115,22 @@ def score_existing_position(
     # Compute roll pressure
     decision.roll_pressure = _compute_roll_pressure(decision)
 
-    # Compute profit target progress
-    decision.profit_target_progress = _compute_profit_target_progress(decision)
-
     # Exit playbook verdict (deterministic rules, preset-driven thresholds).
     entry_credit = float(position_data.get("avg_cost", 0) or 0)
+    decision.captured_profit_pct = captured_profit_pct_for_short(entry_credit, decision.mid_price)
+    decision.profit_target_progress = _compute_profit_target_progress(decision)
+    adjusted_basis = position_data.get("adjusted_basis")
+    if adjusted_basis is None:
+        adjusted_basis = (portfolio_context.get("positions", {}).get(ticker, {}) or {}).get("adjusted_basis")
+    assignment_pnl = None
+    try:
+        if option_type == "CALL" and adjusted_basis is not None and float(adjusted_basis) > 0:
+            assignment_pnl = (strike - float(adjusted_basis) + entry_credit) * 100
+    except (TypeError, ValueError):
+        assignment_pnl = None
+    intent = position_data.get("covered_call_intent")
+    if option_type == "CALL" and intent is None and assignment_pnl is not None:
+        intent = "income" if assignment_pnl >= 0 else "repair"
     exit_verdict = _evaluate_position_exit(
         decision,
         entry_credit_per_contract=entry_credit,
@@ -129,14 +140,21 @@ def score_existing_position(
         delta=raw_delta if delta_available else None,
         thresholds=ExitThresholds(
             profit_take_pct=float(portfolio_context.get("exit_profit_take_pct", 50.0) or 50.0),
-            roll_dte=int(portfolio_context.get("exit_roll_dte", 21) or 21),
+            roll_dte=int(portfolio_context.get("roll_dte", portfolio_context.get("exit_roll_dte", 21)) or 21),
             exit_delta=float(portfolio_context.get("exit_delta", 0.65) or 0.65),
             deep_itm_pct=float(portfolio_context.get("exit_deep_itm_pct", 15.0) or 15.0),
             stop_loss_pct=float(portfolio_context.get("exit_stop_loss_pct", -100.0) or -100.0),
+            repair_defend_delta=float(portfolio_context.get("repair_defend_delta", 0.40) or 0.40),
+            repair_defend_dte=int(portfolio_context.get("repair_defend_dte", 3) or 3),
+            repair_defend_otm_pct=float(portfolio_context.get("repair_defend_otm_pct", 2.0) or 2.0),
         ),
+        assignment_pnl=assignment_pnl,
+        assignment_strike=strike,
+        covered_call_intent=intent,
     )
     decision.exit_verdict = exit_verdict.verdict
     decision.exit_reasons = exit_verdict.reasons
+    decision.exit_reason_codes = exit_verdict.reason_codes
     decision.roll_target = exit_verdict.roll_target
 
     # Size fit
@@ -180,6 +198,9 @@ def _evaluate_position_exit(
     roll_target: dict | None = None,
     thresholds: ExitThresholds | None = None,
     delta: float | None = None,
+    assignment_pnl: float | None = None,
+    assignment_strike: float | None = None,
+    covered_call_intent: str | None = None,
 ):
     """Bridge a scored open position into the exit playbook.
 
@@ -224,5 +245,8 @@ def _evaluate_position_exit(
         thresholds=thresholds,
         rotation_comparison=rotation_comparison,
         roll_target=roll_target,
+        assignment_pnl=assignment_pnl,
+        assignment_strike=assignment_strike,
+        covered_call_intent=covered_call_intent,
     )
     return verdict

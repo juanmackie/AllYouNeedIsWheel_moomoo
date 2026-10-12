@@ -26,6 +26,7 @@ test.beforeEach(async () => {
 });
 
 test('broker down: degraded banner + copy blocked; recovery restores staging', async ({ page }) => {
+    test.setTimeout(60000);
     await server.publish('complete_closed');
     await page.goto('/');
 

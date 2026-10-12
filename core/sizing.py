@@ -16,8 +16,18 @@ from math import isfinite
 from core.ticker_utils import earnings_underlying_ticker
 
 
-def deployment_plan(candidates: list[dict] | None, cash_available: float, max_per_underlying: int = 1) -> list[dict]:
-    """Allocate remaining CSP cash across already-ranked candidates.
+def deployment_plan(
+    candidates: list[dict] | None,
+    cash_available: float,
+    max_per_underlying: int = 1,
+    *,
+    reserve_pct: float = 10.0,
+    per_underlying_cap_pct: float = 35.0,
+    group_cap_pct: float = 35.0,
+    leveraged_tickers: set[str] | list[str] | tuple[str, ...] = (),
+    portfolio_context: dict | None = None,
+) -> dict:
+    """Allocate CSP cash across already-ranked candidates.
 
     Candidates are expected to be in backend rank order. This helper never
     creates a signal: it only sizes existing candidates using their broker-
@@ -33,25 +43,77 @@ def deployment_plan(candidates: list[dict] | None, cash_available: float, max_pe
         underlying_cap = max(int(max_per_underlying), 0)
     except (TypeError, ValueError):
         underlying_cap = 1
+    try:
+        reserve_pct = min(max(float(reserve_pct), 0.0), 100.0)
+        per_underlying_cap_pct = min(max(float(per_underlying_cap_pct), 0.0), 100.0)
+        group_cap_pct = min(max(float(group_cap_pct), 0.0), 100.0)
+    except (TypeError, ValueError):
+        reserve_pct, per_underlying_cap_pct, group_cap_pct = 10.0, 35.0, 35.0
+    budget = round(remaining * (1.0 - reserve_pct / 100.0), 2)
+    ticker_cap = remaining * per_underlying_cap_pct / 100.0
+    leveraged_cap = remaining * group_cap_pct / 100.0
+    room = budget
     selected: list[dict] = []
+    skipped: list[dict] = []
     counts: dict[str, int] = {}
+    ticker_cash: dict[str, float] = {}
+    leveraged_cash = 0.0
+    leveraged = {earnings_underlying_ticker(str(t or "")).upper() for t in leveraged_tickers}
+
+    def skip(candidate: dict, reason_code: str, reason: str) -> None:
+        skipped.append(
+            {"ticker": candidate.get("ticker", ""), "contract": candidate, "reason_code": reason_code, "reason": reason}
+        )
 
     for candidate in candidates or []:
         if not isinstance(candidate, dict) or str(candidate.get("option_type", "")).upper() != "PUT":
+            continue
+        if candidate.get("research_only") or candidate.get("copy_eligible") is False:
+            skip(candidate, "review_only", "Candidate is not copy eligible")
             continue
         try:
             cash_required = float(candidate.get("cash_required", 0) or 0)
             requested = int(candidate.get("recommended_contracts", 0) or 0)
         except (TypeError, ValueError):
+            skip(candidate, "invalid_sizing", "Candidate has invalid cash or quantity inputs")
             continue
-        if cash_required <= 0 or requested <= 0 or remaining < cash_required:
+        if cash_required <= 0 or requested <= 0:
+            skip(candidate, "invalid_sizing", "Candidate has no positive cash requirement or quantity")
             continue
 
         underlying = earnings_underlying_ticker(str(candidate.get("ticker", "") or "")).upper()
-        if not underlying or counts.get(underlying, 0) >= underlying_cap:
+        if not underlying:
+            skip(candidate, "invalid_ticker", "Candidate has no canonical ticker")
             continue
-        contracts = min(requested, int(remaining // cash_required))
+        if counts.get(underlying, 0) >= underlying_cap:
+            skip(candidate, "duplicate_ticker", "A line for this ticker is already in the cash plan")
+            continue
+        position = ((portfolio_context or {}).get("positions", {}) or {}).get(underlying, {})
+        try:
+            shares = float(position.get("position", 0) or 0)
+            adjusted_basis = float(position.get("adjusted_basis", position.get("avg_cost", 0)) or 0)
+            market_price = float(position.get("market_price", 0) or 0)
+            if market_price <= 0 and shares > 0:
+                market_price = float(position.get("market_val", position.get("market_value", 0)) or 0) / shares
+        except (AttributeError, TypeError, ValueError):
+            shares = adjusted_basis = market_price = 0.0
+        if shares > 0 and adjusted_basis > 0 and market_price > 0 and market_price < adjusted_basis:
+            skip(candidate, "held_below_adjusted_basis", "Shares are held below adjusted basis")
+            continue
+        if shares > 0 and (adjusted_basis <= 0 or market_price <= 0):
+            skip(candidate, "held_basis_or_price_unavailable", "Held-share basis or market price is unavailable")
+            continue
+        line_room = min(room, max(ticker_cap - ticker_cash.get(underlying, 0.0), 0.0))
+        if underlying in leveraged:
+            line_room = min(line_room, max(leveraged_cap - leveraged_cash, 0.0))
+        contracts = min(requested, int(line_room // cash_required))
         if contracts <= 0:
+            code = (
+                "leveraged_group_cap"
+                if underlying in leveraged and leveraged_cap - leveraged_cash < cash_required
+                else ("ticker_cap" if ticker_cap - ticker_cash.get(underlying, 0.0) < cash_required else "cash_budget")
+            )
+            skip(candidate, code, "No cash remains within the configured allocation caps")
             continue
 
         planned = dict(candidate)
@@ -61,12 +123,33 @@ def deployment_plan(candidates: list[dict] | None, cash_available: float, max_pe
             contracts * float(candidate.get("bid_premium_per_contract", candidate.get("premium_per_contract", 0)) or 0),
             2,
         )
-        remaining = round(remaining - planned["deployment_cash_required"], 2)
-        planned["deployment_cash_remaining"] = remaining
+        spent = planned["deployment_cash_required"]
+        room = round(room - spent, 2)
+        ticker_cash[underlying] = ticker_cash.get(underlying, 0.0) + spent
+        if underlying in leveraged:
+            leveraged_cash += spent
+        planned["deployment_cash_remaining"] = room
         selected.append(planned)
         counts[underlying] = counts.get(underlying, 0) + 1
 
-    return selected
+    total_cash = round(sum(item["deployment_cash_required"] for item in selected), 2)
+    total_credit = round(sum(item["deployment_income"] for item in selected), 2)
+    weighted_return = (
+        sum(item["deployment_cash_required"] * float(item.get("capital_velocity_per_day", 0) or 0) for item in selected)
+        / total_cash
+        if total_cash
+        else 0.0
+    )
+    return {
+        "lines": selected,
+        "skipped": skipped,
+        "total_cash": total_cash,
+        "total_credit": total_credit,
+        "reserve_cash": round(remaining * reserve_pct / 100.0, 2),
+        "cash_left": round(remaining - total_cash, 2),
+        "cash_budget": round(budget, 2),
+        "capital_weighted_return_per_day": round(weighted_return, 8),
+    }
 
 
 def remaining_underlying_capital(

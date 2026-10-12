@@ -9,7 +9,7 @@
 ## Ownership
 
 - `base.html` owns the masthead, theme-toggle hook (`data-theme`), navigation shell, and global markup.
-- `dashboard.html` owns the dashboard page structure: numbered, bordered areas keep scan state first, followed by the visible shortlist, account and income, and live positions; growth, outcomes, watchlist controls, and supplementary options data are separate native disclosures collapsed by default; scan provenance remains visible at the page end. The compact section navigation groups primary review links separately from exploration links. Preserve all partial IDs and class names.
+- `dashboard.html` owns the dashboard page structure: numbered, bordered areas keep scan state first, followed by next actions, the visible shortlist, account and income, and live positions; growth, outcomes, watchlist controls, and supplementary options data are separate native disclosures collapsed by default; scan provenance remains visible at the page end. The compact section navigation groups primary review links separately from exploration links. Preserve all partial IDs and class names.
 - `partials/common/` owns shared tables and footer-level common UI.
 - `partials/components/` owns reusable modal/component fragments.
 - `partials/dashboard/` owns dashboard-specific panels and tables.
@@ -38,3 +38,5 @@
 - Favor partials for repeated markup.
 - Update matching JavaScript (`main.js`) when new interactive elements (e.g. theme toggle) are added.
 - Keep all Bootstrap shim class names intact (`.badge`, `.alert-*`, `.btn`, `.table`, `.d-none`).
+
+- `next_actions.html` directly follows scan status; `#run-warning-banner` stays under the strip. Campaign/break-even records replace the capital-recovery panel. Next action cards never add `.recommendation-card` nodes to the shortlist.

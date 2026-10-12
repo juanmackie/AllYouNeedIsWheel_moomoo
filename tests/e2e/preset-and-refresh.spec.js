@@ -156,7 +156,7 @@ test('preset change flips the active preset and triggers a republished refresh',
     await page.goto('/');
 
     await expect(page.locator('#run-preset')).toContainText('Balanced');
-    await expect(page.locator('#run-snapshot-preset')).toContainText('Balanced v7');
+    await expect(page.locator('#run-snapshot-preset')).toContainText('Balanced v9');
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
     await expect(page.locator('#top-recommendations-content')).toContainText('AAPL');
 
@@ -178,13 +178,13 @@ test('preset change flips the active preset and triggers a republished refresh',
 
     // The new run is adopted: Aggressive label, new publish, aggressive cards.
     await expect(page.locator('#run-preset')).toContainText('Aggressive', { timeout: 20000 });
-    await expect(page.locator('#run-snapshot-preset')).toContainText('Aggressive v7', { timeout: 20000 });
+    await expect(page.locator('#run-snapshot-preset')).toContainText('Aggressive v9', { timeout: 20000 });
     await expect
         .poll(() => page.locator('#run-last-success').innerText())
         .not.toBe(lastSuccessBefore);
     await expect(page.locator('#top-recommendations-content')).toContainText('MSFT', { timeout: 20000 });
     await expect(page.locator('#top-recommendations-content .recommendation-card')).toHaveCount(2);
-    await expect(page.locator('#strategy-rules-text')).toContainText('AGGRESSIVE v7');
+    await expect(page.locator('#strategy-rules-text')).toContainText('AGGRESSIVE v9');
     await expect(page.locator('#strategy-rules-text')).toContainText('0.35');
     await expect(page.locator('#strategy-rules-text')).toContainText('0.15');
     await expect(page.locator('#strategy-rules-text')).toContainText('CSP DTE 7-35 (pref 14)');
@@ -194,8 +194,8 @@ test('preset change flips the active preset and triggers a republished refresh',
     await expect(page.locator('#strategy-rules-text')).toContainText('90% buying power per CSP');
     await expect(page.locator('#strategy-rules-text')).toContainText('min premium $5.00');
     await expect(page.locator('#strategy-rules-text')).toContainText('min mid $0.03');
-    await expect(page.locator('#strategy-rules-text')).toContainText('max spread 70%');
-    await expect(page.locator('#strategy-rules-text')).toContainText('min OI 5');
+    await expect(page.locator('#strategy-rules-text')).toContainText('max spread 25%');
+    await expect(page.locator('#strategy-rules-text')).toContainText('min OI 50');
     await expect(page.locator('#strategy-rules-text')).toContainText('cash-fit required');
     await expect(page.locator('#bp-amount')).toHaveText('$78,500.00');
     await expect(page.locator('#bp-broker')).toHaveText('$74,000.00');

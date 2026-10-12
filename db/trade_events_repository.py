@@ -168,7 +168,7 @@ class TradeEventsRepository:
                 wins = sum(1 for e in measured if e["pnl"] > 0)
                 measured_exits = len(measured)
                 unknown_exits = total_exits - measured_exits
-                win_rate = (wins / measured_exits * 100) if measured_exits > 0 else 0
+                win_rate = (wins / measured_exits * 100) if measured_exits > 0 else None
 
                 events_with_leakage = [e for e in exit_events if (e.get("leakage") or 0) > 0]
                 avg_leakage = (
@@ -213,7 +213,7 @@ class TradeEventsRepository:
                     "measured_exits": measured_exits,
                     "unknown_exits": unknown_exits,
                     "wins": wins,
-                    "win_rate": round(win_rate, 1),
+                    "win_rate": round(win_rate, 1) if win_rate is not None else None,
                     "avg_leakage": round(avg_leakage, 2),
                     "roll_count": len(roll_events),
                     "per_symbol": per_symbol,
@@ -226,7 +226,7 @@ class TradeEventsRepository:
                 "measured_exits": 0,
                 "unknown_exits": 0,
                 "wins": 0,
-                "win_rate": 0,
+                "win_rate": None,
                 "avg_leakage": 0,
                 "roll_count": 0,
                 "per_symbol": [],

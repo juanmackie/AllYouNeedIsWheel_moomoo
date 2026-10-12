@@ -966,6 +966,8 @@ class RecommendationEngine:
 
             # ── Lanes ──────────────────────────────────────────────────
             covered_call_candidates = []
+            roll_candidates = []
+            call_rejections = []
             recovery_call_candidates_by_ticker = {}
             available_call_contracts_by_ticker = {}
             watchlist_csp_candidates = []
@@ -1137,14 +1139,17 @@ class RecommendationEngine:
                 existing_short_calls_by_ticker[ticker] = existing_short_calls
                 available_call_contracts_by_ticker[ticker] = max(0, floor(shares_owned / 100) - existing_short_calls)
 
-            has_cc_capacity = any(available_call_contracts_by_ticker.values())
+            has_cc_capacity = any(
+                safe_float(p.get("position")) >= 100 and str(p.get("security_type", "STK")).upper() != "OPT"
+                for p in positions.values()
+            )
             if not has_cc_capacity:
                 logger.info("Skipping CC lane: no unencumbered 100-share covered-call capacity")
             if has_cc_capacity:
                 for ticker in deduped_position_tickers:
                     try:
                         available_calls = available_call_contracts_by_ticker.get(ticker, 0)
-                        if available_calls <= 0:
+                        if safe_float(positions.get(ticker, {}).get("position")) < 100:
                             continue
                         # Get stock price for this ticker
                         stock_price = conn.get_stock_price(ticker)
@@ -1172,9 +1177,6 @@ class RecommendationEngine:
                         )
 
                         # Determine OTM target — from the active preset
-                        if available_calls <= 0:
-                            continue
-
                         sp = self._preset_profile
                         otm_target = sp.get("call_default_otm_pct", 10)
 
@@ -1185,11 +1187,17 @@ class RecommendationEngine:
                             "CALL",
                             growth_mode_config=self._preset_profile,
                         )
+                        scan_context = dict(portfolio_context)
+                        scan_context["short_calls"] = {
+                            k: v
+                            for k, v in (short_calls or {}).items()
+                            if earnings_underlying_ticker(str(k)).upper() != underlying
+                        }
                         result = self._options_data_provider._process_ticker_for_otm(
                             conn=conn,
                             ticker=ticker,
                             otm_percentage=otm_target,  # Growth-tuned or default OTM
-                            portfolio_context=portfolio_context,
+                            portfolio_context=scan_context,
                             expiration=None,  # Get all expirations
                             option_type="CALL",  # Covered-call lane only
                             screening_profile=call_profile,
@@ -1205,6 +1213,44 @@ class RecommendationEngine:
                             "recovery_calls", result.get("calls", [])
                         )
 
+                        retained = result.get("calls", [])
+                        for call in retained:
+                            roll_candidates.append(
+                                {
+                                    "ticker": ticker,
+                                    "stock_price": stock_price,
+                                    "option_type": "CALL",
+                                    "max_contracts": total_possible_calls,
+                                    **call,
+                                }
+                            )
+                        if not retained:
+                            rejected_calls = result.get("recovery_calls") or []
+                            best = next(iter(rank_candidates(rejected_calls)), {})
+                            codes = (
+                                best.get("blocked_reason_codes")
+                                or (best.get("wheel_decision") or {}).get("blocked_reason_codes")
+                                or []
+                            )
+                            # Earnings takes precedence because it blocks all repair calls in this window.
+                            code = next(
+                                (c for c in codes if str(c).startswith("repair_earnings")),
+                                codes[0] if codes else "no_qualifying_covered_call",
+                            )
+                            call_rejections.append(
+                                {
+                                    "ticker": ticker,
+                                    "signal_type": "covered_call",
+                                    "reason_code": code,
+                                    "reason_text": "; ".join(
+                                        best.get("hard_blockers")
+                                        or (best.get("wheel_decision") or {}).get("hard_blockers")
+                                        or ["No qualifying covered call"]
+                                    ),
+                                    "actionable": False,
+                                }
+                            )
+
                         # Process eligible CALLs — covered call lane
                         if available_calls > 0:
                             for call in result.get("calls", []):
@@ -1219,6 +1265,10 @@ class RecommendationEngine:
                                         "held_position": False,
                                         "from_watchlist": False,
                                         **call,
+                                        "recommended_contracts": min(
+                                            available_calls,
+                                            int(call.get("recommended_contracts", available_calls) or available_calls),
+                                        ),
                                     }
                                 )
 
@@ -1229,7 +1279,7 @@ class RecommendationEngine:
 
             cc_elapsed = time.time() - cc_start
             logger.info(f"[TIMING] Covered call scan: {cc_elapsed:.2f}s")
-            blocked_signals = []
+            blocked_signals = list(call_rejections)
             reason_counts = {}
             # blocked_signals and reason_counts were initialized before gating.
 
@@ -1365,53 +1415,34 @@ class RecommendationEngine:
             formatted_cc = _format_rec_list(top_covered_calls)
             formatted_csp = _format_rec_list(top_watchlist_csp)
 
-            # Reserve the recommended cash from the visible top signals,
-            # then offer the next ranked affordable CSPs for idle cash. This
-            # is a planning surface only; it does not create candidates or
-            # place orders.
-            selected_keys = {
-                (
-                    str(opt.get("ticker", "")).upper(),
-                    str(opt.get("option_type", "")).upper(),
-                    str(opt.get("expiration", "")),
-                    float(opt.get("strike", 0) or 0),
-                )
-                for opt in signals
-            }
-            reserved_cash = 0.0
-            for opt in signals:
-                if str(opt.get("option_type", "")).upper() != "PUT":
-                    continue
-                try:
-                    reserved_cash += max(int(opt.get("recommended_contracts", 0) or 0), 0) * max(
-                        float(opt.get("cash_required", 0) or 0), 0.0
-                    )
-                except (TypeError, ValueError):
-                    continue
-            remaining_cash = max(cash_available_for_csp - reserved_cash, 0.0)
-            deployment_candidates = [
-                opt
-                for opt in all_candidates
-                if (
-                    str(opt.get("ticker", "")).upper(),
-                    str(opt.get("option_type", "")).upper(),
-                    str(opt.get("expiration", "")),
-                    float(opt.get("strike", 0) or 0),
-                )
-                not in selected_keys
-            ]
-            deployment = deployment_plan(deployment_candidates, remaining_cash)
-            formatted_deployment = []
-            for rank, opt in enumerate(deployment, 1):
-                formatted = format_recommendation(opt, rank)
-                for field_name in (
-                    "deployment_contracts",
-                    "deployment_cash_required",
-                    "deployment_income",
-                    "deployment_cash_remaining",
-                ):
-                    formatted[field_name] = opt.get(field_name)
-                formatted_deployment.append(formatted)
+            # One combined allocation from the copy-addressable CSP lane.
+            deployment = deployment_plan(
+                formatted_csp,
+                cash_available_for_csp,
+                max_per_underlying=self._preset_profile.get("plan_max_strikes_per_underlying", 1),
+                reserve_pct=self._preset_profile.get("plan_cash_reserve_pct", 10),
+                per_underlying_cap_pct=self._preset_profile.get("plan_max_cash_pct_per_underlying", 35),
+                group_cap_pct=self._preset_profile.get("plan_group_cap_pct", 35),
+                leveraged_tickers=self.config.get("leveraged_etf_tickers", []),
+                portfolio_context=portfolio_context,
+            )
+            held_options = [p for p in positions.values() if safe_float(p.get("position")) < 0 and p.get("option_type")]
+            retained_rolls = []
+            all_rolls = rank_candidates(roll_candidates + eligible_watchlist_csp_candidates)
+            for held in held_options:
+                underlying = earnings_underlying_ticker(str(held.get("symbol") or "")).upper()
+                matching = [
+                    c
+                    for c in all_rolls
+                    if earnings_underlying_ticker(str(c.get("ticker") or "")).upper() == underlying
+                    and c.get("option_type") == held.get("option_type")
+                    and str(c.get("expiration") or "") > str(held.get("expiration") or "")
+                ][:5]
+                for candidate in matching:
+                    candidate = dict(candidate)
+                    candidate["recommended_contracts"] = int(abs(safe_float(held.get("position"))))
+                    retained_rolls.append(candidate)
+            formatted_rolls = _format_rec_list(retained_rolls)
 
             scoring_elapsed = time.time() - cc_start - cc_elapsed
             elapsed = time.time() - start_time
@@ -1518,13 +1549,9 @@ class RecommendationEngine:
                     "count": len(formatted_csp),
                 },
                 "capital_recovery": capital_recovery,
-                "deployment_plan": {
-                    "signals": formatted_deployment,
-                    "count": len(formatted_deployment),
-                    "cash_available": round(cash_available_for_csp, 2),
-                    "cash_reserved_by_top_signals": round(reserved_cash, 2),
-                    "cash_remaining": round(remaining_cash, 2),
-                },
+                "deployment_plan": deployment,
+                "campaigns": portfolio_context.get("campaigns") or [],
+                "roll_candidates": formatted_rolls,
                 "broker_buying_power": round(broker_buying_power, 2),
                 "cash_available_for_csp": round(cash_available_for_csp, 2),
                 "watchlist_cash_fit": _build_watchlist_cash_fit_summary(

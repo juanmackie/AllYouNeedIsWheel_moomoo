@@ -1,6 +1,6 @@
 # All You Need Is Wheel (Moomoo Edition)
 
-A focused capital-return scanner for the Wheel Strategy, powered by
+A wheel desk for holdings decisions and capped cash allocation, powered by
 [Moomoo OpenAPI](https://openapi.moomoo.com/moomoo-api-doc/en/intro/intro.html)
 via local OpenD. One screen, one broker truth boundary, one ranked wheel
 decision flow.
@@ -13,8 +13,8 @@ manual copy-to-ticket suggestions for your broker UI.
 
 1. Start OpenD and log in, then launch the app.
 2. Open the dashboard and check scan status (environment, read-only state,
-   market state, coverage, quote freshness). Review the cash-secured put and
-   covered-call signals, then account capital, weekly premium, and open short
+   market state, coverage, quote freshness). Review Next actions for holdings and one cash plan, then the ranked
+   cash-secured put and covered-call signals, account capital, weekly premium, and open short
    options with exit-playbook verdicts. Section links help you move through
    the page through grouped Review and Explore links. Growth, Outcomes,
    Watchlist, and Options each have their own expandable area.

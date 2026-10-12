@@ -397,7 +397,6 @@ class TestWatchlistManagerScreeningProfile(unittest.TestCase):
             "ideal_open_interest",
             "ideal_volume",
             "ideal_spread_pct",
-            "min_volume",
             "max_expirations",
             "target_delta",
             "delta_tolerance",

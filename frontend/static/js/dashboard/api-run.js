@@ -49,13 +49,17 @@ export async function markRecommendationTaken({ run_id, ticker, option_type, exp
  * staged tickets, re-fetches last-session evidence directly from OpenD. Never
  * writes/closes anything.
  */
-export async function revalidateCopy({ run_id, ticker, option_type, expiration, strike }) {
+export async function revalidateCopy({ run_id, ticker, option_type, expiration, strike, quantity, kind, close_expiration, close_strike }) {
     const params = new URLSearchParams();
     if (run_id) params.set('run_id', run_id);
     if (ticker) params.set('ticker', ticker);
     if (option_type) params.set('option_type', option_type);
     if (expiration) params.set('expiration', expiration);
     if (strike != null) params.set('strike', String(strike));
+    if (quantity != null) params.set('quantity', String(quantity));
+    if (kind) params.set('kind', kind);
+    if (close_expiration) params.set('close_expiration', String(close_expiration).replace(/-/g, ''));
+    if (close_strike != null) params.set('close_strike', String(close_strike));
     const response = await fetchWithTimeout('/api/run/copy-check?' + params.toString(), {
         headers: { 'Cache-Control': 'no-cache' },
     }, 25000);

@@ -115,6 +115,55 @@ class TestLinkSuggestions(unittest.TestCase):
 
         self.assertEqual(build_link_suggestions([snapshot], [fill], taken_links=taken), [])
 
+    def test_suggestions_only_use_prior_runs_and_return_one_best_per_fill(self):
+        from api.services.outcome_service import build_link_suggestions
+
+        snapshots = [
+            _snapshot([_signal(strike=151.0)], generated_at="2026-01-02T15:00:00", run_id="run-old"),
+            _snapshot([_signal(strike=152.0)], generated_at="2026-01-04T15:00:00", run_id="run-near"),
+            _snapshot([_signal(strike=153.0)], generated_at="2026-01-06T15:00:00", run_id="run-after"),
+        ]
+        fill = _fill(strike=145.0, captured_at="2026-01-05T15:00:00")
+        suggestions = build_link_suggestions(snapshots, [fill])
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0]["run_id"], "run-old")
+        self.assertNotEqual(suggestions[0]["run_id"], "run-after")
+        self.assertGreaterEqual(suggestions[0]["days_from_run"], 0)
+
+    def test_suggestion_uses_ranked_full_candidate_fields(self):
+        from api.services.outcome_service import build_link_suggestions
+
+        low = _signal(strike=151.0, capital_velocity_per_day=0.001)
+        high = _signal(strike=152.0, capital_velocity_per_day=0.02)
+        snapshot = _snapshot([low, high], generated_at="2026-01-02T15:00:00", run_id="run-1")
+        fill = _fill(strike=145.0, captured_at="2026-01-03T15:00:00")
+        suggestions = build_link_suggestions([snapshot], [fill])
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0]["recommendation"]["strike"], 152.0)
+        self.assertNotIn("_rank_key", suggestions[0])
+
+    def test_linked_traded_contract_suppresses_suggestions_across_runs(self):
+        from api.services.outcome_service import build_link_suggestions
+
+        snapshots = [
+            _snapshot([_signal(strike=151.0)], generated_at="2026-01-02T15:00:00", run_id="run-1"),
+            _snapshot([_signal(strike=152.0)], generated_at="2026-01-04T15:00:00", run_id="run-2"),
+        ]
+        fill = _fill(strike=145.0, captured_at="2026-01-05T15:00:00")
+        taken = [
+            {
+                "run_id": "run-1",
+                "recommendation": _signal(strike=151.0),
+                "traded": {
+                    "ticker": "AAPL",
+                    "expiration": "20260220",
+                    "option_type": "PUT",
+                    "strike": 145.0,
+                },
+            }
+        ]
+        self.assertEqual(build_link_suggestions(snapshots, [fill], taken_links=taken), [])
+
 
 class TestDteComparisons(unittest.TestCase):
     def test_compares_owner_fill_to_best_saved_candidate_only_in_21_to_45_dte(self):
@@ -153,7 +202,7 @@ class TestDteComparisons(unittest.TestCase):
         self.assertEqual(comparisons[0]["candidate"]["dte"], 30)
         self.assertEqual(comparisons[0]["candidate"]["saved_sample_rank"], 1)
 
-    def test_reports_unavailable_when_saved_run_has_no_candidate_in_window(self):
+    def test_omits_row_when_saved_run_has_no_candidate_in_window(self):
         from api.services.outcome_service import build_dte_comparisons
 
         snapshot = _snapshot(
@@ -169,10 +218,7 @@ class TestDteComparisons(unittest.TestCase):
             captured_at="2026-01-05T15:00:00",
         )
 
-        comparison = build_dte_comparisons([snapshot], [fill])[0]
-
-        self.assertIsNone(comparison["candidate"])
-        self.assertEqual(comparison["reason"], "no_saved_candidate_in_21_45_dte_window")
+        self.assertEqual(build_dte_comparisons([snapshot], [fill]), [])
 
 
 class TestIdentities(unittest.TestCase):
@@ -314,6 +360,48 @@ class TestBuildOutcomeRecords(unittest.TestCase):
         self.assertAlmostEqual(rec["capital_days"], expected_days, places=2)
         self.assertIsNone(rec["owner_efficiency"])
         self.assertAlmostEqual(rec["unrealized_premium_dollars"], 105.0)
+
+    def test_unattributed_put_still_uses_strike_for_capital_days(self):
+        records = build_outcome_records(
+            [], [_fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")], now=NOW
+        )
+        self.assertAlmostEqual(records[0]["capital_days"], 7000 * 46.0208333333, places=2)
+
+    def test_expired_short_is_not_reported_open_or_given_inferred_profit(self):
+        records = build_outcome_records(
+            [_snapshot([_signal(expiration="20260201")])],
+            [_fill(expiration="20260201", side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=datetime(2026, 2, 20, 15, 0, 0),
+        )
+        record = records[0]
+        self.assertEqual(record["outcome_status"], "expired")
+        self.assertEqual(record["lifecycle_status"], "expired")
+        self.assertFalse(record["open"])
+        self.assertIsNone(record["net_pnl"])
+
+    def test_zero_price_buy_pairs_to_stock_fill_as_assignment_without_pnl_inference(self):
+        from api.services.outcome_service import build_outcome_records
+
+        option_fills = [
+            _fill(side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00"),
+            _fill(side="BUY", price=0.0, fees=0.0, captured_at="2026-02-05T14:30:00"),
+        ]
+        stock_fills = [
+            {
+                "security_type": "STK",
+                "ticker": "AAPL",
+                "side": "BUY",
+                "qty": 100,
+                "price": 70.0,
+                "captured_at": "2026-02-05T14:30:01",
+                "fill_id": "stock-assignment",
+            }
+        ]
+        record = build_outcome_records([], option_fills, now=NOW, stock_fills=stock_fills)[0]
+        self.assertEqual(record["lifecycle_status"], "assigned")
+        self.assertEqual(record["assignment_evidence"], "paired_stock_fill")
+        self.assertFalse(record["open"])
+        self.assertIsNone(record["net_pnl"])
 
     def test_covered_call_capital_uses_signal_stock_price(self):
         records = build_outcome_records(

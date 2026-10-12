@@ -20,6 +20,7 @@ import hashlib
 import logging
 import threading
 import uuid
+from copy import deepcopy
 
 from core.run_model import RefreshAttempt, RunMetadata, WheelRunSnapshot, utc_now_iso
 from core.utils import is_market_open
@@ -145,6 +146,7 @@ class WheelRunner:
         max_tradeable_age_sec: int = 300,
         roll_diagnostics_provider=None,
         event_context_refresher=None,
+        fills_ingest_provider=None,
     ):
         self._db = db
         self._options_service = options_service
@@ -160,6 +162,7 @@ class WheelRunner:
         # Failures must never abort the scan (best-effort, bounded on the api
         # side); core only swallows exceptions as a last line of defence.
         self._event_context_refresher = event_context_refresher
+        self._fills_ingest_provider = fills_ingest_provider
         self._latest_snapshot: WheelRunSnapshot | None = None
 
     # -- attempt helpers -------------------------------------------------
@@ -202,6 +205,11 @@ class WheelRunner:
 
             account_id = resolve_account(conn, self._config)
             opaque = opaque_account_id(account_id)
+            if self._fills_ingest_provider is not None:
+                try:
+                    self._fills_ingest_provider()
+                except Exception as exc:
+                    logger.warning("Fill refresh unavailable; using broker basis: %s", exc)
 
             self._persist_attempt(
                 RefreshAttempt(
@@ -267,6 +275,12 @@ class WheelRunner:
             fresh_candidates = list(result.get("signals") or [])
             fresh_candidates.extend((result.get("watchlist_csps") or {}).get("signals", []) or [])
             fresh_candidates.extend((result.get("covered_calls") or {}).get("signals", []) or [])
+            fresh_candidates.extend(result.get("roll_candidates") or [])
+            from core.presets import get_preset
+
+            portfolio_context["exit_profile"] = get_preset(
+                (result.get("preset") or {}).get("key")
+            ).to_screener_profile()
             roll_decisions = self._build_roll_decisions(portfolio_context, conn, fresh_candidates)
 
             snapshot = self._build_snapshot(
@@ -398,6 +412,27 @@ class WheelRunner:
             active_watchlist["last_successful_sync"] = ""
 
         preset = result.get("preset") or {}
+        from core.action_plan import build_next_actions
+
+        campaigns = deepcopy(list(result.get("campaigns") or (portfolio or {}).get("campaigns") or []))
+        best_csp = next(iter((result.get("watchlist_csps") or {}).get("signals") or []), None)
+        if best_csp:
+            for campaign in campaigns:
+                campaign["best_csp_opportunity"] = best_csp
+                block = campaign.get("break_even") or {}
+                if block.get("capital_tied_up") is not None:
+                    block["opportunity_cost_per_day"] = round(
+                        float(block["capital_tied_up"]) * float(best_csp.get("capital_velocity_per_day") or 0), 2
+                    )
+        deployment = dict(result.get("deployment_plan") or {})
+        actions = build_next_actions(
+            roll_decisions=roll_decisions,
+            cc_decisions=(result.get("covered_calls") or {}).get("signals") or [],
+            roll_candidates=result.get("roll_candidates") or [],
+            campaigns=campaigns,
+            deployment_plan=deployment,
+            rejected=result.get("blocked_signals") or [],
+        )
         run = RunMetadata(
             run_id=uuid.uuid4().hex[:16],
             generated_at=generated_at,
@@ -433,6 +468,10 @@ class WheelRunner:
             broker_buying_power=result.get("broker_buying_power"),
             cash_reserved_for_csp=result.get("cash_reserved_for_csp"),
             preflight=dict(result.get("preflight") or {}),
+            campaigns=tuple(campaigns),
+            roll_candidates=tuple(result.get("roll_candidates") or []),
+            deployment_plan=deployment,
+            next_actions=tuple(actions),
         )
 
     def latest(self) -> WheelRunSnapshot | None:
