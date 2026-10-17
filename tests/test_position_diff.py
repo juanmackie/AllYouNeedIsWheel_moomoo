@@ -10,7 +10,7 @@ import unittest
 from core.position_diff import infer_trade_events
 
 
-def _opt(symbol, expiration, opt_type, strike, qty=-1, market_price=1.5):
+def _opt(symbol, expiration, opt_type, strike, qty=-1, market_price=1.5, avg_cost=0.0):
     return {
         "symbol": symbol,
         "security_type": "OPT",
@@ -19,7 +19,7 @@ def _opt(symbol, expiration, opt_type, strike, qty=-1, market_price=1.5):
         "expiration": expiration,
         "option_type": opt_type,
         "market_price": market_price,
-        "avg_cost": 0.0,
+        "avg_cost": avg_cost,
         "market_val": market_price * 100 * abs(qty),
         "contract_key": f"{symbol} {expiration} {opt_type[:1]}{strike}",
     }
@@ -54,6 +54,27 @@ class TestInferTradeEvents(unittest.TestCase):
         self.assertEqual(event["strike"], 300.0)
         self.assertEqual(event["expiration"], "20260904")
         self.assertEqual(event["details"]["source"], "position_diff")
+
+    def test_new_short_put_entry_premium_is_average_cost_not_mark(self):
+        """Entry premium is the broker average credit per share, never the
+        current mark (a later mark would fabricate a much larger premium)."""
+        prev = _snap([])
+        curr = _snap([_opt("AXTI", "20261030", "PUT", 59, avg_cost=3.5, market_price=10.79)])
+        events = infer_trade_events(prev, curr)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "entry")
+        self.assertEqual(events[0]["premium_in"], 3.5)
+        self.assertEqual(events[0]["premium_out"], 0.0)
+        self.assertIsNone(events[0]["pnl"])
+
+    def test_new_short_put_without_average_cost_has_unknown_premium(self):
+        prev = _snap([])
+        for avg_cost in (0.0, None):
+            with self.subTest(avg_cost=avg_cost):
+                curr = _snap([_opt("SOXL", "20261030", "PUT", 40, avg_cost=avg_cost, market_price=9.5)])
+                events = infer_trade_events(prev, curr)
+                self.assertEqual(events[0]["event_type"], "entry")
+                self.assertEqual(events[0]["premium_in"], 0.0)
 
     def test_vanished_short_put_is_exit(self):
         prev = _snap([_opt("TSLA", "20260904", "PUT", 300)])

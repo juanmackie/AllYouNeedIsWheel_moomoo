@@ -379,6 +379,128 @@ class TestRecommendationEngine(unittest.TestCase):
         # Holdings checked for covered calls come from Moomoo positions.
         self.assertIn("AAPL", active["holdings_checked"])
 
+    def test_ticker_with_valid_pick_and_blocked_contract_is_scanned(self):
+        """Hard-blocked contracts beside a valid pick are diagnostics for a
+        scanned ticker, not a skipped ticker. The pick is still published."""
+        tickers = ["AAA"]
+        self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)
+        self.mock_watchlist_manager.preflight_scan_feasibility.return_value = {
+            "feasible": True,
+            "watchlist_size": 1,
+            "estimated_scan_sec": 30.0,
+            "freshness_window_sec": 300,
+            "chain_calls": 2,
+            "chain_quota_ok": True,
+            "recommended_max_size": 12,
+        }
+        engine = self._import_engine()
+        pick = {
+            "ticker": "AAA",
+            "stock_price": 150.0,
+            "option_type": "PUT",
+            "strike": 140.0,
+            "expiration": "20240315",
+            "dte": 21,
+            "mid_price": 1.55,
+            "premium_per_contract": 155.0,
+            "bid": 1.5,
+            "ask": 1.6,
+            "annualized_return": 20.0,
+            "iv_adjusted_return": 50.0,
+            "otm_pct": 6.7,
+            "delta": -0.18,
+            "implied_volatility": 0.35,
+            "open_interest": 300,
+            "volume": 200,
+            "profile_type": "monthly",
+            "warnings": [],
+        }
+        blocked = engine._make_skip_diagnostic("AAA", "blocked_by_scoring", "Hard blockers present")
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", return_value=[pick, blocked]),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations(limit=5)
+
+        by_symbol = {t["symbol"]: t for t in result["active_watchlist"]["tickers"]}
+        self.assertEqual(by_symbol["AAA"]["status"], "scanned")
+        self.assertEqual(result["scan_coverage"], {"scanned": 1, "total": 1, "complete": True})
+        self.assertEqual(result["watchlist_csps"]["count"], 1)
+
+    def test_research_only_pick_is_kept_beside_hard_blocked_diagnostics(self):
+        """Hard-blocked diagnostics must not push a research-only pick out of
+        the per-ticker result. Diagnostics sort after real picks."""
+        from types import SimpleNamespace
+
+        from api.services import recommendations
+
+        engine = self._import_engine()
+        engine._preset_profile = {"csp_min_otm_pct": 5, "csp_max_otm_pct": 15}
+        options = [{"strike": strike, "bid": 1.0, "ask": 1.1, "last": 1.0} for strike in (95, 90, 86, 85)]
+
+        def score_contract(contract, _ticker, _price, dte, *_args, **_kwargs):
+            if contract["strike"] == 95:
+                return SimpleNamespace(strike=95, premium_per_contract=100.0, dte=dte, hard_blockers=[])
+            return SimpleNamespace(
+                strike=contract["strike"],
+                premium_per_contract=0.0,
+                dte=dte,
+                hard_blockers=["Blocked"],
+                blocked_reason_codes=["blocked_by_scoring"],
+            )
+
+        def format_candidate(ticker, stock_price, decision, **_kwargs):
+            return {
+                "ticker": ticker,
+                "option_type": "PUT",
+                "strike": decision.strike,
+                "dte": decision.dte,
+                "stock_price": stock_price,
+                "bid_premium_per_contract": decision.premium_per_contract,
+                "capital_velocity_per_day": decision.premium_per_contract / (decision.strike * 100 * decision.dte),
+                "premium_velocity_per_day": decision.premium_per_contract / decision.dte,
+            }
+
+        evidence = {
+            "stock_price": 100.0,
+            "quote_fetched_at_utc": "2026-09-27T12:00:00+00:00",
+            "chains": [{"dte": 10, "exp_str": "20261005", "options": options}],
+        }
+        with (
+            patch.object(engine, "_score_csp_contract", side_effect=score_contract),
+            patch.object(recommendations, "_format_decision_to_candidate", side_effect=format_candidate),
+        ):
+            candidates = engine._score_watchlist_csp_evidence(evidence, "AAA", {"cash_available_for_csp": 500})
+
+        picks = [c for c in candidates if not c.get("_skip_diagnostic")]
+        diagnostics = [c for c in candidates if c.get("_skip_diagnostic")]
+        self.assertEqual([(p["strike"], p["research_only"]) for p in picks], [(95, True)])
+        self.assertEqual([d["reason_code"] for d in diagnostics], ["blocked_by_scoring"] * 3)
+        self.assertEqual(candidates[0]["strike"], 95)
+
+    def test_holdings_checked_lists_covered_call_stock_holdings_only(self):
+        """Option contracts and stock below 100 shares are not covered-call
+        holdings, so they are absent from holdings_checked."""
+        self.mock_portfolio_context["positions"] = {
+            "AAPL": {"position": 126, "security_type": "STK", "market_price": 150.0, "avg_cost": 145.0},
+            "NVDA": {"position": 50, "security_type": "STK", "market_price": 120.0, "avg_cost": 110.0},
+            "US.AXTI261030P59000": {
+                "position": -1,
+                "security_type": "OPT",
+                "option_type": "PUT",
+                "strike": 59.0,
+                "market_price": 10.79,
+                "avg_cost": 3.5,
+            },
+        }
+        engine = self._import_engine()
+
+        result = engine.get_top_recommendations(limit=5)
+
+        self.assertTrue(result.get("success"), result)
+        self.assertEqual(result["active_watchlist"]["holdings_checked"], ["AAPL"])
+
     def test_watchlist_cash_fit_summary_counts_unaffordable_names(self):
         tickers = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
         self.mock_watchlist_manager.get_scan_universe.return_value = self._scan_universe(tickers)

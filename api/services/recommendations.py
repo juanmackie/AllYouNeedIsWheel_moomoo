@@ -770,7 +770,11 @@ class RecommendationEngine:
         if not candidates:
             return [self._make_skip_diagnostic(ticker, "blocked_by_scoring", "All candidates filtered by scoring")]
 
-        return sorted(candidates, key=lambda opt: (bool(opt.get("research_only")), rank_key(opt)))[:3]
+        # Diagnostics never compete with real picks for the per-ticker slots.
+        picks = [opt for opt in candidates if not opt.get("_skip_diagnostic")]
+        diagnostics = [opt for opt in candidates if opt.get("_skip_diagnostic")]
+        ranked_picks = sorted(picks, key=lambda opt: (bool(opt.get("research_only")), rank_key(opt)))[:3]
+        return ranked_picks + diagnostics[:3]
 
     def _make_skip_diagnostic(self, ticker, reason_code, reason_text):
         """Create a diagnostic entry for a skipped CSP candidate."""
@@ -957,7 +961,7 @@ class RecommendationEngine:
                         wl_raw_codes=wl_raw_codes,
                         effective_watchlist=effective_watchlist,
                         scan_status_by_ticker={},
-                        position_tickers=list(positions.keys()),
+                        position_tickers=_covered_call_holding_tickers(positions),
                         quote_fetched_at={},
                         fetched_at=wl_fetched_at,
                     ),
@@ -1085,11 +1089,15 @@ class RecommendationEngine:
                     continue
                 if is_evidence_cached:
                     watchlist_cached += 1
-                scan_status_by_ticker[ticker] = "scanned"
+                # Only a ticker with no valid stock price assessed nothing; any
+                # other result set means the ticker was scanned.
+                no_price_only = bool(results) and all(
+                    result.get("_skip_diagnostic") and result.get("reason_code") == "no_price" for result in results
+                )
+                scan_status_by_ticker[ticker] = "skipped" if no_price_only else "scanned"
 
                 for result in results:
                     if result.get("_skip_diagnostic"):
-                        scan_status_by_ticker[ticker] = "skipped"
                         skipped_csp_diagnostics.append(result)
                         continue
                     result["held_position"] = is_held
@@ -1577,7 +1585,7 @@ class RecommendationEngine:
                     wl_raw_codes=wl_raw_codes,
                     effective_watchlist=effective_watchlist,
                     scan_status_by_ticker=scan_status_by_ticker,
-                    position_tickers=list(positions.keys()),
+                    position_tickers=_covered_call_holding_tickers(positions),
                     quote_fetched_at=scan_quote_fetched_at,
                     fetched_at=wl_fetched_at,
                 ),
@@ -1671,6 +1679,20 @@ def _sanitize_unsupported(entries) -> list[dict]:
                 }
             )
     return cleaned
+
+
+def _covered_call_holding_tickers(positions: dict) -> list[str]:
+    """Position keys the covered-call lane assesses: non-option holdings with at
+    least 100 shares. Option contracts and smaller stock positions are excluded."""
+    return sorted(
+        {
+            str(ticker)
+            for ticker, pos in positions.items()
+            if str(ticker).strip()
+            and str(pos.get("security_type", "STK")).upper() != "OPT"
+            and safe_float(pos.get("position")) >= 100
+        }
+    )
 
 
 def _build_active_watchlist(

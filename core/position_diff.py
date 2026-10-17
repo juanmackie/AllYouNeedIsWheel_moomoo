@@ -9,15 +9,19 @@ did between runs:
 - ``roll``        — short option moved strike/expiry (same underlying + type)
 - ``assignment``  — short put vanished while shares of the underlying increased
 
-Deterministic, broker-free, no I/O. Premium/PnL fields are left at zero —
-inference knows positions, not fill prices; analytics treat zeros explicitly
-as "unknown", never as fabricated profit.
+Deterministic, broker-free, no I/O. An entry's ``premium_in`` is the broker
+average cost per share (the entry credit) when it is known and positive; the
+current mark is never used. Other premium and PnL fields stay zero: inference
+knows positions, not fill prices. Analytics treat zeros explicitly as
+"unknown", never as fabricated profit.
 
 Events match the ``trade_events`` table schema consumed by
 ``db.trade_events_repository.TradeEventsRepository.save_trade_event``.
 """
 
 from __future__ import annotations
+
+from math import isfinite
 
 from core.utils import safe_float as _safe_float
 
@@ -187,7 +191,10 @@ def infer_trade_events(previous: dict | None, current: dict | None) -> list[dict
             continue
         new_pos = curr_opts[key]
         event = _base_event("entry", new_pos, timestamp)
-        event["premium_in"] = abs(_safe_float(new_pos.get("market_price")))
+        avg_cost = _safe_float(new_pos.get("avg_cost"))
+        # Broker average cost is the entry credit per share. The mark is not an
+        # entry price, so an unknown or non-positive average cost stays unknown.
+        event["premium_in"] = avg_cost if isfinite(avg_cost) and avg_cost > 0 else 0.0
         event["reason"] = f"New short position: {key}"
         events.append(event)
 
