@@ -122,9 +122,10 @@ After hard gates it orders purely by capital return:
 ```
 
 Quality/event tier labels do not gate or influence ordering. Repair calls
-independently require known earnings strictly after expiry or broker ETF/index
-classification. The midpoint and composite score are intentionally absent
-from the key: they may qualify or explain a candidate, never break a velocity
+independently require `event_safe` earnings (fresh and successful, dated after
+expiry) or broker ETF/index classification. The midpoint and composite score are
+intentionally absent from the key: they may qualify or explain a candidate,
+never break a velocity
 tie. Review item S03 is RESOLVED on both halves: the ranking decision (owner
 decision: capital return primary, as implemented in `rank_key`) and the
 actionability/state-table half (implemented as the read-time session/coverage
@@ -401,9 +402,10 @@ return, cash left, and named skips.
 
 Covered-call economics use `(strike - effective_basis + bid) * 100`. A
 nonnegative result is an income call/no-loss exit. Otherwise it is a repair
-call: delta <= 0.20 and known earnings strictly after expiry (broker ETF/index
-exempt). A qualifying income call suppresses repairs for that holding; rank_key
-within the eligible class is unchanged. Repair loss-if-called is explicit.
+call: delta <= 0.20 and `event_safe` earnings (fresh and successful, dated
+strictly after expiry; broker ETF/index exempt). A qualifying income call
+suppresses repairs for that holding; rank_key within the eligible class is
+unchanged. Repair loss-if-called is explicit.
 Threatened repairs (ITM, delta >= 0.40, or <=3 DTE within 2% of strike) get a
 screened net-credit up/out ROLL, otherwise CLOSE. Profitable exit calls get
 LET_ASSIGN in cases that would otherwise CLOSE. A covered-call TAKE_PROFIT
@@ -412,9 +414,10 @@ without a different qualifying follow-up is HOLD with a named reason.
 Effective basis preserves broker avg_cost. Reconciled, account-scoped closed
 option premium may reduce it only with current-refresh ingestion, known fees,
 reconciled open shorts/stock lots, and measured history capability. G1 expiry
-behavior remains unmeasured; automatic pulls and inferred worthless expiries
-are disabled, so production uses broker average cost with reasons. See
-`docs/broker-history-capability.md`. Profit progress is actual premium captured;
+behavior remains unmeasured. Fills are pulled on every refresh (owner decision
+2026-10-17), but inferred worthless expiries are disabled, so production uses
+broker average cost with reasons. See `docs/broker-history-capability.md`.
+Profit progress is actual premium captured;
 unknown entry/mark is unavailable.
 
 | Ticket kind | Copy-time evidence |

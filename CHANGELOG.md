@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-10-17 — Broker-truth audit
+
+Each refresh now pulls broker fills once. The pull is query-only and idempotent.
+A failed pull logs a warning and does not fail the refresh. Fee lookups resolve
+up to 40 orders per refresh; orders left over make that pull incomplete.
+Automatic expiry inference and premium-adjusted basis stay disabled until the G1
+history measurement passes. Outcomes label a contract as expired only with
+measured G1 evidence and a successful fill pull that covers its expiry. Other
+open contracts past expiry show as unresolved after expiry, with an unknown
+outcome.
+
+Campaigns read the account's recorded fills. Open-short checks compare only
+shorts on the holding's own underlying. Inferred journal entries record the
+Moomoo average cost as entry credit, not the current mark.
+
+Earnings context covers the whole scan universe. One bulk calendar request
+refreshes stale holdings and watchlist names. Holdings keep ex-dividend data
+from the per-ticker path. Repair calls now need fresh earnings dated after
+expiry; unknown, stale, or pre-expiry earnings block them. ETFs and indexes stay
+exempt. A rejected contract no longer marks its ticker as skipped. The per-ticker
+top 3 shows real picks only, followed by up to three diagnostics. The covered-call
+holdings count includes only stock holdings of at least 100 shares.
+
+IV history is keyed by underlying. Each watchlist cash-secured put scan records
+one closest-to-the-money IV sample. Next actions name the cost basis source. The
+account tile reads "Available Cash", net of short-put collateral. The growth
+win-rate note states that exit P&L is not inferred and points to Outcomes.
+
 ## 2026-10-11 — Wheel desk
 
 Next actions now precede the shortlist: holding verdicts, manual close/roll/open

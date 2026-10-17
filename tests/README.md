@@ -115,9 +115,9 @@ establish closed-market capability. No account balances or orders are queried.
    counts, net outcome, capital-days, owner $/day, avg slippage), the four
    per-preset/DTE/ticker/event-tier summary grids, and the contract drill-down where
    each quoted-vs-filled row expands to its supporting fill transactions. `Pull
-   broker fills` is the only write path and is query-only (rate-limited, `502` on
-   broker failure); with no fills the panel shows empty states, never fabricated
-   outcomes.
+   broker fills` is a manual write path and is query-only (rate-limited, `502` on
+   broker failure). Each refresh also pulls fills, query-only; with no fills the
+   panel shows empty states, never fabricated outcomes.
 10. Confirm no UI or API path places, unlocks, cancels, or modifies an order.
 
 If OpenD is unavailable, record the blocked manual-smoke result rather than

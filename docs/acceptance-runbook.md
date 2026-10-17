@@ -497,3 +497,12 @@ automated query-only checks never imply an order was placed.
   inferred expiry credits, and production premium-adjusted basis remain
   disabled. This closed-market check does not complete the runbook's separate
   open-session acceptance requirements.
+
+### Fill pulls, 2026-10-17
+
+- Each wheel refresh now runs one query-only, idempotent fill pull (owner
+  decision 2026-10-17). A failed pull is a warning only.
+- G1 remains unmeasured. Expiry inference and premium-adjusted basis stay
+  disabled.
+- Live verification results are pending. Record them here after the owner
+  runs a refresh with logged-in OpenD.

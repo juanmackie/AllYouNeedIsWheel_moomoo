@@ -41,8 +41,11 @@ API quota.
    allocates returned order fees over that order's fills and keeps unknown fees
    unknown.
 3. Do not infer expired-worthless status from an absent deal. Expiry handling
-   and refresh-time ingestion remain disabled until a later probe has positive,
-   owner-confirmed lifecycle evidence and bounded query behavior.
+   stays disabled until a later probe has positive, owner-confirmed lifecycle
+   evidence and bounded query behavior. Fills are pulled on every refresh (owner
+   decision 2026-10-17). The pull is query-only and idempotent. Outcomes label an
+   open contract past expiry `unresolved_after_expiry` unless measured G1 evidence
+   and a successful fill pull covering the expiry both exist.
 4. The current campaign implementation defaults to Moomoo average cost and
    labels the capability reason while G1 is unmeasured.
 
