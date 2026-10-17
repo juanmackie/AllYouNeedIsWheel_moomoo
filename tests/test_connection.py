@@ -1550,3 +1550,13 @@ class TestBrokerEvidence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSecurityTypeRowNormalization(unittest.TestCase):
+    """ETF detection matches the whole word, never a substring of a name."""
+
+    def test_name_containing_etf_substring_is_stock(self):
+        self.assertEqual(MoomooConnection._normalize_security_type_row({"name": "Netflix"}), "stock")
+
+    def test_name_with_etf_word_is_etf(self):
+        self.assertEqual(MoomooConnection._normalize_security_type_row({"name": "iShares Russell 2000 ETF"}), "etf")

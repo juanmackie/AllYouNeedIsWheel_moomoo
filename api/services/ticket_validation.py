@@ -22,10 +22,14 @@ def call_quote_blocker(target, quote, basis, preset):
         return "repair call no longer passes the assignment-delta limit"
     if str(target.get("security_type") or "").lower() in {"etf", "index"}:
         return None
+    # The scoring-time tier must be event_safe; a date alone is not enough.
+    tier = target.get("event_tier") or (target.get("wheel_decision") or {}).get("event_tier")
+    if tier != "event_safe":
+        return "repair call earnings date is unknown, stale, or before expiry"
     earnings_date = str(target.get("earnings_date") or "").replace("-", "")[:8]
     expiration = str(target.get("expiration") or "").replace("-", "")[:8]
     if len(earnings_date) != 8 or not earnings_date.isdigit() or earnings_date <= expiration:
-        return "repair call earnings date is unknown or before expiry"
+        return "repair call earnings date is unknown, stale, or before expiry"
     return None
 
 

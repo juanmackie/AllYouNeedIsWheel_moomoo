@@ -167,6 +167,23 @@ class TestIVEarningsService(unittest.TestCase):
         # Legacy free-text source is normalized to the canonical token.
         self.assertEqual(info["earnings_source"], "alpha_vantage")
 
+    def test_get_earnings_info_reports_stored_error_status_for_future_date(self):
+        """A stored future date with fetch_status 'error' is not reported as success."""
+        future = (datetime.now() + timedelta(days=20)).strftime("%Y-%m-%d")
+        self.service.db.get_earnings_date.return_value = {
+            "ticker": "NVTS",
+            "earnings_date": future,
+            "earnings_source": "alpha_vantage",
+            "fetch_status": "error",
+            "error_message": "quota",
+            "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        info = self.service.get_earnings_info("NVTS")
+
+        self.assertEqual(info["earnings_date"], future)
+        self.assertEqual(info["fetch_status"], "error")
+
 
 class TestAlphaVantageProvider(unittest.TestCase):
     """Alpha Vantage CSV parsing, caching, and availability."""
@@ -666,6 +683,9 @@ class TestStaleEventContextRefresh(unittest.TestCase):
         from api.services.iv_earnings_service import IVEarningsService
 
         self.service = IVEarningsService(database=MagicMock())
+        # Keep these tests hermetic: a real key in the environment must not
+        # trigger a live Alpha Vantage bulk calendar request.
+        self.service._alpha_vantage = MagicMock(available=False)
         _reset_av_globals()
 
     def test_refresh_stale_event_context_updates_only_stale(self):
@@ -784,6 +804,101 @@ class TestStaleEventContextRefresh(unittest.TestCase):
         self.assertEqual(recovered["deferred"], 0)
         self.assertEqual(mock_update.call_count, 3)
         self.assertEqual([call.args[0] for call in mock_update.call_args_list], ["A3", "A1", "A2"])
+
+
+class TestWatchlistBulkEarningsRefresh(unittest.TestCase):
+    """Watchlist names refresh from one bulk Alpha Vantage calendar request,
+    while holdings keep the per-ticker provider path."""
+
+    def setUp(self):
+        from api.services.iv_earnings_service import IVEarningsService
+
+        self.db = MagicMock()
+        self.service = IVEarningsService(database=self.db)
+        self.provider = MagicMock(available=True)
+        self.provider.get_status.return_value = {"available": True}
+        self.service._alpha_vantage = self.provider
+        _reset_av_globals()
+        self.old = (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+        self.future = (datetime.now() + timedelta(days=20)).strftime("%Y-%m-%d")
+        self.db.get_all_earnings_dates.return_value = [
+            {"ticker": "NVTS", "last_updated": self.old, "fetch_status": "success"},
+        ]
+        self.db.get_earnings_date.return_value = {
+            "ticker": "NVTS",
+            "earnings_date": "2026-09-01",
+            "ex_dividend_date": "2026-10-30",
+            "fetch_status": "success",
+            "last_updated": self.old,
+        }
+        self.provider.get_all_earnings.return_value = {
+            "NVTS": {
+                "reportDate": self.future,
+                "fiscalDateEnding": "2026-09-30",
+                "estimate": 0.12,
+                "currency": "USD",
+                "timeOfDay": "post-market",
+            },
+        }
+
+    def test_stale_watchlist_ticker_refreshes_from_one_bulk_calendar(self):
+        with patch.object(self.service, "update_earnings_data", return_value=True):
+            result = self.service.refresh_stale_event_context([], watchlist_tickers=["NVTS"], timeout_sec=2)
+
+        self.provider.get_all_earnings.assert_called_once()
+        self.assertEqual(result["bulk_refreshed"], 1)
+        self.assertFalse(result["bulk_pending"])
+        self.db.save_earnings_date.assert_called_once()
+        args, kwargs = self.db.save_earnings_date.call_args
+        self.assertEqual(args[0], "NVTS")
+        self.assertEqual(args[1], self.future)
+        self.assertEqual(kwargs["fetch_status"], "success")
+        self.assertEqual(kwargs["earnings_source"], "alpha_vantage")
+        # Bulk calendars carry no ex-dividend date; the stored one must survive.
+        self.assertEqual(kwargs["ex_dividend_date"], "2026-10-30")
+
+        info = self.service.get_earnings_info("NVTS")
+        self.assertFalse(info["data_stale"])
+        self.assertEqual(info["fetch_status"], "success")
+        self.assertEqual(info["earnings_date"], self.future)
+
+    def test_stale_watchlist_ticker_missing_from_calendar_is_not_written(self):
+        self.db.get_all_earnings_dates.return_value = [
+            {"ticker": "NVTS", "last_updated": self.old, "fetch_status": "success"},
+            {"ticker": "ZZZZ", "last_updated": self.old, "fetch_status": "success"},
+        ]
+        with patch.object(self.service, "update_earnings_data", return_value=True):
+            result = self.service.refresh_stale_event_context([], watchlist_tickers=["NVTS", "ZZZZ"], timeout_sec=2)
+
+        self.assertEqual(result["bulk_refreshed"], 1)
+        written = [call.args[0] for call in self.db.save_earnings_date.call_args_list]
+        self.assertEqual(written, ["NVTS"])
+        self.assertNotIn("ZZZZ", self.service._earnings_cache)
+
+    def test_watchlist_only_tickers_skip_per_ticker_provider_jobs(self):
+        self.db.get_all_earnings_dates.return_value = []
+        with patch.object(self.service, "update_earnings_data", return_value=True) as per_ticker:
+            result = self.service.refresh_stale_event_context(["AAPL"], watchlist_tickers=["NVTS"], timeout_sec=2)
+
+        self.assertEqual([call.args[0] for call in per_ticker.call_args_list], ["AAPL"])
+        self.assertEqual(result["bulk_refreshed"], 1)
+
+    def test_slow_bulk_calendar_does_not_starve_holdings_per_ticker_jobs(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def slow_calendar():
+            release.wait(5)
+            return {}
+
+        self.provider.get_all_earnings.side_effect = slow_calendar
+        self.db.get_all_earnings_dates.return_value = []
+        with patch.object(self.service, "update_earnings_data", return_value=True) as per_ticker:
+            result = self.service.refresh_stale_event_context(["AAPL"], watchlist_tickers=["NVTS"], timeout_sec=0.5)
+
+        self.assertEqual([call.args[0] for call in per_ticker.call_args_list], ["AAPL"])
+        self.assertTrue(result["bulk_pending"])
+        self.assertEqual(result["bulk_refreshed"], 0)
 
 
 class TestWheelRunnerEventContextHook(unittest.TestCase):

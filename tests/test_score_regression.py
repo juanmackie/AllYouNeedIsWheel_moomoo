@@ -81,7 +81,14 @@ class TestScoreRegression(unittest.TestCase):
     def test_repair_call_passes_with_low_delta_and_known_post_expiry_earnings(self):
         option, profile, portfolio, _ = get_cc_below_cost_basis()
         option["delta"] = 0.18
-        result = score_contract("AAPL", option, 155.0, profile, portfolio, earnings_info={"days_to_earnings": 40})
+        result = score_contract(
+            "AAPL",
+            option,
+            155.0,
+            profile,
+            portfolio,
+            earnings_info={"days_to_earnings": 40, "fetch_status": "success", "data_stale": False},
+        )
         self.assertFalse(result.hard_blockers)
         self.assertEqual(result.covered_call_intent, "repair")
         self.assertEqual(result.loss_if_called, 650.0)

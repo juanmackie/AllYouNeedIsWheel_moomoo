@@ -603,16 +603,13 @@ def score_contract(
                     reason = f"Repair call delta {abs(delta):.2f} exceeds {max_repair_delta:.2f} maximum"
                     decision.hard_blockers.append(reason)
                     decision.blocked_reason_codes.append("repair_delta_too_high")
-                days_to_earnings = earnings_info.get("days_to_earnings")
                 is_fund = security_type in {"etf", "index"}
-                earnings_safe = False
-                if days_to_earnings is not None:
-                    try:
-                        earnings_safe = int(days_to_earnings) > dte
-                    except (TypeError, ValueError):
-                        earnings_safe = False
+                # Only scoring-time "event_safe" evidence (fresh, successful,
+                # and after expiry) clears a repair call; unknown or stale
+                # earnings fail closed.
+                earnings_safe = event_tier == "event_safe"
                 if not is_fund and not earnings_safe:
-                    reason = "Repair call expiry crosses earnings or the earnings date is unknown"
+                    reason = "Repair call expiry crosses earnings, or the earnings date is unknown or stale"
                     decision.hard_blockers.append(reason)
                     decision.blocked_reason_codes.append("repair_earnings_before_expiry")
         decision.size_fit = _compute_size_fit(decision, portfolio_context)

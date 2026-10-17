@@ -461,6 +461,56 @@ class TestScoreContractEdgeCases(unittest.TestCase):
         self.assertEqual(result.broker_cost_basis, 105.0)
         self.assertEqual(result.if_called_pnl_vs_basis, 100.0)
 
+    def _repair_call_fixture(self):
+        future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
+        option = dict(
+            self.base_option,
+            option_type="CALL",
+            strike=104.0,
+            expiration=future_date,
+            delta=0.15,
+            bid=2.0,
+            ask=2.5,
+        )
+        portfolio = dict(self.base_portfolio, positions={"AAPL": {"position": 200, "avg_cost": 110.0}})
+        return option, portfolio
+
+    def test_repair_call_with_stale_earnings_after_expiry_is_blocked(self):
+        option, portfolio = self._repair_call_fixture()
+        result = score_contract(
+            "AAPL",
+            option,
+            100.0,
+            self.base_profile,
+            portfolio,
+            earnings_info={
+                "fetch_status": "success",
+                "data_stale": True,
+                "days_to_earnings": 31,
+            },
+        )
+
+        self.assertEqual(result.covered_call_intent, "repair")
+        self.assertIn("repair_earnings_before_expiry", result.blocked_reason_codes)
+
+    def test_repair_call_with_fresh_earnings_after_expiry_is_not_blocked(self):
+        option, portfolio = self._repair_call_fixture()
+        result = score_contract(
+            "AAPL",
+            option,
+            100.0,
+            self.base_profile,
+            portfolio,
+            earnings_info={
+                "fetch_status": "success",
+                "data_stale": False,
+                "days_to_earnings": 31,
+            },
+        )
+
+        self.assertEqual(result.covered_call_intent, "repair")
+        self.assertNotIn("repair_earnings_before_expiry", result.blocked_reason_codes)
+
     def test_preset_delta_bands_are_hard_limits_for_puts_and_calls(self):
         future_date = (datetime.now() + timedelta(days=21)).strftime("%Y%m%d")
         cases = [

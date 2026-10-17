@@ -8,7 +8,7 @@ import logging
 import math
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -23,6 +23,10 @@ logger = logging.getLogger("api.services.iv_tracking")
 # Normalized, UI-facing source tokens (per repo contract: alpha_vantage|yfinance).
 SOURCE_ALPHA_VANTAGE = "alpha_vantage"
 SOURCE_YFINANCE = "yfinance"
+
+# In-flight key for the single bulk Alpha Vantage calendar job. Ticker keys
+# never contain underscores, so this cannot collide with a per-ticker job.
+ALPHA_VANTAGE_BULK_INFLIGHT_KEY = "__alpha_vantage_bulk__"
 
 # IV history is a one-sample-per-day closest-to-ATM series (see
 # `_daily_atm_series`). Rank and percentile both read the same 1-year window;
@@ -594,6 +598,7 @@ class IVEarningsService:
                     "estimate": result.get("estimate"),
                     "currency": result.get("currency"),
                     "earnings_source": result.get("earnings_source"),
+                    "fetch_status": "success",
                     "provider_status": result.get("provider_status"),
                     "provider_error": result.get("provider_error"),
                     "last_updated": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -651,7 +656,9 @@ class IVEarningsService:
         """
         normalized_ticker = self._earnings_lookup_ticker(ticker)
         cache_entry = self._earnings_cache.get(normalized_ticker)
+        stored_status = None
         if self._is_cache_valid(cache_entry, self._earnings_cache_duration_hours):
+            stored_status = cache_entry.get("fetch_status")
             earnings_date = cache_entry.get("earnings_date")
             ex_dividend_date = cache_entry.get("ex_dividend_date")
             time_of_day = cache_entry.get("time_of_day")
@@ -664,6 +671,7 @@ class IVEarningsService:
         elif self.db:
             record = self.db.get_earnings_date(normalized_ticker)
             if record:
+                stored_status = record.get("fetch_status")
                 earnings_date = record.get("earnings_date")
                 ex_dividend_date = record.get("ex_dividend_date")
                 time_of_day = record.get("time_of_day")
@@ -681,6 +689,7 @@ class IVEarningsService:
                     "estimate": estimate,
                     "currency": currency,
                     "earnings_source": earnings_source,
+                    "fetch_status": stored_status,
                     "provider_error": provider_error,
                     "last_updated": last_updated,
                     "timestamp": datetime.now(),
@@ -759,7 +768,7 @@ class IVEarningsService:
                 "days_to_earnings": days_to_earnings,
                 "days_to_ex_dividend": days_to_ex_dividend,
                 "warning_level": warning_level,
-                "fetch_status": "success",
+                "fetch_status": stored_status or "success",
                 "error_message": None,
                 "time_of_day": time_of_day,
                 "fiscal_date_ending": fiscal_date_ending,
@@ -830,6 +839,7 @@ class IVEarningsService:
         hours: Optional[int] = None,
         max_workers: int = 2,
         timeout_sec: float = 3.0,
+        watchlist_tickers: Optional[List[str]] = None,
     ) -> Dict:
         """Best-effort refresh of event context (earnings + ex-dividend) that is
         missing, errored, or older than ``hours`` (default: the 24h per-ticker
@@ -839,6 +849,11 @@ class IVEarningsService:
         flight and are deduplicated on later refreshes. ``timed_out`` counts
         running jobs still active at return; ``deferred`` counts jobs already
         in flight elsewhere or not started before the deadline.
+
+        ``watchlist_tickers`` are refreshed by one bulk Alpha Vantage calendar
+        request (``bulk_refreshed`` rows written; ``bulk_pending`` when that
+        request is still running at return). Only ``tickers`` (holdings) also
+        take the per-ticker provider path, which carries ex-dividend data.
         Provider failures never abort the broker scan.
         """
         started_at = time.monotonic()
@@ -860,20 +875,18 @@ class IVEarningsService:
             "errors": 0,
             "timed_out": 0,
             "deferred": 0,
+            "bulk_refreshed": 0,
+            "bulk_pending": False,
             "provider": self._alpha_vantage.get_status(),
         }
-        if not tickers:
+        if not tickers and not watchlist_tickers:
             return empty
 
-        normalized: List[str] = []
-        seen = set()
-        for ticker in tickers:
-            n = self._earnings_lookup_ticker(ticker)
-            if n and n not in seen:
-                seen.add(n)
-                normalized.append(n)
-        if not normalized:
+        normalized = self._normalize_event_tickers(tickers)
+        watchlist = self._normalize_event_tickers(watchlist_tickers)
+        if not normalized and not watchlist:
             return empty
+        union = list(dict.fromkeys(normalized + watchlist))
 
         existing = {}
         if self.db:
@@ -886,22 +899,10 @@ class IVEarningsService:
                 logger.warning("Could not read stored earnings context: %s", exc)
                 return empty
 
-        stale: List[str] = []
         now = datetime.now()
-        for n in normalized:
-            row = existing.get(n)
-            if row is None or (row.get("fetch_status") or "") in ("error", "pending"):
-                stale.append(n)
-                continue
-            parsed = None
-            try:
-                parsed = datetime.strptime(str(row.get("last_updated") or ""), "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                parsed = None
-            if parsed is None or now - parsed > timedelta(hours=hours):
-                stale.append(n)
-
-        if not stale:
+        stale_set = {n for n in union if self._event_row_is_stale(existing.get(n), now, hours)}
+        stale_union = [n for n in union if n in stale_set]
+        if not stale_union:
             return {
                 "refreshed": 0,
                 "stale": 0,
@@ -909,6 +910,27 @@ class IVEarningsService:
                 "errors": 0,
                 "timed_out": 0,
                 "deferred": 0,
+                "bulk_refreshed": 0,
+                "bulk_pending": False,
+                "provider": self._alpha_vantage.get_status(),
+            }
+
+        # Submit only: the bulk calendar must not spend the budget that the
+        # per-ticker holdings jobs need. It is awaited after those jobs run.
+        bulk_future = self._submit_bulk_earnings(stale_union)
+
+        stale = [n for n in normalized if n in stale_set]
+        if not stale:
+            bulk_refreshed, bulk_pending = self._await_bulk_earnings(bulk_future, deadline)
+            return {
+                "refreshed": 0,
+                "stale": 0,
+                "skipped": len(normalized),
+                "errors": 0,
+                "timed_out": 0,
+                "deferred": 0,
+                "bulk_refreshed": bulk_refreshed,
+                "bulk_pending": bulk_pending,
                 "provider": self._alpha_vantage.get_status(),
             }
 
@@ -1009,6 +1031,7 @@ class IVEarningsService:
         with self._event_refresh_lock:
             self._event_refresh_cursor = (start_index + next_candidate) % stale_count
 
+        bulk_refreshed, bulk_pending = self._await_bulk_earnings(bulk_future, deadline)
         logger.info(
             "Stale event context refreshed: %d updated, %d failed, %d timed out, %d deferred (of %d stale, %d skipped)",
             refreshed,
@@ -1025,8 +1048,136 @@ class IVEarningsService:
             "errors": failed,
             "timed_out": timed_out,
             "deferred": deferred,
+            "bulk_refreshed": bulk_refreshed,
+            "bulk_pending": bulk_pending,
             "provider": self._alpha_vantage.get_status(),
         }
+
+    def _normalize_event_tickers(self, values) -> List[str]:
+        """Map raw inputs to unique underlying tickers, keeping input order."""
+        normalized: List[str] = []
+        seen = set()
+        for value in values or []:
+            n = self._earnings_lookup_ticker(value)
+            if n and n not in seen:
+                seen.add(n)
+                normalized.append(n)
+        return normalized
+
+    @staticmethod
+    def _event_row_is_stale(row, now: datetime, hours: int) -> bool:
+        """Missing, errored, pending, or older-than-``hours`` rows need a refresh."""
+        if row is None or (row.get("fetch_status") or "") in ("error", "pending"):
+            return True
+        try:
+            parsed = datetime.strptime(str(row.get("last_updated") or ""), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            parsed = None
+        return parsed is None or now - parsed > timedelta(hours=hours)
+
+    def _submit_bulk_earnings(self, tickers: List[str]) -> Optional[Future]:
+        """Queue one bulk calendar job for ``tickers`` without waiting.
+
+        The job stays registered under ``ALPHA_VANTAGE_BULK_INFLIGHT_KEY`` so
+        the shared two-slot cap counts it. Returns None when there is nothing
+        to do. A job already running from an earlier refresh is reused.
+        """
+        if not tickers or not self._alpha_vantage.available:
+            return None
+
+        def clear_inflight(completed):
+            with self._event_refresh_lock:
+                if self._event_refresh_inflight.get(ALPHA_VANTAGE_BULK_INFLIGHT_KEY) is completed:
+                    self._event_refresh_inflight.pop(ALPHA_VANTAGE_BULK_INFLIGHT_KEY, None)
+
+        with self._event_refresh_lock:
+            future = self._event_refresh_inflight.get(ALPHA_VANTAGE_BULK_INFLIGHT_KEY)
+            if future is None or future.done():
+                future = self._event_refresh_executor.submit(self._bulk_earnings_job, list(tickers))
+                self._event_refresh_inflight[ALPHA_VANTAGE_BULK_INFLIGHT_KEY] = future
+                future.add_done_callback(clear_inflight)
+        return future
+
+    @staticmethod
+    def _await_bulk_earnings(future: Optional[Future], deadline: float) -> Tuple[int, bool]:
+        """Wait for a bulk job only until ``deadline``.
+
+        Returns ``(rows_written, still_running)``. A job that outlives the
+        deadline keeps running in the shared worker pool and still applies its
+        rows when it finishes.
+        """
+        if future is None:
+            return 0, False
+        done, _not_done = wait([future], timeout=max(0.0, deadline - time.monotonic()))
+        if not done:
+            return 0, True
+        try:
+            return int(future.result()), False
+        except Exception as exc:
+            logger.warning("Alpha Vantage bulk earnings refresh failed: %s", exc)
+            return 0, False
+
+    def _bulk_earnings_job(self, tickers: List[str]) -> int:
+        """Worker body: one bulk calendar request, then store matching rows."""
+        try:
+            calendar = self._alpha_vantage.get_all_earnings()
+        except Exception as exc:
+            logger.warning("Alpha Vantage bulk earnings calendar failed: %s", exc)
+            return 0
+        return self._apply_bulk_earnings(calendar, tickers)
+
+    def _apply_bulk_earnings(self, calendar, tickers) -> int:
+        """Store report dates from a bulk calendar for ``tickers``.
+
+        The bulk calendar has no ex-dividend date, so the stored one is kept.
+        Tickers missing from the calendar are left untouched: no date is
+        invented. Never raises; returns the rows written so far.
+        """
+        if not self.db or not isinstance(calendar, dict):
+            return 0
+        written = 0
+        try:
+            for ticker in tickers:
+                entry = calendar.get(ticker.upper())
+                report_date = str((entry or {}).get("reportDate") or "")[:10]
+                if "-" not in report_date:
+                    continue
+                existing = self.db.get_earnings_date(ticker) or {}
+                ex_dividend_date = existing.get("ex_dividend_date")
+                saved = self.db.save_earnings_date(
+                    ticker,
+                    report_date,
+                    fetch_status="success",
+                    time_of_day=entry.get("timeOfDay") or None,
+                    fiscal_date_ending=entry.get("fiscalDateEnding") or None,
+                    estimate=entry.get("estimate"),
+                    currency=entry.get("currency") or None,
+                    earnings_source=SOURCE_ALPHA_VANTAGE,
+                    ex_dividend_date=ex_dividend_date,
+                )
+                if not saved:
+                    logger.warning("Bulk earnings row for %s was not saved", ticker)
+                    continue
+                now = datetime.now()
+                self._earnings_cache[ticker] = {
+                    "normalized_ticker": ticker,
+                    "earnings_date": report_date,
+                    "ex_dividend_date": ex_dividend_date,
+                    "time_of_day": entry.get("timeOfDay") or None,
+                    "fiscal_date_ending": entry.get("fiscalDateEnding") or None,
+                    "estimate": entry.get("estimate"),
+                    "currency": entry.get("currency") or None,
+                    "earnings_source": SOURCE_ALPHA_VANTAGE,
+                    "fetch_status": "success",
+                    "provider_status": self._build_provider_status(),
+                    "provider_error": None,
+                    "last_updated": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": now,
+                }
+                written += 1
+        except Exception as exc:
+            logger.warning("Could not store bulk earnings calendar rows: %s", exc)
+        return written
 
     def batch_update_earnings(self, tickers: List[str], max_tickers: Optional[int] = None) -> Dict:
         """

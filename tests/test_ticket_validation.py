@@ -127,7 +127,12 @@ def test_roll_rejects_repair_when_fresh_delta_is_above_owner_limit():
 
 def test_open_repair_rechecks_delta_and_free_shares():
     view, request, now, positions, fetch = _inputs("open")
-    target = dict(view.pop("roll_candidates")[0], covered_call_intent="repair", earnings_date="20261115")
+    target = dict(
+        view.pop("roll_candidates")[0],
+        covered_call_intent="repair",
+        earnings_date="20261115",
+        event_tier="event_safe",
+    )
     view["cc_decisions"] = [target]
     request.update(expiration="20261030", strike=12)
     positions["positions"]["ABC"]["avg_cost"] = 20
@@ -159,3 +164,25 @@ def test_open_repair_rechecks_delta_and_free_shares():
         )["mode"]
         == "review_only"
     )
+
+
+def test_repair_call_blocks_without_scoring_time_event_safe_tier():
+    from api.services.ticket_validation import call_quote_blocker
+
+    target = {
+        "ticker": "ABC",
+        "option_type": "CALL",
+        "expiration": "20261030",
+        "strike": 12,
+        "earnings_date": "20261115",
+        "security_type": "stock",
+    }
+    quote = {"bid": 0.5, "delta": 0.1}
+    preset = {"repair_call_max_delta": 0.2}
+
+    assert (
+        call_quote_blocker(target, quote, 20, preset) == "repair call earnings date is unknown, stale, or before expiry"
+    )
+    assert call_quote_blocker(dict(target, event_tier="event_safe"), quote, 20, preset) is None
+    nested = dict(target, wheel_decision={"event_tier": "event_safe"})
+    assert call_quote_blocker(nested, quote, 20, preset) is None

@@ -423,7 +423,14 @@ def _register_services():
             service = getattr(iv_earnings, "refresh_stale_event_context", None)
             if service is None:
                 return {"refreshed": 0, "errors": 0, "skipped": len(tickers)}
-            return service(sorted(tickers))
+            # Watchlist names take the bulk calendar path only; holdings stay
+            # the positional tickers that also get per-ticker provider jobs.
+            try:
+                watchlist = options_service.get_effective_watchlist()
+            except Exception as exc:
+                logger.debug("Watchlist unavailable for event context refresh: %s", exc)
+                watchlist = []
+            return service(sorted(tickers), watchlist_tickers=watchlist)
 
         return WheelRunner(
             db=current_app.config.get("database"),

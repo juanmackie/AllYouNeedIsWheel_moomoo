@@ -8,6 +8,7 @@ readonly=False is rejected at construction (see core/broker_protocol.py).
 
 import math
 import os
+import re
 import threading
 import time
 import traceback
@@ -1291,7 +1292,7 @@ class MoomooConnection:
             if value in ("index", "idx", "ind"):
                 return "index"
         name = str(row.get("name", "") or "").lower()
-        if "etf" in name or name.endswith(" etf"):
+        if re.search(r"\betf\b", name):
             return "etf"
         return "stock"
 
