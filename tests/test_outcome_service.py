@@ -82,6 +82,8 @@ def _snapshot(signals, generated_at="2026-01-02T15:00:00", preset_key="balanced"
 
 NOW = datetime(2026, 2, 20, 15, 0, 0)
 
+VERIFIED_CAPABILITY = {"measured": True, "expired_worthless_supported": True}
+
 
 class TestLinkSuggestions(unittest.TestCase):
     def test_suggests_same_ticker_side_within_inclusive_seven_days_only(self):
@@ -372,12 +374,49 @@ class TestBuildOutcomeRecords(unittest.TestCase):
             [_snapshot([_signal(expiration="20260201")])],
             [_fill(expiration="20260201", side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
             now=datetime(2026, 2, 20, 15, 0, 0),
+            history_capability=VERIFIED_CAPABILITY,
+            fill_coverage={"last_success_at": "2026-02-10T00:00:00"},
         )
         record = records[0]
         self.assertEqual(record["outcome_status"], "expired")
         self.assertEqual(record["lifecycle_status"], "expired")
         self.assertFalse(record["open"])
         self.assertIsNone(record["net_pnl"])
+
+    def test_expired_short_without_expiry_evidence_is_unresolved_not_expired(self):
+        records = build_outcome_records(
+            [_snapshot([_signal(expiration="20260201")])],
+            [_fill(expiration="20260201", side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=NOW,
+        )
+        record = records[0]
+        self.assertEqual(record["lifecycle_status"], "unresolved_after_expiry")
+        self.assertEqual(record["outcome_status"], "unknown")
+        self.assertFalse(record["open"])
+        self.assertEqual(record["open_contracts"], 0)
+        self.assertIsNone(record["net_pnl"])
+        self.assertIsNone(record["capital_days"])
+
+    def test_expired_short_with_pull_before_expiry_is_unresolved_not_expired(self):
+        records = build_outcome_records(
+            [_snapshot([_signal(expiration="20260201")])],
+            [_fill(expiration="20260201", side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=NOW,
+            history_capability=VERIFIED_CAPABILITY,
+            fill_coverage={"last_success_at": "2026-01-30T00:00:00"},
+        )
+        self.assertEqual(records[0]["lifecycle_status"], "unresolved_after_expiry")
+        self.assertEqual(records[0]["outcome_status"], "unknown")
+
+    def test_expired_short_when_fill_window_starts_after_expiry_is_unresolved(self):
+        records = build_outcome_records(
+            [_snapshot([_signal(expiration="20260201")])],
+            [_fill(expiration="20260201", side="SELL", price=1.05, fees=1.0, captured_at="2026-01-05T14:30:00")],
+            now=NOW,
+            history_capability=VERIFIED_CAPABILITY,
+            fill_coverage={"first_covered_date": "2026-02-02", "last_success_at": "2026-02-10T00:00:00"},
+        )
+        self.assertEqual(records[0]["lifecycle_status"], "unresolved_after_expiry")
 
     def test_zero_price_buy_pairs_to_stock_fill_as_assignment_without_pnl_inference(self):
         from api.services.outcome_service import build_outcome_records

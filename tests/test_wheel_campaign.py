@@ -131,6 +131,29 @@ def test_open_short_option_without_matching_sell_fill_blocks_adjusted_basis():
     assert "open_short_leg_missing_from_ledger" in campaign["basis_reasons"]
 
 
+def test_open_short_put_on_another_underlying_does_not_block_this_holding():
+    position = {"symbol": "US.ABC", "position": 100, "avg_cost": 70.0}
+    other_underlying_put = {
+        "symbol": "US.XYZ260918P50",
+        "security_type": "OPT",
+        "position": -1,
+        "option_type": "PUT",
+        "expiration": "2026-09-18",
+        "strike": 50,
+    }
+
+    campaign = build_campaign(
+        position,
+        [],
+        fill_pull_ok=True,
+        capability_measured=True,
+        open_option_positions=[other_underlying_put],
+    )
+
+    assert "open_short_leg_missing_from_ledger" not in campaign["basis_reasons"]
+    assert "unverified_expired_or_assigned_short_legs" not in campaign["basis_reasons"]
+
+
 def test_previous_sold_share_lot_does_not_credit_the_current_campaign():
     position = {"symbol": "US.ABC", "position": 100, "avg_cost": 70.0}
     fills = []

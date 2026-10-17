@@ -229,6 +229,9 @@ def build_campaign(
         for option in open_option_positions:
             if not isinstance(option, dict) or str(option.get("security_type", "") or "").upper() != "OPT":
                 continue
+            underlying = earnings_underlying_ticker(str(option.get("symbol", "") or "")).upper()
+            if underlying != str(ticker or "").upper():
+                continue  # short options on other underlyings belong to other holdings
             try:
                 qty = abs(parse_position_qty(option.get("position", option.get("shares", 0)) or 0))
             except (TypeError, ValueError):
@@ -237,7 +240,7 @@ def build_campaign(
                 continue
             expected_open[
                 (
-                    earnings_underlying_ticker(str(option.get("symbol", "") or "")).upper(),
+                    underlying,
                     str(option.get("expiration", "") or ""),
                     str(option.get("option_type", "") or "").upper(),
                     _finite(option.get("strike")),

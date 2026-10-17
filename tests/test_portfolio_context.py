@@ -481,5 +481,40 @@ class TestPortfolioContextCSPFields(unittest.TestCase):
         self.assertEqual(context["underlying_capital_exposure"]["UBER"], 7500.0)
 
 
+class _ConfigObject:
+    """Stands in for config.Config: exposes get(), not a dict."""
+
+    def __init__(self, values):
+        self._values = values
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+
+class TestCampaignIdentityFromConfigObject(unittest.TestCase):
+    def test_campaigns_are_read_with_opaque_identity_from_config_object(self):
+        from api.services.portfolio_context import PortfolioContext
+        from core.wheel_runner import opaque_account_id
+
+        config_provider = Mock()
+        config_provider.config = _ConfigObject({"account_id": "ACC-1", "portfolio_env": "real"})
+        portfolio_provider = Mock()
+        portfolio_provider.db = Mock()
+        ctx = PortfolioContext(
+            portfolio_service_provider=portfolio_provider,
+            config_provider=config_provider,
+        )
+        campaign_service = Mock()
+        campaign_service.get_campaigns.return_value = []
+        ctx._campaign_service = campaign_service
+        stock_positions = [{"ticker": "ABC", "symbol": "US.ABC", "security_type": "STK", "qty": 100}]
+
+        ctx._attach_campaigns({"positions": {}}, Mock(), stock_positions=stock_positions)
+
+        campaign_service.get_campaigns.assert_called_once()
+        args = campaign_service.get_campaigns.call_args.args
+        self.assertEqual(args[1:3], ("REAL", opaque_account_id("ACC-1")))
+
+
 if __name__ == "__main__":
     unittest.main()

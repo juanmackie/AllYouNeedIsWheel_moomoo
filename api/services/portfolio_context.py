@@ -180,14 +180,21 @@ class PortfolioContext:
         return context
 
     def _configured_campaign_identity(self):
-        """Resolve the already configured account identity without broker I/O."""
-        account_id = self.config.get("account_id") if isinstance(self.config, dict) else None
+        """Resolve the already configured account identity without broker I/O.
+
+        Accepts any config object exposing ``get`` (``config.Config``), not only
+        dicts. Derivation matches ``api.services.config.get_current_identity``.
+        """
+        getter = getattr(self.config, "get", None)
+        if not callable(getter):
+            return None
+        account_id = getter("account_id")
         if not account_id:
             return None
         from core.wheel_runner import opaque_account_id
 
-        env = str((self.config.get("portfolio_env") or self.config.get("env") or "SIMULATE")).upper()
-        return env, opaque_account_id(str(account_id))
+        env = str(getter("portfolio_env") or getter("env") or "SIMULATE").strip().upper()
+        return env, opaque_account_id(str(account_id).strip())
 
     @staticmethod
     def _merge_campaign_basis(context, campaigns):

@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -219,8 +220,8 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         self.assertEqual(msft["signal_type"], "unmatched")
         self.assertEqual(msft["attribution"], "unattributed")
         self.assertIsNone(msft["quoted_credit_per_contract"])
-        self.assertEqual(msft["outcome_status"], "expired")
-        self.assertEqual(msft["lifecycle_status"], "expired")
+        self.assertEqual(msft["outcome_status"], "unknown")
+        self.assertEqual(msft["lifecycle_status"], "unresolved_after_expiry")
         self.assertFalse(msft["open"])
         self.assertIsNone(msft["net_pnl"])
         self.assertIsNone(msft["gross_premium_pnl"])
@@ -247,11 +248,31 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         self.assertEqual(summary["totals"]["unknown_count"], 1)
         self.assertEqual(summary["totals"]["measured_count"], 0)
         self.assertIsNone(summary["outcomes"][0]["net_pnl"])
-        # The AAPL expiry is in the past. Missing fees keep P&L unknown even
-        # after expiry; the lifecycle state must not be reported as open.
-        self.assertEqual(summary["outcomes"][0]["outcome_status"], "expired")
-        self.assertEqual(summary["outcomes"][0]["lifecycle_status"], "expired")
+        # The AAPL expiry is in the past, but no measured expiry evidence is
+        # stored. Missing fees keep P&L unknown, and the lifecycle state is
+        # unresolved rather than inferred expired and never reported as open.
+        self.assertEqual(summary["outcomes"][0]["outcome_status"], "unknown")
+        self.assertEqual(summary["outcomes"][0]["lifecycle_status"], "unresolved_after_expiry")
         self.assertFalse(summary["outcomes"][0]["open"])
+
+    def test_stored_capability_and_covering_pull_label_expired_contract(self):
+        # Expiry five days ago; the fill pull ran today and its window began
+        # before expiry, so the stored G1 evidence can prove the expiry.
+        expiry = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
+        code = f"US.AAPL{expiry[2:]}P00070000"
+        traded_at = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d %H:%M:%S")
+        self._publish_signal_run(signals=[_signal(expiration=expiry)])
+        conn = _FakeBrokerConnection([_deal("D1", "O1", code, "SELL", 1.0, 1.05, traded_at)], {"O1": 1.0}, {})
+        self.assertTrue(FillsService(conn, self.db).ingest_history_fills(days=30)["ok"])
+
+        without_evidence = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)["outcomes"][0]
+        self.assertEqual(without_evidence["lifecycle_status"], "unresolved_after_expiry")
+
+        self.db.set_history_capability(ENV, OPAQUE, {"measured": True, "expired_worthless_supported": True})
+        with_evidence = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)["outcomes"][0]
+        self.assertEqual(with_evidence["lifecycle_status"], "expired")
+        self.assertEqual(with_evidence["outcome_status"], "expired")
+        self.assertFalse(with_evidence["open"])
 
     def test_signal_without_fills_is_pending(self):
         self._publish_signal_run()
@@ -484,8 +505,8 @@ class TestOwnerLinkedAttribution(_OutcomeIntegrationBase):
 
         uber = next(r for r in summary["outcomes"] if r["ticker"] == "UBER")
         self.assertEqual(uber["attribution"], "unattributed")
-        self.assertEqual(uber["outcome_status"], "expired")
-        self.assertEqual(uber["lifecycle_status"], "expired")
+        self.assertEqual(uber["outcome_status"], "unknown")
+        self.assertEqual(uber["lifecycle_status"], "unresolved_after_expiry")
         self.assertFalse(uber["open"])
         self.assertIsNone(uber["net_pnl"])  # collected premium is never realized
 

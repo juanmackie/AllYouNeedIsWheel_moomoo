@@ -25,6 +25,8 @@ from core.utils import parse_position_qty
 logger = logging.getLogger("api.services.fills")
 
 _DEAL_OK_STATUS = "OK"
+_FEE_BACKFILL_BUDGET = 40  # order ids resolved per refresh call
+_FEE_QUERY_BATCH_SIZE = 20  # order ids per broker fee query
 
 
 def normalize_deal_row(row, env: str, opaque_account: str):
@@ -101,6 +103,26 @@ def normalize_deal_row(row, env: str, opaque_account: str):
         "fees": None,
         "raw_json": row,
     }
+
+
+def refresh_fill_evidence(connection, database) -> dict:
+    """Pull broker fills for one wheel refresh (query-only, idempotent).
+
+    Owner decision (2026-10-17): fills are pulled on every refresh. Never
+    raises; the result tells the caller whether this refresh's pull succeeded.
+    """
+    if connection is None or database is None:
+        return {"ok": False, "reason": "broker_connection_unavailable"}
+    try:
+        result = FillsService(connection, database).ingest_history_fills(days=None)
+    except Exception as exc:
+        logger.warning("Fill pull failed during refresh (%s)", type(exc).__name__)
+        return {"ok": False, "reason": "fill_pull_failed"}
+    evidence = {"ok": bool(result.get("ok")), "reason": result.get("reason", "")}
+    for key in ("ingested", "seen", "fees_complete"):
+        if key in result:
+            evidence[key] = result[key]
+    return evidence
 
 
 class FillsService:
@@ -257,15 +279,18 @@ class FillsService:
                 if fill.get("order_id") and fill.get("fees") is None
             }
         )
-        if len(missing) > 40:
-            logger.warning("Fee backfill budget exceeded for this refresh")
-            return 0, False
         if not missing:
             return 0, True
-        updated = 0
         complete = True
-        for offset in range(0, len(missing), 20):
-            order_ids = missing[offset : offset + 20]
+        if len(missing) > _FEE_BACKFILL_BUDGET:
+            logger.warning(
+                "Fee backfill budget exceeded for this refresh; resolving the first %d orders", _FEE_BACKFILL_BUDGET
+            )
+            missing = missing[:_FEE_BACKFILL_BUDGET]
+            complete = False
+        updated = 0
+        for offset in range(0, len(missing), _FEE_QUERY_BATCH_SIZE):
+            order_ids = missing[offset : offset + _FEE_QUERY_BATCH_SIZE]
             fee_rows = self._connection.get_order_fees(order_ids)
             if fee_rows is None:
                 logger.warning("Fee backfill stopped after a broker fee-query failure")

@@ -388,6 +388,7 @@ def _register_services():
     def _create_wheel_runner():
         from flask import current_app
 
+        from api.services.fills_service import refresh_fill_evidence
         from api.services.roll_diagnostics import build_roll_decisions
         from core.wheel_runner import WheelRunner
 
@@ -396,13 +397,13 @@ def _register_services():
         # background wheel-refresh thread, which has no Flask app context.
         options_service = get_service("options")
         iv_earnings = get_service("ivearnings")
+        database = current_app.config.get("database")
 
         def _refresh_campaign_evidence():
-            # G1 did not establish expired-worthless encoding or a bounded
-            # trade-query deadline. Do not make automatic SDK calls until
-            # that gate is measured; never reuse a previous manual pull as
-            # successful evidence belonging to this refresh.
-            result = {"ok": False, "reason": "broker_history_capability_unmeasured"}
+            # Owner decision (2026-10-17): fills are pulled on every refresh
+            # (query-only, idempotent). Expiry inference and premium-adjusted
+            # basis remain gated by G1 (docs/broker-history-capability.md).
+            result = refresh_fill_evidence(options_service._ensure_connection(), database)
             helper = getattr(options_service, "portfolio_context_helper", None)
             if helper is not None:
                 helper.set_campaign_refresh_evidence(result)

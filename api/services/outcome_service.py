@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from api.services.recommendation_ranking import rank_candidates, rank_key
 from api.services.taken_links import read_taken_links
@@ -669,7 +669,15 @@ def _link_context(link) -> dict:
     }
 
 
-def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=None, stock_fills=None) -> list[dict]:
+def build_outcome_records(
+    run_snapshots,
+    option_fills,
+    now=None,
+    taken_links=None,
+    stock_fills=None,
+    history_capability=None,
+    fill_coverage=None,
+) -> list[dict]:
     """Join recommendation signals to option fills and attribute outcomes.
 
     ``run_snapshots``: published snapshot dicts (any order; recommendations
@@ -682,9 +690,13 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
     contract identity — the signal identity when a recommendation can be
     attributed, otherwise an unattributed evidence record for orphan fills
     (never dropped). ``stock_fills`` is used only to identify an explicit
-    assignment pair; it never supplies or implies P&L.
+    assignment pair; it never supplies or implies P&L. ``history_capability``
+    and ``fill_coverage`` are the stored G1 and fill-pull states. An expired
+    label needs both (see ``_fill_evidence_window``); without them an open
+    contract past expiry is ``unresolved_after_expiry``.
     """
     now = now or datetime.now()
+    expiry_evidence = _fill_evidence_window(history_capability, fill_coverage)
 
     # All candidate recommendations per identity (across signals + pick
     # lists), kept at full cardinality — never deduped early — because
@@ -747,13 +759,23 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
                 fills,
                 now,
                 stock_fills=stock_fills,
+                expiry_evidence=expiry_evidence,
             )
             record["attribution"] = ATTRIBUTION_OWNER_LINKED
         else:
             meta, attribution = _select_candidate(candidates, fills)
             if attribution != "unattributed" and meta is not None:
                 record = _build_record(
-                    meta["signal"], meta, ticker, expiration, option_type, strike, fills, now, stock_fills=stock_fills
+                    meta["signal"],
+                    meta,
+                    ticker,
+                    expiration,
+                    option_type,
+                    strike,
+                    fills,
+                    now,
+                    stock_fills=stock_fills,
+                    expiry_evidence=expiry_evidence,
                 )
                 record["attribution"] = attribution
             else:
@@ -762,7 +784,16 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
                 # fabricated quoted price or a recommendation identity.
                 empty_meta = {"signal": None, "preset_key": "", "generated_at": "", "run_id": ""}
                 record = _build_record(
-                    None, empty_meta, ticker, expiration, option_type, strike, fills, now, stock_fills=stock_fills
+                    None,
+                    empty_meta,
+                    ticker,
+                    expiration,
+                    option_type,
+                    strike,
+                    fills,
+                    now,
+                    stock_fills=stock_fills,
+                    expiry_evidence=expiry_evidence,
                 )
                 record["signal_type"] = "unmatched"
                 record["attribution"] = "unattributed"
@@ -788,7 +819,45 @@ def build_outcome_records(run_snapshots, option_fills, now=None, taken_links=Non
     return records
 
 
-def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, now, stock_fills=None) -> dict:
+def _iso_date(value):
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _fill_evidence_window(history_capability, fill_coverage):
+    """Return ``(first_covered, last_success)`` fill-pull dates, or None.
+
+    Expired-worthless labels need measured G1 evidence (see
+    docs/broker-history-capability.md). An absent closing deal is never
+    proof by itself; the successful pull must also cover the expiry.
+    """
+    if not isinstance(history_capability, dict) or not history_capability.get("measured"):
+        return None
+    if not history_capability.get("expired_worthless_supported"):
+        return None
+    if not isinstance(fill_coverage, dict):
+        return None
+    last_success = _iso_date(fill_coverage.get("last_success_at"))
+    if last_success is None:
+        return None
+    return _iso_date(fill_coverage.get("first_covered_date")), last_success
+
+
+def _expiry_proven_by_pull(expiry_date, evidence) -> bool:
+    """True when a successful pull ran after expiry and its window began by expiry."""
+    if evidence is None or expiry_date is None:
+        return False
+    first_covered, last_success = evidence
+    if first_covered is not None and first_covered > expiry_date:
+        return False
+    return last_success > expiry_date
+
+
+def _build_record(
+    signal, meta, ticker, expiration, option_type, strike, fills, now, stock_fills=None, expiry_evidence=None
+) -> dict:
     quoted = quoted_credit_per_contract(signal) if signal is not None else None
     dte = signal.get("dte") if signal is not None else None
 
@@ -843,22 +912,31 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
         except ValueError:
             expiry_date = None
         as_of_date = now.date() if isinstance(now, datetime) else datetime.now().date()
-        if expiry_date is not None and expiry_date < as_of_date and (open_contracts > 0 or zero_price_buys):
+        past_expiry = expiry_date is not None and expiry_date < as_of_date
+        proven = _expiry_proven_by_pull(expiry_date, expiry_evidence)
+        if past_expiry and (open_contracts > 0 or zero_price_buys) and proven:
             lifecycle_status = "expired"
         elif zero_price_buys:
             lifecycle_status = "unresolved_zero_price_close"
+        elif past_expiry and open_contracts > 0:
+            # Open per fills after expiry with no closing deal and no measured
+            # expiry evidence: unknown, never inferred expired-worthless.
+            lifecycle_status = "unresolved_after_expiry"
         elif open_contracts > 0:
             lifecycle_status = "open"
         else:
             lifecycle_status = "closed" if fills else "pending"
 
-    if lifecycle_status in {"assigned", "expired", "unresolved_zero_price_close"}:
+    if lifecycle_status in {"assigned", "expired", "unresolved_zero_price_close", "unresolved_after_expiry"}:
         open_contracts = 0.0
         open = False
         if lifecycle_status == "expired" and capital_per is not None:
             expiry_close = f"{expiration[:4]}-{expiration[4:6]}-{expiration[6:8]}T23:59:59"
             lots = [(entry, exit_at or expiry_close, qty) for entry, exit_at, qty in lots]
             capital_days = capital_days_from_lots(lots, capital_per, as_of=now)
+        elif lifecycle_status == "unresolved_after_expiry":
+            # The exit date is unknown, so the holding period is too (None, not 0).
+            capital_days = None
     else:
         open = open_contracts > 0
 
@@ -877,7 +955,7 @@ def _build_record(signal, meta, ticker, expiration, option_type, strike, fills, 
         status = "assigned"
     elif lifecycle_status == "expired":
         status = "expired"
-    elif lifecycle_status == "unresolved_zero_price_close":
+    elif lifecycle_status in {"unresolved_zero_price_close", "unresolved_after_expiry"}:
         status = "unknown"
     elif not fills:
         status = "pending"
@@ -1082,6 +1160,18 @@ class OutcomeService:
 
     # -- serving -----------------------------------------------------------
 
+    def _optional_read(self, method_name, env, account_id) -> dict:
+        """Read stored broker-history state; a missing or failing read is {}."""
+        reader = getattr(self._db, method_name, None)
+        if reader is None:
+            return {}
+        try:
+            value = reader(env, account_id)
+        except Exception as exc:
+            logger.debug("Broker history state unavailable for outcomes (%s)", type(exc).__name__)
+            return {}
+        return value if isinstance(value, dict) else {}
+
     def get_outcome_summary(
         self,
         env,
@@ -1118,7 +1208,16 @@ class OutcomeService:
             ticker_filter = str(ticker).upper()
             link_suggestions = [item for item in link_suggestions if item["recommendation"]["ticker"] == ticker_filter]
             dte_comparisons = [item for item in dte_comparisons if item["traded"]["ticker"] == ticker_filter]
-        records = build_outcome_records(snapshots, fills, taken_links=taken_links, stock_fills=stock_fills)
+        history_capability = self._optional_read("get_history_capability", env, account_id)
+        fill_coverage = self._optional_read("get_history_fill_coverage", env, account_id)
+        records = build_outcome_records(
+            snapshots,
+            fills,
+            taken_links=taken_links,
+            stock_fills=stock_fills,
+            history_capability=history_capability,
+            fill_coverage=fill_coverage,
+        )
         records = filter_records(
             records, ticker=ticker, preset=preset, event_tier=event_tier, dte_bucket_filter=dte_bucket
         )
