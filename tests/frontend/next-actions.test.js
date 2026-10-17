@@ -57,6 +57,17 @@ describe('next actions desk', () => {
         expect(document.getElementById('next-actions-content').textContent).toContain('This run has no next actions');
     });
 
+    it.each([
+        ['moomoo_avg_cost', 'Assignment P&L vs Moomoo average cost: $5.00'],
+        ['premium_adjusted', 'Assignment P&L vs premium-adjusted basis: $5.00'],
+        [undefined, 'Assignment P&L vs basis: $5.00'],
+    ])('names the assignment P&L basis from basis_source %s', (basisSource, expected) => {
+        const snapshot = structuredClone(run);
+        snapshot.next_actions[0] = { ...snapshot.next_actions[0], if_called_pnl_vs_basis: 5, basis_source: basisSource };
+        renderNextActions(snapshot);
+        expect(document.querySelector('#next-actions-content').textContent).toContain(expected);
+    });
+
     it('renders campaign break-even values when the snapshot provides campaign records', () => {
         renderNextActions({
             ...run,

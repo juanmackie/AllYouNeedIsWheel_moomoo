@@ -479,6 +479,92 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertEqual([d["reason_code"] for d in diagnostics], ["blocked_by_scoring"] * 3)
         self.assertEqual(candidates[0]["strike"], 95)
 
+    def _run_watchlist_csp_evidence_with_one_pick(self, engine):
+        """Score evidence whose contracts all pass; return the candidate list."""
+        from types import SimpleNamespace
+
+        from api.services import recommendations
+
+        def score_contract(contract, _ticker, _price, dte, *_args, **_kwargs):
+            return SimpleNamespace(
+                strike=contract["strike"],
+                premium_per_contract=100.0,
+                dte=dte,
+                hard_blockers=[],
+            )
+
+        def format_candidate(ticker, stock_price, decision, **_kwargs):
+            return {
+                "ticker": ticker,
+                "option_type": "PUT",
+                "strike": decision.strike,
+                "dte": decision.dte,
+                "stock_price": stock_price,
+                "bid_premium_per_contract": decision.premium_per_contract,
+                "capital_velocity_per_day": decision.premium_per_contract / (decision.strike * 100 * decision.dte),
+                "premium_velocity_per_day": decision.premium_per_contract / decision.dte,
+            }
+
+        engine._preset_profile = {"csp_min_otm_pct": 5, "csp_max_otm_pct": 15}
+        evidence = {
+            "stock_price": 100.0,
+            "quote_fetched_at_utc": "2026-09-27T12:00:00+00:00",
+            "chains": [
+                {
+                    "dte": 10,
+                    "exp_str": "20261005",
+                    "options": [
+                        {"strike": 95, "bid": 1.0, "ask": 1.1, "last": 1.0, "implied_volatility": 0.30},
+                        {"strike": 90, "bid": 1.0, "ask": 1.1, "last": 1.0, "implied_volatility": 0.35},
+                        {"strike": 86, "bid": 1.0, "ask": 1.1, "last": 1.0, "implied_volatility": 0.40},
+                    ],
+                },
+                {
+                    "dte": 17,
+                    "exp_str": "20261012",
+                    "options": [
+                        # Closest to the stock price, but no IV: must not be the IV sample.
+                        {"strike": 99, "bid": 1.0, "ask": 1.1, "last": 1.0, "implied_volatility": 0},
+                        {"strike": 98, "bid": 1.0, "ask": 1.1, "last": 1.0, "implied_volatility": 0.28},
+                    ],
+                },
+            ],
+        }
+        with (
+            patch.object(engine, "_score_csp_contract", side_effect=score_contract),
+            patch.object(recommendations, "_format_decision_to_candidate", side_effect=format_candidate),
+        ):
+            return engine._score_watchlist_csp_evidence(evidence, "AAPL", self.mock_portfolio_context)
+
+    def test_watchlist_csp_records_one_iv_sample_nearest_the_stock_price(self):
+        """G2: the watchlist CSP scan feeds IV history once per call, using the
+        option with usable IV closest to the stock price."""
+        engine = self._import_engine()
+
+        candidates = self._run_watchlist_csp_evidence_with_one_pick(engine)
+
+        self.assertTrue(candidates)
+        self.mock_iv_earnings.record_iv_data.assert_called_once_with(
+            "AAPL", 0.28, 100.0, "PUT", "20261012", 17, strike=98.0
+        )
+
+    def test_watchlist_csp_scoring_survives_missing_iv_service(self):
+        engine = self._import_engine()
+        engine.iv_earnings_service = None
+
+        candidates = self._run_watchlist_csp_evidence_with_one_pick(engine)
+
+        # The three OTM-window puts (5% to 15% OTM) are picks; strikes 98 and 99 fall outside it.
+        self.assertEqual(sorted(c["strike"] for c in candidates), [86, 90, 95])
+
+    def test_watchlist_csp_scoring_survives_failing_iv_recording(self):
+        engine = self._import_engine()
+        self.mock_iv_earnings.record_iv_data.side_effect = RuntimeError("iv store unavailable")
+
+        candidates = self._run_watchlist_csp_evidence_with_one_pick(engine)
+
+        self.assertTrue(any(c["strike"] == 95 for c in candidates))
+
     def test_holdings_checked_lists_covered_call_stock_holdings_only(self):
         """Option contracts and stock below 100 shares are not covered-call
         holdings, so they are absent from holdings_checked."""

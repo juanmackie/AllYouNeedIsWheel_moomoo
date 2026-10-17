@@ -701,6 +701,7 @@ class RecommendationEngine:
         stock_price = float(evidence.get("stock_price", 0) or 0)
         if stock_price <= 0:
             return [self._make_skip_diagnostic(ticker, "no_price", "No valid stock price for CSP")]
+        self._record_watchlist_csp_iv_sample(evidence, ticker, stock_price)
         sp = self._preset_profile
         candidates = []
         seen = set()
@@ -775,6 +776,35 @@ class RecommendationEngine:
         diagnostics = [opt for opt in candidates if opt.get("_skip_diagnostic")]
         ranked_picks = sorted(picks, key=lambda opt: (bool(opt.get("research_only")), rank_key(opt)))[:3]
         return ranked_picks + diagnostics[:3]
+
+    def _record_watchlist_csp_iv_sample(self, evidence, ticker, stock_price):
+        """Record one IV sample per scan so the ticker's IV history accumulates (G2).
+
+        The sample is the usable option (IV > 0, strike > 0) closest to the
+        stock price. Recording never affects scoring.
+        """
+        iv_service = getattr(self, "iv_earnings_service", None)
+        if iv_service is None:
+            return
+        best = None
+        for chain in evidence.get("chains", []):
+            dte = int(chain.get("dte", 0) or 0)
+            exp_str = chain.get("exp_str", "")
+            for opt in chain.get("options", []):
+                strike = safe_float(opt.get("strike"))
+                iv = safe_float(opt.get("implied_volatility"))
+                if iv <= 0 or strike <= 0:
+                    continue
+                rank = (abs(strike - stock_price), dte, strike)
+                if best is None or rank < best[0]:
+                    best = (rank, iv, exp_str, dte, strike)
+        if best is None:
+            return
+        _, iv, exp_str, dte, strike = best
+        try:
+            iv_service.record_iv_data(ticker, iv, stock_price, "PUT", exp_str, dte, strike=strike)
+        except Exception:
+            logger.debug("IV sample record failed for %s", ticker, exc_info=True)
 
     def _make_skip_diagnostic(self, ticker, reason_code, reason_text):
         """Create a diagnostic entry for a skipped CSP candidate."""

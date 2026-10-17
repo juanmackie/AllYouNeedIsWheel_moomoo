@@ -394,7 +394,9 @@ function renderJournal(payload) {
     const winRateDetail = document.getElementById('journal-win-rate-detail');
     if (winRateDetail) {
         const count = Number.isFinite(totalExits) ? totalExits : 0;
-        winRateDetail.textContent = `${Number.isFinite(measuredWins) ? measuredWins : 0} wins · ${measuredExits} of ${count} exits measured`;
+        winRateDetail.textContent = measuredExits === 0 && count > 0
+            ? 'Exit P&L is not inferred; see Outcomes for broker-verified results'
+            : `${Number.isFinite(measuredWins) ? measuredWins : 0} wins · ${measuredExits} of ${count} exits measured`;
     }
     const exitsEl = document.getElementById('journal-exits');
     if (exitsEl) exitsEl.textContent = String(analytics.total_exits ?? 0);

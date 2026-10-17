@@ -126,6 +126,8 @@ def build_next_actions(
                 or ((call or {}).get("wheel_decision") or {}).get("loss_if_called"),
                 "if_called_pnl_vs_basis": (call or {}).get("if_called_pnl_vs_basis")
                 or ((call or {}).get("wheel_decision") or {}).get("if_called_pnl_vs_basis"),
+                "basis_source": (call or {}).get("basis_source")
+                or ((call or {}).get("wheel_decision") or {}).get("basis_source"),
             }
         )
     plan = deployment_plan or {}

@@ -29,6 +29,12 @@ function money(value) {
     return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—';
 }
 
+function basisLabelFor(basisSource) {
+    if (basisSource === 'premium_adjusted') return 'premium-adjusted basis';
+    if (basisSource === 'moomoo_avg_cost') return 'Moomoo average cost';
+    return 'basis';
+}
+
 function freshnessFor(snapshot, ticker) {
     const fetched = snapshot?.run?.quote_fetched_at || {};
     const stamp = fetched[ticker] || fetched[String(ticker || '').toUpperCase()];
@@ -165,7 +171,7 @@ function makeActionCard(action, snapshot) {
             text(card, 'p', `Loss if called: ${money(lossIfCalled)} /contract`, 'small mb-2');
         }
         if (action.if_called_pnl_vs_basis != null) {
-            text(card, 'p', `Assignment P&L vs adjusted basis: ${money(action.if_called_pnl_vs_basis)}`, 'small mb-2');
+            text(card, 'p', `Assignment P&L vs ${basisLabelFor(action.basis_source)}: ${money(action.if_called_pnl_vs_basis)}`, 'small mb-2');
         }
 
         const eligibility = copyEligibility({ eligibility: action.eligibility || ticket.eligibility });

@@ -470,6 +470,24 @@ class TestScorePositionExitInputs(unittest.TestCase):
         self.assertIsNotNone(decision)
         self.assertEqual(decision.dte, 30)
 
+    def test_iv_history_is_keyed_by_underlying_not_contract_code(self):
+        # G1: IV samples accumulate per underlying. Recording or reading under the
+        # option contract code never builds a series, so IV rank stays unavailable.
+        from api.services.portfolio_scoring import score_position
+
+        pos = self._pos(avg_cost=0)
+        conn = MagicMock()
+        conn.get_stock_price.return_value = 100.0
+        iv = MagicMock()
+        iv.get_iv_environment_score.return_value = (0.0, 50.0, "normal")
+        iv.get_earnings_score_impact.return_value = (0.0, 0)
+        portfolio_context = {"positions": {}, "cash_balance": 50000, "account_value": 100000}
+
+        score_position(pos, conn, portfolio_context, iv)
+
+        self.assertEqual(iv.record_iv_data.call_args.args[0], "AAPL")
+        self.assertEqual(iv.get_iv_environment_score.call_args.args[0], "AAPL")
+
 
 if __name__ == "__main__":
     unittest.main()

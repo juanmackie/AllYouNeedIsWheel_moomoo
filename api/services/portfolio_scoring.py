@@ -206,8 +206,8 @@ def score_position(pos, conn, portfolio_context, iv_earnings_service, fresh_cand
 
     iv = safe_float(pos.get("implied_volatility"))
     if iv > 0:
-        iv_earnings_service.record_iv_data(ticker, iv, current_price, option_type, expiration, dte, strike=strike)
-    iv_env_adj, iv_rank, iv_status = iv_earnings_service.get_iv_environment_score(ticker, iv if iv > 0 else 0.20)
+        iv_earnings_service.record_iv_data(underlying, iv, current_price, option_type, expiration, dte, strike=strike)
+    iv_env_adj, iv_rank, iv_status = iv_earnings_service.get_iv_environment_score(underlying, iv if iv > 0 else 0.20)
     earnings_adj, _ = iv_earnings_service.get_earnings_score_impact(ticker)
 
     decision = score_existing_position(

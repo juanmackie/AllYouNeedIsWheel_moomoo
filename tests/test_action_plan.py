@@ -92,3 +92,22 @@ def test_runner_publishes_cash_plan_and_actions_atomically():
     assert payload["deployment_plan"] == result["deployment_plan"]
     assert payload["next_actions"][0]["ticket"]["legs"][0]["quantity"] == 3
     assert payload["run"]["schema_version"] == 3
+
+
+def test_covered_call_action_carries_basis_source_from_call_or_wheel_decision():
+    campaigns = [{"ticker": "AAA", "shares": 100, "adjusted_basis": 70, "market_price": 42}]
+    direct = {"ticker": "AAA", "option_type": "CALL", "strike": 75, "if_called_pnl_vs_basis": 500.0}
+    nested = {
+        "ticker": "AAA",
+        "option_type": "CALL",
+        "strike": 75,
+        "wheel_decision": {"if_called_pnl_vs_basis": 500.0, "basis_source": "moomoo_avg_cost"},
+    }
+    actions = build_next_actions(campaigns=campaigns, cc_decisions=[{**direct, "basis_source": "premium_adjusted"}])
+    assert next(a for a in actions if a["underlying"] == "AAA")["basis_source"] == "premium_adjusted"
+
+    actions = build_next_actions(campaigns=campaigns, cc_decisions=[nested])
+    assert next(a for a in actions if a["underlying"] == "AAA")["basis_source"] == "moomoo_avg_cost"
+
+    actions = build_next_actions(campaigns=campaigns, cc_decisions=[direct])
+    assert next(a for a in actions if a["underlying"] == "AAA")["basis_source"] is None
