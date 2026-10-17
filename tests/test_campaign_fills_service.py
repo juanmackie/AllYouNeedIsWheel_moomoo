@@ -154,7 +154,7 @@ def test_fee_backfill_processes_forty_orders_per_call_and_reports_incomplete(dat
     connection = _broker()
     service = FillsService(connection, database)
 
-    updated, complete = service._backfill_fees("REAL", OPAQUE, "2000-01-01", rows)
+    updated, complete = service._backfill_fees("REAL", OPAQUE, rows)
 
     assert complete is False
     batches = [call.args[0] for call in connection.get_order_fees.call_args_list]
@@ -163,6 +163,61 @@ def test_fee_backfill_processes_forty_orders_per_call_and_reports_incomplete(dat
     assert updated == 40
     still_missing = database.get_fills(env="REAL", account_id=OPAQUE, order_id="O44")
     assert still_missing[0]["fees"] is None
+
+
+def test_fee_backfill_queries_only_orders_whose_stored_fills_lack_fees(database):
+    # 45 orders already stored with known fees; the history window still
+    # returns them as fee-less normalized rows. Only the 5 new orders may be
+    # queried, so the 40-order budget is never spent on paid orders.
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    paid_deals = [{**_deal(f"OLD{i:02d}", f"OLD{i:02d}"), "create_time": now_text} for i in range(45)]
+    new_deals = [{**_deal(f"NEW{i}", f"NEW{i}"), "create_time": now_text} for i in range(5)]
+    paid_rows = [normalize_deal_row(deal, "REAL", OPAQUE) for deal in paid_deals]
+    for row in paid_rows:
+        row["fees"] = 0.65
+    database.save_fills(paid_rows)
+    connection = _broker(deals=[*paid_deals, *new_deals])
+
+    result = FillsService(connection, database).ingest_history_fills(days=90)
+
+    assert result["ok"] is True
+    assert result["ingested"] == 5
+    assert result["fees_complete"] is True
+    queried = sorted(oid for call in connection.get_order_fees.call_args_list for oid in call.args[0])
+    assert queried == [f"NEW{i}" for i in range(5)]
+    fills = database.get_fills(env="REAL", account_id=OPAQUE)
+    assert len(fills) == 50
+    assert all(fill["fees"] is not None for fill in fills)
+    assert {fill["fees"] for fill in fills if fill["order_id"].startswith("OLD")} == {0.65}
+
+
+def test_fee_backfill_retries_unpaid_orders_from_earlier_pulls_in_the_history_window(database):
+    # First pull: the broker omits fees for three orders, so they stay fee-less.
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    old_deals = [{**_deal(f"OLD{i}", f"OLD{i}"), "create_time": now_text} for i in range(1, 4)]
+    connection = _broker(deals=old_deals)
+    connection.get_order_fees.side_effect = lambda order_ids: [
+        {"order_id": oid, "fee_amount": 0.65, "fee_details": []} for oid in order_ids if oid.startswith("NEW")
+    ]
+    first = FillsService(connection, database).ingest_history_fills(days=90)
+    assert first["fees_complete"] is False
+    assert len(database.get_order_ids_missing_fees(env="REAL", account_id=OPAQUE)) == 3
+
+    # Second, incremental pull: only one new order arrives, and the broker now
+    # returns every fee.
+    new_deal = {**_deal("NEW1", "NEW1"), "create_time": now_text}
+    connection.get_history_deals.return_value = [new_deal]
+    connection.get_order_fees.side_effect = lambda order_ids: [
+        {"order_id": oid, "fee_amount": 0.65, "fee_details": []} for oid in order_ids
+    ]
+    connection.get_order_fees.reset_mock()
+
+    second = FillsService(connection, database).ingest_history_fills(days=None)
+
+    assert second["fees_complete"] is True
+    queried = sorted(oid for call in connection.get_order_fees.call_args_list for oid in call.args[0])
+    assert queried == ["NEW1", "OLD1", "OLD2", "OLD3"]
+    assert all(fill["fees"] is not None for fill in database.get_fills(env="REAL", account_id=OPAQUE))
 
 
 def test_wheel_runner_fill_provider_pulls_fills_through_app_connection(tmp_path):

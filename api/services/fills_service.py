@@ -189,7 +189,7 @@ class FillsService:
                 rows.append(normalized)
         try:
             inserted = self._db.save_fills(rows)
-            fees_updated, fees_ok = self._backfill_fees(env, opaque_account, start, rows)
+            fees_updated, fees_ok = self._backfill_fees(env, opaque_account, rows)
         except Exception as exc:
             self._record_failure(env, opaque_account, attempt_at, "persistence_failed", last_success, start)
             logger.error("Fill ingestion failed while persisting data (%s)", type(exc).__name__)
@@ -259,26 +259,34 @@ class FillsService:
             },
         )
 
-    def _backfill_fees(self, env: str, opaque_account: str, start: str, current_rows=None) -> tuple[int, bool]:
+    def _backfill_fees(self, env: str, opaque_account: str, current_rows) -> tuple[int, bool]:
         """Resolve order-level fees and allocate them across each order's fills.
+
+        Stored fills decide whether an order still lacks fees. Normalized broker
+        rows always carry ``fees: None``, so they only restrict the candidates
+        to orders in this pull; they never add an order whose stored fills
+        already have fees.
 
         Allocation rule (deterministic): an order's fee is distributed across
         its fills proportionally to gross fill value; when all fills in the
         order have zero value, it is split equally by count.
         """
-        recent_fills = self._db.get_fills(
-            env=env,
-            account_id=opaque_account,
-            start=start,
-            limit=5000,
-        )
-        missing = sorted(
-            {
-                str(fill.get("order_id", ""))
-                for fill in [*(current_rows or []), *recent_fills]
-                if fill.get("order_id") and fill.get("fees") is None
-            }
-        )
+        stored_missing = set(self._db.get_order_ids_missing_fees(env=env, account_id=opaque_account))
+        pulled = {str(row.get("order_id", "") or "") for row in current_rows or []}
+        # Incremental pulls carry only recent deals, so fee-less orders from
+        # earlier pulls are retried while their fills are inside the 90-day window.
+        window_start = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        recent = {
+            str(fill.get("order_id", "") or "")
+            for fill in self._db.get_fills(
+                env=env,
+                account_id=opaque_account,
+                start=window_start,
+                limit=5000,
+            )
+            if fill.get("fees") is None
+        }
+        missing = sorted((pulled | recent) & stored_missing)
         if not missing:
             return 0, True
         complete = True
