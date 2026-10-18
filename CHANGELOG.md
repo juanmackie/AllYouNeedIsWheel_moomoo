@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-10-18 — Scan observability and the measured chain quota
+
+Refresh stage timings, contract-discovery warnings, fill-pull failures, and run
+publish results now reach `logs/api/`. Service and core modules logged through
+plain named loggers, so their records hit an unconfigured root logger and were
+dropped. `api.create_app` now calls
+`core.logging_config.configure_root_logging("api")`; one root file handler writes
+those records to the same file as the request log, and modules that own handlers
+stop propagating, so no line is duplicated. Per-contract blocker and scoring
+lines moved from INFO to DEBUG because the published snapshot already carries
+every rejected row and reason code; a warm refresh now writes about 100 log
+lines instead of about 2,700.
+
+Measured the same day, closed market, 67 supported underlyings, no config change:
+cold refresh 227.10 s, of which contract discovery 208.07 s (67/67 calls, zero
+cached), option quotes 3.65 s, covered-call scan 8.21 s, scoring 0.01 s; coverage
+complete. A query-only probe at roughly 19 requests / 30 s was refused with
+`Get Option Chain is too frequent, request failed, no more than 10 times every 30
+seconds`, so the free-tier quota sets the floor. A perfect sliding-window
+schedule for 67 calls would take about 190 s, so roughly 20 s of the 208 s is
+local scheduling overhead (the limiter's redundant burst cooldown); the rest is
+broker-bound. Recovering that 8-10 % was not attempted here. Quota, ranking,
+presets, and copy gates are unchanged.
+
+Tests: pytest's numbered `tmp_path` directory cannot be scanned back under the
+Windows workspace sandbox, which broke 18 tests at fixture setup. `tests/conftest.py`
+now allocates per-test directories under the existing workspace temp root.
+
 ## 2026-10-17 — Broker-truth audit
 
 Each refresh now pulls broker fills once. The pull is query-only and idempotent.

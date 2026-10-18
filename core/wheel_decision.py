@@ -214,7 +214,8 @@ def _create_failed_decision(
     Create a WheelDecision that failed hard filters.
     Populates hard_blockers with the reason and blocked_reason_codes with machine-readable codes.
     """
-    logger.info("Hard blocker for %s %s at %.2f exp %s: %s", ticker, option_type, strike, expiration, reason)
+    # Per-contract detail: the snapshot already carries rejected rows and codes.
+    logger.debug("Hard blocker for %s %s at %.2f exp %s: %s", ticker, option_type, strike, expiration, reason)
     return WheelDecision(
         ticker=ticker,
         option_type=option_type,
@@ -800,19 +801,18 @@ def score_contract(
         ticker=ticker,
     )
 
-    if logger.isEnabledFor(logging.INFO):
-        logger.info(
-            "score_contract ticker=%s type=%s strike=%.2f exp=%s dte=%d premium=%.2f delta=%.3f iv=%.2f blockers=%s",
-            ticker,
-            option_type,
-            strike,
-            expiration,
-            dte,
-            premium_per_contract,
-            delta,
-            implied_volatility,
-            decision.hard_blockers or [],
-        )
+    logger.debug(
+        "score_contract ticker=%s type=%s strike=%.2f exp=%s dte=%d premium=%.2f delta=%.3f iv=%.2f blockers=%s",
+        ticker,
+        option_type,
+        strike,
+        expiration,
+        dte,
+        premium_per_contract,
+        delta,
+        implied_volatility,
+        decision.hard_blockers or [],
+    )
     return decision
 
 

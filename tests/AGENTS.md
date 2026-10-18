@@ -24,7 +24,7 @@
 ## Work Guidance
 
 - Add focused tests near the feature or risk changed (e.g. `tests/test_api_config.py` for secret-key/CORS hardening, `tests/test_routes_earnings.py` for earnings routes, `tests/test_outcome_attribution.py` for pure outcome/capital-days attribution, `tests/test_fills_repository.py` for idempotent account-scoped fill/cash-flow persistence and the schema v10 migration, `tests/test_outcome_service.py` for outcome summary matching/aggregation, `tests/test_outcome_integration.py` for the no-broker end-to-end path (fake query-only broker connection → fills ingestion → real SQLite → outcome service → `/analytics/outcomes` routes, incl. the 6/min ingest rate limit), and `TestOutcomeAnalytics` in `tests/test_routes_options.py` for the `/analytics/outcomes` routes).
-- Use `conftest.py` fixtures where shared app/database setup already exists.
+- Use `conftest.py` fixtures where shared app/database setup already exists. `tmp_path` is overridden there to allocate under `_tmp/pytest` because pytest's numbered session basetemp cannot be scanned back under the Windows workspace sandbox (18 fixture-setup errors before the override).
 - Keep scenario fixtures realistic but synthetic; do not include private account data.
 - Update `tests/README.md` when manual smoke coverage changes.
 - `test_app_startup.py` verifies recovery occurs only during explicit factory startup; `test_run_model.py` covers interrupted attempts, settled states, and preservation of an active refresh worker and immutable snapshots.

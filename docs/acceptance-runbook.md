@@ -166,6 +166,20 @@ also cover the second expired code present in the earlier September evidence.
 These are real broker/API measurements, not owner confirmation of displayed prices,
 manual copy behavior, or market-open `ready` status. Those checks remain pending.
 
+**Cold-floor measurement, 2026-10-18 (closed market, owner machine, no config change).**
+A cold refresh on the 67-symbol union at 10 requests / 30 s took **227.10 s**, of which
+**contract discovery 208.07 s** (67/67 calls, zero cached, zero retries), option quotes
+3.65 s (2,863 codes in 8 batches), covered-call scan 8.21 s, and scoring 0.01 s;
+coverage was complete at 67/67. A separate query-only probe that bypassed the app limiter
+and paced the same `get_option_chain` calls at roughly 19 per 30 s received
+`Get Option Chain is too frequent, request failed, no more than 10 times every 30 seconds`
+on request 11, so the quota is broker-enforced. The measured 208.07 s sits 17-21 s
+above an arithmetic perfect-schedule bound of 187-191 s for 67 calls at 10 per 30 s;
+the cadence showed 19 burst-cooldown gaps of about 6 s, consistent with the shared
+limiter's redundant burst rule being that overhead (inferred). The remainder is the
+quota. The same-day run's `[TIMING]` lines are the first from the production path;
+the logging sink is described in the Decision gate.
+
 ---
 
 ## Session 2 — US-open copying session
@@ -414,11 +428,22 @@ broker data because no qualifying trade exists; Sessions 1–3 remain unexecuted
   - **Stop rules** — never proceed past a step where: OpenD returns rate-limit errors,
     adaptive backoff engages on consecutive refreshes, or error/cancel storms appear in
     `logs/`. Revert to the last clean step and log it.
+- **Measured 2026-10-18:** the chain quota is enforced by OpenD, not just by
+  `connection.json`. A query-only probe paced at roughly 19 requests / 30 s was refused on
+  request 11 with `Get Option Chain is too frequent, request failed, no more than 10 times
+  every 30 seconds`. Step B's `quota → 20/30 s` is therefore unavailable on the free tier;
+  only a paid OpenD tier, a smaller scan universe, or accepting the ~208 s discovery floor
+  changes cold latency. No quota value was changed.
 - Only a **second clean session** (any of the three, re-run) may justify promoting tuned
   values from `connection.json` into `config.py` defaults — that promotion is a follow-up,
   not part of this runbook.
-- If a session still emits no `[TIMING]` lines, fix the logging sink as a separate tested
-  change; never infer phase timings from the total alone.
+- **Resolved 2026-10-18 — logging sink.** Service and core modules logged through plain
+  named loggers, so `[TIMING]`, discovery warnings, fill-pull failures, and the
+  `Wheel run … published` line never reached `logs/api/`. `api.create_app` now calls
+  `core.logging_config.configure_root_logging("api")`, which writes those records to the
+  api log through one root handler; modules that own handlers stop propagating, so no line
+  is duplicated. If a session again shows no `[TIMING]` lines, treat it as a regression,
+  not as unknown timings.
 
 ## Acceptance criteria (pass = all true)
 

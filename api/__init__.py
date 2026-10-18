@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from flask import Flask, current_app, g, jsonify, request
 
 from core.context_factory import probe_opend_status
-from core.logging_config import get_logger
+from core.logging_config import configure_root_logging, get_logger
 
 # Configure logging
 logger = get_logger("ayniwheel.api", "api")
@@ -221,6 +221,10 @@ def create_app(config=None):
     if config:
         app.config.update(config)
         logger.debug("Applied custom configuration")
+
+    # Service/core modules log through plain named loggers; without a root
+    # handler their scan timings and warnings are dropped (not just filtered).
+    configure_root_logging("api")
 
     # Register services AFTER app is created
     # This prevents circular imports: app -> routes -> services -> app

@@ -8,7 +8,7 @@
 
 ## Ownership
 
-- `api/__init__.py` owns app factory setup, service registration, request logging, same-origin-only policy (no CORS; loopback single-user app), secret-key resolution (`_resolve_secret_key`), health checks, and blueprint registration.
+- `api/__init__.py` owns app factory setup, service registration, request logging (including the single root logging sink for service/core modules via `core.logging_config.configure_root_logging`), same-origin-only policy (no CORS; loopback single-user app), secret-key resolution (`_resolve_secret_key`), health checks, and blueprint registration.
 - `api/routes/` owns request parsing, response shaping, HTTP status handling, and delegation to services.
 - `api/services/` owns broker-facing, market-data, portfolio, recommendation, earnings/IV enrichment, and roll-diagnostics orchestration.
 - `api/routes/portfolio.py::get_portfolio_history` serves persisted per-run portfolio snapshots plus growth-pace math from `core.growth_mode.growth_pace` (target multiple from the active preset); it reads local SQLite only and does not gate on live OpenD. Pace is computed from the **full unbounded history** (an extra `unbounded=True` repository read), so it is independent of the chart `limit` and snapshot retention — the headline 5x goal never shifts just because the chart window narrows.

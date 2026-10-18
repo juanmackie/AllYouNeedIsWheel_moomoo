@@ -14,6 +14,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -48,6 +50,18 @@ def _safe_mkdtemp(suffix="", prefix="tmp", dir=None):
 
 
 tempfile.mkdtemp = _safe_mkdtemp
+
+
+@pytest.fixture
+def tmp_path():
+    """Per-test directory under the workspace temp root.
+
+    pytest's numbered ``tmp_path`` directory cannot be scanned back under the
+    Windows workspace sandbox (Access denied on the session basetemp), so tests
+    use the same explicit root that ``tempfile.mkdtemp`` already targets.
+    """
+    return Path(_safe_mkdtemp())
+
 
 # Redirect moomoo SDK log output away from Roaming to avoid PermissionError
 # during test collection when moomoo imports trigger file-logging init.

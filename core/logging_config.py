@@ -17,6 +17,11 @@ LOGS_DIR = os.environ.get(
 # Log file name format with timestamp
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+# Formats shared by per-module loggers and the root fallback handler.
+_DETAILED_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+_CONSOLE_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# Marks the root handler by target file so repeated app creation cannot duplicate it.
+_ROOT_HANDLER_TAG = "_ayniwheel_root_handler_for"
 
 _initialized_dirs = set()
 
@@ -94,11 +99,12 @@ def configure_logging(module_name, log_type=None, console_level=logging.INFO, fi
     if logger.handlers:
         logger.handlers = []
 
+    # Own handler set: records must not also reach the root handler.
+    logger.propagate = False
+
     # Create formatters
-    detailed_formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
-    )
-    console_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    detailed_formatter = logging.Formatter(_DETAILED_FORMAT)
+    console_formatter = logging.Formatter(_CONSOLE_FORMAT)
 
     # Console handler
     console_handler = logging.StreamHandler()
@@ -132,3 +138,31 @@ def get_logger(module_name, log_type=None):
         logging.Logger: Configured logger
     """
     return configure_logging(module_name, log_type)
+
+
+def configure_root_logging(log_type="api", file_level=logging.INFO):
+    """Route loggers that never call configure_logging into the shared log file.
+
+    Service and core modules log through ``logging.getLogger(...)`` directly, so
+    their records reached an unconfigured root logger and were dropped: scan
+    ``[TIMING]`` lines, contract-discovery warnings, fill-pull failures and
+    refresh publish results never reached ``logs/api``. This attaches one root
+    file handler to the same file as the request log. Loggers configured by
+    ``configure_logging`` own their handlers and do not propagate, so no record
+    is written twice.
+
+    Idempotent per target file: repeated app creation reuses the handler.
+    """
+    _ensure_log_dirs()
+    log_file = os.path.abspath(get_log_path(log_type))
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if getattr(handler, _ROOT_HANDLER_TAG, None) == log_file:
+            return root
+    handler = logging.FileHandler(log_file)
+    handler.setLevel(file_level)
+    handler.setFormatter(logging.Formatter(_DETAILED_FORMAT))
+    setattr(handler, _ROOT_HANDLER_TAG, log_file)
+    root.addHandler(handler)
+    root.setLevel(min(root.level or logging.INFO, file_level))
+    return root
