@@ -19,6 +19,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from functools import partial
 from urllib.parse import urlsplit
 
 from flask import Flask, current_app, g, jsonify, request
@@ -441,7 +442,7 @@ def _register_services():
             db=current_app.config.get("database"),
             options_service=options_service,
             config=config,
-            roll_diagnostics_provider=build_roll_decisions,
+            roll_diagnostics_provider=partial(build_roll_decisions, iv_earnings=iv_earnings),
             event_context_refresher=_refresh_stale_event_context,
             fills_ingest_provider=_refresh_campaign_evidence,
         )

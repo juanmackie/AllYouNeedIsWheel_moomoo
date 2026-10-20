@@ -18,7 +18,7 @@
 
 ## Local Contracts
 
-- Keep `core` free of `api` imports entirely (any direction): api-layer composition is injected into `WheelRunner` as callables (see `api/services/roll_diagnostics.py`).
+- Keep `core` free of `api` and `db` imports entirely: api-layer composition is injected into `WheelRunner` as callables (see `api/services/roll_diagnostics.py`), and persistence is injected as a value or callable. `core.scan_ledger` stays pure; `db.scan_ledger_repository` owns its table I/O.
 - Preserve live-trading safety assumptions and source-of-truth boundaries.
 - Scoring changes must preserve or deliberately update the methodology documented in `SCORING.md`; midpoint is display-only and never a ranking basis.
 - Connection logic must avoid leaking handles and should be safe under repeated route/service calls. `MoomooConnection.get_option_chain(..., force_refresh=True)` is the explicit seam for closed-market last-session reads; it must remain query-only.
@@ -44,6 +44,7 @@
 - Scoring/decision changes: run `pytest tests/test_wheel_decision.py tests/test_score_regression.py`.
 - Connection changes: run `pytest tests/test_connection.py tests/test_import_side_effects.py`.
 - Cache/rate-limit changes: run the matching focused tests such as `tests/test_rate_limiter.py` or `tests/test_scan_ledger.py`.
+- Before adding or moving a module, update `docs/architecture/capabilities.json`, run `uv run python scripts/architecture.py docs`, then `uv run python scripts/architecture.py check`.
 - Before significant edits: question requirements, delete duplication, then simplify; compatibility needs concrete consumer evidence. Structural readonly (`core/broker_protocol.py`) is non-negotiable. After edits, report changes, verification, assumptions, and risks; note any owning contracts intentionally unchanged.
 
 ## Child DOX Index

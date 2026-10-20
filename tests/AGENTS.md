@@ -35,6 +35,7 @@
 - `test_raw_scan_replay.py` exercises all three preset profiles through settings, scan, immutable publication, and copy validation, including persisted Aggressive at service startup and cash/exposure limits.
 - `test_run_model.py` verifies a blocked optional event provider cannot stall scan publication or duplicate in-flight ticker work across refreshes; service deadline, cancellation, and worker limits are covered in `test_iv_earnings_service.py`.
 - `test_probe_option_chain_cost.py` verifies the manual discovery/quote capability gate using synthetic query-only frames: missing quote fields and broker failures cannot produce a go, and fewer than 400 codes leaves capacity unmeasured.
+- `test_architecture_contract.py` proves the architecture checker reaches real sources and fails on synthetic forbidden dependencies, private cross-package imports, and budget growth; it also asserts every runtime module has one capability owner and the generated map is current.
 
 ## Verification
 

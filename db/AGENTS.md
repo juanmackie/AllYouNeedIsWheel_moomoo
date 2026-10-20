@@ -16,6 +16,7 @@
 - `fills_repository.py` owns broker-verified outcome evidence (`option_fills`, `account_cash_flows`, schema v10): fills are keyed by the broker deal id (`fill_id UNIQUE`) for idempotent re-ingest, cash flows by `cashflow_id`; all rows are scoped by `env`/`account_id` via the shared `_identity_where` convention. `fees` is NULL until the order-level fee query resolves it — unknown fees are distinct from zero fees.
 - `database.py::get_run_snapshots` is the read-only outcome-history view over `run_metadata` (newest first, identity-scoped); run snapshots are publish-once immutable, so historical recommendations are never relabeled.
 - `sqlite_pool.py` owns pooled connection behavior.
+- `scan_ledger_repository.py` owns scan-ledger table reads/writes; `core.scan_ledger` owns the pure entry shape and hashes. The repository may import `core`, never the reverse.
 
 ## Local Contracts
 

@@ -17,17 +17,16 @@ from core.connection_constants import (
     _clean_account_id,
     _env_name,
     _first_non_zero,
-    _infer_security_type_from_code,
     _is_truthy_flag,
-    _normalize_iv,
     _normalize_security_firm,
     _normalize_trd_env,
-    _parse_option_code_metadata,
     _safe_close_context,
+    infer_security_type_from_code,
+    parse_option_code_metadata,
 )
 from core.connection_manager import MoomooConnection
 from core.context_factory import probe_opend_status
-from core.utils import safe_float
+from core.utils import normalize_iv, safe_float
 from core.wheel_runner import opaque_account_id
 
 
@@ -129,24 +128,24 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertEqual(result, default)
 
     def test_infer_security_type_from_code(self):
-        """Test _infer_security_type_from_code"""
+        """Test infer_security_type_from_code"""
         # Option code pattern
-        self.assertEqual(_infer_security_type_from_code("US.AAPL230616C00150000"), "OPT")
-        self.assertEqual(_infer_security_type_from_code("US.TSLA240315P00200000"), "OPT")
+        self.assertEqual(infer_security_type_from_code("US.AAPL230616C00150000"), "OPT")
+        self.assertEqual(infer_security_type_from_code("US.TSLA240315P00200000"), "OPT")
 
         # Stock code pattern
-        self.assertEqual(_infer_security_type_from_code("US.AAPL"), "STK")
-        self.assertEqual(_infer_security_type_from_code("US.TSLA"), "STK")
+        self.assertEqual(infer_security_type_from_code("US.AAPL"), "STK")
+        self.assertEqual(infer_security_type_from_code("US.TSLA"), "STK")
 
         # Invalid
-        self.assertEqual(_infer_security_type_from_code(""), "")
-        self.assertEqual(_infer_security_type_from_code(None), "")
-        self.assertEqual(_infer_security_type_from_code("INVALID"), "")
+        self.assertEqual(infer_security_type_from_code(""), "")
+        self.assertEqual(infer_security_type_from_code(None), "")
+        self.assertEqual(infer_security_type_from_code("INVALID"), "")
 
     def test_parse_option_code_metadata(self):
-        """Test _parse_option_code_metadata"""
+        """Test parse_option_code_metadata"""
         # Valid option code
-        result = _parse_option_code_metadata("US.AAPL230616C00150000")
+        result = parse_option_code_metadata("US.AAPL230616C00150000")
         self.assertIsNotNone(result)
         self.assertEqual(result["underlying"], "AAPL")
         self.assertEqual(result["expiration"], "20230616")
@@ -154,7 +153,7 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertEqual(result["option_type"], "CALL")
 
         # Put option
-        result = _parse_option_code_metadata("US.TSLA240315P00200000")
+        result = parse_option_code_metadata("US.TSLA240315P00200000")
         self.assertIsNotNone(result)
         self.assertEqual(result["underlying"], "TSLA")
         self.assertEqual(result["expiration"], "20240315")
@@ -162,9 +161,9 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertEqual(result["option_type"], "PUT")
 
         # Invalid codes
-        self.assertIsNone(_parse_option_code_metadata(None))
-        self.assertIsNone(_parse_option_code_metadata(""))
-        self.assertIsNone(_parse_option_code_metadata("US.AAPL"))
+        self.assertIsNone(parse_option_code_metadata(None))
+        self.assertIsNone(parse_option_code_metadata(""))
+        self.assertIsNone(parse_option_code_metadata("US.AAPL"))
 
     def test_safe_float(self):
         """Test safe_float"""
@@ -196,39 +195,39 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertEqual(_first_non_zero(None, 0, 5), 5)
         self.assertEqual(_first_non_zero("N/A", 3.14), 3.14)
 
-    # -- _normalize_iv tests ----------------------------------------------
+    # -- normalize_iv tests ----------------------------------------------
 
     def test_normalize_iv_moomoo_percentage(self):
-        """_normalize_iv converts Moomoo percentage (48.0) to decimal (0.48)"""
-        self.assertEqual(_normalize_iv(48.0), 0.48)
-        self.assertEqual(_normalize_iv(50.0), 0.50)
-        self.assertEqual(_normalize_iv(120.0), 1.20)
-        self.assertEqual(_normalize_iv(200.0), 2.00)
+        """normalize_iv converts Moomoo percentage (48.0) to decimal (0.48)"""
+        self.assertEqual(normalize_iv(48.0), 0.48)
+        self.assertEqual(normalize_iv(50.0), 0.50)
+        self.assertEqual(normalize_iv(120.0), 1.20)
+        self.assertEqual(normalize_iv(200.0), 2.00)
 
     def test_normalize_iv_yfinance_decimal(self):
-        """_normalize_iv passes through yfinance decimal (0.48) unchanged"""
-        self.assertEqual(_normalize_iv(0.48), 0.48)
-        self.assertEqual(_normalize_iv(0.30), 0.30)
-        self.assertEqual(_normalize_iv(1.20), 1.20)
-        self.assertEqual(_normalize_iv(0.0), 0.0)
+        """normalize_iv passes through yfinance decimal (0.48) unchanged"""
+        self.assertEqual(normalize_iv(0.48), 0.48)
+        self.assertEqual(normalize_iv(0.30), 0.30)
+        self.assertEqual(normalize_iv(1.20), 1.20)
+        self.assertEqual(normalize_iv(0.0), 0.0)
 
     def test_normalize_iv_edge_cases(self):
-        """_normalize_iv handles boundary values correctly"""
+        """normalize_iv handles boundary values correctly"""
         # Exactly 3.0 boundary (300% IV) - passes through as decimal
-        self.assertEqual(_normalize_iv(3.0), 3.0)
+        self.assertEqual(normalize_iv(3.0), 3.0)
         # Just above 3.0 - treated as percentage
-        self.assertEqual(_normalize_iv(3.01), 0.0301)
+        self.assertEqual(normalize_iv(3.01), 0.0301)
         # None and empty
-        self.assertEqual(_normalize_iv(None), 0.0)
-        self.assertEqual(_normalize_iv(""), 0.0)
+        self.assertEqual(normalize_iv(None), 0.0)
+        self.assertEqual(normalize_iv(""), 0.0)
         # Negative
-        self.assertEqual(_normalize_iv(-1.0), -1.0)
+        self.assertEqual(normalize_iv(-1.0), -1.0)
 
     def test_normalize_iv_broker_zero_delta_preserved(self):
-        """_normalize_iv does not affect values already in decimal"""
+        """normalize_iv does not affect values already in decimal"""
         # Typical values: 0.15-0.60 for wheel strategy
         for val in [0.15, 0.25, 0.30, 0.45, 0.60, 0.75]:
-            normalized = _normalize_iv(val)
+            normalized = normalize_iv(val)
             self.assertEqual(normalized, val, f"IV {val} should pass through unchanged, got {normalized}")
 
 

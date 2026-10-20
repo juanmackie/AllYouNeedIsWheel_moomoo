@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 
-from core.connection_constants import _normalize_iv
 from core.exit_playbook import ExitThresholds, captured_profit_pct_for_short, evaluate_exit
 from core.scoring_factors import (
     _calculate_mid_price,
@@ -22,6 +21,7 @@ from core.scoring_factors import (
     _compute_roll_pressure,
     _compute_size_fit,
 )
+from core.utils import normalize_iv
 from core.wheel_decision import WheelDecision
 
 logger = logging.getLogger("core.position_scorer")
@@ -69,7 +69,7 @@ def score_existing_position(
         delta = 0.0
     delta_available = raw_delta is not None
     theta = float(position_data.get("theta", 0) or 0)
-    iv = _normalize_iv(position_data.get("implied_volatility", 0))
+    iv = normalize_iv(position_data.get("implied_volatility", 0))
 
     # Extrinsic value approximation: option price - intrinsic
     if option_type == "CALL":

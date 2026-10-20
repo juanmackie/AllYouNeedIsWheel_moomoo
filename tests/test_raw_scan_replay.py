@@ -168,7 +168,7 @@ def _scan(scenario, engine=None):
         patch("core.scoring_factors.datetime", _FixedDateTime),
         patch("core.wheel_decision.market_now", return_value=scenario["now_et"]),
         patch("core.wheel_decision.is_market_open", return_value=True),
-        patch("core.scan_ledger.ScanLedger.record", return_value=None),
+        patch("db.scan_ledger_repository.ScanLedgerRepository.record", return_value=None),
     ):
         from api.services.options_data import score_contract
 

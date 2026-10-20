@@ -3,7 +3,7 @@
 from datetime import timezone
 from math import isfinite
 
-from core.run_model import _max_tradeable_age_sec, resolve_coverage_truth, resolve_session_context
+from core.run_model import max_tradeable_age_sec, resolve_coverage_truth, resolve_session_context
 from core.scoring_factors import parse_broker_timestamp
 from core.ticker_utils import canonical_underlying, earnings_underlying_ticker
 from core.utils import safe_float
@@ -128,9 +128,9 @@ def validate_exit_ticket(view, requested, *, now_et, now_utc, fetch_quote, fetch
         if stamp is None:
             raise ValueError("broker quote timestamp unavailable")
         age = (now_utc - stamp.astimezone(timezone.utc)).total_seconds()
-        if age < 0 or (session == "open" and age > _max_tradeable_age_sec(run)):
+        if age < 0 or (session == "open" and age > max_tradeable_age_sec(run)):
             raise ValueError("broker quote is stale during the open session")
-        if session != "open" and age < _max_tradeable_age_sec(run):
+        if session != "open" and age < max_tradeable_age_sec(run):
             raise ValueError("market appears open now — refresh for live copy")
         bid, ask = safe_float(quote.get("bid"), None), safe_float(quote.get("ask"), None)
         if bid is None or ask is None or not isfinite(bid) or not isfinite(ask) or bid < 0 or ask <= 0 or ask < bid:

@@ -851,12 +851,12 @@ class RecommendationEngine:
         start_time = time.time()
 
         from core.scan_ledger import (
-            ScanLedger,
             ScanLedgerEntry,
             compute_config_hash,
             compute_portfolio_hash,
             extract_data_sources,
         )
+        from db.scan_ledger_repository import ScanLedgerRepository
 
         try:
             # Preset is resolved in __init__; nothing to reconfigure per run.
@@ -873,7 +873,7 @@ class RecommendationEngine:
                         elapsed_seconds=time.time() - start_time,
                         error_message="Failed to establish connection to moomoo",
                     )
-                    ScanLedger(self.db).record(entry)
+                    ScanLedgerRepository(self.db).record(entry)
                 except Exception:
                     logger.debug("Scan ledger write skipped (connection failure)", exc_info=True)
                 return {"error": "Failed to establish connection to moomoo"}
@@ -965,7 +965,7 @@ class RecommendationEngine:
                         blocked_count=0,
                         data_sources=extract_data_sources(portfolio_context),
                     )
-                    ScanLedger(self.db).record(entry)
+                    ScanLedgerRepository(self.db).record(entry)
                 except Exception:
                     logger.debug("Scan ledger write skipped (empty scan)", exc_info=True)
                 return {
@@ -1561,7 +1561,7 @@ class RecommendationEngine:
                     top_signals=top_signals,
                     blocked_candidates=blocked_summary,
                 )
-                ScanLedger(self.db).record(entry)
+                ScanLedgerRepository(self.db).record(entry)
             except Exception:
                 logger.debug("Scan ledger write skipped", exc_info=True)
 
@@ -1666,7 +1666,7 @@ class RecommendationEngine:
                     elapsed_seconds=time.time() - start_time,
                     error_message=str(e),
                 )
-                ScanLedger(self.db).record(entry)
+                ScanLedgerRepository(self.db).record(entry)
             except Exception:
                 logger.debug("Scan ledger write skipped (scan error)", exc_info=True)
             return {"error": str(e)}

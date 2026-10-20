@@ -8,7 +8,7 @@
 
 ## Ownership
 
-- `workflows/ci.yml` owns the single Windows job: dependency sync (uv), Ruff check + format check, pytest run via `scripts/ci_pytest.py`, frontend Vitest (`npm ci` + `npm test`), AST-backed read-only and generated-artifact hygiene scans, and a fresh-clone import smoke.
+- `workflows/ci.yml` owns the single Windows job: dependency sync (uv), Ruff check + format check, the executable architecture contract, a test-impact report, pytest run via `scripts/ci_pytest.py`, frontend Vitest (`npm ci` + `npm test`), AST-backed read-only and generated-artifact hygiene scans, and a fresh-clone import smoke.
 
 ## Local Contracts
 
@@ -19,7 +19,8 @@
 
 ## Work Guidance
 
-- Prefer narrow CI additions that catch real regressions without making local iteration painful.
+- Prefer narrow CI additions that catch real regressions without making local iteration painful. Keep the architecture step before the test suite: it fails fast and does not need broker access.
+- When `scripts/architecture.py`, its manifest, or the baseline changes, run `uv run python scripts/architecture.py check` and `uv run pytest tests/test_architecture_contract.py -q` locally.
 - If frontend tests are added to CI, install Node dependencies from `package-lock.json` and run the same `npm test` contract used locally.
 - Preserve branch triggers unless the repository release flow intentionally changes.
 

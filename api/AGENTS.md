@@ -30,7 +30,8 @@
 
 - Add new blueprints by following the existing `bp = Blueprint(...)` route module pattern and registering them in `create_app`.
 - Route modules should import from `api.services`, `core`, or `db` only as needed for their endpoint.
-- Service classes should be testable with injected config/data dependencies when practical.
+- Service classes should be testable with injected config/data dependencies when practical. Services must not import the `api` package root or `api.routes`; receive collaborators through the factory (see `build_roll_decisions(..., iv_earnings=...)` in `_create_wheel_runner`).
+- Before adding or moving a module, assign it to a capability in `docs/architecture/capabilities.json`; run `uv run python scripts/architecture.py docs` and `check`.
 - Keep external API clients rate-limited, cached, and failure-tolerant.
 
 ## Verification

@@ -14,9 +14,8 @@ from typing import Dict, List, Optional, Tuple
 
 from api.services.alpha_vantage_provider import ALPHA_VANTAGE_FREE_DAILY_ALLOWANCE, AlphaVantageEarningsProvider
 from api.services.utils import clean_yfinance_ticker, get_yfinance_ticker
-from core.connection_constants import _normalize_iv
 from core.ticker_utils import earnings_underlying_ticker
-from core.utils import market_now
+from core.utils import market_now, normalize_iv
 
 logger = logging.getLogger("api.services.iv_tracking")
 
@@ -259,7 +258,7 @@ class IVEarningsService:
             return
 
         try:
-            normalized_iv = _normalize_iv(implied_volatility)
+            normalized_iv = normalize_iv(implied_volatility)
             self.db.save_iv_data(ticker, normalized_iv, stock_price, option_type, expiration, dte, strike=strike)
             logger.debug("Recorded IV for %s: %.2f%%", ticker, normalized_iv * 100)
 
@@ -308,9 +307,9 @@ class IVEarningsService:
                     chosen = row
 
             if chosen is not None:
-                iv = _normalize_iv(chosen.get("implied_volatility"))
+                iv = normalize_iv(chosen.get("implied_volatility"))
             else:
-                values = sorted(v for v in (_normalize_iv(r.get("implied_volatility")) for r in observations) if v > 0)
+                values = sorted(v for v in (normalize_iv(r.get("implied_volatility")) for r in observations) if v > 0)
                 if not values:
                     continue
                 mid = len(values) // 2
@@ -342,7 +341,7 @@ class IVEarningsService:
         0.5 rank, which means history was observed and the range was flat — real
         information, namely "no information", which legitimately scores neutral.
         """
-        current_iv = _normalize_iv(current_iv)
+        current_iv = normalize_iv(current_iv)
         if current_iv <= 0:
             return (0.5, "unknown")
 
@@ -396,7 +395,7 @@ class IVEarningsService:
                     'above_avg' | 'high' | 'extreme_high' | 'insufficient_history'
                     | 'unknown'
         """
-        current_iv = _normalize_iv(current_iv)
+        current_iv = normalize_iv(current_iv)
         # Check cache first
         cache_entry = self._iv_cache.get(ticker)
         if self._is_cache_valid(cache_entry, self._cache_duration_hours):

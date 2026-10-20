@@ -32,7 +32,8 @@
 
 ## Work Guidance
 
-- Prefer dependency injection for config, database, and provider clients in code that needs isolated tests.
+- Prefer dependency injection for config, database, and provider clients in code that needs isolated tests. `roll_diagnostics.build_roll_decisions` receives `iv_earnings` from the app factory; do not reintroduce a service-registry lookup inside a service.
+- Before adding or moving a module, assign it to a capability in `docs/architecture/capabilities.json`; run `uv run python scripts/architecture.py docs` and `check`.
 - Preserve source metadata and warnings when signals are widened or enriched by non-Moomoo sources.
 - Keep recommendation, signal, and risk outputs deterministic enough for regression tests.
 - Avoid circular imports back into route modules.

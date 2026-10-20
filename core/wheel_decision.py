@@ -11,7 +11,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from core.connection_constants import _normalize_iv
 from core.growth_mode import (
     classify_covered_call_intent,
     compute_confidence_score,
@@ -38,7 +37,7 @@ from core.scoring_factors import (
 )
 from core.sizing import remaining_underlying_capital
 from core.ticker_utils import parse_moomoo_symbol
-from core.utils import is_market_open, market_now, safe_float
+from core.utils import is_market_open, market_now, normalize_iv, safe_float
 from core.utils import normalize_expiration as _normalize_expiration
 
 logger = logging.getLogger(__name__)
@@ -382,7 +381,7 @@ def score_contract(
 
     quote_quality = "tradable"
     delta = float(option.get("delta", 0) or 0)
-    implied_volatility = _normalize_iv(option.get("implied_volatility", 0))
+    implied_volatility = normalize_iv(option.get("implied_volatility", 0))
     open_interest = int(option.get("open_interest", 0) or 0)
     volume = int(option.get("volume", 0) or 0)
     # Canonical premium basis is the executable bid credit, not the midpoint.

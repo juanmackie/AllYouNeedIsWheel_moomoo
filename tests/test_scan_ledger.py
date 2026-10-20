@@ -1,19 +1,24 @@
 """
-Tests for core/scan_ledger.py — Wheel Scan Ledger
+Tests for the wheel scan ledger: pure helpers in ``core/scan_ledger.py`` and
+persistence in ``db/scan_ledger_repository.py``.
 """
 
+import os
+import tempfile
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from core.scan_ledger import (
-    ScanLedger,
     ScanLedgerEntry,
     _stable_json,
     compute_config_hash,
     compute_portfolio_hash,
     extract_data_sources,
 )
+from db.database import OptionsDatabase
+from db.scan_ledger_repository import ScanLedgerRepository
+from db.sqlite_pool import close_connection_pool
 
 
 class TestScanLedgerHashes(unittest.TestCase):
@@ -128,7 +133,7 @@ class TestScanLedgerDB(unittest.TestCase):
     def setUp(self):
         self.mock_db = MagicMock()
         self.mock_db.db_path = ":memory:"
-        self.ledger = ScanLedger(self.mock_db)
+        self.ledger = ScanLedgerRepository(self.mock_db)
 
     def tearDown(self):
         self.ledger.close()
@@ -201,6 +206,55 @@ class TestScanLedgerDB(unittest.TestCase):
         stats = self.ledger.get_stats()
         self.assertEqual(stats.get("total"), 10)
         self.assertEqual(stats.get("errors"), 2)
+
+
+class TestScanLedgerRepositoryRealSQLite(unittest.TestCase):
+    """Round-trip through a real database: mocked connections hide row_factory bugs."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "test_scan_ledger.db")
+        self.db = OptionsDatabase(self.db_path)
+        self.ledger = ScanLedgerRepository(self.db)
+
+    def tearDown(self):
+        self.ledger.close()
+        self.db.close()
+        close_connection_pool(self.db_path)
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def test_record_then_read_recent_by_id_and_stats(self):
+        entry = ScanLedgerEntry(
+            scan_type="recommendations",
+            timestamp="2026-01-01T00:00:00",
+            config_hash="abc",
+            portfolio_hash="def",
+            data_sources=[{"name": "moomoo", "status": "used"}],
+            warnings=["test warning"],
+            total_candidates=5,
+            passed_count=2,
+            blocked_count=3,
+            elapsed_seconds=1.5,
+        )
+        entry_id = self.ledger.record(entry)
+        self.assertIsInstance(entry_id, int)
+
+        rows = self.ledger.get_recent(limit=5)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], entry_id)
+        self.assertEqual(rows[0]["scan_type"], "recommendations")
+        self.assertEqual(rows[0]["data_sources_json"], [{"name": "moomoo", "status": "used"}])
+        self.assertEqual(rows[0]["warnings_json"], ["test warning"])
+
+        fetched = self.ledger.get_by_id(entry_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched["passed_count"], 2)
+
+        stats = self.ledger.get_stats()
+        self.assertEqual(stats["total"], 1)
+        self.assertEqual(stats["errors"], 0)
 
 
 class TestStableJson(unittest.TestCase):
@@ -341,7 +395,7 @@ class TestScanLedgerIntegrationWrite(unittest.TestCase):
 
         mock_db = MagicMock()
         mock_db.db_path = ":memory:"
-        ledger = ScanLedger(mock_db)
+        ledger = ScanLedgerRepository(mock_db)
 
         entry = ScanLedgerEntry(
             scan_type="recommendations",

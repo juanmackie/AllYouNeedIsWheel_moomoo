@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config  # noqa: E402
-from core.connection_constants import _infer_security_type_from_code, _parse_option_code_metadata  # noqa: E402
+from core.connection_constants import infer_security_type_from_code, parse_option_code_metadata  # noqa: E402
 from core.connection_manager import MoomooConnection  # noqa: E402
 from core.ticker_utils import parse_moomoo_symbol  # noqa: E402
 
@@ -108,7 +108,7 @@ def _summarize_deal_shapes(deals):
     stock_rows = []
     for row in deals:
         code = str(row.get("code", "") or "")
-        security_type = _infer_security_type_from_code(code)
+        security_type = infer_security_type_from_code(code)
         side = str(row.get("trd_side", "") or "").upper()
         try:
             qty = abs(float(row.get("qty", 0) or 0))
@@ -119,7 +119,7 @@ def _summarize_deal_shapes(deals):
         if security_type == "STK":
             stock_rows.append((parse_moomoo_symbol(code), side, qty, price, stamp))
         elif security_type == "OPT":
-            meta = _parse_option_code_metadata(code)
+            meta = parse_option_code_metadata(code)
             if not meta:
                 continue
             key = (

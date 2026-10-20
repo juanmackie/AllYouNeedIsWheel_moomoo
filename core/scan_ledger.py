@@ -1,5 +1,5 @@
 """
-Wheel Scan Ledger — permanent record of every scan the app has run.
+Wheel Scan Ledger — pure entry shape and hashes for every scan the app runs.
 
 Each scan produces one ledger entry (like a Vibe-Trading run card) recording:
   - scan_type (recommendations, roll, watchlist)
@@ -11,17 +11,14 @@ Each scan produces one ledger entry (like a Vibe-Trading run card) recording:
   - top signals and blocked candidates
   - counts and scoring version
 
-This is read-only for users but inspectable via `/api/ledger`.
+Persistence lives in ``db.scan_ledger_repository``; this module stays pure so
+decision code can build entries without importing SQLite.
 """
 
 import hashlib
 import json
-import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 SCORING_VERSION = "3.0-capital-return"
 
@@ -97,115 +94,6 @@ def extract_data_sources(portfolio_context: dict, decisions: list | None = None)
                     if val and val not in ("missing", ""):
                         sources.add(val)
     return [{"name": s, "status": "used"} for s in sorted(sources)]
-
-
-class ScanLedger:
-    def __init__(self, db):
-        self.db = db
-        self._conn = None
-
-    def _connect(self):
-        if self._conn is None:
-            from db.sqlite_pool import pooled_connection
-
-            self._conn_ctx = pooled_connection(self.db.db_path)
-            self._conn = self._conn_ctx.__enter__()
-        return self._conn
-
-    def close(self):
-        if self._conn is not None:
-            self._conn_ctx.__exit__(None, None, None)
-            self._conn = None
-
-    def record(self, entry: ScanLedgerEntry) -> int | None:
-        try:
-            conn = self._connect()
-            conn.execute(
-                """
-                INSERT INTO scan_ledger
-                    (scan_type, timestamp, config_hash, portfolio_hash, scoring_version,
-                     data_sources_json, warnings_json, top_signals_json,
-                     blocked_candidates_json, total_candidates, passed_count,
-                     blocked_count, elapsed_seconds, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    entry.scan_type,
-                    entry.timestamp or datetime.now().isoformat(),
-                    entry.config_hash,
-                    entry.portfolio_hash,
-                    entry.scoring_version,
-                    json.dumps(entry.data_sources),
-                    json.dumps(entry.warnings),
-                    json.dumps(entry.top_signals),
-                    json.dumps(entry.blocked_candidates),
-                    entry.total_candidates,
-                    entry.passed_count,
-                    entry.blocked_count,
-                    entry.elapsed_seconds,
-                    entry.error_message,
-                ),
-            )
-            conn.commit()
-            return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        except Exception as exc:
-            logger.error("Failed to record scan ledger entry: %s", exc)
-            return None
-
-    def get_recent(self, limit: int = 20, scan_type: str | None = None) -> list[dict]:
-        try:
-            conn = self._connect()
-            if scan_type:
-                rows = conn.execute(
-                    "SELECT * FROM scan_ledger WHERE scan_type = ? ORDER BY id DESC LIMIT ?",
-                    (scan_type, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM scan_ledger ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-            return [_row_to_dict(r) for r in rows]
-        except Exception as exc:
-            logger.error("Failed to query scan ledger: %s", exc)
-            return []
-
-    def get_by_id(self, entry_id: int) -> dict | None:
-        try:
-            conn = self._connect()
-            row = conn.execute("SELECT * FROM scan_ledger WHERE id = ?", (entry_id,)).fetchone()
-            return _row_to_dict(row) if row else None
-        except Exception as exc:
-            logger.error("Failed to get scan ledger entry %s: %s", entry_id, exc)
-            return None
-
-    def get_stats(self) -> dict:
-        try:
-            conn = self._connect()
-            row = conn.execute(
-                """
-                SELECT
-                    COUNT(*) as total,
-                    COUNT(CASE WHEN error_message IS NOT NULL AND error_message != '' THEN 1 END) as errors,
-                    AVG(elapsed_seconds) as avg_elapsed,
-                    AVG(total_candidates) as avg_candidates,
-                    AVG(passed_count) as avg_passed,
-                    AVG(blocked_count) as avg_blocked
-                FROM scan_ledger
-                """
-            ).fetchone()
-            return dict(row) if row else {}
-        except Exception as exc:
-            logger.error("Failed to get scan ledger stats: %s", exc)
-            return {}
-
-
-def _row_to_dict(row) -> dict:
-    d = dict(row)
-    for json_field in ("data_sources_json", "warnings_json", "top_signals_json", "blocked_candidates_json"):
-        if json_field in d and isinstance(d[json_field], str):
-            try:
-                d[json_field] = json.loads(d[json_field])
-            except (json.JSONDecodeError, TypeError):
-                pass
-    return d
 
 
 def _stable_json(obj: Any) -> str:

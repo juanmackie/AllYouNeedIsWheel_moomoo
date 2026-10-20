@@ -16,9 +16,9 @@ from core.run_model import (
     MODE_REVIEW_ONLY,
     MODE_STAGED,
     SESSION_UNKNOWN,
-    _fresh_quote_map,
-    _max_tradeable_age_sec,
     build_eligibility_view,
+    fresh_quote_map,
+    max_tradeable_age_sec,
     recompute_effective_snapshot,
     resolve_coverage_truth,
     resolve_session_context,
@@ -307,9 +307,9 @@ def evaluate_copy_check(
 
     session_state, session_reasons = resolve_session_context(run, now_et)
     coverage_truth, coverage_reasons = resolve_coverage_truth(run, session_state)
-    quotes_fresh, _ = _fresh_quote_map(
+    quotes_fresh, _ = fresh_quote_map(
         run.get("quote_fetched_at") or {},
-        _max_tradeable_age_sec(run),
+        max_tradeable_age_sec(run),
         now_utc,
     )
     build_eligibility_view(view, now_utc, now_et)
@@ -383,7 +383,7 @@ def evaluate_copy_check(
         # The broker IS serving current-session quotes => market is open; never stage.
         option = evidence.get("option") or {}
         age = _broker_quote_age_sec(option, now_utc)
-        if age is not None and age < _max_tradeable_age_sec(run):
+        if age is not None and age < max_tradeable_age_sec(run):
             return (
                 MODE_REVIEW_ONLY,
                 ["market appears open now (fresh broker quotes) — refresh for live copy; staging blocked"],
@@ -436,7 +436,7 @@ def evaluate_copy_check(
                 age = _broker_quote_age_sec(quote, now_utc)
                 blocker = (
                     "fresh broker repair quote unavailable"
-                    if evidence.get("source") != "broker" or age is None or age < 0 or age > _max_tradeable_age_sec(run)
+                    if evidence.get("source") != "broker" or age is None or age < 0 or age > max_tradeable_age_sec(run)
                     else repair_open_blocker(
                         contract,
                         quote,

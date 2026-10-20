@@ -43,19 +43,18 @@ from core.connection_constants import (
     _clean_account_id,
     _env_name,
     _first_non_zero,
-    _infer_security_type_from_code,
-    _normalize_iv,
     _normalize_security_firm,
     _normalize_trd_env,
-    _parse_option_code_metadata,
     _safe_close_context,
+    infer_security_type_from_code,
+    parse_option_code_metadata,
 )
 from core.context_factory import create_contexts
 from core.logging_config import get_logger
 from core.quote_cache import OptionChainCache, PendingRequestCoordinator
 from core.rate_limiter import RateLimiter
 from core.ticker_utils import TickerCache, format_symbol
-from core.utils import market_now, safe_float
+from core.utils import market_now, normalize_iv, safe_float
 
 logger = get_logger("ayniwheel.connection", "moomoo")
 
@@ -860,7 +859,7 @@ class MoomooConnection:
             "last": safe_float(row.get("last_price")),
             "volume": int(safe_float(row.get("volume"))),
             "open_interest": int(safe_float(row.get("option_open_interest", row.get("open_interest")))),
-            "implied_volatility": _normalize_iv(row.get("option_implied_volatility", 0)),
+            "implied_volatility": normalize_iv(row.get("option_implied_volatility", 0)),
             "delta": safe_float(row.get("option_delta")),
             "gamma": safe_float(row.get("option_gamma")),
             "theta": safe_float(row.get("option_theta")),
@@ -1082,7 +1081,7 @@ class MoomooConnection:
 
             ret, pos_data = self.trd_ctx.position_list_query(trd_env=trd_env, acc_id=self._account_id_arg(account_id))
             if ret == RET_OK and not pos_data.empty:
-                position_types = pos_data["code"].apply(_infer_security_type_from_code)
+                position_types = pos_data["code"].apply(infer_security_type_from_code)
                 option_positions = pos_data[position_types == "OPT"]
                 if not option_positions.empty:
                     quote_fetched_at_utc = datetime.now(timezone.utc).isoformat()
@@ -1096,8 +1095,8 @@ class MoomooConnection:
 
                 for _, pos in pos_data.iterrows():
                     symbol = pos.get("code", "")
-                    sec_type = _infer_security_type_from_code(symbol)
-                    option_metadata = _parse_option_code_metadata(symbol) if sec_type == "OPT" else None
+                    sec_type = infer_security_type_from_code(symbol)
+                    option_metadata = parse_option_code_metadata(symbol) if sec_type == "OPT" else None
 
                     pos_key = symbol
                     pos_details = {
@@ -1122,7 +1121,7 @@ class MoomooConnection:
                                 "bid": safe_float(snap.get("bid_price"), None),
                                 "ask": safe_float(snap.get("ask_price"), None),
                                 "last": safe_float(snap.get("last_price"), None),
-                                "implied_volatility": _normalize_iv(snap.get("option_implied_volatility", 0)),
+                                "implied_volatility": normalize_iv(snap.get("option_implied_volatility", 0)),
                                 "delta": safe_float(snap.get("option_delta"), None),
                                 "theta": safe_float(snap.get("option_theta"), None),
                                 "quote_fetched_at_utc": quote_fetched_at_utc,

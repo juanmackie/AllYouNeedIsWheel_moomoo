@@ -1,0 +1,353 @@
+{
+  "version": 1,
+  "boundaries": [
+    {
+      "from": "core",
+      "to": "api",
+      "reason": "core is the pure decision layer; the api layer composes it, never the reverse"
+    },
+    {
+      "from": "core",
+      "to": "db",
+      "reason": "core stays database-free; persistence is injected by the api composition layer"
+    },
+    {
+      "from": "db",
+      "to": "api",
+      "reason": "repositories do not depend on HTTP or app orchestration"
+    },
+    {
+      "from": "api.services",
+      "to": "api",
+      "reason": "services receive collaborators from the app factory instead of resolving the composition root"
+    },
+    {
+      "from": "api.services",
+      "to": "api.routes",
+      "reason": "routes depend on services, never the reverse"
+    }
+  ],
+  "budgets": {
+    "module_loc": 900,
+    "function_loc": 150,
+    "module_baseline": {
+      "api/services/iv_earnings_service.py": 1299,
+      "api/services/outcome_service.py": 1248,
+      "api/services/recommendations.py": 1794,
+      "core/connection_manager.py": 1496,
+      "core/wheel_decision.py": 928
+    },
+    "function_baseline": {
+      "api/__init__.py::create_app": 165,
+      "api/routes/run.py::evaluate_copy_check": 235,
+      "api/services/iv_earnings_service.py::IVEarningsService.get_earnings_info": 176,
+      "api/services/iv_earnings_service.py::IVEarningsService.refresh_stale_event_context": 220,
+      "api/services/options_data.py::OptionsDataService._build_candidate": 217,
+      "api/services/outcome_service.py::_build_record": 152,
+      "api/services/recommendations.py::RecommendationEngine.get_top_recommendations": 855,
+      "core/action_plan.py::build_next_actions": 176,
+      "core/exit_playbook.py::evaluate_exit": 214,
+      "core/monte_carlo.py::project_nav": 170,
+      "core/position_scorer.py::score_existing_position": 161,
+      "core/wheel_campaign.py::build_campaign": 161,
+      "core/wheel_decision.py::score_contract": 558,
+      "core/wheel_runner.py::WheelRunner.refresh": 154,
+      "db/schema.py::create_tables": 270,
+      "db/schema.py::migrate_database": 356
+    }
+  },
+  "capabilities": [
+    {
+      "id": "runtime-and-config",
+      "summary": "Entry points, Flask app factory, service registry, environment/config, logging, and loopback trust boundary.",
+      "entry_points": [
+        "python app.py",
+        "python run_api.py",
+        "GET /health",
+        "GET /api/system/opend-status"
+      ],
+      "owns": [
+        "app.py",
+        "run_api.py",
+        "config.py",
+        "api/__init__.py",
+        "api/services/config.py",
+        "core/context_factory.py",
+        "core/logging_config.py"
+      ],
+      "tests": [
+        "tests/test_app_startup.py",
+        "tests/test_api_health.py",
+        "tests/test_api_config.py",
+        "tests/test_config_env.py",
+        "tests/test_import_side_effects.py",
+        "tests/test_service_registry.py",
+        "tests/test_loopback_trust_boundary.py",
+        "tests/test_logging_config.py"
+      ]
+    },
+    {
+      "id": "broker-connectivity",
+      "summary": "Read-only OpenD connection lifecycle, broker protocol guard, rate limits, and quote/chain caching.",
+      "entry_points": [
+        "core.connection_manager.MoomooConnection",
+        "core.broker_protocol.QUERY_SDK_MEMBERS"
+      ],
+      "owns": [
+        "core/broker_protocol.py",
+        "core/connection_manager.py",
+        "core/connection_constants.py",
+        "core/rate_limiter.py",
+        "core/quote_cache.py"
+      ],
+      "tests": [
+        "tests/test_connection.py",
+        "tests/test_query_only_broker.py",
+        "tests/test_no_execution_surface.py",
+        "tests/test_rate_limiter.py",
+        "tests/test_import_side_effects.py"
+      ]
+    },
+    {
+      "id": "shared-kernel",
+      "summary": "Pure shared helpers for market time, ticker normalization, numbers, and provider-safe symbols. No domain decisions.",
+      "entry_points": [
+        "core.utils",
+        "core.ticker_utils",
+        "api.services.utils"
+      ],
+      "owns": [
+        "core/__init__.py",
+        "core/utils.py",
+        "core/ticker_utils.py",
+        "api/services/utils.py"
+      ],
+      "tests": [
+        "tests/test_utils.py",
+        "tests/test_ticker_utils.py",
+        "tests/test_entry_window.py"
+      ]
+    },
+    {
+      "id": "persistence",
+      "summary": "SQLite schema, migrations, connection pooling, and account-scoped repositories.",
+      "entry_points": [
+        "db.database.OptionsDatabase",
+        "db.schema.migrate_database",
+        "db.sqlite_pool.pooled_connection"
+      ],
+      "owns": [
+        "db/__init__.py",
+        "db/database.py",
+        "db/schema.py",
+        "db/sqlite_pool.py",
+        "db/earnings_repository.py",
+        "db/fills_repository.py",
+        "db/iv_repository.py",
+        "db/option_chain_repository.py",
+        "db/portfolio_snapshots_repository.py",
+        "db/trade_events_repository.py",
+        "db/scan_ledger_repository.py"
+      ],
+      "tests": [
+        "tests/test_database.py",
+        "tests/test_fills_repository.py",
+        "tests/test_portfolio_snapshots.py",
+        "tests/test_scan_ledger.py"
+      ]
+    },
+    {
+      "id": "wheel-scan",
+      "summary": "Watchlist-union scan, broker evidence gates, contract scoring, capital-return ranking, immutable run snapshots, and copy eligibility.",
+      "entry_points": [
+        "POST /api/run/refresh",
+        "GET /api/run",
+        "GET /api/run/copy-check",
+        "api.services.recommendations.RecommendationEngine",
+        "core.wheel_runner.WheelRunner"
+      ],
+      "owns": [
+        "core/wheel_runner.py",
+        "core/run_model.py",
+        "core/wheel_decision.py",
+        "core/scoring_factors.py",
+        "core/sizing.py",
+        "core/greeks.py",
+        "core/scan_ledger.py",
+        "api/services/recommendations.py",
+        "api/services/recommendation_ranking.py",
+        "api/services/options_data.py",
+        "api/services/options_service.py",
+        "api/routes/run.py"
+      ],
+      "tests": [
+        "tests/test_recommendations.py",
+        "tests/test_score_regression.py",
+        "tests/test_run_model.py",
+        "tests/test_saved_run_regressions.py",
+        "tests/test_routes_run.py",
+        "tests/test_full_watchlist_discovery.py",
+        "tests/test_options_data.py",
+        "tests/test_options_service.py",
+        "tests/test_wheel_decision.py",
+        "tests/test_wheel_parity.py",
+        "tests/test_sizing.py",
+        "tests/test_greeks.py",
+        "tests/test_scan_ledger.py",
+        "tests/test_raw_scan_replay.py"
+      ]
+    },
+    {
+      "id": "portfolio-and-growth",
+      "summary": "Portfolio context, holdings basis/campaigns, position monitor, exit playbook, growth pace, Monte Carlo projection, and next actions.",
+      "entry_points": [
+        "GET /api/portfolio",
+        "GET /api/portfolio/history",
+        "GET /api/portfolio/projection",
+        "GET /api/alerts",
+        "GET /api/roll-pressure"
+      ],
+      "owns": [
+        "core/portfolio_snapshot.py",
+        "core/position_diff.py",
+        "core/position_scorer.py",
+        "core/exit_playbook.py",
+        "core/growth_mode.py",
+        "core/monte_carlo.py",
+        "core/action_plan.py",
+        "api/services/portfolio_service.py",
+        "api/services/portfolio_context.py",
+        "api/services/portfolio_scoring.py",
+        "api/services/roll_diagnostics.py",
+        "api/routes/portfolio.py",
+        "api/routes/roll_pressure.py",
+        "api/routes/alerts.py"
+      ],
+      "tests": [
+        "tests/test_portfolio_service.py",
+        "tests/test_portfolio_context.py",
+        "tests/test_portfolio_snapshots.py",
+        "tests/test_position_diff.py",
+        "tests/test_position_scorer.py",
+        "tests/test_exit_playbook.py",
+        "tests/test_growth_mode.py",
+        "tests/test_growth_pace.py",
+        "tests/test_monte_carlo.py",
+        "tests/test_action_plan.py",
+        "tests/test_routes_portfolio.py",
+        "tests/test_routes_alerts.py",
+        "tests/test_projection_route.py"
+      ]
+    },
+    {
+      "id": "watchlist",
+      "summary": "Moomoo watchlist discovery, merged scan universe, and active-watchlist API state.",
+      "entry_points": [
+        "GET /api/watchlist",
+        "api.services.watchlist_manager.WatchlistManager"
+      ],
+      "owns": [
+        "api/services/watchlist_manager.py",
+        "api/routes/watchlist.py"
+      ],
+      "tests": [
+        "tests/test_watchlist_manager.py"
+      ]
+    },
+    {
+      "id": "earnings-and-iv",
+      "summary": "Earnings calendar enrichment, ex-dividend context, IV rank/percentile, and optional external providers.",
+      "entry_points": [
+        "GET /api/earnings",
+        "api.services.iv_earnings_service.IVEarningsService"
+      ],
+      "owns": [
+        "api/services/iv_earnings_service.py",
+        "api/services/alpha_vantage_provider.py",
+        "api/routes/earnings.py"
+      ],
+      "tests": [
+        "tests/test_iv_earnings_service.py",
+        "tests/test_routes_earnings.py"
+      ]
+    },
+    {
+      "id": "options-and-tickets",
+      "summary": "Options HTTP surface, manual close/roll ticket revalidation, and taken-link state.",
+      "entry_points": [
+        "GET /api/options",
+        "GET /api/options/analytics/outcomes",
+        "POST /api/options/analytics/outcomes/ingest"
+      ],
+      "owns": [
+        "api/services/ticket_validation.py",
+        "api/services/taken_links.py",
+        "api/routes/options.py"
+      ],
+      "tests": [
+        "tests/test_ticket_validation.py",
+        "tests/test_taken_links.py",
+        "tests/test_routes_options.py"
+      ]
+    },
+    {
+      "id": "fills-and-outcomes",
+      "summary": "Query-only broker fill ingestion, reconciled campaign basis, and broker-verified outcome attribution.",
+      "entry_points": [
+        "api.services.fills_service.refresh_fill_evidence",
+        "api.services.outcome_service.OutcomeService",
+        "core.outcome_attribution"
+      ],
+      "owns": [
+        "api/services/fills_service.py",
+        "api/services/outcome_service.py",
+        "api/services/campaign_service.py",
+        "core/outcome_attribution.py",
+        "core/wheel_campaign.py"
+      ],
+      "tests": [
+        "tests/test_outcome_attribution.py",
+        "tests/test_outcome_service.py",
+        "tests/test_outcome_integration.py",
+        "tests/test_campaign_service.py",
+        "tests/test_campaign_fills_service.py",
+        "tests/test_fills_repository.py"
+      ]
+    },
+    {
+      "id": "settings-and-ledger",
+      "summary": "Versioned wheel presets, settings persistence, and the read-only scan ledger API.",
+      "entry_points": [
+        "GET /api/settings",
+        "POST /api/settings",
+        "GET /api/ledger/scans",
+        "GET /api/ledger/scans/stats"
+      ],
+      "owns": [
+        "core/presets.py",
+        "api/routes/settings.py",
+        "api/routes/ledger.py"
+      ],
+      "tests": [
+        "tests/test_presets.py",
+        "tests/test_routes_settings.py",
+        "tests/test_scan_ledger.py"
+      ]
+    },
+    {
+      "id": "source-policy-and-http",
+      "summary": "Shared HTTP response shapes and source-policy metadata for broker-authoritative versus research payloads.",
+      "entry_points": [
+        "api.routes.utils",
+        "api.routes.source_policy"
+      ],
+      "owns": [
+        "api/routes/source_policy.py",
+        "api/routes/utils.py"
+      ],
+      "tests": [
+        "tests/test_response_consistency.py"
+      ]
+    }
+  ]
+}

@@ -56,7 +56,7 @@ def _scheduled_market_open(now_et: datetime) -> bool:
     return open_dt <= now_et <= close_dt
 
 
-def _fresh_quote_map(quote_fetched_at: dict, max_age_sec: int, now: datetime) -> tuple[bool, list[str]]:
+def fresh_quote_map(quote_fetched_at: dict, max_age_sec: int, now: datetime) -> tuple[bool, list[str]]:
     stale_symbols = []
     if not quote_fetched_at:
         return False, stale_symbols
@@ -90,7 +90,7 @@ def resolve_session_context(run: dict | None, now_et: datetime | None = None) ->
     now_et = now_et or market_now()
     if not _scheduled_market_open(now_et):
         return SESSION_CLOSED, []
-    fresh, _ = _fresh_quote_map(
+    fresh, _ = fresh_quote_map(
         evidence,
         int(run.get("max_tradeable_age_sec", 300) or 300),
         now_et.astimezone(timezone.utc),
@@ -175,7 +175,7 @@ def compute_signal_eligibility(
     return MODE_STAGED, list(session_reasons or [])
 
 
-def _max_tradeable_age_sec(run: dict) -> int:
+def max_tradeable_age_sec(run: dict) -> int:
     try:
         return max(0, int(run.get("max_tradeable_age_sec", 300) or 300))
     except (TypeError, ValueError):
@@ -255,9 +255,9 @@ def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: 
     now_utc = now_utc or datetime.now(timezone.utc)
     session_state, session_reasons = resolve_session_context(run, now_et)
     coverage_truth, coverage_reasons = resolve_coverage_truth(run, session_state)
-    fresh, stale_symbols = _fresh_quote_map(
+    fresh, stale_symbols = fresh_quote_map(
         run.get("quote_fetched_at") or {},
-        _max_tradeable_age_sec(run),
+        max_tradeable_age_sec(run),
         now_utc,
     )
     view["eligibility"] = {
@@ -327,7 +327,7 @@ def recompute_effective_snapshot(
     view = copy.deepcopy(snapshot)
     run = view.get("run") or {}
     now = now or datetime.now(timezone.utc)
-    fresh, stale_symbols = _fresh_quote_map(
+    fresh, stale_symbols = fresh_quote_map(
         run.get("quote_fetched_at") or {},
         int(run.get("max_tradeable_age_sec", 300) or 300),
         now,
@@ -418,7 +418,7 @@ class WheelRunSnapshot:
         return self._quotes_fresh()
 
     def _quotes_fresh(self) -> bool:
-        fresh, _ = _fresh_quote_map(
+        fresh, _ = fresh_quote_map(
             self.run.quote_fetched_at,
             self.run.max_tradeable_age_sec,
             datetime.now(timezone.utc),

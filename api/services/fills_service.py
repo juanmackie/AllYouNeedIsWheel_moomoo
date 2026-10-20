@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 
-from core.connection_constants import _infer_security_type_from_code, _parse_option_code_metadata
+from core.connection_constants import infer_security_type_from_code, parse_option_code_metadata
 from core.ticker_utils import parse_moomoo_symbol
 from core.utils import parse_position_qty
 
@@ -47,7 +47,7 @@ def normalize_deal_row(row, env: str, opaque_account: str):
         return None  # cancelled/rolled-back fills are not trading evidence
 
     code = str(row.get("code", "") or "").strip()
-    security_type = _infer_security_type_from_code(code)
+    security_type = infer_security_type_from_code(code)
     if security_type not in ("OPT", "STK"):
         return None
 
@@ -65,7 +65,7 @@ def normalize_deal_row(row, env: str, opaque_account: str):
     strike = None
     expiration = ""
     if security_type == "OPT":
-        metadata = _parse_option_code_metadata(code)
+        metadata = parse_option_code_metadata(code)
         if not metadata:
             logger.warning("Skipping a deal with an undecodable option contract code")
             return None

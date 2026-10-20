@@ -1,9 +1,9 @@
 """Roll/hold/close diagnostics for actual option positions.
 
-Lives in the api layer because it composes registered services (portfolio,
-ivearnings) with portfolio scoring helpers. ``WheelRunner`` receives this as an
-injected ``roll_diagnostics_provider`` callable, so ``core`` never imports
-``api``.
+Lives in the api layer because it composes the portfolio scoring helper with an
+IV/earnings service supplied by the app factory. ``WheelRunner`` receives this
+as an injected ``roll_diagnostics_provider`` callable, so ``core`` never imports
+``api`` and the service never resolves the composition root itself.
 """
 
 from __future__ import annotations
@@ -13,8 +13,12 @@ import logging
 logger = logging.getLogger("api.services.roll_diagnostics")
 
 
-def build_roll_decisions(portfolio_context, conn, fresh_candidates=None):
-    """Build per-position diagnostics, naming only fresh, copy-eligible targets."""
+def build_roll_decisions(portfolio_context, conn, fresh_candidates=None, *, iv_earnings):
+    """Build per-position diagnostics, naming only fresh, copy-eligible targets.
+
+    ``iv_earnings`` is injected by the app factory so this service never imports
+    the composition root (``api``) or resolves services itself.
+    """
     try:
         option_positions = []
         positions = portfolio_context.get("positions", {}) or {}
@@ -23,14 +27,12 @@ def build_roll_decisions(portfolio_context, conn, fresh_candidates=None):
                 option_positions.append(pos)
         if not option_positions:
             return []
-        from api import get_service
         from api.services.portfolio_scoring import score_position
 
         ctx = dict(portfolio_context)
         profile = ctx.get("exit_profile") or {}
         ctx.update(profile)
         ctx["exit_roll_dte"] = profile.get("roll_dte", 21)
-        iv_earnings = get_service("ivearnings")
         decisions = []
         for pos in option_positions:
             decision = score_position(pos, conn, ctx, iv_earnings, fresh_candidates)

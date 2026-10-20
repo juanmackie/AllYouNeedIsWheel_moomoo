@@ -7,7 +7,7 @@ import logging
 from flask import Blueprint, current_app
 
 from api.routes.utils import error_response, success_response
-from core.scan_ledger import ScanLedger
+from db.scan_ledger_repository import ScanLedgerRepository
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def get_recent_scans():
         db = current_app.config.get("database")
         if not db:
             return error_response("Database not available", status_code=503)
-        ledger = ScanLedger(db)
+        ledger = ScanLedgerRepository(db)
         entries = ledger.get_recent(limit=50)
         stats = ledger.get_stats()
         return success_response(
@@ -43,7 +43,7 @@ def get_scan(entry_id: int):
         db = current_app.config.get("database")
         if not db:
             return error_response("Database not available", status_code=503)
-        ledger = ScanLedger(db)
+        ledger = ScanLedgerRepository(db)
         entry = ledger.get_by_id(entry_id)
         if not entry:
             return error_response("Scan entry not found", status_code=404)
@@ -60,7 +60,7 @@ def get_scan_stats():
         db = current_app.config.get("database")
         if not db:
             return error_response("Database not available", status_code=503)
-        ledger = ScanLedger(db)
+        ledger = ScanLedgerRepository(db)
         stats = ledger.get_stats()
         return success_response({"stats": stats})
     except Exception as e:

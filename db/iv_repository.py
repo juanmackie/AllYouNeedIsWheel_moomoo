@@ -2,7 +2,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 
-from core.connection_constants import _normalize_iv
+from core.utils import normalize_iv
 
 from .sqlite_pool import pooled_connection
 
@@ -21,7 +21,7 @@ class IVRepository:
                 cursor = conn.cursor()
 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                normalized_iv = _normalize_iv(implied_volatility)
+                normalized_iv = normalize_iv(implied_volatility)
 
                 cursor.execute(
                     """
@@ -60,7 +60,7 @@ class IVRepository:
                 for row in rows:
                     d = dict(row)
                     if "implied_volatility" in d:
-                        d["implied_volatility"] = _normalize_iv(d["implied_volatility"])
+                        d["implied_volatility"] = normalize_iv(d["implied_volatility"])
                     results.append(d)
                 return results
         except Exception as e:
@@ -86,7 +86,7 @@ class IVRepository:
                 if row:
                     d = dict(row)
                     if "implied_volatility" in d:
-                        d["implied_volatility"] = _normalize_iv(d["implied_volatility"])
+                        d["implied_volatility"] = normalize_iv(d["implied_volatility"])
                     return d
                 return None
         except Exception as e:

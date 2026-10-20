@@ -168,6 +168,20 @@ def safe_float(value: Any, default: float | None = 0.0) -> float | None:
     return parsed
 
 
+def normalize_iv(value, default=0.0):
+    """Normalize implied volatility to decimal form.
+
+    Moomoo returns IV as percentage (e.g. 48.0 for 48%), while Black-Scholes
+    and the rest of the system expect decimal (e.g. 0.48 for 48%).
+    Values > 3.0 are assumed to be percentages and divided by 100; values
+    already in decimal form are passed through unchanged.
+    """
+    iv = safe_float(value, default)
+    if iv > 3.0:
+        return round(iv / 100.0, 4)
+    return round(iv, 4)
+
+
 def normalize_expiration(expiration) -> str:
     """Return YYYYMMDD for common broker/yfinance expiration formats."""
     value = str(expiration or "").strip()
