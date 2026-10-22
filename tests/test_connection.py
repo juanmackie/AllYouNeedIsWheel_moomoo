@@ -1559,3 +1559,29 @@ class TestSecurityTypeRowNormalization(unittest.TestCase):
 
     def test_name_with_etf_word_is_etf(self):
         self.assertEqual(MoomooConnection._normalize_security_type_row({"name": "iShares Russell 2000 ETF"}), "etf")
+
+
+class TestCashFlowQuota(unittest.TestCase):
+    """Get Cash Flow Summary is limited to 20 requests per 30 seconds by the broker."""
+
+    def test_cash_flow_limiter_stays_within_broker_quota(self):
+        limiter = MoomooConnection._cash_flow_rate_limiter
+        self.assertLessEqual(limiter.max_requests_per_window, 20)
+        self.assertGreaterEqual(limiter.rate_limit_window, 30)
+        self.assertLessEqual(limiter.burst_threshold, 20)
+        self.assertGreaterEqual(limiter.burst_window, 30)
+
+    def test_get_cash_flow_is_paced_by_cash_flow_limiter(self):
+        conn = MoomooConnection()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.trd_ctx = MagicMock()
+        conn.trd_ctx.get_acc_cash_flow.return_value = (RET_ERROR, "broker error")
+        conn._resolve_portfolio_account = MagicMock(return_value=(TrdEnv.REAL, "123"))
+        conn._rate_limiter.check_rate_limit = MagicMock()
+
+        with patch.object(MoomooConnection._cash_flow_rate_limiter, "check_rate_limit") as paced:
+            result = conn.get_cash_flow("2026-10-21")
+
+        self.assertIsNone(result)
+        paced.assert_called_once()
+        conn._rate_limiter.check_rate_limit.assert_not_called()

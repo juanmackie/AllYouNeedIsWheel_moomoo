@@ -150,6 +150,8 @@ class MoomooConnection:
     _option_chain_gate = threading.BoundedSemaphore(1)
     _option_chain_rate_limiter = None
     _option_chain_rate_lock = threading.Lock()
+    # Broker quota: "Get Cash Flow Summary" allows 20 requests per 30 s (process-wide; 18 leaves headroom).
+    _cash_flow_rate_limiter = RateLimiter(18, 30, 18, 30)  # max, window s, burst, burst window s
     _market_timezone = ZoneInfo(os.environ.get("MARKET_TIMEZONE", "America/New_York"))
 
     def __new__(
@@ -1226,13 +1228,11 @@ class MoomooConnection:
             return None
 
     def get_cash_flow(self, clearing_date):
-        """Query one clearing date's cash movements (``get_acc_cash_flow``).
+        """Query one clearing date's cash movements (``get_acc_cash_flow``, read-only).
 
-        Read-only. Securities accounts are keyed by a single ``clearing_date``
-        per call (date-range bounds are crypto-only in the SDK). Returns rows
-        [{cashflow_id, clearing_date, currency, cashflow_type,
-        cashflow_direction, cashflow_amount, cashflow_remark}], or None on
-        failure. ``cashflow_type`` is a raw server string passthrough.
+        One ``clearing_date`` per call. Returns raw rows (cashflow_id, clearing_date,
+        currency, cashflow_type, cashflow_direction, cashflow_amount, cashflow_remark),
+        or None on failure. Paced by ``_cash_flow_rate_limiter`` (broker quota).
         """
         clearing_date = str(clearing_date or "").strip()
         if not clearing_date:
@@ -1240,7 +1240,7 @@ class MoomooConnection:
         if not self.is_connected() and not self.connect():
             return None
         try:
-            self._rate_limiter.check_rate_limit()
+            MoomooConnection._cash_flow_rate_limiter.check_rate_limit()
             trd_env, account_id = self._resolve_portfolio_account()
             ret, data = self.trd_ctx.get_acc_cash_flow(
                 clearing_date=clearing_date, trd_env=trd_env, acc_id=self._account_id_arg(account_id)

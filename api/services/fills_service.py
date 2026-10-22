@@ -6,7 +6,8 @@ connection surface and persists it account-scoped and idempotently:
 - fills (options + underlying shares) keyed by the broker deal id;
 - order-level fees allocated back onto fill rows;
 - account cash movements (deposits/withdrawals) kept separate from trading
-  profit — they never enter attribution arithmetic.
+  profit — they never enter attribution arithmetic. Cash movements are queried
+  one clearing date at a time, in a budgeted slice on each wheel refresh.
 
 This service owns OpenD/error handling; the attribution math lives in pure
 ``core.outcome_attribution`` helpers and the persistence in
@@ -25,8 +26,11 @@ from core.utils import parse_position_qty
 logger = logging.getLogger("api.services.fills")
 
 _DEAL_OK_STATUS = "OK"
+DEFAULT_HISTORY_START = "2025-01-01"
 _FEE_BACKFILL_BUDGET = 40  # order ids resolved per refresh call
 _FEE_QUERY_BATCH_SIZE = 20  # order ids per broker fee query
+_HISTORY_WINDOW_DAYS = 89  # one broker deal query covers at most 90 days inclusive
+_CASH_FLOW_DAYS_PER_REFRESH = 18  # stays inside the broker's 20-per-30-seconds quota
 
 
 def normalize_deal_row(row, env: str, opaque_account: str):
@@ -105,23 +109,96 @@ def normalize_deal_row(row, env: str, opaque_account: str):
     }
 
 
-def refresh_fill_evidence(connection, database) -> dict:
-    """Pull broker fills for one wheel refresh (query-only, idempotent).
+def history_windows(start: date, end: date) -> list[tuple[str, str]]:
+    """Split ``[start, end]`` into consecutive inclusive windows (pure).
 
-    Owner decision (2026-10-17): fills are pulled on every refresh. Never
-    raises; the result tells the caller whether this refresh's pull succeeded.
+    Each window spans at most 90 days inclusive, which is the broker's per-query
+    limit. The next window starts the day after the previous one ends.
+    Returns ``[]`` when ``start`` is after ``end``.
+    """
+    windows = []
+    cursor = start
+    while cursor <= end:
+        window_end = min(cursor + timedelta(days=_HISTORY_WINDOW_DAYS), end)
+        windows.append((cursor.isoformat(), window_end.isoformat()))
+        cursor = window_end + timedelta(days=1)
+    return windows
+
+
+def _parse_date(value) -> date | None:
+    """Return the ``YYYY-MM-DD`` prefix of a stored value as a date, or None."""
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_start(value) -> date:
+    """Return the configured history start, falling back to the built-in default."""
+    return _parse_date(value) or date.fromisoformat(DEFAULT_HISTORY_START)
+
+
+def _weekdays_between(first: date, last: date, *, descending: bool) -> list[date]:
+    """Return Monday-to-Friday dates in ``[first, last]`` (pure)."""
+    days = []
+    cursor = first
+    while cursor <= last:
+        if cursor.weekday() < 5:
+            days.append(cursor)
+        cursor += timedelta(days=1)
+    return days[::-1] if descending else days
+
+
+def _first_weekday_on_or_after(value: date) -> date:
+    """Return ``value`` moved forward to the next Monday-to-Friday date (pure)."""
+    while value.weekday() >= 5:
+        value += timedelta(days=1)
+    return value
+
+
+def _cash_flow_row(row: dict, env: str, opaque_account: str) -> dict:
+    """Normalize one OpenD cash-flow row into an account_cash_flows row (pure)."""
+    return {
+        "cashflow_id": row.get("cashflow_id", ""),
+        "clearing_date": row.get("clearing_date", ""),
+        "settlement_date": row.get("settlement_date", ""),
+        "currency": row.get("currency", ""),
+        "direction": row.get("cashflow_direction", ""),
+        "flow_type": row.get("cashflow_type", ""),
+        "amount": row.get("cashflow_amount", 0),
+        "remark": row.get("cashflow_remark", ""),
+        "env": env,
+        "account_id": opaque_account,
+        "raw_json": row,
+    }
+
+
+def refresh_fill_evidence(connection, database, history_start=None) -> dict:
+    """Pull broker fills and cash flows for one wheel refresh (query-only, idempotent).
+
+    Owner decision (2026-10-17): fills are pulled on every refresh. Cash flows
+    are refreshed in a budgeted slice after the fill pull, whether or not the
+    fill pull succeeded. Never raises; the top-level ``ok`` and ``reason``
+    describe the fill pull only, and ``cash_flows`` reports the cash-flow slice.
     """
     if connection is None or database is None:
         return {"ok": False, "reason": "broker_connection_unavailable"}
+    service = FillsService(connection, database)
     try:
-        result = FillsService(connection, database).ingest_history_fills(days=None)
+        result = service.ingest_history_fills(days=None, history_start=history_start)
+        evidence = {"ok": bool(result.get("ok")), "reason": result.get("reason", "")}
+        for key in ("ingested", "seen", "fees_complete"):
+            if key in result:
+                evidence[key] = result[key]
     except Exception as exc:
         logger.warning("Fill pull failed during refresh (%s)", type(exc).__name__)
-        return {"ok": False, "reason": "fill_pull_failed"}
-    evidence = {"ok": bool(result.get("ok")), "reason": result.get("reason", "")}
-    for key in ("ingested", "seen", "fees_complete"):
-        if key in result:
-            evidence[key] = result[key]
+        evidence = {"ok": False, "reason": "fill_pull_failed"}
+    try:
+        cash_result = service.refresh_cash_flows(history_start=history_start)
+        evidence["cash_flows"] = {"ok": bool(cash_result.get("ok")), "complete": bool(cash_result.get("complete"))}
+    except Exception as exc:
+        logger.warning("Cash-flow refresh failed during refresh (%s)", type(exc).__name__)
+        evidence["cash_flows"] = {"ok": False, "reason": "cash_flow_refresh_failed"}
     return evidence
 
 
@@ -135,52 +212,61 @@ class FillsService:
     def _identity(self):
         return self._connection.resolve_portfolio_identity()
 
-    def ingest_history_fills(self, days: int | None = None) -> dict:
-        """Ingest recent fills incrementally; idempotent per broker deal id.
+    def ingest_history_fills(self, days: int | None = None, history_start: str | None = None) -> dict:
+        """Ingest broker fills incrementally; idempotent per broker deal id.
 
-        The 90-day cap is the SDK's history window; repeated ingestion is
-        cheap because existing fill_ids are ignored on insert.
+        OpenD answers at most 90 days per deal query, so the pull is split into
+        consecutive windows. The first pull (or a pull whose covered start is
+        later than ``history_start``) backfills from ``history_start``. Later
+        pulls start two days before the last success. An explicit ``days`` sets
+        the lookback directly. A failed window saves nothing and keeps the
+        covered start, so the next pull retries the whole backfill.
         """
-        now = datetime.now()
+        today = date.today()
         try:
             env, opaque_account = self._identity()
         except Exception as exc:
             logger.warning("Fill ingestion skipped: account identity unavailable (%s)", type(exc).__name__)
             return {"ok": False, "reason": "account_identity_unavailable", "ingested": 0}
 
+        floor = _parse_start(history_start)
         coverage = self._db.get_history_fill_coverage(env, opaque_account)
-        last_success = coverage.get("last_success_at")
-        if days is None:
-            try:
-                days_since = max(0, (now.date() - date.fromisoformat(str(last_success)[:10])).days)
-            except (TypeError, ValueError):
-                days_since = 90
-            query_days = min(90, max(1, days_since + 2))
+        last_success = _parse_date(coverage.get("last_success_at"))
+        covered_from = _parse_date(coverage.get("first_covered_date"))
+        if days is not None:
+            from_date = today - timedelta(days=max(1, int(days)))
+        elif covered_from is None or covered_from > floor or last_success is None:
+            from_date = floor
         else:
-            query_days = min(90, max(1, int(days)))
-        start = (now - timedelta(days=query_days)).strftime("%Y-%m-%d")
-        attempt_at = now.isoformat(timespec="seconds")
+            from_date = max(floor, last_success - timedelta(days=2))
+        from_date = min(from_date, today)
+        attempt_at = datetime.now().isoformat(timespec="seconds")
         self._db.set_history_fill_coverage(
             env,
             opaque_account,
             {
                 "status": "in_progress",
                 "last_attempt_at": attempt_at,
-                "last_success_at": last_success,
-                "first_covered_date": coverage.get("first_covered_date") or start,
+                "last_success_at": coverage.get("last_success_at"),
+                "first_covered_date": coverage.get("first_covered_date"),
                 "reason": "",
             },
         )
-        try:
-            ret_rows = self._connection.get_history_deals(start=start, end="")
-        except Exception as exc:
-            self._record_failure(env, opaque_account, attempt_at, "history_query_failed", last_success, start)
-            logger.error("Fill ingestion aborted: history query raised %s", type(exc).__name__)
-            return {"ok": False, "reason": "history_query_failed", "ingested": 0}
-        if ret_rows is None:
-            self._record_failure(env, opaque_account, attempt_at, "history_query_failed", last_success, start)
-            logger.error("Fill ingestion aborted: history query failed")
-            return {"ok": False, "reason": "history_query_failed", "ingested": 0}
+
+        windows = history_windows(from_date, today)
+        ret_rows = []
+        for window_start, window_end in windows:
+            try:
+                window_rows = self._connection.get_history_deals(start=window_start, end=window_end)
+            except Exception as exc:
+                self._record_failure(env, opaque_account, attempt_at, "history_query_failed", coverage)
+                logger.error("Fill ingestion aborted: history query raised %s", type(exc).__name__)
+                return {"ok": False, "reason": "history_query_failed", "ingested": 0}
+            if window_rows is None:
+                self._record_failure(env, opaque_account, attempt_at, "history_query_failed", coverage)
+                logger.error("Fill ingestion aborted: history query failed")
+                return {"ok": False, "reason": "history_query_failed", "ingested": 0}
+            ret_rows.extend(window_rows)
 
         rows = []
         for raw in ret_rows:
@@ -191,34 +277,12 @@ class FillsService:
             inserted = self._db.save_fills(rows)
             fees_updated, fees_ok = self._backfill_fees(env, opaque_account, rows)
         except Exception as exc:
-            self._record_failure(env, opaque_account, attempt_at, "persistence_failed", last_success, start)
+            self._record_failure(env, opaque_account, attempt_at, "persistence_failed", coverage)
             logger.error("Fill ingestion failed while persisting data (%s)", type(exc).__name__)
             return {"ok": False, "reason": "persistence_failed", "ingested": 0}
-        if not fees_ok:
-            success_at = datetime.now().isoformat(timespec="seconds")
-            self._db.set_history_fill_coverage(
-                env,
-                opaque_account,
-                {
-                    "status": "success",
-                    "last_attempt_at": attempt_at,
-                    "last_success_at": success_at,
-                    "first_covered_date": coverage.get("first_covered_date") or start,
-                    "reason": "fee_query_incomplete",
-                },
-            )
-            return {
-                "ok": True,
-                "fees_complete": False,
-                "reason": "fee_query_failed",
-                "seen": len(ret_rows),
-                "ingested": inserted,
-                "fees_updated": fees_updated,
-                "query_days": query_days,
-                "covered_from": start,
-            }
+
         success_at = datetime.now().isoformat(timespec="seconds")
-        first_covered = coverage.get("first_covered_date") or start
+        first_covered = from_date if covered_from is None else min(covered_from, from_date)
         self._db.set_history_fill_coverage(
             env,
             opaque_account,
@@ -226,35 +290,40 @@ class FillsService:
                 "status": "success",
                 "last_attempt_at": attempt_at,
                 "last_success_at": success_at,
-                "first_covered_date": first_covered,
-                "reason": "",
+                "first_covered_date": first_covered.isoformat(),
+                "reason": "" if fees_ok else "fee_query_incomplete",
             },
         )
+        result = {
+            "ok": True,
+            "fees_complete": fees_ok,
+            "seen": len(ret_rows),
+            "ingested": inserted,
+            "fees_updated": fees_updated,
+            "query_days": (today - from_date).days,
+            "covered_from": from_date.isoformat(),
+            "windows": len(windows),
+        }
+        if not fees_ok:
+            result["reason"] = "fee_query_failed"
+            return result
         logger.info(
             "Fill ingestion complete: %d deal row(s) seen, %d new",
             len(ret_rows),
             inserted,
         )
-        return {
-            "ok": True,
-            "fees_complete": True,
-            "seen": len(ret_rows),
-            "ingested": inserted,
-            "fees_updated": fees_updated,
-            "query_days": query_days,
-            "covered_from": start,
-        }
+        return result
 
-    def _record_failure(self, env, account_id, attempt_at, reason, last_success, start):
-        coverage = self._db.get_history_fill_coverage(env, account_id)
+    def _record_failure(self, env, account_id, attempt_at, reason, coverage):
+        """Record a failed pull. The covered start is kept, never lowered."""
         self._db.set_history_fill_coverage(
             env,
             account_id,
             {
                 "status": "failed",
                 "last_attempt_at": attempt_at,
-                "last_success_at": last_success,
-                "first_covered_date": coverage.get("first_covered_date") or start,
+                "last_success_at": coverage.get("last_success_at"),
+                "first_covered_date": coverage.get("first_covered_date"),
                 "reason": reason,
             },
         )
@@ -267,26 +336,15 @@ class FillsService:
         to orders in this pull; they never add an order whose stored fills
         already have fees.
 
-        Allocation rule (deterministic): an order's fee is distributed across
-        its fills proportionally to gross fill value; when all fills in the
-        order have zero value, it is split equally by count.
+        Candidates are every stored order that still lacks fees, whatever its
+        age. Orders from this pull come first, so the per-refresh budget favors
+        fresh fills. Allocation rule (deterministic): an order's fee is
+        distributed across its fills proportionally to gross fill value; when all
+        fills in the order have zero value, it is split equally by count.
         """
         stored_missing = set(self._db.get_order_ids_missing_fees(env=env, account_id=opaque_account))
         pulled = {str(row.get("order_id", "") or "") for row in current_rows or []}
-        # Incremental pulls carry only recent deals, so fee-less orders from
-        # earlier pulls are retried while their fills are inside the 90-day window.
-        window_start = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
-        recent = {
-            str(fill.get("order_id", "") or "")
-            for fill in self._db.get_fills(
-                env=env,
-                account_id=opaque_account,
-                start=window_start,
-                limit=5000,
-            )
-            if fill.get("fees") is None
-        }
-        missing = sorted((pulled | recent) & stored_missing)
+        missing = sorted(pulled & stored_missing) + sorted(stored_missing - pulled)
         if not missing:
             return 0, True
         complete = True
@@ -342,9 +400,11 @@ class FillsService:
             return {"ok": False, "error": f"Account resolution failed: {exc}", "ingested": 0}
 
         rows = []
+        failed = 0
         for clearing_date in clearing_dates or []:
             flow_rows = self._connection.get_cash_flow(clearing_date)
             if flow_rows is None:
+                failed += 1
                 logger.warning(
                     "Cash-flow query failed for clearing date %s: %s",
                     clearing_date,
@@ -352,22 +412,99 @@ class FillsService:
                 )
                 continue
             for row in flow_rows:
-                if not isinstance(row, dict):
-                    continue
-                rows.append(
-                    {
-                        "cashflow_id": row.get("cashflow_id", ""),
-                        "clearing_date": row.get("clearing_date", ""),
-                        "settlement_date": row.get("settlement_date", ""),
-                        "currency": row.get("currency", ""),
-                        "direction": row.get("cashflow_direction", ""),
-                        "flow_type": row.get("cashflow_type", ""),
-                        "amount": row.get("cashflow_amount", 0),
-                        "remark": row.get("cashflow_remark", ""),
-                        "env": env,
-                        "account_id": opaque_account,
-                        "raw_json": row,
-                    }
-                )
+                if isinstance(row, dict):
+                    rows.append(_cash_flow_row(row, env, opaque_account))
         inserted = self._db.save_cash_flows(rows)
-        return {"ok": True, "seen": len(rows), "ingested": inserted}
+        return {"ok": failed == 0, "seen": len(rows), "ingested": inserted, "failed_dates": failed}
+
+    def refresh_cash_flows(
+        self,
+        history_start: str | None = None,
+        max_days: int = _CASH_FLOW_DAYS_PER_REFRESH,
+        today: date | None = None,
+    ) -> dict:
+        """Pull a budgeted slice of cash movements; never raises.
+
+        Each refresh queries at most ``max_days`` weekdays, one clearing date per
+        broker call. The forward pass re-pulls from two days before ``latest``
+        through today. The backward pass continues from ``earliest - 1`` down to
+        ``history_start``. Forward dates use the budget first. Coverage records
+        only the contiguous run of successful dates.
+        """
+        today = today or date.today()
+        try:
+            env, opaque_account = self._identity()
+        except Exception as exc:
+            logger.warning("Cash-flow refresh skipped: account identity unavailable (%s)", type(exc).__name__)
+            return {"ok": False, "reason": "account_identity_unavailable", "queried": 0, "ingested": 0}
+
+        floor = _parse_start(history_start)
+        coverage = self._db.get_cash_flow_coverage(env, opaque_account)
+        earliest = _parse_date(coverage.get("earliest"))
+        latest = _parse_date(coverage.get("latest"))
+        attempt_at = datetime.now().isoformat(timespec="seconds")
+
+        budget = max(0, int(max_days))
+        rows = []
+        queried = 0
+        forward_ok = []
+        forward_failed = False
+        if latest is not None:
+            forward_dates = _weekdays_between(latest - timedelta(days=2), today, descending=False)[:budget]
+            forward_ok, forward_failed, used = self._query_cash_flow_dates(forward_dates, env, opaque_account, rows)
+            queried += used
+        backward_start = today if earliest is None else earliest - timedelta(days=1)
+        backward_dates = _weekdays_between(floor, backward_start, descending=True)[: budget - queried]
+        backward_ok, backward_failed, used = self._query_cash_flow_dates(backward_dates, env, opaque_account, rows)
+        queried += used
+
+        new_latest = forward_ok[-1] if forward_ok else latest
+        new_earliest = backward_ok[-1] if backward_ok else earliest
+        if earliest is None and backward_ok:
+            new_latest = new_latest or backward_ok[0]
+        failed = forward_failed or backward_failed
+        try:
+            inserted = self._db.save_cash_flows(rows)
+        except Exception as exc:
+            logger.error("Cash-flow refresh failed while persisting data (%s)", type(exc).__name__)
+            return {"ok": False, "reason": "persistence_failed", "queried": queried, "ingested": 0}
+        self._db.set_cash_flow_coverage(
+            env,
+            opaque_account,
+            {
+                "status": "partial" if failed else "success",
+                "last_attempt_at": attempt_at,
+                "earliest": new_earliest.isoformat() if new_earliest else None,
+                "latest": new_latest.isoformat() if new_latest else None,
+                "reason": "cash_flow_query_failed" if failed else "",
+            },
+        )
+        complete = new_earliest is not None and new_earliest <= _first_weekday_on_or_after(floor)
+        return {
+            "ok": not failed,
+            "queried": queried,
+            "ingested": inserted,
+            "earliest": new_earliest.isoformat() if new_earliest else None,
+            "latest": new_latest.isoformat() if new_latest else None,
+            "complete": complete,
+        }
+
+    def _query_cash_flow_dates(self, dates, env, opaque_account, rows):
+        """Query clearing dates in order and stop at the first failure.
+
+        Appends normalized rows to ``rows``. Returns the successful dates (a
+        contiguous run from the first date), whether a query failed, and the
+        number of broker queries made.
+        """
+        ok_dates = []
+        for day in dates:
+            try:
+                flow_rows = self._connection.get_cash_flow(day.isoformat())
+            except Exception as exc:
+                logger.warning("Cash-flow query raised for one clearing date (%s)", type(exc).__name__)
+                flow_rows = None
+            if flow_rows is None:
+                return ok_dates, True, len(ok_dates) + 1
+            rows.extend(_cash_flow_row(row, env, opaque_account) for row in flow_rows if isinstance(row, dict))
+            ok_dates.append(day)
+        return ok_dates, False, len(ok_dates)

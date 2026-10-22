@@ -458,10 +458,11 @@ class TestRouteIntegration(TestIngestToAttributionToSummary):
             self.assertEqual(resp.status_code, 429)
 
         # 6 accepted ingests: 1 with cash_flow_days=1, then 5 × default 7
-        # clearing dates. Fee backfill re-queries every accepted ingest
+        # clearing dates. The 30-day ingest is one history window; each default
+        # 90-day ingest spans 91 inclusive days, so it is two windows. Fee backfill re-queries every accepted ingest
         # because the share fill's order (O3) has no fee entry — its fills
         # legitimately stay fee-NULL (unknown ≠ zero).
-        self.assertEqual(len(conn.deal_calls), 6)
+        self.assertEqual(len(conn.deal_calls), 11)
         self.assertEqual(len(conn.fee_calls), 6)
         self.assertEqual(len(conn.cash_calls), 36)
 

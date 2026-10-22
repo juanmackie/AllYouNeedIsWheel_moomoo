@@ -546,7 +546,7 @@ def ingest_outcome_evidence():
             days = int(request.args.get("days", 90))
         except (TypeError, ValueError):
             return error_response("days must be an integer", status_code=400)
-        days = min(max(days, 1), 90)  # SDK caps each history window at 90 days
+        days = min(max(days, 1), 3650)  # windowed: each broker query covers at most 90 days
         try:
             cash_flow_days = int(request.args.get("cash_flow_days", 7))
         except (TypeError, ValueError):

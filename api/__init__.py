@@ -408,7 +408,11 @@ def _register_services():
             # Owner decision (2026-10-17): fills are pulled on every refresh
             # (query-only, idempotent). Expiry inference and premium-adjusted
             # basis remain gated by G1 (docs/broker-history-capability.md).
-            result = refresh_fill_evidence(options_service._ensure_connection(), database)
+            result = refresh_fill_evidence(
+                options_service._ensure_connection(),
+                database,
+                history_start=config.get("broker_history_start"),
+            )
             helper = getattr(options_service, "portfolio_context_helper", None)
             if helper is not None:
                 helper.set_campaign_refresh_evidence(result)

@@ -24,6 +24,8 @@ DEFAULT_CONNECTION_CONFIG = {
     # Leveraged ETFs share a combined cash-plan exposure cap. Owners may
     # override this list in connection.json as the leveraged wheel universe changes.
     "leveraged_etf_tickers": ["SOXL", "SOXS", "MSTU", "TSLL", "CONL", "ETHU"],
+    # Earliest date the fill and cash-flow backfill requests from OpenD (YYYY-MM-DD).
+    "broker_history_start": "2025-01-01",
     "watchlist_mode": "static",  # 'static' or 'moomoo' (dynamic/hybrid screening removed 2026-08)
     "moomoo_watchlist_group": "My Watchlist",
     "broker_cache_after_hours": True,  # use cached broker data outside US market hours

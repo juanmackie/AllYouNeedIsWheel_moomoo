@@ -1022,11 +1022,11 @@ class TestOutcomeAnalytics(unittest.TestCase):
         }
         mock_get_svc.return_value = mock_service
         with app.test_client() as client:
-            resp = client.post("/api/options/analytics/outcomes/ingest?days=500&cash_flow_days=99")
+            resp = client.post("/api/options/analytics/outcomes/ingest?days=5000&cash_flow_days=99")
             data = resp.get_json()
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(data["success"])
-        self.assertEqual(mock_service.ingest_broker_evidence.call_args.kwargs["days"], 90)
+        self.assertEqual(mock_service.ingest_broker_evidence.call_args.kwargs["days"], 3650)
         self.assertEqual(mock_service.ingest_broker_evidence.call_args.kwargs["cash_flow_days"], 30)
 
     @patch("api.routes.options.get_outcome_service")

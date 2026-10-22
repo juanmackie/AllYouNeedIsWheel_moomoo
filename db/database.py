@@ -146,6 +146,30 @@ class OptionsDatabase:
         }
         self.set_setting(self._history_coverage_key(env, account_id), json.dumps(payload, sort_keys=True))
 
+    def _cash_flow_coverage_key(self, env, account_id):
+        """Settings key for one opaque identity's cash-flow coverage (sibling of fill coverage)."""
+        return self._history_coverage_key(env, account_id).replace(":coverage", ":cash_flow_coverage")
+
+    def get_cash_flow_coverage(self, env, account_id):
+        """Return this identity's cash-flow backfill state (``earliest``/``latest`` clearing dates)."""
+        raw = self.get_setting(self._cash_flow_coverage_key(env, account_id), "")
+        if not raw:
+            return {}
+        try:
+            result = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return result if isinstance(result, dict) else {}
+
+    def set_cash_flow_coverage(self, env, account_id, state):
+        """Persist a sanitized cash-flow backfill state for one opaque broker identity."""
+        payload = {
+            key: state[key]
+            for key in ("status", "last_attempt_at", "earliest", "latest", "reason")
+            if isinstance(state, dict) and key in state
+        }
+        self.set_setting(self._cash_flow_coverage_key(env, account_id), json.dumps(payload, sort_keys=True))
+
     def get_history_capability(self, env, account_id):
         """Return measured broker-history capability for one account identity."""
         key = self._history_coverage_key(env, account_id).replace(":coverage", ":capability")
