@@ -33,7 +33,7 @@
     "module_baseline": {
       "api/services/iv_earnings_service.py": 1299,
       "api/services/outcome_service.py": 1248,
-      "api/services/recommendations.py": 1794,
+      "api/services/recommendations.py": 1788,
       "core/connection_manager.py": 1496,
       "core/wheel_decision.py": 928
     },

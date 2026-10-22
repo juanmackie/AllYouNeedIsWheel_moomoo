@@ -6,12 +6,17 @@ import os
 import random
 import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
-from api.services.recommendation_ranking import format_recommendation, rank_candidates
+from api.services.recommendation_ranking import (
+    csp_tail_risk_gate,
+    format_recommendation,
+    is_roll_target_eligible,
+    rank_candidates,
+)
 from api.services.recommendations import RecommendationEngine
 from core.quote_cache import OptionChainCache
 from core.ticker_utils import format_symbol
@@ -1460,6 +1465,7 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             max_contracts=1,
             recommended_contracts=1,
             copy_eligible=True,
+            event_tier="event_safe",
         )
         with patch.object(engine, "_score_csp_contract", return_value=decision) as scorer:
             result = engine._score_watchlist_csp_evidence(evidence, "AAPL", {"cash_available_for_csp": 0})
@@ -1890,6 +1896,7 @@ class TestRecommendationEngineSignals(unittest.TestCase):
             max_contracts=1,
             recommended_contracts=1,
             copy_eligible=True,
+            event_tier="event_safe",
         )
         with patch.object(engine, "_score_csp_contract", return_value=decision) as scorer:
             result = engine._score_watchlist_csp_evidence(evidence, "COST", {"cash_available_for_csp": 1209.66})
@@ -2769,6 +2776,7 @@ class TestRecommendationNonDuplication(unittest.TestCase):
             max_contracts=1,
             recommended_contracts=1,
             copy_eligible=True,
+            event_tier="event_safe",
         )
         with patch.object(engine, "_score_csp_contract", return_value=decision) as scorer:
             result = engine._score_watchlist_csp_evidence(evidence, "CHEAP", {"cash_available_for_csp": 200})
@@ -3125,6 +3133,214 @@ class TestCapitalReturnRankKey(unittest.TestCase):
         ranked = rank_candidates([call, put])
         # Ascending canonical option type: CALL before PUT.
         self.assertEqual([c["option_type"] for c in ranked], ["CALL", "PUT"])
+
+
+class TestCspTailRiskGate(unittest.TestCase):
+    """Owner decision 2026-10-23: new CSP entries with tail risk stay research-only.
+
+    The gate runs before ranking and never changes rank_key. Covered calls are not
+    gated, and a held short put may roll into a gated contract.
+    """
+
+    LEVERAGED = ["SOXL", "SOXS"]
+
+    def test_gate_reason_codes_and_precedence(self):
+        cases = [
+            ({"ticker": "SOXL", "event_tier": "event_safe"}, self.LEVERAGED, "leveraged_etf"),
+            ({"ticker": "soxs", "event_tier": "event_not_applicable"}, self.LEVERAGED, "leveraged_etf"),
+            ({"ticker": "SOXL", "event_tier": "earnings_before_expiry"}, self.LEVERAGED, "leveraged_etf"),
+            (
+                {"ticker": "AAPL", "event_tier": "earnings_before_expiry", "earnings_date": "2026-11-05"},
+                [],
+                "earnings_before_expiry",
+            ),
+            ({"ticker": "AAPL", "event_tier": "event_unknown"}, [], "earnings_unknown"),
+            ({"ticker": "AAPL", "event_tier": ""}, [], "earnings_unknown"),
+            ({"ticker": "AAPL"}, [], "earnings_unknown"),
+            ({"ticker": "AAPL", "event_tier": "event_safe"}, [], None),
+            ({"ticker": "SPY", "event_tier": "event_not_applicable"}, [], None),
+        ]
+        for candidate, leveraged, expected in cases:
+            with self.subTest(candidate=candidate, leveraged=leveraged):
+                gate = csp_tail_risk_gate(candidate, leveraged)
+                if expected is None:
+                    self.assertIsNone(gate)
+                else:
+                    self.assertEqual(gate[0], expected)
+                    self.assertTrue(gate[1].startswith("Research-only:"))
+
+    def test_earnings_before_expiry_text_names_the_date(self):
+        gate = csp_tail_risk_gate(
+            {"ticker": "AAPL", "event_tier": "earnings_before_expiry", "earnings_date": "2026-11-05"}
+        )
+        self.assertEqual(gate[1], "Research-only: earnings on 2026-11-05 fall before expiry")
+
+    def test_roll_target_eligibility_allows_only_gated_held_roll_targets(self):
+        cases = [
+            ({"copy_eligible": True}, True),
+            ({"copy_eligible": False, "risk_gate": "leveraged_etf"}, True),
+            ({"copy_eligible": False, "risk_gate": "earnings_unknown"}, True),
+            ({"copy_eligible": False}, False),
+            ({"copy_eligible": False, "risk_gate": ""}, False),
+            ({"copy_eligible": None, "risk_gate": "leveraged_etf"}, False),
+            ({"risk_gate": "leveraged_etf"}, False),
+            ({}, False),
+        ]
+        for candidate, expected in cases:
+            with self.subTest(candidate=candidate):
+                self.assertIs(is_roll_target_eligible(candidate), expected)
+
+    def setUp(self):
+        config_provider = MagicMock()
+        config_provider.config = {"cash_reserve_enabled": True, "leveraged_etf_tickers": self.LEVERAGED}
+        self.iv_earnings = MagicMock()
+        self.iv_earnings.get_iv_environment_score.return_value = (0, 0.5, "normal")
+        self.iv_earnings.get_earnings_score_impact.return_value = (0, None)
+        self.iv_earnings.get_earnings_info.return_value = {}
+        watchlist_manager = MagicMock()
+        watchlist_manager.get_screening_profile.return_value = {
+            "min_dte": 1,
+            "max_dte": 60,
+            "max_buying_power_pct_per_csp": 100,
+        }
+        self.engine = RecommendationEngine(
+            MagicMock(),
+            config_provider,
+            MagicMock(),
+            self.iv_earnings,
+            MagicMock(),
+            MagicMock(),
+            watchlist_manager,
+            MagicMock(),
+            MagicMock(),
+        )
+        self.engine._preset_profile = {"csp_min_otm_pct": 5, "csp_max_otm_pct": 15}
+        self.portfolio = {
+            "positions": {},
+            "cash_balance": 50000.0,
+            "available_cash": 50000.0,
+            "broker_buying_power": 50000.0,
+            "cash_available_for_csp": 50000.0,
+            "account_value": 100000.0,
+        }
+
+    @staticmethod
+    def _option(strike=90.0, bid=2.0, dte=37, exp_str="20261127", security_type="stock"):
+        return {
+            "strike": strike,
+            "expiration": exp_str,
+            "option_type": "PUT",
+            "bid": bid,
+            "ask": bid + 0.10,
+            "last": bid + 0.05,
+            "dte": dte,
+            "implied_volatility": 0.35,
+            "open_interest": 500,
+            "volume": 200,
+            "delta": -0.30,
+            "theta": -0.06,
+            "gamma": 0.04,
+            "vega": 0.15,
+            "security_type": security_type,
+            "chain_source": "broker",
+        }
+
+    @staticmethod
+    def _evidence(*chains):
+        return {
+            "stock_price": 100.0,
+            "quote_fetched_at_utc": datetime.now(timezone.utc).isoformat(),
+            "chains": [{"dte": dte, "exp_str": exp_str, "options": options} for dte, exp_str, options in chains],
+        }
+
+    def _score(self, ticker, evidence):
+        return self.engine._score_watchlist_csp_evidence(evidence, ticker, self.portfolio)
+
+    def test_leveraged_etf_pick_is_research_only_even_when_event_safe(self):
+        self.iv_earnings.get_earnings_info.return_value = {
+            "fetch_status": "success",
+            "days_to_earnings": 400,
+            "earnings_date": "2028-01-01",
+        }
+        evidence = self._evidence((37, "20261127", [self._option(security_type="etf")]))
+
+        picks = self._score("SOXL", evidence)
+
+        self.assertTrue(picks)
+        for pick in picks:
+            self.assertTrue(pick["research_only"])
+            self.assertFalse(pick["copy_eligible"])
+            self.assertEqual(pick["max_contracts"], 0)
+            self.assertEqual(pick["risk_gate"], "leveraged_etf")
+            self.assertIn(
+                "Research-only: leveraged/inverse ETF — daily-reset gap risk is larger than the premium shows",
+                pick["warnings"],
+            )
+
+    def test_stock_with_earnings_inside_expiry_is_research_only(self):
+        self.iv_earnings.get_earnings_info.return_value = {
+            "fetch_status": "success",
+            "days_to_earnings": 5,
+            "earnings_date": "2026-10-28",
+        }
+        picks = self._score("AAPL", self._evidence((37, "20261127", [self._option()])))
+
+        self.assertEqual(picks[0]["risk_gate"], "earnings_before_expiry")
+        self.assertTrue(picks[0]["research_only"])
+        self.assertFalse(picks[0]["copy_eligible"])
+        self.assertIn("Research-only: earnings on 2026-10-28 fall before expiry", picks[0]["warnings"])
+
+    def test_stock_with_unknown_earnings_is_research_only(self):
+        self.iv_earnings.get_earnings_info.return_value = {}
+        picks = self._score("AAPL", self._evidence((37, "20261127", [self._option()])))
+
+        self.assertEqual(picks[0]["risk_gate"], "earnings_unknown")
+        self.assertTrue(picks[0]["research_only"])
+        self.assertIn(
+            "Research-only: earnings date unknown — cannot confirm it falls after expiry", picks[0]["warnings"]
+        )
+
+    def test_cash_short_gated_pick_keeps_the_warning_but_is_never_a_roll_target(self):
+        self.iv_earnings.get_earnings_info.return_value = {}
+        evidence = self._evidence((37, "20261127", [self._option()]))
+
+        picks = self.engine._score_watchlist_csp_evidence(evidence, "AAPL", {"cash_available_for_csp": 500})
+
+        self.assertTrue(picks[0]["research_only"])
+        self.assertIn(
+            "Research-only: earnings date unknown — cannot confirm it falls after expiry", picks[0]["warnings"]
+        )
+        self.assertIsNone(picks[0]["risk_gate"])
+        self.assertFalse(is_roll_target_eligible(picks[0]))
+
+    def test_stock_with_earnings_after_expiry_stays_actionable(self):
+        self.iv_earnings.get_earnings_info.return_value = {
+            "fetch_status": "success",
+            "days_to_earnings": 400,
+            "earnings_date": "2028-01-01",
+        }
+        picks = self._score("AAPL", self._evidence((37, "20261127", [self._option()])))
+
+        self.assertTrue(picks[0]["copy_eligible"])
+        self.assertFalse(picks[0].get("research_only", False))
+        self.assertIsNone(picks[0].get("risk_gate"))
+
+    def test_actionable_pick_sorts_before_gated_pick_with_higher_capital_velocity(self):
+        self.iv_earnings.get_earnings_info.return_value = {
+            "fetch_status": "success",
+            "days_to_earnings": 20,
+            "earnings_date": "2026-11-12",
+        }
+        # The 10-DTE put is event_safe (earnings after its expiry). The 37-DTE put is
+        # gated because earnings fall inside its expiry, yet it has the higher velocity.
+        safe = self._option(bid=1.0, dte=10, exp_str="20261102")
+        gated = self._option(bid=5.0, dte=37, exp_str="20261127")
+        picks = self._score("AAPL", self._evidence((10, "20261102", [safe]), (37, "20261127", [gated])))
+
+        self.assertEqual([p["expiration"] for p in picks], ["20261102", "20261127"])
+        self.assertFalse(picks[0].get("research_only", False))
+        self.assertTrue(picks[1]["research_only"])
+        self.assertGreater(picks[1]["capital_velocity_per_day"], picks[0]["capital_velocity_per_day"])
 
 
 if __name__ == "__main__":

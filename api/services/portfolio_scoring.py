@@ -8,6 +8,7 @@ the roll-pressure and alerts endpoints.
 from datetime import datetime, timezone
 from math import isfinite
 
+from api.services.recommendation_ranking import is_roll_target_eligible
 from core.logging_config import get_logger
 from core.ticker_utils import canonical_underlying, earnings_underlying_ticker, parse_moomoo_symbol
 from core.utils import is_market_open, market_now, parse_position_qty, safe_float
@@ -66,8 +67,7 @@ def _select_fresh_roll_candidate(pos, ticker, option_type, fresh_candidates):
     for candidate in fresh_candidates or []:
         if not isinstance(candidate, dict):
             continue
-        eligible = candidate.get("copy_eligible")
-        if not isinstance(eligible, bool) or not eligible:
+        if not is_roll_target_eligible(candidate):
             continue
         candidate_ticker = canonical_underlying(str(candidate.get("ticker") or "")).upper()
         if candidate_ticker != underlying or _normalized_option_type(candidate.get("option_type")) != option_type:
@@ -77,7 +77,10 @@ def _select_fresh_roll_candidate(pos, ticker, option_type, fresh_candidates):
             continue
         eligibility = candidate.get("eligibility")
         mode = eligibility.get("mode") if isinstance(eligibility, dict) else None
-        if mode and mode not in {"live", "staged"}:
+        # A gated pick is review_only only because copy_eligible is False (the
+        # mode check returns before session/coverage), so its mode says nothing
+        # about freshness. Quote age is checked below and again at copy time.
+        if mode and mode not in {"live", "staged"} and not candidate.get("risk_gate"):
             continue
         age = candidate.get("quote_age_sec")
         if age is None:

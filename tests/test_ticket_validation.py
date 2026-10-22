@@ -104,6 +104,28 @@ def test_roll_checks_both_legs_and_rejects_debit():
     )
 
 
+def test_roll_into_risk_gated_target_passes_target_check():
+    view, request, now, positions, fetch = _inputs("roll")
+    request.update(expiration="20261030", strike=12, close_expiration="20261016", close_strike=10)
+    view["roll_candidates"][0].update(copy_eligible=False, risk_gate="earnings_before_expiry")
+    result = evaluate_copy_check(
+        view, request, now_et=now, fetch_live_chain=fetch, fetch_live_positions=lambda: positions
+    )
+    assert result["mode"] == "staged"
+    assert result["net_credit"] == 0.3
+
+
+def test_roll_into_ungated_copy_ineligible_target_stays_blocked():
+    view, request, now, positions, fetch = _inputs("roll")
+    request.update(expiration="20261030", strike=12, close_expiration="20261016", close_strike=10)
+    view["roll_candidates"][0].update(copy_eligible=False)
+    result = evaluate_copy_check(
+        view, request, now_et=now, fetch_live_chain=fetch, fetch_live_positions=lambda: positions
+    )
+    assert result["mode"] == "review_only"
+    assert "no longer qualifies" in result["reasons"][0]
+
+
 def test_roll_rejects_repair_when_fresh_delta_is_above_owner_limit():
     view, request, now, positions, fetch = _inputs("roll")
     request.update(expiration="20261030", strike=12, close_expiration="20261016", close_strike=10)

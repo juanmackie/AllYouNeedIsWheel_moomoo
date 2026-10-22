@@ -103,7 +103,11 @@ def scan(tmp_path, monkeypatch):
     iv = MagicMock()
     iv.get_iv_environment_score.return_value = (0, 0.5, "normal")
     iv.get_earnings_score_impact.return_value = (0, None)
-    iv.get_earnings_info.return_value = {}
+    iv.get_earnings_info.return_value = {
+        "fetch_status": "success",
+        "days_to_earnings": 400,
+        "earnings_date": "2028-01-01",
+    }
     engine = RecommendationEngine(connection, config, db, iv, context, MagicMock(), manager, MagicMock(), MagicMock())
     yield engine, conn, db, portfolio, tickers
     db.close()

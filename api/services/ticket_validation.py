@@ -3,6 +3,7 @@
 from datetime import timezone
 from math import isfinite
 
+from api.services.recommendation_ranking import is_roll_target_eligible
 from core.run_model import max_tradeable_age_sec, resolve_coverage_truth, resolve_session_context
 from core.scoring_factors import parse_broker_timestamp
 from core.ticker_utils import canonical_underlying, earnings_underlying_ticker
@@ -145,7 +146,7 @@ def validate_exit_ticket(view, requested, *, now_et, now_utc, fetch_quote, fetch
         payload["contract"] = closing
         if kind == "roll":
             target, lane = find_contract(view, ticker, right, requested.get("expiration"), requested.get("strike"))
-            if target is None or not target.get("copy_eligible"):
+            if target is None or not is_roll_target_eligible(target):
                 return blocked("roll target no longer qualifies in the current run")
             if str(target.get("expiration") or "") <= expiration or (
                 right == "CALL" and safe_float(target.get("strike")) < strike

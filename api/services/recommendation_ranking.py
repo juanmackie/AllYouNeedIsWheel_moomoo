@@ -9,13 +9,22 @@ information and never influence ordering. The composite score and midpoint
 are intentionally absent from this key: they may qualify/explain a candidate,
 never break a velocity tie.
 
+CSP tail-risk gates (owner decision 2026-10-23) are hard gates applied before
+ranking: `csp_tail_risk_gate` marks a new put research-only, so it sorts after
+actionable picks. `rank_key` is unchanged by these gates.
+
 Pure helpers extracted from RecommendationEngine (F-S1).
 """
 
 from __future__ import annotations
 
 from core.scoring_factors import capital_velocity_per_day, premium_velocity_per_day
+from core.ticker_utils import earnings_underlying_ticker
 from core.utils import safe_float
+
+LEVERAGED_ETF = "leveraged_etf"
+EARNINGS_BEFORE_EXPIRY = "earnings_before_expiry"
+EARNINGS_UNKNOWN = "earnings_unknown"
 
 
 def candidate_field(candidate: dict, field: str, default=None):
@@ -85,6 +94,60 @@ def rank_key(candidate: dict):
 def rank_candidates(candidates: list) -> list:
     """Sort candidates by the deterministic shortlist ordering."""
     return sorted(candidates, key=rank_key)
+
+
+def mark_research_only_candidate(candidate: dict, reason: str | None = None) -> dict:
+    """Flag a candidate as research-only and attach a visible warning."""
+    candidate["research_only"] = True
+    candidate.update(copy_eligible=False, review_only=True, max_contracts=0, recommended_contracts=0)
+    decision = candidate.get("wheel_decision")
+    if isinstance(decision, dict):
+        decision.update(copy_eligible=False, review_only=True, max_contracts=0, recommended_contracts=0)
+    warnings = list(candidate.get("warnings") or [])
+    if reason and reason not in warnings:
+        warnings.append(reason)
+    candidate["warnings"] = warnings
+    return candidate
+
+
+def csp_tail_risk_gate(candidate: dict, leveraged_tickers=()) -> tuple[str, str] | None:
+    """Return (reason_code, reason_text) when a new CSP must stay research-only, else None.
+
+    Owner decision 2026-10-23. Checks run in order: leveraged or inverse ETF,
+    then earnings inside expiry, then unknown earnings (missing or empty
+    event_tier). event_safe and event_not_applicable (non-leveraged ETF or index)
+    pass. Ranking order is unchanged. Covered calls and rolls of held positions
+    are not gated.
+    """
+    underlying = earnings_underlying_ticker(str(candidate.get("ticker") or "")).upper()
+    leveraged = {earnings_underlying_ticker(str(t or "")).upper() for t in leveraged_tickers}
+    leveraged.discard("")
+    if underlying and underlying in leveraged:
+        return (
+            LEVERAGED_ETF,
+            "Research-only: leveraged/inverse ETF — daily-reset gap risk is larger than the premium shows",
+        )
+    event_tier = str(candidate.get("event_tier") or "")
+    if event_tier == "earnings_before_expiry":
+        earnings_date = candidate.get("earnings_date") or "a known date"
+        return EARNINGS_BEFORE_EXPIRY, f"Research-only: earnings on {earnings_date} fall before expiry"
+    if event_tier in {"", "event_unknown"}:
+        return EARNINGS_UNKNOWN, "Research-only: earnings date unknown — cannot confirm it falls after expiry"
+    return None
+
+
+def is_roll_target_eligible(candidate: dict) -> bool:
+    """Return True when a fresh candidate may be a roll target.
+
+    A tail-risk gate blocks new entries only. A held position may roll into a
+    gated contract, so copy_eligible False with a risk_gate still qualifies.
+    The scan sets ``risk_gate`` only on picks that were copy-eligible before the
+    gate, so a pick that is also cash-short or scorer-blocked never qualifies.
+    """
+    eligible = candidate.get("copy_eligible")
+    if eligible is True:
+        return True
+    return eligible is False and bool(candidate.get("risk_gate"))
 
 
 def option_source_value(option: dict, wheel_decision: dict | None, key: str, fallback: str = "unknown") -> str:
@@ -204,4 +267,6 @@ def format_recommendation(option: dict, rank: int = 0) -> dict:
         "quote_fetched_at_utc": option.get("quote_fetched_at_utc", wd.get("quote_fetched_at_utc", "")),
         "blocked_reason_codes": wd.get("blocked_reason_codes", []) or wd.get("hard_blockers", []),
         "research_only": research_only,
+        # CSP tail-risk gate code (leveraged_etf, earnings_before_expiry, earnings_unknown); None when ungated.
+        "risk_gate": option.get("risk_gate"),
     }

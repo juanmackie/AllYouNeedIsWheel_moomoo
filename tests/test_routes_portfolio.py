@@ -420,6 +420,45 @@ class TestScorePositionExitInputs(unittest.TestCase):
         self.assertEqual(decision.exit_verdict, "HOLD")
         self.assertIsNone(decision.roll_target)
 
+    def _gate_roll_target(self, **overrides):
+        from datetime import datetime, timedelta
+
+        held_expiry = datetime.now() + timedelta(days=18)
+        target = {
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": 92.0,
+            "expiration": (held_expiry + timedelta(days=30)).strftime("%Y%m%d"),
+            "dte": 48,
+            "bid": 1.50,
+            "ask": 1.60,
+            "copy_eligible": True,
+            "capital_velocity_per_day": 0.001,
+            "quote_fetched_at_utc": datetime.now().astimezone().isoformat(),
+        }
+        target.update(overrides)
+        return target, held_expiry
+
+    def test_held_short_put_may_roll_into_risk_gated_target(self):
+        # The effective snapshot marks every non-copyable pick review_only before
+        # it checks session or coverage; that label must not hide a gated roll.
+        target, held_expiry = self._gate_roll_target(
+            copy_eligible=False,
+            risk_gate="earnings_before_expiry",
+            warnings=["Research-only: gated"],
+            eligibility={"mode": "review_only", "reasons": ["candidate is not copy eligible"]},
+        )
+        pos = self._pos(expiration=held_expiry.strftime("%Y%m%d"), avg_cost=0)
+        decision = self._score(pos, fresh_candidates=[target])
+        self.assertEqual(decision.exit_verdict, "ROLL")
+        self.assertEqual(decision.roll_target["strike"], 92.0)
+
+    def test_ungated_copy_ineligible_target_is_still_not_a_roll_target(self):
+        target, held_expiry = self._gate_roll_target(copy_eligible=False)
+        pos = self._pos(expiration=held_expiry.strftime("%Y%m%d"), avg_cost=0)
+        decision = self._score(pos, fresh_candidates=[target])
+        self.assertIsNone(decision.roll_target)
+
     def test_entry_credit_reaches_profit_take_rule(self):
         # Short PUT sold for $2.00 credit; mark now ~$0.35 -> ~82% captured.
         decision = self._score(self._pos())

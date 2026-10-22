@@ -10,9 +10,13 @@ from math import floor, isfinite
 
 from api.services.options_data import get_contract_directory
 from api.services.recommendation_ranking import (
+    csp_tail_risk_gate,
     format_recommendation,
     rank_candidates,
     rank_key,
+)
+from api.services.recommendation_ranking import (
+    mark_research_only_candidate as _mark_research_only_candidate,
 )
 from api.services.recommendation_ranking import (
     option_source_value as _option_source_value,
@@ -163,20 +167,6 @@ def _make_failed_csp_decision(ticker: str, contract: dict, reason: str, reason_c
         hard_blockers=[reason],
         blocked_reason_codes=reason_codes,
     )
-
-
-def _mark_research_only_candidate(candidate: dict, reason: str | None = None) -> dict:
-    """Flag a candidate as research-only and attach a visible warning."""
-    candidate["research_only"] = True
-    candidate.update(copy_eligible=False, review_only=True, max_contracts=0, recommended_contracts=0)
-    decision = candidate.get("wheel_decision")
-    if isinstance(decision, dict):
-        decision.update(copy_eligible=False, review_only=True, max_contracts=0, recommended_contracts=0)
-    warnings = list(candidate.get("warnings") or [])
-    if reason and reason not in warnings:
-        warnings.append(reason)
-    candidate["warnings"] = warnings
-    return candidate
 
 
 def _format_decision_to_candidate(
@@ -764,6 +754,10 @@ class RecommendationEngine:
                         result,
                         f"Research-only: requires ${cash_required:.0f} cash, CSP cash available ${cash_available_for_csp:.0f}",
                     )
+                gate = csp_tail_risk_gate(result, self.config.get("leveraged_etf_tickers", []))
+                if gate:
+                    result["risk_gate"] = gate[0] if result.get("copy_eligible") else None
+                    _mark_research_only_candidate(result, gate[1])
 
                 result["quote_fetched_at_utc"] = evidence.get("quote_fetched_at_utc", "")
                 candidates.append(result)
