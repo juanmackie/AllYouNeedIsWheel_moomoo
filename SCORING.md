@@ -121,9 +121,29 @@ After hard gates it orders purely by capital return:
 3. canonical ticker, then expiration, then strike, then option type
 ```
 
-Quality/event tier labels do not gate or influence ordering. Repair calls
+Quality tier labels do not gate or influence ordering. Repair calls
 independently require `event_safe` earnings (fresh and successful, dated after
-expiry) or broker ETF/index classification. The midpoint and composite score are
+expiry) or broker ETF/index classification.
+
+CSP tail-risk gate (owner decision 2026-10-23). A new watchlist cash-secured put
+is research-only (visible, not copyable, zero contracts) when the quoted premium
+does not show its main tail risk:
+
+| Order | Condition | `risk_gate` code |
+|---|---|---|
+| 1 | Underlying is in `leveraged_etf_tickers` (daily-reset leveraged or inverse ETF) | `leveraged_etf` |
+| 2 | Single stock whose earnings date is on or before expiry | `earnings_before_expiry` |
+| 3 | Single stock whose earnings date is unknown, stale, or failed | `earnings_unknown` |
+
+`event_safe` stocks and non-leveraged ETFs/indexes pass. The gate is a hard gate
+before ranking: research-only picks sort after actionable picks by the existing
+`(research_only, rank_key)` sort, and `rank_key` is unchanged. Covered calls are
+not gated. A held short put may still roll into a gated contract: roll-target
+selection and copy-time ticket validation accept `copy_eligible: false` when
+`risk_gate` is set. The scan sets `risk_gate` only on picks that were copyable
+before the gate, so a cash-short pick never becomes a roll target. Rationale: in
+the owner's reconciled broker history the largest losses came from share losses
+after assignment and from short puts on a 3x ETF, not from the premium side. The midpoint and composite score are
 intentionally absent from the key: they may qualify or explain a candidate,
 never break a velocity
 tie. Review item S03 is RESOLVED on both halves: the ranking decision (owner

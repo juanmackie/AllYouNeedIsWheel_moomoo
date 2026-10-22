@@ -45,11 +45,14 @@ paths or account/environment settings can also make history appear absent.
 4. **Fills and fees:** `FillsService` requests query-only history on each refresh,
    normalizes deal IDs, side, quantity and timestamps, and inserts idempotently.
    Order fees are queried separately (40-order budget per refresh), allocated to
-   fills, and remain NULL when unavailable. Incremental pulls are capped at 90
-   days. Long downtime can create unrecoverable gaps without statement imports.
-5. **Cash movements:** explicit outcome ingestion calls `ingest_cash_flows` for
-   selected clearing dates (default last seven days). These are stored separately;
-   normal per-refresh fill pulls do not establish complete cash-flow coverage.
+   fills, and remain NULL when unavailable. *Corrected 2026-10-23:* one deal
+   query covers at most 90 days, but consecutive windows reach older history, so
+   downtime does not leave a permanent gap. The first pull now backfills from
+   `broker_history_start` (see `docs/broker-history-capability.md`).
+5. **Cash movements:** *updated 2026-10-23:* each refresh now pulls a budgeted
+   slice of clearing dates (at most 18, inside the broker quota of 20 per 30
+   seconds), forward to today and backward to `broker_history_start`, and records
+   the contiguous coverage. Deposits and withdrawals stay out of trading P&L.
    Simply subtracting the available deposits would therefore give false precision.
 6. **Outcome arithmetic:** `OutcomeService` joins persisted recommendations,
    owner links and fills. Option prices convert per-share to per-contract once
@@ -142,6 +145,28 @@ may contain raw deal/account information. Never publish it as a test fixture.
    drawdown within pre-agreed risk limits; inadequate data or unstable results
    mean inconclusive, not a pass. Do not use a larger premium quote or a green
    test suite as the success criterion.
+
+## Update 2026-10-23: broker reconciliation was possible locally
+
+The statement above that the evaluation was blocked applied to a checkout
+without the owner's database. On the owner's machine, a read-only script queried
+live OpenD (history deals in 90-day windows, order fees, positions, and daily
+cash flows) and matched every stored fill to a broker deal id. Per-underlying
+cash plus current marks attributed the net loss mainly to share losses after put
+assignment (including calls sold below cost basis before the 2026-10-17 audit)
+and to short puts on a 3x leveraged ETF, while the option premium side was
+positive. The figures are private and are not stored in Git.
+
+Follow-up changes:
+
+- `GET /api/options/analytics/pnl` and the dashboard Account P&L panel show this
+  cash-plus-mark P&L per underlying, reconciled to broker positions; a row that
+  cannot be reconciled is unknown, never zero.
+- Fill history backfills in 90-day windows; cash flows refresh on each run.
+- A CSP tail-risk gate (SCORING.md) keeps new puts on leveraged ETFs and on
+  stocks without `event_safe` earnings research-only. This is a risk policy
+  chosen by the owner, not a demonstrated edge; the walk-forward evaluation
+  below is still required before any claim that it raises returns.
 
 ## Validation and limits
 

@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased — Durable financial evidence and honest return labels
+## Unreleased — Broker-truth P&L, full history, and a CSP tail-risk gate
+
+The dashboard gains an Account P&L panel (`GET /api/options/analytics/pnl`):
+per underlying, option cash plus share cash plus current broker marks minus
+known fees, with interest and dividends shown as income and NAV change measured
+only after the last deposit. Rows reconcile to broker positions by strict
+quantity equality; a row with missing history is unknown, never zero. The
+Outcomes panel still covers option legs only.
+
+Fill ingestion now backfills from `broker_history_start` (default 2025-01-01)
+in 90-day query windows; the old code assumed history older than 90 days was
+unreachable. Fee retries cover every fee-less order. Each refresh also pulls a
+budgeted slice of cash flows, paced below the broker quota of 20 cash-flow
+queries per 30 seconds; the manual ingest now reports failure when any date
+fails.
+
+New CSP tail-risk gate (owner decision): a new cash-secured put is research-only
+when its underlying is a configured leveraged ETF, or a single stock whose
+earnings fall before expiry or are unknown. Ranking order is unchanged, covered
+calls are not gated, and held puts can still roll into a gated contract. This is
+a risk policy, not a demonstrated edge.
+
+## Durable financial evidence and honest return labels
 
 Startup no longer age-deletes published runs, portfolio snapshots, trade links,
 or cash flows; fills were already durable. Caches and operational diagnostics

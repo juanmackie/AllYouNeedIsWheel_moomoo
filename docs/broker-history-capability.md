@@ -33,10 +33,34 @@ not a measurement of the broker's actual trade-API quota. G1 therefore
 remains **unmeasured** for worthless expiry behavior and the authoritative
 API quota.
 
+## Measurement 2026-10-23 (windowed history, lifecycle encoding, cash-flow quota)
+
+A read-only script used the same `MoomooConnection` against the live OpenD
+session. It queried consecutive 89-day windows with explicit `start` and `end`
+from 2025-10-01 to 2026-10-23.
+
+| Question | Observation |
+|---|---|
+| History older than 90 days | Reachable. The windows returned 0, 1, 34, 55, and 18 deal rows, 108 unique deal ids in total, from 2026-02-25. The 90-day limit is per query, not per account. |
+| Stored fills vs broker | All 73 stored fills matched broker deal ids, with no field differences. The 35 older deals were missing only because earlier pulls were limited to 90 days. |
+| Fees for old orders | `order_fee_query` returned fees for all 33 older orders that were queried. |
+| Expired short options | Three expired short options (two puts, one call) appeared as a zero-price BUY close with no share fill. |
+| Expired long options | Two expired long option positions appeared as a zero-price SELL close. |
+| Assignments | Zero-price option close plus a share fill at the strike (as in the 2026-10-11 sample). |
+| Cash-flow quota | `get_acc_cash_flow` rejects more than 20 requests per 30 seconds ("Get Cash Flow Summary is too frequent"). At 1.6 s spacing, 170 weekday queries all succeeded. |
+
+This is lifecycle evidence for G1. It is not yet owner-confirmed, so the stored
+G1 capability is unchanged and expiry inference stays disabled. The account P&L
+read model (`core/account_pnl.py`) needs no inference: it reconciles each
+contract by strict quantity equality, so a missing close record shows as an
+unknown row, never as profit.
+
 ## Implications
 
-1. A history request covers at most 90 days. Incremental pulls can preserve
-   continuity only while the app successfully refreshes inside that window.
+1. One history request covers at most 90 days, but consecutive windows reach
+   older history. `FillsService.ingest_history_fills` backfills once from
+   `broker_history_start` and then pulls incrementally, so downtime longer than
+   90 days no longer leaves a permanent gap.
 2. Deal rows do not include fees. Fees require `order_fee_query`; ingestion
    allocates returned order fees over that order's fills and keeps unknown fees
    unknown.

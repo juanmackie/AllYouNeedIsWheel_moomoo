@@ -74,6 +74,10 @@ keeps its existing warning rather than delaying the run.
   Ordering is executable return on deployed capital per day, then executable
   bid premium per day as a tie-break, then stable ticker/expiry/strike/option-type
   keys. Tiers and midpoint never influence that order.
+- New cash-secured puts are research-only (visible, not copyable) when the
+  underlying is a configured leveraged ETF (`leveraged_etf_tickers`) or a single
+  stock whose earnings are not confirmed after expiry. Covered calls are not
+  gated, and a held put can still roll into such a contract. See SCORING.md.
 - Moomoo `update_time` is preserved verbatim and interpreted in
   `America/New_York`; UTC fetch time is carried separately. Missing/invalid/
   stale broker time blocks actionable candidates while the market is open.
@@ -89,8 +93,10 @@ keeps its existing warning rather than delaying the run.
 ## Interpreting returns and keeping history
 
 Signal yield is gross bid premium per capital per day, not expected net profit
-or a verified edge. Outcomes measure supported realized option legs after known
-fees; they exclude underlying P&L and unresolved lifecycles. Efficiency is shown
+or a verified edge. The Account P&L panel is the account-level truth: cash from
+every broker fill plus current broker marks, per underlying, including share
+gains and losses after assignment. Outcomes measure supported realized option
+legs after known fees; they exclude underlying P&L and unresolved lifecycles. Efficiency is shown
 in basis points/day, not dollars/day. Growth and Monte Carlo use unadjusted NAV;
 deposits can look like growth, so neither is a strategy performance backtest.
 
@@ -196,6 +202,8 @@ fallback evidence stays planning and review-only.
 | `MOOMOO_CHAIN_RATE_LIMIT_MAX_REQUESTS` | `10` | Conservative option-chain requests per window |
 | `MOOMOO_CHAIN_RATE_LIMIT_WINDOW_SEC` | `30` | Option-chain quota window in seconds |
 | `MOOMOO_CHAIN_MIN_REQUEST_SPACING_SEC` | `3.0` | Minimum spacing between chain calls |
+| `broker_history_start` (in config) | `2025-01-01` | Earliest date the fill and cash-flow backfill requests from OpenD |
+| `leveraged_etf_tickers` (in config) | `SOXL, SOXS, MSTU, TSLL, CONL, ETHU` | Leveraged ETFs: combined cash-plan cap, and new CSPs are research-only |
 | `wheel_preset` (in config/DB) | `balanced` | Selected risk preset; persisted via `/api/settings/preset` |
 
 ## Tests and quality gates
