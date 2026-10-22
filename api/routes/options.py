@@ -564,3 +564,25 @@ def ingest_outcome_evidence():
         logger.error(f"Error ingesting outcome evidence: {str(e)}")
         logger.error(traceback.format_exc())
         return error_response(str(e))
+
+
+@bp.route("/analytics/pnl", methods=["GET"])
+def get_account_pnl():
+    """Broker-truth account P&L per underlying (local SQLite only, no OpenD)."""
+    logger.info("GET /analytics/pnl request received")
+
+    try:
+        from api.services.account_pnl_service import build_account_pnl_payload
+        from api.services.config import get_current_identity
+
+        database = current_app.config.get("database")
+        if database is None:
+            return error_response("Database unavailable", status_code=503)
+
+        identity_env, identity_account = get_current_identity()
+        payload = build_account_pnl_payload(database, identity_env, identity_account)
+        return success_response(payload)
+    except Exception as e:
+        logger.error(f"Error building account P&L: {str(e)}")
+        logger.error(traceback.format_exc())
+        return error_response(str(e))

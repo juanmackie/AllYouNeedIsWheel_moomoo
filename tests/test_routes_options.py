@@ -7,6 +7,7 @@ database, and OpenD connection to avoid requiring live infrastructure.
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,8 @@ from flask import Flask
 
 from api.routes.options import bp
 from api.routes.utils import _RATE_LIMIT_BUCKETS, enforce_route_rate_limit
+from db.database import OptionsDatabase
+from db.sqlite_pool import close_connection_pool
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1042,6 +1045,84 @@ class TestOutcomeAnalytics(unittest.TestCase):
         with app.test_client() as client:
             resp = client.post("/api/options/analytics/outcomes/ingest")
         self.assertEqual(resp.status_code, 502)
+
+
+class TestAccountPnlRoute(unittest.TestCase):
+    """GET /api/options/analytics/pnl over a real SQLite database (no OpenD)."""
+
+    def setUp(self):
+        _RATE_LIMIT_BUCKETS.clear()
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "account_pnl_route.db")
+        self.db = OptionsDatabase(self.db_path)
+
+    def tearDown(self):
+        self.db.close()
+        close_connection_pool(self.db_path)
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    @patch("api.services.config.get_current_identity")
+    def test_returns_broker_truth_pnl_from_persisted_rows(self, mock_identity):
+        """Fills plus the latest snapshot reconcile into per-underlying P&L."""
+        mock_identity.return_value = ("REAL", "opaque-pnl")
+        self.db.save_fills(
+            [
+                {
+                    "fill_id": "P1",
+                    "order_id": "O1",
+                    "captured_at": "2026-08-01 14:30:00",
+                    "env": "REAL",
+                    "account_id": "opaque-pnl",
+                    "ticker": "AAA",
+                    "security_type": "STK",
+                    "side": "BUY",
+                    "qty": 100,
+                    "price": 50.0,
+                    "fees": 1.0,
+                },
+            ]
+        )
+        self.assertTrue(
+            self.db.save_portfolio_snapshot(
+                {
+                    "run_id": "run-pnl-1",
+                    "captured_at": "2026-08-20T16:00:00",
+                    "env": "REAL",
+                    "account_id": "opaque-pnl",
+                    "net_liquidation": 5500.0,
+                    "positions": [
+                        {"symbol": "AAA", "security_type": "STK", "qty": 100, "market_price": 55.0, "avg_cost": 50.0}
+                    ],
+                }
+            )
+        )
+
+        app = _make_app(database=self.db)
+        with app.test_client() as client:
+            resp = client.get("/api/options/analytics/pnl")
+            data = resp.get_json()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data["success"])
+        self.assertEqual(data["as_of"], "2026-08-20T16:00:00")
+        self.assertEqual(data["totals"]["net_pnl"], 499.0)
+        self.assertEqual(data["totals"]["underlying_count"], 1)
+        self.assertEqual(data["underlyings"][0]["ticker"], "AAA")
+        self.assertEqual(data["underlyings"][0]["status"], "reconciled")
+        self.assertIn("fill_coverage", data)
+        self.assertIn("cash_flow_coverage", data)
+        self.assertIn("generated_at", data)
+
+    @patch("api.services.config.get_current_identity")
+    def test_missing_database_returns_503(self, mock_identity):
+        """Without a configured database the route refuses instead of guessing."""
+        mock_identity.return_value = ("REAL", "opaque-pnl")
+        app = _make_app()
+        with app.test_client() as client:
+            resp = client.get("/api/options/analytics/pnl")
+        self.assertEqual(resp.status_code, 503)
 
 
 # ---------------------------------------------------------------------------

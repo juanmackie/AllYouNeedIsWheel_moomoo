@@ -189,10 +189,10 @@ Options HTTP surface, manual close/roll ticket revalidation, and taken-link stat
 
 Query-only broker fill ingestion, reconciled campaign basis, and broker-verified outcome attribution.
 
-- **Owned modules:** `api/services/fills_service.py`, `api/services/outcome_service.py`, `api/services/campaign_service.py`, `core/outcome_attribution.py`, `core/wheel_campaign.py`
-- **Entry points:** `api.services.fills_service.refresh_fill_evidence`, `api.services.outcome_service.OutcomeService`, `core.outcome_attribution`
-- **Focused tests:** `tests/test_outcome_attribution.py`, `tests/test_outcome_service.py`, `tests/test_outcome_integration.py`, `tests/test_campaign_service.py`, `tests/test_campaign_fills_service.py`, `tests/test_fills_repository.py`
-- **Verify:** `uv run python scripts/ci_pytest.py tests/test_outcome_attribution.py tests/test_outcome_service.py tests/test_outcome_integration.py tests/test_campaign_service.py tests/test_campaign_fills_service.py tests/test_fills_repository.py -q`
+- **Owned modules:** `api/services/fills_service.py`, `api/services/outcome_service.py`, `api/services/campaign_service.py`, `api/services/account_pnl_service.py`, `core/outcome_attribution.py`, `core/wheel_campaign.py`, `core/account_pnl.py`
+- **Entry points:** `api.services.fills_service.refresh_fill_evidence`, `api.services.outcome_service.OutcomeService`, `core.outcome_attribution`, `GET /api/options/analytics/pnl`
+- **Focused tests:** `tests/test_outcome_attribution.py`, `tests/test_outcome_service.py`, `tests/test_outcome_integration.py`, `tests/test_campaign_service.py`, `tests/test_campaign_fills_service.py`, `tests/test_fills_repository.py`, `tests/test_account_pnl.py`
+- **Verify:** `uv run python scripts/ci_pytest.py tests/test_outcome_attribution.py tests/test_outcome_service.py tests/test_outcome_integration.py tests/test_campaign_service.py tests/test_campaign_fills_service.py tests/test_fills_repository.py tests/test_account_pnl.py -q`
 
 ### `settings-and-ledger`
 

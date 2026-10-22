@@ -296,14 +296,17 @@
       "entry_points": [
         "api.services.fills_service.refresh_fill_evidence",
         "api.services.outcome_service.OutcomeService",
-        "core.outcome_attribution"
+        "core.outcome_attribution",
+        "GET /api/options/analytics/pnl"
       ],
       "owns": [
         "api/services/fills_service.py",
         "api/services/outcome_service.py",
         "api/services/campaign_service.py",
+        "api/services/account_pnl_service.py",
         "core/outcome_attribution.py",
-        "core/wheel_campaign.py"
+        "core/wheel_campaign.py",
+        "core/account_pnl.py"
       ],
       "tests": [
         "tests/test_outcome_attribution.py",
@@ -311,7 +314,8 @@
         "tests/test_outcome_integration.py",
         "tests/test_campaign_service.py",
         "tests/test_campaign_fills_service.py",
-        "tests/test_fills_repository.py"
+        "tests/test_fills_repository.py",
+        "tests/test_account_pnl.py"
       ]
     },
     {
