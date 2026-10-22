@@ -136,6 +136,7 @@ test('dashboard panels receive successful API responses, including the opened ma
         'GET /api/portfolio/projection',
         'GET /api/options/analytics/lifecycle',
         'GET /api/options/analytics/outcomes',
+        'GET /api/options/analytics/pnl',
         'GET /api/earnings/status',
         'GET /api/watchlist',
         'GET /api/options/screening-config',

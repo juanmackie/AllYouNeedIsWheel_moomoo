@@ -1,0 +1,28 @@
+<section class="app-section pnl-section" id="pnl-panel" aria-labelledby="pnl-title">
+    <div class="app-section__header">
+        <div>
+            <span class="app-section__eyebrow">Account P&amp;L</span>
+            <h2 id="pnl-title">Profit and loss (broker truth)</h2>
+            <p>Cash in and out from every broker fill, plus the current value of what you still hold. Includes share gains and losses, open option marks, and fees. Deposits are not profit.</p>
+        </div>
+    </div>
+
+    <div id="pnl-state" class="small text-muted" role="status" aria-live="polite">Loading…</div>
+    <div id="pnl-totals" class="summary-metrics-grid" role="group" aria-label="Account P&amp;L totals"></div>
+    <div class="ft-table-wrap" role="region" aria-label="P&amp;L by underlying" tabindex="0">
+        <table class="ft-table">
+            <thead>
+                <tr>
+                    <th>Underlying</th>
+                    <th>Status</th>
+                    <th class="ft-th-right">Options</th>
+                    <th class="ft-th-right">Shares</th>
+                    <th class="ft-th-right">Fees</th>
+                    <th class="ft-th-right">Net</th>
+                </tr>
+            </thead>
+            <tbody id="pnl-rows"></tbody>
+        </table>
+    </div>
+    <p id="pnl-footnote" class="text-muted small mt-2 mb-0"></p>
+</section>

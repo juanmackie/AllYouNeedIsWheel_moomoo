@@ -13,6 +13,7 @@ import { initRunStrip, loadRunStrip } from './run-strip.js';
 import { startRunStatePoll, ensureRunStatePoll, onRunPublished } from './run-notifier.js';
 import { renderGrowthPanel } from './growth-panel.js';
 import { renderOutcomePanel } from './outcome-panel.js';
+import { renderPnlPanel } from './pnl-panel.js';
 import { renderWeeklyIncome } from './weekly-income.js';
 import { state as optionsTableState } from './options-table-state.js';
 import { initializeSectionNavigation } from './section-navigation.js';
@@ -133,6 +134,7 @@ function secondaryPanelReloads() {
         () => updateIdleCashPanel(),
         () => renderGrowthPanel(),
         () => renderOutcomePanel(),
+        () => renderPnlPanel(),
         () => renderWeeklyIncome(),
     ];
     // The options table performs a heavy read-only chain scan; reload it on a
@@ -190,6 +192,12 @@ async function initializeSignalPanels() {
         // re-renders on a newly adopted run; no template emits a refresh button.
     }).catch(err => {
         console.error('Failed to load outcome panel:', err);
+    });
+
+    import('./pnl-panel.js').then(mod => {
+        mod.renderPnlPanel();
+    }).catch(err => {
+        console.error('Failed to load P&L panel:', err);
     });
 
     import('./options-table.js').then(mod => {
