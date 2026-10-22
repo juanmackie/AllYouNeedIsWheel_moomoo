@@ -86,6 +86,22 @@ keeps its existing warning rather than delaying the run.
   controls remain disabled because roll tickets have no copy-time revalidation
   against the current published run.
 
+## Interpreting returns and keeping history
+
+Signal yield is gross bid premium per capital per day, not expected net profit
+or a verified edge. Outcomes measure supported realized option legs after known
+fees; they exclude underlying P&L and unresolved lifecycles. Efficiency is shown
+in basis points/day, not dollars/day. Growth and Monte Carlo use unadjusted NAV;
+deposits can look like growth, so neither is a strategy performance backtest.
+
+Financial evidence (fills, cash flows, portfolio snapshots, published runs and
+trade links) now survives startup without age-based deletion. Caches and scan
+operational diagnostics still expire. Keep the same configured database and
+account and maintain private backups; this cannot recover already-pruned rows.
+Outcome reads remain bounded (see API.md), not an all-time performance ledger.
+See [the return investigation](docs/returns-investigation.md) for reproduced
+defects, validation, and the evidence needed for a real performance evaluation.
+
 ## Architecture
 
 ```

@@ -299,11 +299,21 @@ function renderPace(payload, series) {
 
     if (!latest) {
         if (badge) {
-            badge.textContent = 'NO HISTORY';
+            badge.textContent = payload ? 'NO HISTORY' : 'HISTORY UNAVAILABLE';
             badge.className = 'badge bg-secondary';
         }
-        if (navEl) navEl.textContent = '—';
-        if (targetEl) targetEl.textContent = '—';
+        for (const id of ['growth-current-nav', 'growth-target-nav', 'growth-progress', 'growth-annualized', 'growth-eta']) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = '—';
+                el.classList.remove('text-success', 'text-danger');
+            }
+        }
+        const bar = document.getElementById('growth-progress-bar');
+        if (bar) {
+            bar.style.width = '0%';
+            bar.setAttribute('aria-valuenow', '0');
+        }
         return;
     }
 
@@ -367,7 +377,7 @@ function renderPace(payload, series) {
             badge.textContent = 'COLLECTING DATA';
             badge.className = 'badge bg-secondary';
         } else if (pace > 0) {
-            badge.textContent = 'COMPOUNDING';
+            badge.textContent = 'NAV RISING';
             badge.className = 'badge bg-success';
         } else {
             badge.textContent = 'FLAT/DOWN';
@@ -381,7 +391,12 @@ function renderJournal(payload) {
     if (!winRateEl) return; // panel not present in this DOM
     const analytics = payload && payload.analytics ? payload.analytics : null;
     if (!analytics) {
-        winRateEl.textContent = '—';
+        for (const id of ['journal-win-rate', 'journal-exits', 'journal-rolls', 'journal-entries']) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '—';
+        }
+        const detail = document.getElementById('journal-win-rate-detail');
+        if (detail) detail.textContent = 'Journal unavailable';
         return;
     }
     const winRate = analytics.win_rate;
@@ -420,12 +435,15 @@ export async function renderGrowthPanel() {
     const series = historyPayload ? historyPayload.series : [];
 
     const curveContainer = document.getElementById('growth-equity-curve');
-    if (curveContainer) renderEquityCurve(curveContainer, series);
+    if (curveContainer) {
+        if (historyPayload) renderEquityCurve(curveContainer, series);
+        else curveContainer.textContent = 'Could not load saved history. Retry; this does not mean your records were deleted.';
+    }
     renderPace(historyPayload, series);
     renderJournal(journalPayload);
     wireMcHorizonButtons();
     renderProjection(projectionPayload);
 
     const snapshotCount = document.getElementById('journal-snapshots');
-    if (snapshotCount && historyPayload) snapshotCount.textContent = String(historyPayload.count || 0);
+    if (snapshotCount) snapshotCount.textContent = historyPayload ? String(historyPayload.count || 0) : '—';
 }

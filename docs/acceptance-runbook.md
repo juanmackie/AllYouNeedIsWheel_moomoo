@@ -259,11 +259,11 @@ against Moomoo and record results — **measured where broker-verified, unknown 
 
 **Compare against Moomoo**: positions (qty × strike/expiry), fills (price, time, qty, fees),
 cash balance reflecting premium/assignment, closed positions, and the outcome panel
-aggregates (sample size, coverage %, measured/unknown/pending counts, net outcome,
-capital-days, owner $/day, avg slippage).
+aggregates (sample size, coverage %, measured/unknown/pending counts, realized
+option-leg net outcome, capital-days, net bp/day, avg slippage).
 
-**Metrics to log**: measured / unknown / pending counts, sample size, net outcome,
-capital-days, owner $/day, avg slippage, verdict distribution per position, and which
+**Metrics to log**: measured / unknown / pending counts, sample size, realized
+option-leg net outcome, capital-days, net bp/day, avg slippage, verdict distribution per position, and which
 Session-2 tickets are measured vs unsupported.
 
 **Session-3 log (UNEXECUTED — owner fills)**

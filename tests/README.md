@@ -112,13 +112,21 @@ establish closed-market capability. No account balances or orders are queried.
    cash subtracts reserved short-put collateral once. Margin buying power is display-only.
 9. Confirm the Outcomes panel (below the growth panel) renders from local SQLite
    without an OpenD gate: totals (sample size, coverage %, measured/unknown/pending
-   counts, net outcome, capital-days, owner $/day, avg slippage), the four
+   counts, realized option-leg net outcome, capital-dollar-days, net bp/day, avg slippage), the four
    per-preset/DTE/ticker/event-tier summary grids, and the contract drill-down where
    each quoted-vs-filled row expands to its supporting fill transactions. `Pull
    broker fills` is a manual write path and is query-only (rate-limited, `502` on
    broker failure). Each refresh also pulls fills, query-only; with no fills the
    panel shows empty states, never fabricated outcomes.
 10. Confirm no UI or API path places, unlocks, cancels, or modifies an order.
+11. Verify signal yield is labelled gross premium, outcome efficiency is a rate
+    (e.g. $73 / ($7,000 × 31 days) = 3.36 bp/day, not $0.00/day), and Growth
+    warns that NAV is not adjusted for deposits/withdrawals. Block history and
+    journal API reads after a successful load: stale pace/ETA/counts must clear
+    and history must say unavailable, not imply deletion. Restore the API and
+    confirm the persisted values reappear. Restart against the same private DB
+    and configured account; verify saved NAV, fills, fees, cash flows and links
+    against a private backup. Never commit that backup or broker exports.
 
 If OpenD is unavailable, record the blocked manual-smoke result rather than
 substituting simulated production portfolio or quote data.

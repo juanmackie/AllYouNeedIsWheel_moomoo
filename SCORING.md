@@ -280,14 +280,17 @@ before entry is already enforced by event tiers.
 One portfolio snapshot is persisted per completed run (NAV, cash, reserved
 collateral, full position book). `GET /api/portfolio/history` serves the
 series plus a `pace` payload from `core.growth_mode.growth_pace`: progress
-toward the active preset's 5x `target_account_multiple`, annualized pace from
-realized NAV change, ETA to target, required premium/day, and an on-track
-verdict derived from realized pace — never a promised date.
+toward the active preset's 5x `target_account_multiple`, annualized change in
+unadjusted NAV (market change plus deposits/withdrawals), ETA to target, required
+premium/day, and an on-track verdict derived from that NAV change — never a
+cash-flow-adjusted strategy return or promised date. The dashboard labels this
+unadjusted NAV change, not strategy compounding.
 
 ## Expected trajectory (Monte Carlo, Moomoo-calibrated)
 
-`GET /api/portfolio/projection` extends the same snapshot history into a
-forward fan chart. `core/monte_carlo.py::project_nav` collapses bursts to one
+`GET /api/portfolio/projection` extends the same snapshot history into an
+illustrative fan chart, not a strategy backtest or expected trading return.
+Deposits/withdrawals are not removed from its NAV history. `core/monte_carlo.py::project_nav` collapses bursts to one
 point per calendar day, drops zero/negative-NAV rows from failed broker reads
 (counted, not hidden), fits a geometric Brownian motion with exact
 inter-observation gaps (MLE drift/vol), and simulates daily log increments

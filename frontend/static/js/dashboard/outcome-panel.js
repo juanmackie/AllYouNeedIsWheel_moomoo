@@ -58,6 +58,12 @@ function _signedMoney(value) {
   return `${n > 0 ? '+' : '−'}${formatCurrency(abs)}`;
 }
 
+/** API efficiency is net dollars / (capital dollars × days), not $/day. */
+function efficiencyRate(value) {
+  const rate = _optNum(value) * 10000;
+  return Number.isFinite(rate) ? `${rate.toFixed(2)} bp/day` : '—';
+}
+
 function optionalCurrency(value) {
   if (value == null || value === '') return '—';
   return formatCurrency(value);
@@ -95,7 +101,7 @@ function renderTotals(totals) {
     ['Pending', String(_count(totals.pending_count))],
     ['Net outcome', _signedMoney(netDollars), netDollars < 0 ? 'ft-td-down' : 'ft-td-signal'],
     ['Capital-days', String(Math.round(_count(totals.capital_days)))],
-    ['Owner $/day', Number.isFinite(efficiency) ? `$${efficiency.toFixed(2)}` : '—'],
+    ['Net / capital-day', efficiencyRate(efficiency)],
     ['Avg slippage', Number.isFinite(avgSlippage) ? _signedMoney(avgSlippage) : '—'],
   ];
   for (const [label, value, extraClass = ''] of metrics) el.appendChild(metricCell(label, value, extraClass));
@@ -123,7 +129,7 @@ function groupRow(group) {
   addCell(Number.isFinite(coverage) ? `${coverage.toFixed(1)}%` : '—', 'ft-td-right');
   addCell(_signedMoney(netDollars), `ft-td-right ${netDollars < 0 ? 'ft-td-down' : ''}`.trim());
   addCell(String(Math.round(_count(group.capital_days))), 'ft-td-right');
-  addCell(Number.isFinite(efficiency) ? `$${efficiency.toFixed(2)}` : '—', 'ft-td-right');
+  addCell(efficiencyRate(efficiency), 'ft-td-right');
   return row;
 }
 
@@ -209,7 +215,7 @@ function recordRow(record, index) {
   row.appendChild(cell(Number.isFinite(slippage) ? _signedMoney(slippage) : '—', `ft-td-right ${Number.isFinite(slippage) && slippage < 0 ? 'ft-td-down' : ''}`.trim()));
   row.appendChild(cell(Number.isFinite(net) ? _signedMoney(net) : '—', `ft-td-right ${Number.isFinite(net) && net < 0 ? 'ft-td-down' : 'ft-td-signal'}`));
   row.appendChild(cell(String(Math.round(_count(record.capital_days))), 'ft-td-right'));
-  row.appendChild(cell(Number.isFinite(efficiency) ? `$${efficiency.toFixed(2)}` : '—', 'ft-td-right'));
+  row.appendChild(cell(efficiencyRate(efficiency), 'ft-td-right'));
   const fillsCell = document.createElement('td');
   fillsCell.className = 'ft-td-right';
   fillsCell.textContent = String(fills.length);

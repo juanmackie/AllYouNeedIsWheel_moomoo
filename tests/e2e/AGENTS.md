@@ -26,6 +26,7 @@
 - `preset-and-refresh.spec.js` verifies failure, quota, API outage, and rejected-refresh warnings remain visible above retained results and clear on recovery, including a narrow viewport. `fixture_server.py` supplies persisted test-only run scenes (`quota_partial` retains a covered call with incomplete coverage); production data paths stay unmodified.
 - The same journey holds `/api/portfolio` open to verify saved cards, run status, and a manually usable refresh control load independently; page startup never starts a scan.
 
+- `return-labels.spec.js` verifies gross premium/option-leg/NAV caveats, bp/day units, history-outage clearing, and viewport containment at 320px/1440px using test-only synthetic responses. The long-refresh stage assertion allows the shared 5-second poll to arrive instead of racing an equal assertion timeout.
 - The evening journey verifies the cash action and clipboard output only after direct broker revalidation; preset journeys assert the active v9 contract. Disconnect recovery allows both broker-status poll cycles within its 60-second timeout.
 
 ## Verification

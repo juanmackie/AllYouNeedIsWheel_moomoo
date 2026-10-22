@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Durable financial evidence and honest return labels
+
+Startup no longer age-deletes published runs, portfolio snapshots, trade links,
+or cash flows; fills were already durable. Caches and operational diagnostics
+still expire. A synthetic ledger regression verifies attribution, fees, NAV and
+cash flows across database reopen, plus history/outcomes through a fresh app
+process. Previously deleted records are not restored.
+
+Outcome efficiency now displays basis points/day instead of rounding a ratio to
+$0.00/day. Signal labels distinguish gross premium from expected profit; Growth
+warns about unadjusted NAV, no longer calls a rise COMPOUNDING, and clears stale
+pace/ETA/journal counts when reads fail. No ranking, sizing, broker or copy gates
+changed. Real broker reconciliation and walk-forward profitability evaluation
+remain blocked by missing private ledger and point-in-time market data; see
+`docs/returns-investigation.md`.
+
 ## 2026-10-18 — Scan observability and the measured chain quota
 
 Refresh stage timings, contract-discovery warnings, fill-pull failures, and run

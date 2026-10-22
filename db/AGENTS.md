@@ -44,4 +44,5 @@
 No child DOX files yet.
 
 
-- Historical `option_fills` are not age-deleted: long holding campaigns need early credits. Account-scoped fill coverage and the durable growth baseline use existing settings; snapshot schema 3 requires no database migration.
+- Financial evidence is not age-deleted: `option_fills`, `account_cash_flows`, `portfolio_snapshots`, `run_metadata`, and `trade_events` (including owner-taken links) survive startup and cleanup. Only caches and operational diagnostics expire. This preserves attribution and the equity baseline, not just early credits. Database size can grow; keep private backups, never commit the database. Already-pruned records cannot be recovered by this policy change.
+- Account-scoped fill coverage and the durable growth baseline use existing settings; snapshot schema 3 requires no database migration.

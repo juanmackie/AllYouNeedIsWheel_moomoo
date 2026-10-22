@@ -27,11 +27,9 @@ logger = logging.getLogger("db.database")
 DEFAULT_RETENTION_DAYS = {
     "option_contracts": ("fetched_at", 7),
     "option_chain_snapshots": ("as_of", 14),
-    "run_metadata": ("published_at", 365),
+    # Financial evidence is durable: never age-delete run attribution, NAV,
+    # owner trade links, fills, or cash flows when reopening the application.
     "refresh_attempts": ("created_at", 365),
-    "portfolio_snapshots": ("captured_at", 365),
-    "trade_events": ("timestamp", 365),
-    "account_cash_flows": ("clearing_date", 365),
     "scan_ledger": ("timestamp", 365),
     # IV rank/percentile read a 1-year window. The previous 45-day cap made that
     # window unreachable and silently truncated history on every DB init.
@@ -76,10 +74,10 @@ class OptionsDatabase:
     def prune_retained_data(self, retention_days=None):
         """Delete expired operational history while preserving current state.
 
-        Retention is deliberately explicit and bounded: option-chain payloads are
-        short-lived evidence, while run/portfolio/trade history remains available
-        for the growth cockpit for one year. Failures are raised so startup or a
-        publish path cannot silently claim cleanup occurred when it did not.
+        Only caches and operational diagnostics expire. Financial history and
+        its attribution are durable across startup; deleting those rows used to
+        erase the equity baseline and unlink old fills. Failures are raised so
+        callers cannot silently claim cleanup occurred when it did not.
         """
         policies = dict(DEFAULT_RETENTION_DAYS)
         if retention_days:

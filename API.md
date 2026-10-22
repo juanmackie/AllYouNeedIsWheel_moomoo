@@ -58,7 +58,7 @@ the underlying coverage total.
 ### Options / research
 - `GET /api/options/otm`, `/api/options/expirations`, `/api/options/stock-price`,
   `/api/options/cash-status`, `/api/options/analytics/lifecycle` — broker-only research views. Shortlist cards are served only by `/api/run`; there is no parallel recommendation cache endpoint.
-- `GET /api/options/analytics/outcomes` — broker-verified outcome journal (local SQLite; no OpenD gate). Joins published recommendation signals to ingested option fills: quoted vs. filled credit, slippage, net-of-fee outcomes (unknown fees ⇒ unknown outcome), capital-days, owner $/day, and groups by preset / DTE bucket / ticker / event tier (display-only). Also returns `link_suggestions` for short fills sharing ticker and option type within 7 days after a preceding published run, with one best match per short fill; these are suggestions only and persist only after owner confirmation through `POST /api/run/taken`. `dte_comparisons` compares matching 21–45 DTE owner fills with candidates retained in that run's saved shortlist; comparisons with no retained alternative are omitted. This is comparison-only, never fetches extra chains, and is not a full-chain ranking. Filter params: `ticker`, `preset`, `event_tier`, `dte_bucket`, `limit`.
+- `GET /api/options/analytics/outcomes` — broker-verified outcome journal (local SQLite; no OpenD gate). Joins published recommendation signals to ingested option fills: quoted vs. filled credit, slippage, net-of-fee outcomes (unknown fees ⇒ unknown outcome), capital-days, `owner_efficiency` (net dollars / capital-dollar-days, a decimal daily rate displayed as basis points/day, not $/day), and groups by preset / DTE bucket / ticker / event tier (display-only). Also returns `link_suggestions` for short fills sharing ticker and option type within 7 days after a preceding published run, with one best match per short fill; these are suggestions only and persist only after owner confirmation through `POST /api/run/taken`. `dte_comparisons` compares matching 21–45 DTE owner fills with candidates retained in that run's saved shortlist; comparisons with no retained alternative are omitted. This is comparison-only, never fetches extra chains, and is not a full-chain ranking. Filter params: `ticker`, `preset`, `event_tier`, `dte_bucket`, `limit`. This is not lifetime portfolio performance: the default reads the latest 500 published runs and up to 5,000 fills per security type; `limit` only changes the run window (1–2,000).
 - `POST /api/options/analytics/outcomes/ingest?days=90&cash_flow_days=7` — query-only pull of broker fills, order fees, and cash movements from OpenD (OpenD-gated, 6/min, `days` capped at the SDK 90-day window). Ingestion only ever reads; nothing is placed, modified, or cancelled.
 
 ### Portfolio / positions
@@ -107,6 +107,10 @@ and never execute an order. Cash-plan copying checks every line separately.
 Fill history remains manually ingestible while G1 is unmeasured. Missing fees
 produce unknown outcomes and block adjusted basis; they do not invalidate
 successfully ingested deal history. Outcome suggestions use preceding runs and
-one best match per fill; empty DTE comparisons are omitted. Growth baselines
-persist per account through snapshot retention, and invalid NAV samples are
-excluded.
+one best match per fill; empty DTE comparisons are omitted. Financial evidence
+(fills, cash flows, portfolio snapshots, published runs, and trade events) is
+retained across startup without an age cutoff; caches and operational diagnostics
+still expire. Growth baselines persist per account, and invalid NAV samples are
+excluded. Growth pace and projections use unadjusted NAV: they do not remove
+deposits/withdrawals and are not strategy returns. Retention does not recover
+already-deleted history or remove the outcome API's read-window limits.

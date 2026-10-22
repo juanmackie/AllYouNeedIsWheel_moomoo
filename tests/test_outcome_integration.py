@@ -6,7 +6,9 @@ connection. No OpenD, no network, no mock portfolio data in production
 behavior — the fake connection exists only inside this test.
 """
 
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -136,6 +138,99 @@ class _OutcomeIntegrationBase(unittest.TestCase):
             signals=tuple(signals if signals is not None else [_signal()]),
         )
         self.db.save_run_snapshot(snapshot)
+
+
+class TestReturnPersistence(_OutcomeIntegrationBase):
+    """Synthetic ledger: retained evidence must survive a real process restart."""
+
+    def test_old_ledger_survives_database_reopen_and_application_restart(self):
+        signal = _signal(expiration="20000220")
+        self._publish_signal_run(generated_at="2000-01-02T15:00:00", signals=[signal])
+        broker = _FakeBrokerConnection(
+            [
+                _deal("D1", "O1", "US.AAPL000220P00070000", "SELL", 1, 1.05, "2000-01-05 14:30:00"),
+                _deal("D2", "O2", "US.AAPL000220P00070000", "BUY", 1, 0.30, "2000-02-05 14:30:00"),
+            ],
+            {"O1": 1.0, "O2": 1.0},
+            {
+                "2000-01-10": [
+                    {
+                        "cashflow_id": "CF1",
+                        "clearing_date": "2000-01-10",
+                        "cashflow_type": "Deposit",
+                        "cashflow_amount": 5000,
+                        "currency": "USD",
+                    }
+                ]
+            },
+        )
+        # Deliberately old synthetic timestamps exercise the retention boundary;
+        # this fake does not claim to reproduce the broker's history window.
+        ingest = FillsService(broker, self.db)
+        self.assertTrue(ingest.ingest_history_fills()["ok"])
+        self.assertTrue(ingest.ingest_cash_flows(["2000-01-10"])["ok"])
+        for run_id, stamp, nav in (("old-nav", "2000-01-01", 10000), ("new-nav", "2000-02-05", 15073)):
+            self.assertTrue(
+                self.db.save_portfolio_snapshot(
+                    {
+                        "run_id": run_id,
+                        "captured_at": stamp,
+                        "env": ENV,
+                        "account_id": OPAQUE,
+                        "net_liquidation": nav,
+                    }
+                )
+            )
+        record_taken_link(
+            self.db,
+            run_id="run-1",
+            recommendation=signal,
+            lane="signals",
+            env=ENV,
+            account_id=OPAQUE,
+            now=datetime(2000, 1, 5, 14, 31),
+        )
+        before = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
+        self.assertAlmostEqual(before["totals"]["net_dollars"], 73.0)
+        self.assertEqual(before["outcomes"][0]["attribution"], "owner-linked")
+        self.db.close()
+        close_connection_pool(self.db_path)
+        self.db = OptionsDatabase(self.db_path)
+        after = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
+        self.assertEqual(after["outcomes"], before["outcomes"])
+        self.assertEqual(len(self.db.get_portfolio_history(env=ENV, account_id=OPAQUE)), 2)
+        self.assertEqual(len(self.db.get_cash_flows(env=ENV, account_id=OPAQUE)), 1)
+        self.assertEqual(len(self.db.get_trade_events(env=ENV, account_id=OPAQUE)), 1)
+
+        # New interpreter, real application factory and SQLite, no live broker.
+        config_path = os.path.join(self.temp_dir, "connection-test.json")
+        with open(config_path, "w") as handle:
+            json.dump({"db_path": self.db_path, "portfolio_env": ENV, "account_id": BROKER_ACCOUNT}, handle)
+        script = """
+import json
+from app import create_application
+app = create_application()
+with app.test_client() as client:
+    history = client.get('/api/portfolio/history')
+    outcomes = client.get('/api/options/analytics/outcomes')
+    assert history.status_code == outcomes.status_code == 200
+    print('RESULT:' + json.dumps({'history': history.get_json(), 'outcomes': outcomes.get_json()}))
+app.config['database'].close()
+"""
+        env = dict(
+            os.environ, CONNECTION_CONFIG=config_path, MOOMOO_PORTFOLIO_ENV=ENV, MOOMOO_ACCOUNT_ID=BROKER_ACCOUNT
+        )
+        try:
+            process = subprocess.run(
+                [sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=30, check=True
+            )
+            payload = json.loads(next(line[7:] for line in process.stdout.splitlines() if line.startswith("RESULT:")))
+            self.assertEqual(payload["history"]["count"], 2)
+            self.assertEqual(payload["history"]["pace"]["baseline_nav"], 10000)
+            self.assertEqual(payload["outcomes"]["outcomes"], before["outcomes"])
+            self.assertAlmostEqual(payload["outcomes"]["totals"]["net_dollars"], 73.0)
+        finally:
+            os.remove(config_path)
 
 
 class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):

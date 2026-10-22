@@ -198,7 +198,36 @@ describe('outcome-panel rendering', () => {
     expect(totals).toContain('Capital-days');
   });
 
-  it('shows em dash (never $0.00) for open/unknown net P&L, slippage and $/day', async () => {
+  it('displays net P&L per capital-day as basis points, not dollars per day', async () => {
+    const payload = samplePayload();
+    payload.totals.owner_efficiency = 73 / (7000 * 31);
+    payload.groups.by_preset[0].owner_efficiency = payload.totals.owner_efficiency;
+    payload.outcomes[0].owner_efficiency = payload.totals.owner_efficiency;
+    mockFetchOnce(payload);
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+    const totals = document.getElementById('outcome-totals').textContent;
+    expect(totals).toContain('Net / capital-day');
+    expect(totals).toContain('3.36 bp/day');
+    expect(totals).not.toContain('Owner $/day');
+    expect(document.querySelector('#outcome-group-preset tr').lastChild.textContent).toBe('3.36 bp/day');
+    expect(document.querySelectorAll('.outcome-record-row')[0].children[8].textContent).toBe('3.36 bp/day');
+  });
+
+  it('preserves negative, zero, and unknown efficiency without currency labels', async () => {
+    const payload = samplePayload();
+    payload.totals.owner_efficiency = -0.000336;
+    payload.groups.by_preset[0].owner_efficiency = 0;
+    payload.outcomes[0].owner_efficiency = null;
+    mockFetchOnce(payload);
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+    expect(document.getElementById('outcome-totals').textContent).toContain('-3.36 bp/day');
+    expect(document.querySelector('#outcome-group-preset tr').lastChild.textContent).toBe('0.00 bp/day');
+    expect(document.querySelectorAll('.outcome-record-row')[0].children[8].textContent).toBe('—');
+  });
+
+  it('shows em dash (never $0.00) for open/unknown net P&L, slippage and efficiency', async () => {
     const payload = samplePayload();
     const open = payload.outcomes[1];
     open.outcome_status = 'open';

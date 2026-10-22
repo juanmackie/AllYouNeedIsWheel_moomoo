@@ -49,6 +49,39 @@ describe('growth panel data truth', () => {
         expect(document.querySelector('#growth-equity-curve p').textContent).toContain('2 snapshots');
     });
 
+    it('clears previous growth and journal values when history becomes unavailable', async () => {
+        document.body.innerHTML = PANEL_DOM;
+        stubGrowthApis({ win_rate: 50, total_exits: 3, measured_exit_count: 2, measured_wins: 1, roll_count: 1, per_symbol: [{ entries: 2 }] });
+        await renderGrowthPanel();
+        document.getElementById('growth-annualized').textContent = '40%/yr';
+        document.getElementById('growth-annualized').classList.add('text-success');
+        document.getElementById('growth-eta').textContent = '~3y';
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+        await renderGrowthPanel();
+        for (const id of ['growth-current-nav', 'growth-target-nav', 'growth-progress',
+            'growth-annualized', 'growth-eta', 'journal-win-rate', 'journal-exits',
+            'journal-rolls', 'journal-entries', 'journal-snapshots']) {
+            expect(document.getElementById(id).textContent, id).toBe('—');
+        }
+        expect(document.getElementById('growth-progress-bar').style.width).toBe('0%');
+        expect(document.getElementById('growth-annualized').classList.contains('text-success')).toBe(false);
+        expect(document.getElementById('growth-track-badge').textContent).toBe('HISTORY UNAVAILABLE');
+        expect(document.getElementById('growth-equity-curve').textContent).toContain('Could not load');
+        expect(document.getElementById('journal-win-rate-detail').textContent).toBe('Journal unavailable');
+    });
+
+    it('labels positive raw NAV change without claiming strategy compounding', async () => {
+        document.body.innerHTML = PANEL_DOM;
+        vi.stubGlobal('fetch', vi.fn(async (url) => payloadResponse(
+            String(url).includes('/api/portfolio/history') ? {
+                count: 2, series: [{ net_liquidation: 10000 }, { net_liquidation: 15000 }],
+                pace: { target_nav: 50000, progress_pct: 12.5, annualized_pace: 0.5, eta_days: 1000 },
+            } : {}
+        )));
+        await renderGrowthPanel();
+        expect(document.getElementById('growth-track-badge').textContent).toBe('NAV RISING');
+    });
+
     it('keeps the measured-exit count label when some exits have measured P&L', async () => {
         document.body.innerHTML = PANEL_DOM;
         stubGrowthApis({ win_rate: 50, total_exits: 3, measured_exit_count: 2, measured_wins: 1, roll_count: 0, per_symbol: [] });

@@ -244,10 +244,13 @@ class TestOptionsDatabase(unittest.TestCase):
         deleted = self.db.prune_retained_data()
 
         self.assertEqual(deleted["option_chain_snapshots"], 1)
-        self.assertEqual(deleted["run_metadata"], 1)
         self.assertEqual(deleted["refresh_attempts"], 1)
-        self.assertEqual(deleted["portfolio_snapshots"], 1)
-        self.assertEqual(deleted["trade_events"], 1)
+        for table in ("run_metadata", "portfolio_snapshots", "trade_events", "account_cash_flows", "option_fills"):
+            self.assertNotIn(table, deleted)
+        with sqlite3.connect(self.db_path) as conn:
+            for table in ("run_metadata", "portfolio_snapshots", "trade_events"):
+                self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 1)
+        conn.close()
         self.assertEqual(deleted["scan_ledger"], 1)
         self.assertEqual(deleted["iv_history"], 1)
 

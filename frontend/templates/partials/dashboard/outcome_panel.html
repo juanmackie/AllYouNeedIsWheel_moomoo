@@ -3,7 +3,9 @@
         <div>
             <span class="app-section__eyebrow">Outcomes</span>
             <h2>Broker-verified outcomes</h2>
-            <p>Quoted vs filled credit, net of fees, capital deployed per day — reconciled against your own OpenD fill history. Read-only; never affects ranking.</p>
+            <p>Realized option-leg P&amp;L after known fees — not total portfolio return. Share gains/losses, open-position mark-to-market, and unresolved lifecycle results are not included. Unknown outcomes remain unknown. Read-only; never affects ranking.</p>
+            <p>Net / capital-day is a rate: net P&amp;L divided by deployed capital × holding days, shown in basis points per day (1 bp = 0.01%). It is not daily dollar income or a forecast.</p>
+            <p class="ft-td-mute">Recent evidence window: up to 500 saved runs and 5,000 fills per security type. Older entries or exits may fall outside this view; these are not lifetime performance totals.</p>
         </div>
         <div class="app-section__actions">
             <button id="outcome-ingest-btn" class="ft-btn ft-btn--ghost" type="button"
@@ -33,28 +35,28 @@
         <div class="outcome-group">
             <h3 class="outcome-group__title">By preset</h3>
             <div class="ft-table-wrap" role="region" aria-label="Outcomes by preset table" tabindex="0"><table class="ft-table">
-                <thead><tr><th>Preset</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <thead><tr><th>Preset</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">Net bp/day</th></tr></thead>
                 <tbody id="outcome-group-preset"></tbody>
             </table></div>
         </div>
         <div class="outcome-group">
             <h3 class="outcome-group__title">By DTE bucket</h3>
             <div class="ft-table-wrap" role="region" aria-label="Outcomes by DTE table" tabindex="0"><table class="ft-table">
-                <thead><tr><th>Bucket</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <thead><tr><th>Bucket</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">Net bp/day</th></tr></thead>
                 <tbody id="outcome-group-dte"></tbody>
             </table></div>
         </div>
         <div class="outcome-group">
             <h3 class="outcome-group__title">By ticker</h3>
             <div class="ft-table-wrap" role="region" aria-label="Outcomes by ticker table" tabindex="0"><table class="ft-table">
-                <thead><tr><th>Ticker</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <thead><tr><th>Ticker</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">Net bp/day</th></tr></thead>
                 <tbody id="outcome-group-ticker"></tbody>
             </table></div>
         </div>
         <div class="outcome-group">
             <h3 class="outcome-group__title">By event tier</h3>
             <div class="ft-table-wrap" role="region" aria-label="Outcomes by event tier table" tabindex="0"><table class="ft-table">
-                <thead><tr><th>Tier</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">$/day</th></tr></thead>
+                <thead><tr><th>Tier</th><th class="ft-th-right">Signals</th><th class="ft-th-right">Meas/Unk</th><th class="ft-th-right">Coverage</th><th class="ft-th-right">Net</th><th class="ft-th-right">Cap-days</th><th class="ft-th-right">Net bp/day</th></tr></thead>
                 <tbody id="outcome-group-event"></tbody>
             </table></div>
         </div>
@@ -77,7 +79,7 @@
                         <th class="ft-th-right">Slippage</th>
                         <th class="ft-th-right">Net P&amp;L</th>
                         <th class="ft-th-right">Capital-days</th>
-                        <th class="ft-th-right">$/day</th>
+                        <th class="ft-th-right">Net bp/day</th>
                         <th class="ft-th-right">Fills</th>
                         <th class="ft-th-right">Details</th>
                     </tr>

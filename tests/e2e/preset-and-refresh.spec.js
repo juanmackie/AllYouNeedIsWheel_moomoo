@@ -237,7 +237,8 @@ test('scan longer than 60s keeps REFRESHING over the retained run until adoption
     // The strip shows progress while the scan is in-flight (70s window).
     await expect(page.locator('#run-status')).toHaveText('REFRESHING', { timeout: 20000 });
     await expect(page.locator('#run-progress-details')).toBeVisible();
-    await expect(page.locator('#run-progress-stage')).toContainText('Preparing watchlist scan');
+    // Stage arrives on the shared 5s poll; the default 5s assertion races that poll.
+    await expect(page.locator('#run-progress-stage')).toContainText('Preparing watchlist scan', { timeout: 20000 });
     const elapsedBefore = await page.locator('#run-progress-elapsed').innerText();
 
     // Prove the poll did not give up before the 60s mark. The scan lasts 70s,

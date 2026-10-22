@@ -30,6 +30,7 @@
 - `partials/dashboard/run_strip.html` keeps `#run-warning-banner` directly below the operational strip, outside collapsible details. Its title, reason, and recovery action use stable `run-warning-*` IDs and an atomic alert role. Visible alerts require the existing `.show` shim; `.d-none` hides recovered warnings.
 - `#run-preset` identifies the current selection; `#run-snapshot-preset` identifies the retained published strategy. Both remain visible during refresh.
 - Signal cards use `<details>` to collapse `.recommendation-details` (metrics detail rows); hero/reward/warnings/source remain visible. Preserve `.recommendation-card`, `.copy-ticket-btn`, `.signal-data-source`, `.missing-risk-badge`, `.d-none` visibility contracts.
+- Financial labels distinguish gross bid premium yield (not expected profit), realized option-leg outcomes (not full portfolio return), and unadjusted NAV growth/projections (deposits and withdrawals are not removed). Data confidence is not a win probability. Outcome efficiency is a rate in basis points/day, never $/day.
 - Keep script/style dependencies consistent with `base.html`.
 - Do not alter class names that frontend tests (`tests/frontend/`) depend on (e.g. `.recommendation-card`, `.ticker-badge`, `.table-responsive`).
 
