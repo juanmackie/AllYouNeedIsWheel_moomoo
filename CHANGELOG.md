@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — Failed-read guard, honest unknowns, and signal evidence tools
+
+A refresh whose broker portfolio read fails now fails the attempt and keeps the
+last published run. Before, it published a $0-cash run and stored a zero NAV
+with an empty book, which logged phantom exits and re-entries (seen 2026-08-30;
+the bad rows were removed after a backup). Portfolio snapshots now keep the
+broker market value; the old key mismatch stored 0.
+
+Outcome summaries report unmeasured totals as unknown instead of $0.00, and the
+net-per-capital-day rate uses the same measured records in its numerator and
+its denominator. The Outcomes headline is now "Option-leg net (realized)" with a
+note that share results are in Account P&L. A reveal threshold that kept the
+tall Outcomes section invisible is fixed.
+
+Signal cards no longer colour gross yield green. They say the rank is gross
+premium, not expected profit. CSP cards show the per-contract result at a 20%
+lower stock price, net of the bid credit. These changes follow a walk-forward
+replay of the app's own past picks (see `docs/returns-investigation.md`): the
+sample is small, and it shows no edge.
+
+New query-only tools: `tools/replay_signals.py` and `tools/verify_returns.py`.
+
 ## Unreleased — Broker-truth P&L, full history, and a CSP tail-risk gate
 
 The dashboard gains an Account P&L panel (`GET /api/options/analytics/pnl`):

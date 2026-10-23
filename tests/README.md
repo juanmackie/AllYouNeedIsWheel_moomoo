@@ -60,6 +60,26 @@ decision in `docs/acceptance-runbook.md`. Exit 0 means the measured gate passed;
 exit 1 means no-go; exit 2 means blocked/unmeasured. An open-market pass cannot
 establish closed-market capability. No account balances or orders are queried.
 
+### Signal replay and return reconciliation (query-only)
+
+Both tools read `options.db` read-only and write private output to the git-ignored
+`_tmp/` folder. Set the SDK log paths first, because the running app locks the
+default AppData log:
+
+```powershell
+$env:APPDATA = "$PWD\_tmpppdata"; $env:MOOMOO_LOG_PATH = "$PWD\_tmp\moomoo_logs"
+.venv/Scripts/python tools/replay_signals.py --yf-check   # first run fetches daily candles
+.venv/Scripts/python tools/replay_signals.py --no-fetch   # later runs use the candle cache
+.venv/Scripts/python tools/verify_returns.py
+```
+
+Re-run the replay after each Friday expiry: each run adds the cohorts whose
+contracts have expired. The replay verdict stays `inconclusive` or `negative`
+until at least 8 out-of-sample cohorts resolve. The candle fetch checks the
+30-day historical-candle quota first. `verify_returns.py` compares the app's
+P&L with an independent recomputation from raw deals. Differences on the same
+day usually come from after-hours mark changes since the last snapshot.
+
 
 1. Start OpenD, log in, launch the app, and confirm the operational strip shows
    the environment, read-only state, market state, run status, coverage, and

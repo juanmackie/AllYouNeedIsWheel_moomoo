@@ -31,6 +31,7 @@
 - `#run-preset` identifies the current selection; `#run-snapshot-preset` identifies the retained published strategy. Both remain visible during refresh.
 - Signal cards use `<details>` to collapse `.recommendation-details` (metrics detail rows); hero/reward/warnings/source remain visible. Preserve `.recommendation-card`, `.copy-ticket-btn`, `.signal-data-source`, `.missing-risk-badge`, `.d-none` visibility contracts.
 - Financial labels distinguish gross bid premium yield (not expected profit), realized option-leg outcomes (not full portfolio return), and unadjusted NAV growth/projections (deposits and withdrawals are not removed). Data confidence is not a win probability. Outcome efficiency is a rate in basis points/day, never $/day.
+- Positive gross yield is neutral, never green. CSP cards show `.csp-downside`: the per-contract result at a 20% lower stock price, net of the bid credit, plus breakeven; it is hidden when unknown, never $0. The Outcomes headline is "Option-leg net (realized)", with `.outcome-scope-note` pointing to Account P&L.
 - Keep script/style dependencies consistent with `base.html`.
 - Do not alter class names that frontend tests (`tests/frontend/`) depend on (e.g. `.recommendation-card`, `.ticker-badge`, `.table-responsive`).
 
