@@ -55,6 +55,9 @@ def _serialize_position(raw_symbol: str, pos: dict) -> dict | None:
     fields = _STOCK_FIELDS if security_type == "STK" else _OPTION_FIELDS
     for field in fields:
         value = pos.get(field)
+        if field == "market_val" and value is None:
+            # MoomooConnection.get_portfolio renames the broker's market_val to market_value.
+            value = pos.get("market_value")
         if field in ("strike", "expiration"):
             entry[field] = str(value or "")
         elif field == "option_type":

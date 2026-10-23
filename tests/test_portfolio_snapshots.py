@@ -69,6 +69,12 @@ class TestBuildPortfolioSnapshot(unittest.TestCase):
         self.assertEqual(tsla["qty"], -1)
         self.assertEqual(tsla["contract_key"], "TSLA260904P00300000 20260904 P300")
 
+    def test_market_value_from_broker_portfolio_is_kept(self):
+        # MoomooConnection.get_portfolio stores the broker's market_val as "market_value".
+        ctx = {"positions": {"US.AAPL": {"security_type": "STK", "position": 100, "market_value": 21_050.0}}}
+        snap = build_portfolio_snapshot(ctx, "r", "REAL", "abc", "t")
+        self.assertEqual(snap["positions"][0]["market_val"], 21_050.0)
+
     def test_none_and_empty_contexts(self):
         snap = build_portfolio_snapshot(None, "r", "SIMULATE", "", "t")
         self.assertEqual(snap["net_liquidation"], 0.0)
