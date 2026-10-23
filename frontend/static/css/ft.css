@@ -1563,7 +1563,7 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
   .container, .app-shell { padding-right: 12px; padding-left: 12px; }
   .dashboard-area { margin-top: 18px; padding: 14px 12px; }
   .dashboard-section-nav { gap: 2px 8px; padding: 6px; overflow-x: auto; }
-  .dashboard-section-nav__group { flex-wrap: nowrap; gap: 0 8px; }
+  .dashboard-section-nav__group { flex-wrap: wrap; gap: 0 8px; }
   .dashboard-section-nav__group + .dashboard-section-nav__group { padding-left: 10px; }
   .dashboard-section-nav a { white-space: nowrap; font-size: 10px; }
   #top-recommendations-section { margin-top: 16px; }
@@ -1580,5 +1580,6 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
   .summary-panel { padding: 14px 12px; }
   .recommendation-card { padding: 12px; }
   .recommendation-card .card-body { padding: 0; }
+  #top-recommendations-section .row { margin-right: 0; margin-left: 0; }
   .form-control, .form-select { min-height: 44px; }
 }

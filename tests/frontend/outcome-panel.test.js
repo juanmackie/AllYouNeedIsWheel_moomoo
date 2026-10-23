@@ -193,9 +193,37 @@ describe('outcome-panel rendering', () => {
     expect(totals).toContain('66.7%');
     expect(totals).toContain('Measured / Unknown');
     expect(totals).toContain('2 / 0');
-    expect(totals).toContain('Net outcome');
+    expect(totals).toContain('Option-leg net (realized)');
+    expect(totals).not.toContain('Net outcome');
     expect(totals).toContain('$410.00');
     expect(totals).toContain('Capital-days');
+  });
+
+  it('shows unknown capital-days as an em dash and formats known values with separators', async () => {
+    const payload = samplePayload();
+    payload.totals.capital_days = null;
+    payload.groups.by_ticker[0].capital_days = 3974873;
+    payload.groups.by_preset[0].capital_days = null;
+    payload.outcomes[0].capital_days = 3974873;
+    mockFetchOnce(payload);
+    const { renderOutcomePanel } = await import('../../frontend/static/js/dashboard/outcome-panel.js');
+    await renderOutcomePanel();
+
+    const metricValue = (label) => [...document.querySelectorAll('#outcome-totals .outcome-metric')]
+      .find((m) => m.querySelector('.outcome-metric__label').textContent === label)
+      .querySelector('.outcome-metric__value').textContent;
+    expect(metricValue('Capital-days')).toBe('—');
+
+    const tickerRows = document.getElementById('outcome-group-ticker').querySelectorAll('tr');
+    expect(tickerRows[0].children[5].textContent).toBe('3,974,873');
+    expect(tickerRows[1].children[5].textContent).toBe('0'); // known zero stays 0
+
+    const records = document.querySelectorAll('.outcome-record-row');
+    expect(records[0].children[7].textContent).toBe('3,974,873');
+    expect(records[1].children[7].textContent).toBe('—'); // unknown, not 0
+
+    const presetRow = document.querySelector('#outcome-group-preset tr');
+    expect(presetRow.children[5].textContent).toBe('—');
   });
 
   it('displays net P&L per capital-day as basis points, not dollars per day', async () => {
@@ -475,5 +503,24 @@ describe('outcome-panel rendering', () => {
     expect(calls).toContainEqual(['/api/options/analytics/outcomes/ingest?days=90&cash_flow_days=7', 'POST']);
     // POST happened, then a fresh GET re-render
     expect(calls.some(c => c[0] === '/api/options/analytics/outcomes?limit=500')).toBe(true);
+  });
+});
+
+describe('outcome panel template scope note', () => {
+  it('states that option-leg net is not the account result and links to Account P&L', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const root = path.resolve(__dirname, '../../frontend/templates/partials/dashboard');
+    const outcomeHtml = fs.readFileSync(path.join(root, 'outcome_panel.html'), 'utf-8');
+    const pnlHtml = fs.readFileSync(path.join(root, 'pnl_panel.html'), 'utf-8');
+
+    expect(outcomeHtml).toContain('Not the account result: share gains and losses are excluded.');
+    expect(outcomeHtml).toContain('for the whole-account figure.');
+    const link = outcomeHtml.match(/<a[^>]*href="(#[^"]+)"[^>]*>Account P&amp;L<\/a>/);
+    expect(link).not.toBeNull();
+    const targetId = link[1].slice(1);
+    expect(pnlHtml).toContain(`id="${targetId}"`);
+    // The note sits before the totals grid it qualifies.
+    expect(outcomeHtml.indexOf('Not the account result')).toBeLessThan(outcomeHtml.indexOf('id="outcome-totals"'));
   });
 });

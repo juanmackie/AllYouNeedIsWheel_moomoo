@@ -77,6 +77,8 @@ function setupDOM() {
         <span class="premium-velocity"></span>
         <span class="premium-amount"></span>
         <span class="annualized-return"></span>
+        <div class="csp-downside d-none"></div>
+        <div class="why-winner"></div>
         <span class="quality-badge"></span>
         <span class="confidence-badge"></span>
         <span class="underlying-quality-badge"></span>
@@ -1878,5 +1880,144 @@ describe('top-recommendations owner-recorded taken link', () => {
     // The control stays usable and the card never claims a link that failed.
     expect(btn.disabled).toBe(false);
     expect(btn.textContent).toContain('Mark taken');
+  });
+});
+
+describe('top-recommendations signal yield and downside framing', () => {
+  let cleanup;
+
+  const CSP = {
+    ticker: 'SOXL',
+    option_type: 'PUT',
+    signal_type: 'csp',
+    strike: 100.0,
+    expiration: '20260918',
+    dte: 19,
+    bid: 6.2,
+    ask: 6.4,
+    mid_price: 6.3,
+    annualized_return: 119.1,
+    capital_velocity_per_day: 0.00326,
+    delta: -0.295,
+    otm_pct: 10.19,
+    recommended_contracts: 2,
+    max_contracts: 3,
+    breakeven: 93.8,
+    stock_price: 111.35,
+    bid_premium_per_contract: 620,
+    wheel_decision: { stress_loss: 2184 },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDOM();
+  });
+
+  afterEach(() => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  async function renderCards(signals) {
+    const { initializeTopRecommendations, cleanupTopRecommendations, loadTopRecommendations } = await import(
+      '../../frontend/static/js/dashboard/top-recommendations.js'
+    );
+    cleanup = cleanupTopRecommendations;
+    const api = await import('../../frontend/static/js/dashboard/api-run.js');
+    api.fetchRunState.mockResolvedValue({
+      success: true,
+      count: signals.length,
+      signals,
+      run: { run_id: 'run-1', status: 'ready' },
+      taken_links: [],
+      generated_at: '2026-09-20T00:00:00',
+    });
+    await initializeTopRecommendations();
+    await loadTopRecommendations(true);
+    await new Promise((r) => setTimeout(r, 20));
+    return document.querySelectorAll('.recommendation-card');
+  }
+
+  it('keeps a positive gross annualized yield neutral and only colours non-positive yield red', async () => {
+    const cards = await renderCards([CSP, { ...CSP, ticker: 'NEG', annualized_return: -4.2 }]);
+    const positive = cards[0].querySelector('.annualized-return');
+    expect(positive.textContent).toBe('119.1%');
+    expect(positive.classList.contains('text-success')).toBe(false);
+    expect(positive.classList.contains('text-danger')).toBe(false);
+
+    const negative = cards[1].querySelector('.annualized-return');
+    expect(negative.classList.contains('text-danger')).toBe(true);
+  });
+
+  it('describes the rank as gross premium per deployed dollar, not expected profit', async () => {
+    const cards = await renderCards([CSP]);
+    expect(cards[0].querySelector('.why-winner').textContent).toBe(
+      'Ranked by gross premium per deployed dollar per day (119.1% annualized gross). Not expected profit.',
+    );
+  });
+
+  it('shows the CSP result per contract at a 20% lower stock price, net of the bid credit', async () => {
+    const cards = await renderCards([CSP]);
+    const line = cards[0].querySelector('.csp-downside');
+    expect(line.classList.contains('d-none')).toBe(false);
+    // 620 credit - (100 - 0.8 * 111.35) * 100 = 620 - 1092 = -472 per contract.
+    expect(line.textContent).toContain('If the stock is 20% lower at expiry: −$472.00 per contract after the $620.00 credit');
+    expect(line.textContent).toContain('Breakeven $93.80');
+  });
+
+  it('keeps the per-contract downside correct when research-only gating zeroed the contract counts', async () => {
+    // The backend stress total was sized for 5 contracts before the gate set both counts to 0.
+    const gated = { ...CSP, ticker: 'GATED', recommended_contracts: 0, max_contracts: 0, wheel_decision: { stress_loss: 5460 } };
+    const cards = await renderCards([gated]);
+    expect(cards[0].querySelector('.csp-downside').textContent).toContain('−$472.00 per contract');
+  });
+
+  it('shows a positive result when the credit covers the loss at a 20% lower price', async () => {
+    const deep = { ...CSP, ticker: 'DEEP', strike: 85, breakeven: 78.8 };
+    const cards = await renderCards([deep]);
+    // 620 - max(0, 85 - 89.08) * 100 = +620.
+    expect(cards[0].querySelector('.csp-downside').textContent).toContain('+$620.00 per contract');
+  });
+
+  it('hides the downside line for a covered call', async () => {
+    const cc = {
+      ...CSP,
+      ticker: 'CCX',
+      option_type: 'CALL',
+      signal_type: 'covered_call',
+      strike: 110,
+      breakeven: undefined,
+      wheel_decision: { stress_loss: 900 },
+    };
+    const cards = await renderCards([cc]);
+    const line = cards[0].querySelector('.csp-downside');
+    expect(line.classList.contains('d-none')).toBe(true);
+    expect(line.textContent).toBe('');
+  });
+
+  it('places the downside line in the reward group, outside the All metrics disclosure', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const html = fs.readFileSync(
+      path.resolve(__dirname, '../../frontend/templates/partials/dashboard/top_recommendations.html'),
+      'utf-8',
+    );
+    const annualized = html.indexOf('class="annualized-return');
+    const line = html.indexOf('class="csp-downside');
+    const metricsDisclosure = html.indexOf('recommendation-metrics-disclosure');
+    expect(annualized).toBeGreaterThan(-1);
+    expect(line).toBeGreaterThan(annualized);
+    expect(line).toBeLessThan(metricsDisclosure);
+  });
+
+  it('hides the downside line with no $0 when stress loss and breakeven are both unknown', async () => {
+    const unknown = { ...CSP, breakeven: null, stock_price: null, wheel_decision: {} };
+    const cards = await renderCards([unknown]);
+    const line = cards[0].querySelector('.csp-downside');
+    expect(line.classList.contains('d-none')).toBe(true);
+    expect(line.textContent).toBe('');
   });
 });

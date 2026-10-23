@@ -58,6 +58,15 @@ function _signedMoney(value) {
   return `${n > 0 ? '+' : '−'}${formatCurrency(abs)}`;
 }
 
+const _integerFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+
+/** Capital-days: unknown (null/undefined/non-finite) is an em dash, never 0. */
+function capitalDaysText(value) {
+  const n = _optNum(value);
+  if (!Number.isFinite(n)) return '—';
+  return _integerFormat.format(Math.round(n) || 0);
+}
+
 /** API efficiency is net dollars / (capital dollars × days), not $/day. */
 function efficiencyRate(value) {
   const rate = _optNum(value) * 10000;
@@ -99,8 +108,8 @@ function renderTotals(totals) {
     ['Coverage', Number.isFinite(coverage) ? `${coverage.toFixed(1)}%` : '—'],
     ['Measured / Unknown', `${_count(totals.measured_count)} / ${_count(totals.unknown_count)}`],
     ['Pending', String(_count(totals.pending_count))],
-    ['Net outcome', _signedMoney(netDollars), netDollars < 0 ? 'ft-td-down' : 'ft-td-signal'],
-    ['Capital-days', String(Math.round(_count(totals.capital_days)))],
+    ['Option-leg net (realized)', _signedMoney(netDollars), netDollars < 0 ? 'ft-td-down' : 'ft-td-signal'],
+    ['Capital-days', capitalDaysText(totals.capital_days)],
     ['Net / capital-day', efficiencyRate(efficiency)],
     ['Avg slippage', Number.isFinite(avgSlippage) ? _signedMoney(avgSlippage) : '—'],
   ];
@@ -128,7 +137,7 @@ function groupRow(group) {
   countCell.appendChild(unknown);
   addCell(Number.isFinite(coverage) ? `${coverage.toFixed(1)}%` : '—', 'ft-td-right');
   addCell(_signedMoney(netDollars), `ft-td-right ${netDollars < 0 ? 'ft-td-down' : ''}`.trim());
-  addCell(String(Math.round(_count(group.capital_days))), 'ft-td-right');
+  addCell(capitalDaysText(group.capital_days), 'ft-td-right');
   addCell(efficiencyRate(efficiency), 'ft-td-right');
   return row;
 }
@@ -214,7 +223,7 @@ function recordRow(record, index) {
   row.appendChild(cell(optionalCurrency(record.filled_credit_per_contract), 'ft-td-right'));
   row.appendChild(cell(Number.isFinite(slippage) ? _signedMoney(slippage) : '—', `ft-td-right ${Number.isFinite(slippage) && slippage < 0 ? 'ft-td-down' : ''}`.trim()));
   row.appendChild(cell(Number.isFinite(net) ? _signedMoney(net) : '—', `ft-td-right ${Number.isFinite(net) && net < 0 ? 'ft-td-down' : 'ft-td-signal'}`));
-  row.appendChild(cell(String(Math.round(_count(record.capital_days))), 'ft-td-right'));
+  row.appendChild(cell(capitalDaysText(record.capital_days), 'ft-td-right'));
   row.appendChild(cell(efficiencyRate(efficiency), 'ft-td-right'));
   const fillsCell = document.createElement('td');
   fillsCell.className = 'ft-td-right';

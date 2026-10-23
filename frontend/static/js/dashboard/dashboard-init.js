@@ -316,7 +316,9 @@ function renderPositionRow(pos) {
         pnl.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(0)}%`;
         const detail = document.createElement('small');
         detail.className = 'text-muted';
-        detail.textContent = `$${pnlDollars >= 0 ? '' : '-'}${Math.abs(pnlDollars).toFixed(0)}`;
+        const pnlRounded = Math.abs(pnlDollars).toFixed(0);
+        const pnlSign = Number(pnlRounded) === 0 ? '' : (pnlDollars > 0 ? '+' : '-');
+        detail.textContent = `${pnlSign}$${pnlRounded}`;
         pnlCell.append(pnl, document.createElement('br'), detail);
     } else {
         const unknown = document.createElement('span');

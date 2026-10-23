@@ -124,6 +124,8 @@ function initSectionReveal() {
     const sections = document.querySelectorAll('.ft-section, .app-section');
     if (!sections.length) return;
 
+    // threshold 0: a tall section (the outcomes table can be ~36,000 px) can never
+    // reach a 5% intersection ratio, so a ratio threshold left it hidden.
     const observer = new IntersectionObserver(function (entries) {
         entries.forEach(function (entry) {
             if (!entry.isIntersecting) return;
@@ -131,7 +133,7 @@ function initSectionReveal() {
             entry.target.classList.add('visible');
             observer.unobserve(entry.target);
         });
-    }, { threshold: 0.05, rootMargin: '0px 0px -40px 0px' });
+    }, { threshold: 0, rootMargin: '0px 0px -40px 0px' });
 
     let index = 0;
     sections.forEach(function (section) {

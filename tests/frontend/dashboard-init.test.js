@@ -285,6 +285,16 @@ describe('C09 position P&L with unknown marks', () => {
     expect(html).not.toContain('100%');
   });
 
+  it('signs a loss as -$600 (never $-600)', async () => {
+    const html = await renderPositions([{
+      symbol: 'AAPL231215P140', option_type: 'PUT', strike: 140, position: -1,
+      avg_cost: 2.00, mid_price: 8.00, bid: 7.90, ask: 8.10,
+    }]);
+    // (2.00 - 8.00) * 100 * 1 = -600 dollars
+    expect(html).toContain('<small class="text-muted">-$600</small>');
+    expect(html).not.toContain('$-600');
+  });
+
   it('reports a real P&L when a valid mark is present', async () => {
     const html = await renderPositions([{
       symbol: 'AAPL231215P140', option_type: 'PUT', strike: 140, position: -1,
@@ -294,7 +304,7 @@ describe('C09 position P&L with unknown marks', () => {
     // Assert on the P&L cell itself: other columns legitimately render '—'
     // for missing data (days-to-earnings, delta), so we check the rendered
     // P&L value is present rather than the unknown-mark placeholder.
-    expect(html).toContain('+83%</span><br><small class="text-muted">$165</small>');
+    expect(html).toContain('+83%</span><br><small class="text-muted">+$165</small>');
     expect(html).not.toContain('100%');
   });
 

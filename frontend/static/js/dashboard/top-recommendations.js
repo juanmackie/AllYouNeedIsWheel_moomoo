@@ -336,6 +336,46 @@ function copyTicket(rec, btn) {
     });
 }
 
+/** Finite number, or null for null, undefined, '' and non-numeric values. */
+function finiteOrNull(value) {
+    if (value == null || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Downside line for cash-secured puts only: the per-contract result at expiry
+ * if the stock is 20% lower, net of the executable bid credit. It uses the same
+ * 20% shock as core/growth_mode.compute_stress_loss, but per contract from the
+ * card's broker fields: the backend total is sized, and research-only gating
+ * zeroes the contract counts after that total is computed.
+ */
+function renderCspDownside(rec, el) {
+    const signalType = getSignalType(rec);
+    const wd = rec.wheel_decision || {};
+    const strike = finiteOrNull(rec.strike ?? wd.strike);
+    const stock = finiteOrNull(rec.stock_price ?? wd.stock_price);
+    const bid = finiteOrNull(rec.bid ?? wd.bid);
+    const credit = finiteOrNull(rec.bid_premium_per_contract ?? wd.bid_premium_per_contract) ?? (bid != null ? bid * 100 : null);
+    const breakeven = finiteOrNull(rec.breakeven ?? wd.breakeven);
+    const hasStress = strike != null && strike > 0 && stock != null && stock > 0 && credit != null;
+    const hasBreakeven = breakeven != null && breakeven > 0;
+    if ((signalType !== 'csp' && signalType !== 'put') || (!hasStress && !hasBreakeven)) {
+        el.textContent = '';
+        el.classList.add('d-none');
+        return;
+    }
+    const parts = [];
+    if (hasStress) {
+        const net = credit - Math.max(0, strike - 0.8 * stock) * 100;
+        const signed = net < 0 ? `−${formatCurrency(-net)}` : `+${formatCurrency(net)}`;
+        parts.push(`If the stock is 20% lower at expiry: ${signed} per contract after the ${formatCurrency(credit)} credit`);
+    }
+    if (hasBreakeven) parts.push(`Breakeven ${formatCurrency(breakeven)}`);
+    el.textContent = parts.join(' · ');
+    el.classList.remove('d-none');
+}
+
 function createRecommendationCard(rec) {
     const template = document.getElementById('recommendation-card-template');
     if (!template) {
@@ -420,7 +460,12 @@ function createRecommendationCard(rec) {
     // Annualized return on the secured/covered capital base (primary metric).
     const annualizedEl = clone.querySelector('.annualized-return');
     annualizedEl.textContent = rec.annualized_return != null ? `${rec.annualized_return.toFixed(1)}%` : 'N/A';
-    annualizedEl.classList.add(rec.annualized_return != null && rec.annualized_return > 0 ? 'text-success' : 'text-danger');
+    // Gross yield is neutral when positive; only non-positive or unknown is red.
+    if (!(rec.annualized_return != null && rec.annualized_return > 0)) annualizedEl.classList.add('text-danger');
+
+    // CSP downside: always visible under the yield, never $0 for unknown.
+    const downsideEl = clone.querySelector('.csp-downside');
+    if (downsideEl) renderCspDownside(rec, downsideEl);
     
     // Explicit quality/event tiers are the actionability explanation.
     const tierBadge = clone.querySelector('.underlying-quality-badge');
@@ -521,7 +566,7 @@ function createRecommendationCard(rec) {
     if (whyEl) {
         const annualized = rec.annualized_return != null ? Number(rec.annualized_return).toFixed(1) : null;
         whyEl.textContent = annualized != null
-            ? `Why this pick: ${annualized}% annualized return on deployed capital`
+            ? `Ranked by gross premium per deployed dollar per day (${annualized}% annualized gross). Not expected profit.`
             : 'Why this pick: passed all hard gates';
     }
     
