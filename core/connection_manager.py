@@ -152,6 +152,8 @@ class MoomooConnection:
     _option_chain_rate_lock = threading.Lock()
     # Broker quota: "Get Cash Flow Summary" allows 20 requests per 30 s (process-wide; 18 leaves headroom).
     _cash_flow_rate_limiter = RateLimiter(18, 30, 18, 30)  # max, window s, burst, burst window s
+    # Broker quota: history deal queries fail after 10 per 30 s (measured 2026-10-23; 9 leaves headroom).
+    _history_deal_rate_limiter = RateLimiter(9, 30, 9, 30)  # max, window s, burst, burst window s
     _market_timezone = ZoneInfo(os.environ.get("MARKET_TIMEZONE", "America/New_York"))
 
     def __new__(
@@ -1168,17 +1170,15 @@ class MoomooConnection:
         return _env_name(trd_env), opaque_account_id(str(account_id or ""))
 
     def get_history_deals(self, start="", end=""):
-        """Query historical fills (executions) for the resolved account.
+        """Query historical fills for the resolved account (``history_deal_list_query``, read-only).
 
-        Read-only deal query (``history_deal_list_query``). The SDK caps each
-        call to a 90-day window. Returns a list of raw row dicts, or None on
-        failure (``last_error`` carries the reason). No fees are included —
-        fees require ``get_order_fees`` keyed by order id.
+        One call covers at most 90 days; paced by ``_history_deal_rate_limiter`` (broker quota).
+        Returns raw row dicts or None on failure (``last_error``). Fees need ``get_order_fees``.
         """
         if not self.is_connected() and not self.connect():
             return None
         try:
-            self._rate_limiter.check_rate_limit()
+            MoomooConnection._history_deal_rate_limiter.check_rate_limit()
             trd_env, account_id = self._resolve_portfolio_account()
             ret, data = self.trd_ctx.history_deal_list_query(
                 start=start, end=end, trd_env=trd_env, acc_id=self._account_id_arg(account_id)

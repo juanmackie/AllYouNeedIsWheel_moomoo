@@ -48,6 +48,8 @@ from 2025-10-01 to 2026-10-23.
 | Expired long options | Two expired long option positions appeared as a zero-price SELL close. |
 | Assignments | Zero-price option close plus a share fill at the strike (as in the 2026-10-11 sample). |
 | Cash-flow quota | `get_acc_cash_flow` rejects more than 20 requests per 30 seconds ("Get Cash Flow Summary is too frequent"). At 1.6 s spacing, 170 weekday queries all succeeded. |
+| History deal quota | Unpaced, the 11th `history_deal_list_query` within 30 seconds failed and later calls kept failing. At about 3.4 s spacing, 19 consecutive windows (2020-06 to 2025-01) succeeded. With `_history_deal_rate_limiter` (9 per 30 s), 12 back-to-back calls all succeeded. |
+| Oldest available deal | 2025-01-21 for this account (windows back to 2018 returned no older rows). Positions opened before that date stay unreconciled in account P&L. |
 
 This is lifecycle evidence for G1. It is not yet owner-confirmed, so the stored
 G1 capability is unchanged and expiry inference stays disabled. The account P&L

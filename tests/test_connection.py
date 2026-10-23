@@ -1585,3 +1585,29 @@ class TestCashFlowQuota(unittest.TestCase):
         self.assertIsNone(result)
         paced.assert_called_once()
         conn._rate_limiter.check_rate_limit.assert_not_called()
+
+
+class TestHistoryDealQuota(unittest.TestCase):
+    """History deal queries fail after 10 per 30 seconds (live measurement 2026-10-23)."""
+
+    def test_history_deal_limiter_stays_within_broker_quota(self):
+        limiter = MoomooConnection._history_deal_rate_limiter
+        self.assertLessEqual(limiter.max_requests_per_window, 10)
+        self.assertGreaterEqual(limiter.rate_limit_window, 30)
+        self.assertLessEqual(limiter.burst_threshold, 10)
+        self.assertGreaterEqual(limiter.burst_window, 30)
+
+    def test_get_history_deals_is_paced_by_history_deal_limiter(self):
+        conn = MoomooConnection()
+        conn.is_connected = MagicMock(return_value=True)
+        conn.trd_ctx = MagicMock()
+        conn.trd_ctx.history_deal_list_query.return_value = (RET_ERROR, "broker error")
+        conn._resolve_portfolio_account = MagicMock(return_value=(TrdEnv.REAL, "123"))
+        conn._rate_limiter.check_rate_limit = MagicMock()
+
+        with patch.object(MoomooConnection._history_deal_rate_limiter, "check_rate_limit") as paced:
+            result = conn.get_history_deals(start="2026-01-01", end="2026-03-31")
+
+        self.assertIsNone(result)
+        paced.assert_called_once()
+        conn._rate_limiter.check_rate_limit.assert_not_called()
