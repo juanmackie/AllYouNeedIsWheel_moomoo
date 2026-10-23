@@ -24,7 +24,7 @@ Interest and dividend cash flows are reported as income only when the flow
 type names interest or dividends. Other flow types are listed as unclassified
 and are not counted. They are kept separate from the trading P&L. The NAV
 change is measured only after the last capital movement (deposit or
-withdrawal). It is null when that movement has no date. It is marked verified
+withdrawal). It is null when any capital movement has no date. It is marked verified
 only when the cash-flow backfill covers the window.
 """
 
@@ -281,7 +281,7 @@ def _cash_flow_summary(cash_flows) -> tuple[dict, dict]:
     """
     income: dict[str, dict[str, float]] = {}
     unclassified: dict[str, dict[str, float]] = {}
-    capital = {"count": 0, "by_currency": {}, "last_date": None}
+    capital = {"count": 0, "undated_count": 0, "by_currency": {}, "last_date": None}
     for row in cash_flows:
         flow_type = str(row.get("flow_type") or "")
         if "exchange" in flow_type.lower():
@@ -291,7 +291,9 @@ def _cash_flow_summary(cash_flows) -> tuple[dict, dict]:
         if is_capital_movement_cash_flow(flow_type, str(row.get("remark") or "")):
             capital["count"] += 1
             day = str(row.get("clearing_date") or "")[:10]
-            if day and (capital["last_date"] is None or day > capital["last_date"]):
+            if not day:
+                capital["undated_count"] += 1
+            elif capital["last_date"] is None or day > capital["last_date"]:
                 capital["last_date"] = day
             if amount is not None:
                 capital["by_currency"][currency] = capital["by_currency"].get(currency, 0.0) + amount
@@ -315,6 +317,7 @@ def _cash_flow_summary(cash_flows) -> tuple[dict, dict]:
     }
     capital_out = {
         "count": capital["count"],
+        "undated_count": capital["undated_count"],
         "by_currency": {currency: _money(total) for currency, total in capital["by_currency"].items()},
         "last_date": capital["last_date"],
     }
@@ -413,7 +416,7 @@ def build_account_pnl(
 
     income, capital = _cash_flow_summary(cash_flows or ())
     # A capital movement without a date cannot place the NAV window, so NAV is unknown.
-    undated_capital = capital["count"] > 0 and capital["last_date"] is None
+    undated_capital = capital["undated_count"] > 0
     nav = None
     if not undated_capital:
         nav = _nav_since_last_capital_movement(list(nav_history or ()), capital["last_date"], cash_flow_coverage)

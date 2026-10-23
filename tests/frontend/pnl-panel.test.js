@@ -140,7 +140,10 @@ describe('P&L panel', () => {
     expect(rows[0].hasAttribute('title')).toBe(false);
 
     const uberNet = rows[1].children[5];
-    expect(uberNet.classList.contains('ft-td-signal')).toBe(true);
+    // A gain must not share the loss colour (the theme's signal colour is red).
+    expect(uberNet.textContent.startsWith('+')).toBe(true);
+    expect(uberNet.classList.contains('ft-td-down')).toBe(false);
+    expect(uberNet.classList.contains('ft-td-signal')).toBe(false);
     expect(rows[1].getAttribute('title')).toBe(
       '126 shares were held before the fill history and use broker average cost',
     );

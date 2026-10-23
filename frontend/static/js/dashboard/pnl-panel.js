@@ -41,7 +41,9 @@ function signedMoney(value) {
 function pnlClass(value) {
   const n = num(value);
   if (!Number.isFinite(n) || n === 0) return '';
-  return n < 0 ? 'ft-td-down' : 'ft-td-signal';
+  // The theme's signal colour is the same red as losses, so gains keep the
+  // default ink and only their "+" sign; losses alone are coloured.
+  return n < 0 ? 'ft-td-down' : '';
 }
 
 function plainCurrency(value) {

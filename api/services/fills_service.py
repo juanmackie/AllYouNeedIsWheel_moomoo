@@ -277,7 +277,7 @@ class FillsService:
         # Overlapping windows return the boundary day twice; count and save each deal once.
         unique_rows = {}
         for raw in ret_rows:
-            deal_id = str(raw.get("deal_id", "") or "") if isinstance(raw, dict) else ""
+            deal_id = str(raw.get("deal_id", "") or "").strip() if isinstance(raw, dict) else ""
             unique_rows[deal_id or id(raw)] = raw
         ret_rows = list(unique_rows.values())
 

@@ -294,6 +294,27 @@ class TestCashFlowsAndNav(unittest.TestCase):
         self.assertIsNone(payload["capital_movements"]["last_date"])
         self.assertIsNone(payload["nav_since_last_capital_movement"])
 
+    def test_nav_is_null_when_any_capital_movement_is_undated(self):
+        # A dated deposit sets last_date, but an undated withdrawal could fall
+        # inside the NAV window, so the window cannot be trusted.
+        cash_flows = [
+            {"clearing_date": "2026-05-04", "currency": "AUD", "flow_type": "Bank Transfer Deposits", "amount": 500.0},
+            {"clearing_date": "", "currency": "AUD", "flow_type": "Withdrawal", "amount": -200.0},
+        ]
+
+        payload = build_account_pnl(
+            [],
+            [],
+            cash_flows=cash_flows,
+            nav_history=self.nav_history,
+            positions_as_of=AS_OF,
+            cash_flow_coverage=self.coverage,
+        )
+
+        self.assertEqual(payload["capital_movements"]["last_date"], "2026-05-04")
+        self.assertEqual(payload["capital_movements"]["undated_count"], 1)
+        self.assertIsNone(payload["nav_since_last_capital_movement"])
+
     def test_nav_is_unverified_without_cash_flow_coverage(self):
         payload = build_account_pnl(
             [],

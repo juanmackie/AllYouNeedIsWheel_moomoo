@@ -991,7 +991,6 @@ hr { border: 0; border-top: 1px solid var(--ft-rule-soft); margin: 16px 0; }
   letter-spacing: -0.02em; line-height: 1; color: var(--ft-ink);
 }
 .summary-metric-value.ft-td-down { color: var(--ft-down); }
-.summary-metric-value.ft-td-signal { color: var(--ft-signal); }
 .summary-leverage-panel { padding-top: 14px; }
 .leverage-bar-height { height: 4px; }
 
