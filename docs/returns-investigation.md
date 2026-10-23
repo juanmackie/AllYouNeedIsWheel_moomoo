@@ -186,3 +186,79 @@ Follow-up changes:
 Retaining financial evidence increases local disk usage; keep private backups.
 No schema migration, ranking/preset change, safety-gate relaxation, remote push,
 or deployment is part of this change.
+
+## Update 2026-10-23 (second pass): replay, reconciliation, and restart
+
+This pass used the owner's database and query-only OpenD calls. Private
+figures are kept in the git-ignored `_tmp/replay/` and `_tmp/verify/` reports.
+
+### Defects found and fixed
+
+| Defect | Evidence | Fix |
+|---|---|---|
+| A failed broker portfolio read was published and stored as truth | `get_portfolio_summary` returned `{"error": ...}`; the context builder ignored it. Run `8b7abf97…` (2026-08-30) published a $0-cash run and stored NAV 0 with no positions. Position inference then logged exits and re-entries for ORCL, SPCX, and UBER calls that never traded. | `portfolio_error` flag; `WheelRunner.refresh` fails the attempt and keeps the last run. The zero snapshot and the 6 phantom events were deleted after a verified backup. Real expiries on that run were kept. |
+| Unmeasured outcome totals shown as zero | Groups with 0 measured outcomes returned net, drawdown, and open losses of 0.0. The rate divided measured P&L by capital-days that included unmeasured records. | Unknown totals are None. The rate pairs its numerator and denominator over the same measured records. |
+| Snapshot market value always 0 | `get_portfolio` stores `market_value`; the snapshot builder read `market_val`. | The builder reads both keys. Old rows stay 0; nothing reads them. |
+| Outcomes section never visible | The reveal observer used a 5% intersection threshold. The outcomes section is about 36,000 px tall, so it never reached 5% and stayed at opacity 0. | Threshold 0; checked in a real browser. |
+| Outcomes headline read as the account result | "Net outcome" counted option legs only, on the same page as an Account P&L that includes share losses. | "Option-leg net (realized)", plus a note that points to Account P&L. |
+
+### Return reconciliation (`tools/verify_returns.py`)
+
+- All 116 stored fills match broker deals by id, side, quantity, and price.
+  Fees match on 108 of 109 orders. One order still has unknown fees in the
+  database, and the app labels it unknown.
+- Per-underlying P&L, recomputed from raw deals and live marks, matches the
+  app on 18 comparable underlyings. The remaining difference is under $12 and
+  comes from after-hours mark changes since the last snapshot, plus that one
+  unknown fee. Four underlyings stay unknown by design (history before
+  2025-01-21). One holding with shares older than the history uses the broker
+  cost basis, so deals cannot check it.
+- The broker reports cash-flow amounts already signed (an OUT dividend tax is
+  negative), so the account P&L's signed sum is correct.
+- No deposit or withdrawal fell inside the NAV snapshot window
+  (2026-08-22 to 2026-10-22), so the cash-flow-adjusted return equals the
+  plain NAV change. Over that window the account fell, while SPY was about
+  flat and cash at 4% gained about 0.7%.
+
+### Restart persistence
+
+On a copy of the real database, every return endpoint (P&L, history,
+outcomes, lifecycle, weekly income, run) returned the same values after a
+reopen, an integrity check, and an app restart. The only differences were
+capital-days accruing against the wall clock (`as_of=now`) for open lots.
+
+### Walk-forward signal replay (`tools/replay_signals.py`)
+
+Method as predeclared above:
+- decision cohorts from persisted snapshots (last snapshot before each US session);
+- hold to expiry at bid minus 0, 0.25, or 0.5 of the spread;
+- option fees calibrated from broker fills (about $0.54 per contract);
+- assignment marked at the expiry close;
+- baselines on the same dates and capital: gated and ungated candidate pools,
+  the same stock, SPY, and cash at 0% and 4%;
+- purged expanding-window rule selection.
+
+Coverage on 2026-10-23: 10 cohorts, but only 4 have resolved expiries
+(2026-08-31 to 2026-10-16). At base cost, in sample:
+
+- The app's published top CSP picks: 8 resolved trades, 25% won, 7 of 8
+  assigned, mean -10.7% of secured capital per trade.
+- All eligible candidates: 63 trades, 41% won, mean -8.3%.
+- The top-ranked picks did worse than the unranked pool. All put rules lost
+  less than buying the stock, but lost more than SPY and cash.
+- The walk-forward chose a rule in 5 folds; only 2 had resolved test trades
+  (5 trades). The predeclared verdict rule returns "negative". It also flags
+  that 2 out-of-sample cohorts are far below the 8 required.
+
+What this establishes: in this window the signals did not show an edge after
+fees and slippage. Ranking by gross premium per capital-day picked
+higher-risk names that did worse than the average candidate. What it does not
+establish:
+- a statistically reliable result (4 correlated cohorts, one market regime);
+- performance with early exits, rolls, or covered calls (not modeled);
+- fills at the next open (quotes were last-session quotes);
+- the owner's selection, which differs from the published picks.
+
+Re-run after each Friday expiry (commands in `tests/README.md`). Treat any
+change to ranking or presets as a separate owner decision, tested with this
+tool on later cohorts that are not used for tuning.
