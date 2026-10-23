@@ -4,9 +4,11 @@ Ordering contract (SCORING.md): descending capital return per dollar of
 capital per day (`rank_capital_velocity`) is the ONLY ranking priority after
 hard gates; executable-bid premium velocity (`rank_velocity`) is the sole
 tie-break; remaining ties resolve on canonical ticker (upper), expiration,
-strike, then option type (upper). Quality/event tiers are display-only risk
-information and never influence ordering. The composite score and midpoint
-are intentionally absent from this key: they may qualify/explain a candidate,
+strike, then option type (upper). Quality tiers are display-only risk
+information and never influence ordering. Event tiers never change `rank_key`,
+but the CSP tail-risk gate (below in this docstring) can make a new put
+research-only. The composite score and midpoint are intentionally absent from
+this key: they may qualify/explain a candidate,
 never break a velocity tie.
 
 CSP tail-risk gates (owner decision 2026-10-23) are hard gates applied before
@@ -18,6 +20,7 @@ Pure helpers extracted from RecommendationEngine (F-S1).
 
 from __future__ import annotations
 
+from core.run_model import is_roll_target_eligible  # noqa: F401 - re-exported for api callers
 from core.scoring_factors import capital_velocity_per_day, premium_velocity_per_day
 from core.ticker_utils import earnings_underlying_ticker
 from core.utils import safe_float
@@ -134,20 +137,6 @@ def csp_tail_risk_gate(candidate: dict, leveraged_tickers=()) -> tuple[str, str]
     if event_tier in {"", "event_unknown"}:
         return EARNINGS_UNKNOWN, "Research-only: earnings date unknown — cannot confirm it falls after expiry"
     return None
-
-
-def is_roll_target_eligible(candidate: dict) -> bool:
-    """Return True when a fresh candidate may be a roll target.
-
-    A tail-risk gate blocks new entries only. A held position may roll into a
-    gated contract, so copy_eligible False with a risk_gate still qualifies.
-    The scan sets ``risk_gate`` only on picks that were copy-eligible before the
-    gate, so a pick that is also cash-short or scorer-blocked never qualifies.
-    """
-    eligible = candidate.get("copy_eligible")
-    if eligible is True:
-        return True
-    return eligible is False and bool(candidate.get("risk_gate"))
 
 
 def option_source_value(option: dict, wheel_decision: dict | None, key: str, fallback: str = "unknown") -> str:

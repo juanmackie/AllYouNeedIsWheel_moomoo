@@ -98,8 +98,9 @@ descending executable return on deployed capital per day
 → option type
 ```
 
-Quality and event tiers remain display-only labels and never reorder the
-shortlist. The explicit repair-call policy independently gates earnings risk. Delta controls eligibility only and does not rank qualifying signals.
+Quality tiers remain display-only labels and never reorder the shortlist. The event tier
+never changes `rank_key`, but the CSP tail-risk gate (above) can make a new put
+research-only, which sorts it after actionable picks. The explicit repair-call policy independently gates earnings risk. Delta controls eligibility only and does not rank qualifying signals.
 The midpoint and composite score are never part of the sort key.
 
 The existing underlying-diversity safeguard is applied after this ordering,
@@ -385,7 +386,9 @@ labels candidates instead of pruning discovery or scoring: unaffordable picks
 show required cash versus available cash, zero contracts, and review-only
 eligibility. Cash-fitting CSPs form the first lane partition; unaffordable CSPs
 follow. Each partition uses the unchanged capital-return-first `rank_key`.
-Quality/event tiers, score, and midpoint never influence ordering. Portfolio
+Quality tiers, score, and midpoint never influence ordering. The event tier never changes
+`rank_key`; through the CSP tail-risk gate it can make a new put research-only, which sorts
+it after actionable picks. Portfolio
 recovery comparisons use the best qualifying CSP across the full ranked set.
 Net broker cash fields are already reduced for collateral and are not reduced
 again; gross cash still subtracts open short-put collateral.

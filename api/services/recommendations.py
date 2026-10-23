@@ -1419,7 +1419,7 @@ class RecommendationEngine:
                 ),
                 max_per=2,
             )
-            best_csp_opportunity = next(iter(rank_candidates(eligible_watchlist_csp_candidates)), None)
+            best_csp_opportunity = next(iter(top_watchlist_csp), None)
             capital_recovery = _build_capital_recovery_cards(
                 positions,
                 recovery_call_candidates_by_ticker,

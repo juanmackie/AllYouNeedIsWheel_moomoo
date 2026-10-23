@@ -849,7 +849,7 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertEqual(called_tickers, tickers)
 
     def test_get_top_recommendations_ranks_by_capital_return(self):
-        """Capital return per dollar per day is the primary sort; tiers never gate."""
+        """Capital return per dollar per day is the primary sort; quality tiers never gate; rank_key orders."""
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAA", "BBB"]
         engine = self._import_engine()
 
@@ -986,6 +986,54 @@ class TestRecommendationEngine(unittest.TestCase):
                 for d in deployment
             )
         )
+
+    def test_capital_recovery_best_csp_prefers_actionable_over_higher_velocity_research_only(self):
+        """The recovery card's best CSP follows the (research_only, rank_key) partition."""
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["GATE", "ACT"]
+        self.mock_portfolio_context["cash_available_for_csp"] = 200000.0
+        engine = self._import_engine()
+
+        def csp(ticker, velocity, research_only):
+            return {
+                "ticker": ticker,
+                "stock_price": 50.0,
+                "option_type": "PUT",
+                "strike": 50.0,
+                "expiration": "20240315",
+                "dte": 20,
+                "mid_price": 1.15,
+                "premium_per_contract": 115.0,
+                "bid": 1.10,
+                "ask": 1.20,
+                "otm_pct": 5.0,
+                "delta": -0.20,
+                "implied_volatility": 0.30,
+                "open_interest": 500,
+                "volume": 100,
+                "quality_tier": "qualified",
+                "capital_velocity_per_day": velocity,
+                "cash_required": 5000.0,
+                "recommended_contracts": 0 if research_only else 1,
+                "max_contracts": 0 if research_only else 1,
+                "profile_type": "monthly",
+                "research_only": research_only,
+                "copy_eligible": not research_only,
+                "risk_gate": "earnings_unknown" if research_only else None,
+                "warnings": [],
+            }
+
+        # GATE has the higher capital velocity but is research-only (sorts last).
+        gated = csp("GATE", 0.0030, research_only=True)
+        actionable = csp("ACT", 0.0010, research_only=False)
+
+        with (
+            patch.object(engine, "_fetch_watchlist_ticker_csp", side_effect=[[gated], [actionable]]),
+            patch("api.services.recommendations.is_market_open", return_value=True),
+        ):
+            result = engine.get_top_recommendations(limit=5)
+
+        card = next(card for card in result["capital_recovery"] if card["ticker"] == "AAPL")
+        self.assertEqual(card["best_csp_opportunity"]["ticker"], "ACT")
 
     def test_get_top_recommendations_keeps_post_rank_enrichment_off_hot_path(self):
         self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]

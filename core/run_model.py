@@ -240,6 +240,20 @@ def _ticket_contract_key(candidate):
     )
 
 
+def is_roll_target_eligible(candidate: dict) -> bool:
+    """Return True when a fresh candidate may be a roll target.
+
+    A tail-risk gate blocks new entries only. A held position may roll into a
+    gated contract, so copy_eligible False with a risk_gate still qualifies.
+    The scan sets ``risk_gate`` only on picks that were copy-eligible before the
+    gate, so a pick that is also cash-short or scorer-blocked never qualifies.
+    """
+    eligible = candidate.get("copy_eligible")
+    if eligible is True:
+        return True
+    return eligible is False and bool(candidate.get("risk_gate"))
+
+
 def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: datetime | None = None) -> dict:
     """Attach read-time eligibility to a snapshot view (never persisted).
 
@@ -291,14 +305,30 @@ def build_eligibility_view(view: dict, now_utc: datetime | None = None, now_et: 
             if isinstance(candidate, dict):
                 candidates_by_contract.setdefault(_ticket_contract_key(candidate), candidate)
     for action in view.get("next_actions") or []:
-        legs = (action.get("ticket") or {}).get("legs") or []
+        ticket = action.get("ticket") or {}
+        legs = ticket.get("legs") or []
         modes, reasons = [], []
         for leg in legs:
             if leg.get("side") == "SELL":
                 candidate = candidates_by_contract.get(_ticket_contract_key(leg), {})
-                eligibility = candidate.get("eligibility") or {}
-                mode = eligibility.get("mode", MODE_REVIEW_ONLY)
-                why = eligibility.get("reasons", ["contract unavailable in current run"])
+                if (
+                    ticket.get("kind") == "roll"
+                    and candidate.get("copy_eligible") is False
+                    and is_roll_target_eligible(candidate)
+                ):
+                    # A gated contract blocks new entries only; a roll target keeps session/coverage/freshness checks.
+                    mode, why = compute_signal_eligibility(
+                        {**candidate, "copy_eligible": True, "recommended_contracts": leg.get("quantity", 0)},
+                        session_state=session_state,
+                        coverage_truth=coverage_truth,
+                        quotes_fresh=fresh,
+                        coverage_reasons=coverage_reasons,
+                        session_reasons=session_reasons,
+                    )
+                else:
+                    eligibility = candidate.get("eligibility") or {}
+                    mode = eligibility.get("mode", MODE_REVIEW_ONLY)
+                    why = eligibility.get("reasons", ["contract unavailable in current run"])
             else:
                 has_quote = safe_float(leg.get("executable_price"), -1) > 0
                 mode, why = compute_signal_eligibility(

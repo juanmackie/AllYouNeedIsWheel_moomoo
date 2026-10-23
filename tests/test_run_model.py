@@ -742,6 +742,52 @@ class TestReadTimeEligibility(unittest.TestCase):
         assert view is not None
         self.assertIsNone(view["csp_picks"][1]["quote_age_sec"])
 
+    def _roll_snapshot(self, kind="roll", **target_overrides):
+        """Closed-session planning run: one roll ticket (BUY leg + SELL leg into the target)."""
+        target = self._candidate(ticker="SOXL", copy_eligible=False, risk_gate="earnings_before_expiry")
+        target.update(target_overrides)
+        buy_leg = {
+            "ticker": "AAPL",
+            "side": "BUY",
+            "option_type": "PUT",
+            "strike": 150.0,
+            "expiration": "20260619",
+            "quantity": 1,
+            "executable_price": 1.0,
+        }
+        sell_leg = {
+            "ticker": "SOXL",
+            "side": "SELL",
+            "option_type": "PUT",
+            "strike": 140.0,
+            "expiration": "20260619",
+            "quantity": 1,
+            "executable_price": 2.0,
+        }
+        return {
+            "run": self._run(status="planning", market_state="closed"),
+            "tradeable": False,
+            "csp_picks": [target],
+            "next_actions": [{"ticket": {"kind": kind, "legs": [buy_leg, sell_leg]}}],
+        }
+
+    def test_roll_into_gated_contract_takes_the_copy_mode_of_a_copy_eligible_target(self):
+        view = recompute_effective_snapshot(self._roll_snapshot(), self.now_utc, self.saturday_10am_et)
+        assert view is not None
+        self.assertEqual(view["csp_picks"][0]["eligibility"]["mode"], "review_only")
+        self.assertEqual(view["next_actions"][0]["eligibility"]["mode"], "staged")
+
+    def test_new_entry_ticket_for_gated_contract_stays_review_only(self):
+        view = recompute_effective_snapshot(self._roll_snapshot(kind="open"), self.now_utc, self.saturday_10am_et)
+        assert view is not None
+        self.assertEqual(view["next_actions"][0]["eligibility"]["mode"], "review_only")
+
+    def test_roll_target_without_risk_gate_stays_review_only(self):
+        snapshot = self._roll_snapshot(risk_gate=None)
+        view = recompute_effective_snapshot(snapshot, self.now_utc, self.saturday_10am_et)
+        assert view is not None
+        self.assertEqual(view["next_actions"][0]["eligibility"]["mode"], "review_only")
+
 
 class TestActiveWatchlistSnapshot(unittest.TestCase):
     """The ACTIVE WATCHLIST foot payload is persisted with the run snapshot:
