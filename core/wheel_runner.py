@@ -221,7 +221,7 @@ class WheelRunner:
                     started_at=started,
                 )
             )
-            portfolio_context = self._options_service._get_portfolio_context(refresh=True)
+            portfolio_context = self._read_broker_portfolio_context()
 
             # Best-effort: refresh stale earnings/ex-dividend event context
             # before broker quote collection. Provider failures are swallowed
@@ -335,6 +335,14 @@ class WheelRunner:
                 )
             )
             raise
+
+    def _read_broker_portfolio_context(self):
+        """Read the broker portfolio for a refresh; a failed read aborts it so nothing is published."""
+        portfolio_context = self._options_service._get_portfolio_context(refresh=True)
+        portfolio_error = portfolio_context.get("portfolio_error")
+        if portfolio_error:
+            raise RuntimeError(f"Broker portfolio unavailable: {portfolio_error}")
+        return portfolio_context
 
     def _build_roll_decisions(self, portfolio_context, conn, fresh_candidates=None):
         """Roll/hold/close diagnostics using only current scan candidates."""

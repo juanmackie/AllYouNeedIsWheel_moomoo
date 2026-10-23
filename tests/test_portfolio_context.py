@@ -170,6 +170,44 @@ class TestPortfolioContextBuild(unittest.TestCase):
         self.assertEqual(context["cash_available_for_csp"], 0.0)
         self.assertEqual(context["underlying_capital_exposure"]["AAPL"], 42000.0)
 
+    def test_failed_summary_flags_portfolio_error(self):
+        self.portfolio_service.get_portfolio_summary.return_value = {"error": "Failed to load portfolio"}
+        self.portfolio_service.get_positions.return_value = []
+
+        context = self.ctx.get_portfolio_context()
+
+        self.assertEqual(context["account_value"], 0.0)
+        self.assertTrue(context.get("portfolio_error"))
+        self.assertIn("Failed to load portfolio", context["portfolio_error"])
+
+    def test_missing_positions_flags_portfolio_error(self):
+        self.portfolio_service.get_portfolio_summary.return_value = {"available_cash": 5000.0}
+        self.portfolio_service.get_positions.return_value = None
+
+        context = self.ctx.get_portfolio_context()
+
+        self.assertTrue(context.get("portfolio_error"))
+
+    def test_read_exception_flags_portfolio_error_without_raising(self):
+        self.portfolio_service.get_portfolio_summary.side_effect = RuntimeError("OpenD disconnected")
+
+        context = self.ctx.get_portfolio_context()
+
+        self.assertIn("OpenD disconnected", context["portfolio_error"])
+        self.assertEqual(context["positions"], {})
+
+    def test_successful_read_has_no_portfolio_error(self):
+        self.portfolio_service.get_portfolio_summary.return_value = {
+            "available_cash": 5000.0,
+            "account_value": 100000.0,
+        }
+        self.portfolio_service.get_positions.return_value = []
+
+        context = self.ctx.get_portfolio_context()
+
+        self.assertNotIn("portfolio_error", context)
+        self.assertEqual(context["account_value"], 100000.0)
+
 
 class TestPortfolioContextHelpers(unittest.TestCase):
     """Test helper methods"""

@@ -294,6 +294,38 @@ class TestRunnerFailurePreservesLastSnapshot(unittest.TestCase):
         self.assertIsNone(saved[-1].run_id)
 
 
+class TestRunnerBrokerPortfolioReadFailure(unittest.TestCase):
+    """A failed broker portfolio read must fail the refresh, not publish a zeroed book."""
+
+    def test_failed_portfolio_read_publishes_and_persists_nothing(self):
+        db = MagicMock()
+        service = MagicMock()
+        runner = WheelRunner(db, service, {"portfolio_env": "SIMULATE", "account_id": ""}, max_tradeable_age_sec=120)
+
+        conn = MagicMock()
+        conn._get_available_accounts.return_value = [{"acc_id": "P1", "trd_env": "SIMULATE"}]
+        service._ensure_connection.return_value = conn
+        service._get_portfolio_context.return_value = {
+            "portfolio_error": "Failed to load portfolio",
+            "account_value": 0.0,
+            "positions": {},
+        }
+        engine = MagicMock()
+        service.recommendation_engine = engine
+
+        with self.assertRaisesRegex(RuntimeError, "Broker portfolio unavailable: Failed to load portfolio"):
+            runner.refresh()
+
+        self.assertIsNone(runner.latest())
+        db.save_run_snapshot.assert_not_called()
+        db.save_portfolio_transition.assert_not_called()
+        engine.get_top_recommendations.assert_not_called()
+        saved = [c.args[0] for c in db.save_refresh_attempt.call_args_list]
+        self.assertEqual(saved[-1].state, "failed")
+        self.assertIsNone(saved[-1].run_id)
+        self.assertIn("Failed to load portfolio", saved[-1].latest_error)
+
+
 class TestRunnerEventRefreshDoesNotBlockScan(unittest.TestCase):
     """A stuck best-effort event provider must not stall run publication."""
 

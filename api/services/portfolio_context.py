@@ -22,6 +22,25 @@ BROKER_NET_BUYING_POWER_SOURCES = {
 }
 
 
+def _read_portfolio_inputs(portfolio_service):
+    """Read the broker summary and positions once.
+
+    Returns (summary, stock_positions, option_positions, read_error). read_error
+    is a short reason when any read failed, else None.
+    """
+    raw_summary = portfolio_service.get_portfolio_summary()
+    raw_stock = portfolio_service.get_positions("STK")
+    raw_option = portfolio_service.get_positions("OPT")
+    read_error = None
+    if not raw_summary:
+        read_error = "portfolio summary unavailable"
+    elif "error" in raw_summary:
+        read_error = str(raw_summary.get("error") or "portfolio summary unavailable")
+    elif raw_stock is None or raw_option is None:
+        read_error = "positions unavailable"
+    return raw_summary or {}, raw_stock or [], raw_option or [], read_error
+
+
 def _first_positive_number(summary: dict, fields: tuple[str, ...]) -> tuple[float, str]:
     first_zero: tuple[float, str] | None = None
     for field in fields:
@@ -425,11 +444,13 @@ class PortfolioContext:
         try:
             portfolio_service = self._get_portfolio_service()
             if portfolio_service is None:
+                context["portfolio_error"] = "portfolio service unavailable"
                 return context
 
-            summary = portfolio_service.get_portfolio_summary() or {}
-            stock_positions = portfolio_service.get_positions("STK") or []
-            option_positions = portfolio_service.get_positions("OPT") or []
+            summary, stock_positions, option_positions, read_error = _read_portfolio_inputs(portfolio_service)
+            if read_error:
+                # Callers that publish a run must fail on this flag; never treat the zeroed book as truth.
+                context["portfolio_error"] = read_error
 
             # Keep true cash separate from margin/buying-power fields.
             true_cash, true_cash_source = _first_positive_number(summary, TRUE_CASH_FIELDS)
@@ -522,6 +543,8 @@ class PortfolioContext:
 
         except Exception as exc:
             logger.error(f"Error building portfolio context for options scoring: {exc}")
+            context["portfolio_error"] = str(exc) or type(exc).__name__
+            return context
 
         return self._attach_campaigns(
             context,

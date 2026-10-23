@@ -16,6 +16,7 @@
 - Moomoo/OpenD remains authoritative for portfolio, positions, cash, account state, and option-chain truth.
 - Optional providers such as yfinance (fallback quotes) and Alpha Vantage (bulk earnings calendar) may enrich or widen context, but must not silently replace broker truth.
 - Services must degrade gracefully when external providers fail, rate-limit, or return partial data.
+- `PortfolioContext.get_portfolio_context(refresh=True)` sets `portfolio_error` (a short reason) when the broker summary or positions read fails; the key is absent on success. Only `WheelRunner.refresh` treats it as fatal; other callers still receive the zeroed defaults.
 - Keep caches and TTLs explicit so stale market data is not presented as fresh.
 - Do not introduce production mocks or simulated account data.
 - When a signal can remain visible only as research-only data, keep that label and caveat explicit rather than silently dropping it.
