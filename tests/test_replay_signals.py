@@ -11,7 +11,9 @@ import pytest
 from tools.replay_signals import (
     BASE_SLIPPAGE,
     SLIPPAGE_LEVELS,
+    CandleStore,
     Trade,
+    _Abort,
     bootstrap_ci,
     build_cohorts,
     build_series,
@@ -253,6 +255,37 @@ def test_published_signals_use_pool_quote_and_drop_unpriced_entries():
     picks, dropped = select_published(signals, pool)
     assert [(c.ticker, c.bid) for c in picks] == [("AAA", 1.0), ("NEW", 0.5)]
     assert dropped == 1
+
+
+def test_published_signal_with_zero_strike_is_dropped_not_priced():
+    signals = [
+        {
+            "signal_type": "csp",
+            "ticker": "ZERO",
+            "option_type": "PUT",
+            "strike": 0.0,
+            "expiration": "20261106",
+            "bid": 0.5,
+            "ask": 0.6,
+        }
+    ]
+    picks, dropped = select_published(signals, [])
+    assert picks == []
+    assert dropped == 1
+
+
+def test_candle_quota_check_aborts_when_remaining_quota_is_short(tmp_path):
+    from unittest.mock import MagicMock
+
+    from moomoo import RET_OK
+
+    conn = MagicMock()
+    conn.quote_ctx.get_history_kl_quota.return_value = (RET_OK, (299, 1, []))
+    store = CandleStore(tmp_path / "prices.json", conn, force=False)
+
+    with pytest.raises(_Abort):
+        store._check_quota(2)
+    conn.quote_ctx.get_history_kl_quota.assert_called_once_with(get_detail=False)
 
 
 def test_fee_calibration_ignores_null_fees_and_zero_price_fills():

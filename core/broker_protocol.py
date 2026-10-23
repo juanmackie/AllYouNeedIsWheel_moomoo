@@ -46,6 +46,7 @@ QUERY_SDK_MEMBERS: tuple[str, ...] = (
     "get_capital_flow",
     "get_broker_queue",
     "request_history_kline",
+    "get_history_kl_quota",
     "get_cur_kline",
     "get_owner_plate",
     "get_option_chain",

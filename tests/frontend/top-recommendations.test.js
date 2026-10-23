@@ -1982,6 +1982,14 @@ describe('top-recommendations signal yield and downside framing', () => {
     expect(cards[0].querySelector('.csp-downside').textContent).toContain('+$620.00 per contract');
   });
 
+  it('hides the downside line when the credit is zero and breakeven is unknown', async () => {
+    const zero = { ...CSP, ticker: 'ZERO', bid_premium_per_contract: 0, bid: 0, breakeven: null };
+    const cards = await renderCards([zero]);
+    const line = cards[0].querySelector('.csp-downside');
+    expect(line.classList.contains('d-none')).toBe(true);
+    expect(line.textContent).not.toContain('$0.00');
+  });
+
   it('hides the downside line for a covered call', async () => {
     const cc = {
       ...CSP,

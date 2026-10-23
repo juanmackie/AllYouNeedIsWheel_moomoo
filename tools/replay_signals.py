@@ -253,7 +253,7 @@ def select_published(signals: list, pool: list[Contract]) -> tuple[list[Contract
             dropped += 1
         elif contract.key in by_key:
             picks.append(by_key[contract.key])
-        elif contract.bid > 0 and contract.ask >= contract.bid:
+        elif contract.strike > 0 and contract.bid > 0 and contract.ask >= contract.bid:
             picks.append(contract)
         else:
             dropped += 1
@@ -1029,6 +1029,7 @@ class CandleStore:
     def _check_quota(self, uncached: int) -> None:
         from moomoo import RET_OK
 
+        # get_history_kl_quota is allowlisted in core/broker_protocol.QUERY_SDK_MEMBERS.
         ret, quota = self.conn.quote_ctx.get_history_kl_quota(get_detail=False)
         if ret != RET_OK:
             raise _Abort(f"history quota query failed: {quota}")

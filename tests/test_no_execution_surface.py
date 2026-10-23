@@ -20,6 +20,7 @@ SCAN_PATHS = [
     REPO_ROOT / "app.py",
     REPO_ROOT / "config.py",
     REPO_ROOT / "run_api.py",
+    REPO_ROOT / "tools",
 ]
 EXCLUDED_DIRS = {"__pycache__"}
 

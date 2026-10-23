@@ -1063,6 +1063,8 @@ def main() -> int:
         )
         fee_pull = pull_order_fees(conn, order_ids)
         portfolio = conn.get_portfolio()
+        if portfolio is None:
+            raise RuntimeError(f"broker portfolio read failed: {conn.last_error}")
 
         nav_days = daily_last_nav(stored_snapshots)
         first_day = nav_days[0][0] if nav_days else history_start

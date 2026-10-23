@@ -442,16 +442,6 @@ class MoomooConnection:
             self.trd_ctx = None
         self._connected = False
 
-    def health_check(self):
-        """
-        Perform a lightweight health check and reconnect if needed.
-        Returns True if connection is healthy after the check.
-        """
-        if self.is_connected():
-            return True
-        logger.warning("Connection health check failed, attempting reconnect")
-        return self.connect()
-
     def disconnect(self):
         with self._connection_lock:
             self._safe_disconnect()
@@ -533,9 +523,6 @@ class MoomooConnection:
 
     def _is_ticker_failed(self, symbol):
         return self._ticker_cache.is_ticker_failed(symbol)
-
-    def _mark_ticker_failed(self, symbol):
-        self._ticker_cache.mark_ticker_failed(symbol)
 
     def get_option_expiration_dates(self, symbol):
         symbol = self._format_symbol(symbol)
@@ -1084,7 +1071,11 @@ class MoomooConnection:
             }
 
             ret, pos_data = self.trd_ctx.position_list_query(trd_env=trd_env, acc_id=self._account_id_arg(account_id))
-            if ret == RET_OK and not pos_data.empty:
+            if ret != RET_OK:
+                self.last_error = self._format_trade_error("get positions", pos_data, trd_env, account_id)
+                logger.error(self.last_error)
+                return None
+            if not pos_data.empty:
                 position_types = pos_data["code"].apply(infer_security_type_from_code)
                 option_positions = pos_data[position_types == "OPT"]
                 if not option_positions.empty:

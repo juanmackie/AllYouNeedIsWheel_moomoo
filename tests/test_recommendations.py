@@ -2210,6 +2210,27 @@ class TestRecommendationEngineCashFields(unittest.TestCase):
         self.assertEqual(result.get("cash_available_for_csp"), 50000.0)
         self.assertEqual(result.get("cash_reserved_for_csp"), 15000.0)
 
+    def test_failed_portfolio_reread_returns_error_without_scanning(self):
+        self.mock_portfolio_context_provider.get_portfolio_context.return_value = {
+            "positions": {},
+            "portfolio_error": "positions busy",
+            "short_calls": {},
+            "short_puts": {},
+        }
+        self.mock_watchlist_manager.get_effective_watchlist.return_value = ["AAPL"]
+
+        engine = self._import_engine()
+        with patch("db.scan_ledger_repository.ScanLedgerRepository.record") as record_ledger:
+            result = engine.get_top_recommendations(limit=3)
+
+        self.assertIn("error", result)
+        self.assertIn("positions busy", result["error"])
+        self.assertNotIn("signals", result)
+        self.mock_conn.get_option_contracts.assert_not_called()
+        # The failed scan is recorded once in the diagnostics ledger, like a connection failure.
+        record_ledger.assert_called_once()
+        self.assertIn("positions busy", record_ledger.call_args.args[0].error_message)
+
 
 class TestRecommendationEngineSignalFields(unittest.TestCase):
     """Test signal-only fields in recommendations."""

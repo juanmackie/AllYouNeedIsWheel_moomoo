@@ -304,7 +304,11 @@ class RecommendationEngine:
         return self._connection_provider._ensure_connection()
 
     def _get_portfolio_context(self):
-        return self._portfolio_context_provider.get_portfolio_context()
+        context = self._portfolio_context_provider.get_portfolio_context()
+        if context.get("portfolio_error"):
+            # Never price signals from a zeroed book; the scan's handler returns {"error": ...}.
+            raise RuntimeError(f"Broker portfolio unavailable: {context['portfolio_error']}")
+        return context
 
     def _get_portfolio_service(self):
         if self._portfolio_service_provider:
@@ -342,17 +346,6 @@ class RecommendationEngine:
         otm_pct = float(self._preset_profile.get("csp_default_otm_pct", 10) or 10)
         target_strike = stock_price * (1 - (otm_pct / 100))
         return max(target_strike, 0.0)
-
-    def _can_afford_csp(self, stock_price: float, portfolio_context: dict, require_cash_fit: bool = True) -> bool:
-        """Return True when the default CSP target strike fits buying power."""
-        cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", 0) or 0)
-        if stock_price <= 0:
-            return False
-        if not require_cash_fit:
-            return True
-        if cash_available_for_csp <= 0:
-            return False
-        return self._csp_target_strike_estimate(stock_price, portfolio_context) * 100 <= cash_available_for_csp
 
     def _find_affordable_csp_strike(
         self, stock_price: float, portfolio_context: dict, strikes: list, require_cash_fit: bool = True
@@ -877,7 +870,6 @@ class RecommendationEngine:
             portfolio_context = self._get_portfolio_context()
             logger.info(f"[TIMING] Portfolio context: {time.time() - ctx_start:.2f}s")
             positions = portfolio_context.get("positions", {})
-            float(portfolio_context.get("available_cash", 0) or 0)
             broker_buying_power = float(portfolio_context.get("broker_buying_power", 0) or 0)
             cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", 0) or 0)
             cash_reserved_for_csp = float(portfolio_context.get("cash_reserved_for_csp", 0) or 0)

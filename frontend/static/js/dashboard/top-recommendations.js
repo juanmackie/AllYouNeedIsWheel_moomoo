@@ -356,7 +356,9 @@ function renderCspDownside(rec, el) {
     const strike = finiteOrNull(rec.strike ?? wd.strike);
     const stock = finiteOrNull(rec.stock_price ?? wd.stock_price);
     const bid = finiteOrNull(rec.bid ?? wd.bid);
-    const credit = finiteOrNull(rec.bid_premium_per_contract ?? wd.bid_premium_per_contract) ?? (bid != null ? bid * 100 : null);
+    const rawCredit = finiteOrNull(rec.bid_premium_per_contract ?? wd.bid_premium_per_contract) ?? (bid != null ? bid * 100 : null);
+    // A zero or negative credit is unknown here; it must not render as "after the $0.00 credit".
+    const credit = rawCredit != null && rawCredit > 0 ? rawCredit : null;
     const breakeven = finiteOrNull(rec.breakeven ?? wd.breakeven);
     const hasStress = strike != null && strike > 0 && stock != null && stock > 0 && credit != null;
     const hasBreakeven = breakeven != null && breakeven > 0;

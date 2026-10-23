@@ -797,6 +797,19 @@ class TestMoomooConnectionDataRetrieval(unittest.TestCase):
         self.assertEqual(result["buying_power"], 25000)
         self.assertEqual(result["buying_power_source"], "usd_net_cash_power")
 
+    def test_get_portfolio_fails_when_positions_query_fails(self):
+        conn = self._make_connected_conn()
+        acc_data = MagicMock()
+        acc_data.empty = False
+        acc_data.iloc.__getitem__.return_value = self._make_acc_row({"acc_id": "acct-123", "us_cash": 40000})
+        self.mock_trd_ctx.accinfo_query.return_value = (RET_OK, acc_data)
+        self.mock_trd_ctx.position_list_query.return_value = (RET_ERROR, "busy")
+
+        result = conn.get_portfolio()
+
+        self.assertIsNone(result)
+        self.assertIn("positions", conn.last_error)
+
     def test_get_portfolio_falls_back_to_us_cash_when_no_usd_cash_field_exists(self):
         conn = self._make_connected_conn()
         acc_data = MagicMock()
