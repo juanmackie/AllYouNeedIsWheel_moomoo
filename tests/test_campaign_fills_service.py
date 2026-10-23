@@ -36,7 +36,7 @@ def test_refresh_fill_pull_is_incremental_after_backfill():
     assert written["first_covered_date"] == "2025-01-01"
 
 
-def test_first_pull_backfills_history_in_consecutive_90_day_windows():
+def test_first_pull_backfills_history_in_overlapping_90_day_windows():
     today = date.today()
     history_start = (today - timedelta(days=200)).isoformat()
     connection = Mock()
@@ -54,11 +54,13 @@ def test_first_pull_backfills_history_in_consecutive_90_day_windows():
     windows = [(call.kwargs["start"], call.kwargs["end"]) for call in connection.get_history_deals.call_args_list]
     assert len(windows) == 3
     assert windows[0][0] == history_start
-    assert windows[-1][1] == today.isoformat()
-    for start, end in windows:
+    for start, end in windows[:-1]:
         assert (date.fromisoformat(end) - date.fromisoformat(start)).days + 1 <= 90
     for (_, previous_end), (next_start, _) in zip(windows, windows[1:]):
-        assert date.fromisoformat(next_start) == date.fromisoformat(previous_end) + timedelta(days=1)
+        assert date.fromisoformat(next_start) == date.fromisoformat(previous_end)
+    # The last window is open-ended so OpenD includes today's deals.
+    assert windows[-1][1] == ""
+    assert date.fromisoformat(windows[-1][0]) <= today
     written = database.set_history_fill_coverage.call_args.args[2]
     assert written["status"] == "success"
     assert written["first_covered_date"] == history_start
@@ -68,10 +70,23 @@ def test_history_windows_split_inclusive_spans_at_ninety_days():
     start = date(2026, 1, 1)
     assert history_windows(date(2026, 1, 2), date(2026, 1, 1)) == []
     assert history_windows(start, start + timedelta(days=89)) == [("2026-01-01", "2026-03-31")]
+    # The next window starts on the previous window's end date (one-day overlap).
     assert history_windows(start, start + timedelta(days=90)) == [
         ("2026-01-01", "2026-03-31"),
-        ("2026-04-01", "2026-04-01"),
+        ("2026-03-31", "2026-04-01"),
     ]
+    assert history_windows(start, start + timedelta(days=178)) == [
+        ("2026-01-01", "2026-03-31"),
+        ("2026-03-31", "2026-06-28"),
+    ]
+
+
+def test_history_windows_single_day_and_last_window_end_at_range_end():
+    start = date(2026, 1, 1)
+    assert history_windows(start, start) == [("2026-01-01", "2026-01-01")]
+    windows = history_windows(start, start + timedelta(days=200))
+    assert windows[-1][1] == (start + timedelta(days=200)).isoformat()
+    assert len(windows) == 3
 
 
 def test_backfill_window_failure_saves_nothing_and_keeps_coverage_start():
@@ -165,6 +180,18 @@ def test_refresh_fill_evidence_persists_pulled_deals(database):
     fills = database.get_fills(env="REAL", account_id=OPAQUE)
     assert sorted(fill["fill_id"] for fill in fills) == ["D1", "D2"]
     assert all(fill["fees"] is not None for fill in fills)
+
+
+def test_backfill_counts_a_deal_repeated_across_overlapping_windows_once(database):
+    # The fake broker returns the same deals for every backfill window, like a
+    # boundary day that two overlapping windows both contain.
+    connection = _broker(deals=[_deal("D1", "O1"), _deal("D2", "O2", side="BUY")])
+
+    result = refresh_fill_evidence(connection, database, history_start="2025-01-01")
+
+    assert connection.get_history_deals.call_count > 1
+    assert result["seen"] == 2
+    assert result["ingested"] == 2
 
 
 @pytest.mark.parametrize(
@@ -363,6 +390,33 @@ def test_cash_flow_reaching_history_start_reports_complete(database):
     assert result["ok"] is True
     assert result["earliest"] == "2026-10-19"
     assert result["complete"] is True
+
+
+def test_cash_flow_forward_failure_skips_the_backward_pass(database):
+    database.set_cash_flow_coverage(
+        "REAL",
+        OPAQUE,
+        {
+            "status": "success",
+            "last_attempt_at": "2026-10-20T09:00:00",
+            "earliest": "2026-10-19",
+            "latest": "2026-10-20",
+            "reason": "",
+        },
+    )
+    connection = _cash_flow_broker(lambda clearing_date: None)
+
+    result = FillsService(connection, database).refresh_cash_flows(
+        history_start="2026-10-01", max_days=5, today=WEDNESDAY
+    )
+
+    queried = [call.args[0] for call in connection.get_cash_flow.call_args_list]
+    assert queried == ["2026-10-19"]
+    assert result["ok"] is False
+    assert result["queried"] == 1
+    coverage = database.get_cash_flow_coverage("REAL", OPAQUE)
+    assert coverage["status"] == "partial"
+    assert coverage["earliest"] == "2026-10-19"
 
 
 def test_ingest_cash_flows_reports_failed_dates(database):

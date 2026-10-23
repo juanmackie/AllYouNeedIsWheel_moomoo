@@ -143,6 +143,39 @@ class TestPartialHistory(unittest.TestCase):
         self.assertEqual(row["shares_held"], 126)
         self.assertTrue(any("126 shares were held before the fill history" in note for note in row["notes"]))
 
+    def test_window_bought_shares_use_broker_cost_basis_for_share_pnl(self):
+        # Reviewer repro: 60 shares bought in the window at 40, broker holds 100 at average cost 50.
+        # The broker cost covers the old and new lots, so the window cash is not added again.
+        fills = [_fill("HHH", "STK", "BUY", 60, 40.0, at="2026-03-02T10:00:00")]
+        positions = [_stk("HHH", 100, 60.0, 50.0)]
+
+        payload = build_account_pnl(fills, positions, positions_as_of=AS_OF)
+        row = _row(payload, "HHH")
+
+        self.assertEqual(row["status"], "partial_history")
+        self.assertEqual(row["share_pnl"], 1000.00)
+        self.assertEqual(row["net_pnl"], 1000.00)
+
+    def test_old_shares_partly_sold_in_window_are_unreconciled(self):
+        # 60 shares bought in the window, 20 sold in the window, 100 held. The sold
+        # shares may have come from the older lots, so realized P&L is unknown.
+        fills = [
+            _fill("III", "STK", "BUY", 60, 40.0, at="2026-03-02T10:00:00"),
+            _fill("III", "STK", "SELL", 20, 45.0, at="2026-04-02T10:00:00"),
+        ]
+        positions = [_stk("III", 100, 60.0, 50.0)]
+
+        payload = build_account_pnl(fills, positions, positions_as_of=AS_OF)
+        row = _row(payload, "III")
+
+        self.assertEqual(row["status"], "unreconciled")
+        self.assertIsNone(row["share_pnl"])
+        self.assertIsNone(row["net_pnl"])
+        self.assertIn(
+            "shares older than the fill history were partly sold; realized share P&L is unknown", row["notes"]
+        )
+        self.assertEqual(payload["totals"]["unreconciled_count"], 1)
+
 
 class TestMismatch(unittest.TestCase):
     def test_open_contract_missing_at_broker_is_unreconciled_and_excluded_from_totals(self):
@@ -181,6 +214,7 @@ class TestUnknownFee(unittest.TestCase):
         self.assertEqual(row["fees_unknown"], 1)
         self.assertEqual(row["fees"], 0.65)
         self.assertEqual(row["net_pnl"], 49.35)
+        self.assertIn("1 fill fee(s) not yet known; net excludes them", row["notes"])
         self.assertEqual(payload["totals"]["fees_unknown"], 1)
 
 
@@ -229,6 +263,36 @@ class TestCashFlowsAndNav(unittest.TestCase):
         self.assertEqual(nav["change"], -3514.54)
         self.assertEqual(nav["change_pct"], -5.91)
         self.assertTrue(nav["verified"])
+
+    def test_unknown_cash_flow_types_are_unclassified_and_not_counted_as_income(self):
+        cash_flows = self.cash_flows + [
+            {"clearing_date": "2026-07-01", "currency": "USD", "flow_type": "Trade Settlement", "amount": -250.0},
+        ]
+
+        payload = build_account_pnl([], [], cash_flows=cash_flows, positions_as_of=AS_OF)
+
+        self.assertEqual(payload["income"]["usd_total"], 13.50)
+        self.assertEqual(payload["income"]["unclassified"], {"USD": {"Trade Settlement": -250.0}})
+        self.assertNotIn("Trade Settlement", payload["income"]["by_currency"].get("USD", {}))
+        self.assertEqual(payload["totals"]["net_pnl_with_income"], 13.50)
+
+    def test_nav_is_null_after_an_undated_capital_movement(self):
+        cash_flows = [
+            {"clearing_date": "", "currency": "AUD", "flow_type": "Bank Transfer Deposits", "amount": 500.0},
+        ]
+
+        payload = build_account_pnl(
+            [],
+            [],
+            cash_flows=cash_flows,
+            nav_history=self.nav_history,
+            positions_as_of=AS_OF,
+            cash_flow_coverage=self.coverage,
+        )
+
+        self.assertEqual(payload["capital_movements"]["count"], 1)
+        self.assertIsNone(payload["capital_movements"]["last_date"])
+        self.assertIsNone(payload["nav_since_last_capital_movement"])
 
     def test_nav_is_unverified_without_cash_flow_coverage(self):
         payload = build_account_pnl(

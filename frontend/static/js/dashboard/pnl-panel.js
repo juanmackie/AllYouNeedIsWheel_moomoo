@@ -54,6 +54,21 @@ function count(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Known fees, with a marker when some fees are not yet known (net excludes them). */
+function feesText(fees, feesUnknown) {
+  const pending = count(feesUnknown);
+  return `${plainCurrency(fees)}${pending > 0 ? ` (+${pending} pending)` : ''}`;
+}
+
+/** Unique unclassified cash-flow types, in API order, across currencies. */
+function unclassifiedTypes(income) {
+  const types = new Set();
+  for (const flows of Object.values((income && income.unclassified) || {})) {
+    for (const flow of Object.keys(flows || {})) types.add(flow);
+  }
+  return [...types];
+}
+
 function metricCell(label, value, extraClass = '') {
   const wrapper = document.createElement('div');
   wrapper.className = 'summary-metric-cell';
@@ -89,14 +104,12 @@ function renderTotals(payload) {
   const totals = payload.totals || {};
   const income = payload.income || {};
   const nav = navText(payload.nav_since_last_capital_movement);
-  const feesPending = count(totals.fees_unknown);
-  const feesText = `${plainCurrency(totals.fees)}${feesPending > 0 ? ` (+${feesPending} pending)` : ''}`;
   const netWithIncome = num(totals.net_pnl_with_income);
   const metrics = [
     ['Net P&L', signedMoney(totals.net_pnl), pnlClass(totals.net_pnl)],
     ['Options', signedMoney(totals.option_pnl), pnlClass(totals.option_pnl)],
     ['Shares', signedMoney(totals.share_pnl), pnlClass(totals.share_pnl)],
-    ['Fees', feesText],
+    ['Fees', feesText(totals.fees, totals.fees_unknown)],
     ['Interest & dividends (USD)', signedMoney(income.usd_total), pnlClass(income.usd_total)],
     ['Net incl. income', signedMoney(netWithIncome), pnlClass(netWithIncome)],
     ['NAV since last deposit', nav.text, nav.className],
@@ -120,7 +133,7 @@ function underlyingRow(row) {
     cell(STATUS_LABELS[row.status] || 'Unknown'),
     cell(signedMoney(row.option_pnl), 'ft-td-right'),
     cell(signedMoney(row.share_pnl), 'ft-td-right'),
-    cell(plainCurrency(row.fees), 'ft-td-right'),
+    cell(feesText(row.fees, row.fees_unknown), 'ft-td-right'),
     cell(signedMoney(net), `ft-td-right ${pnlClass(net)}`.trim()),
   );
   const notes = Array.isArray(row.notes) ? row.notes : [];
@@ -140,6 +153,10 @@ function renderFootnote(payload) {
   let text = `Positions as of ${payload.as_of || 'unknown'}. Fill history from ${payload.history_from || 'unknown'}.`;
   const deposits = count(payload.capital_movements && payload.capital_movements.count);
   if (deposits > 0) text += ` Deposits/withdrawals excluded: ${deposits}.`;
+  const unclassified = unclassifiedTypes(payload.income);
+  if (unclassified.length > 0) {
+    text += ` Unclassified cash-flow types not counted: ${unclassified.join(', ')}.`;
+  }
   el.textContent = text;
 }
 

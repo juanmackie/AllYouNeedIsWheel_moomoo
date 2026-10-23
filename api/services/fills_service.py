@@ -110,10 +110,12 @@ def normalize_deal_row(row, env: str, opaque_account: str):
 
 
 def history_windows(start: date, end: date) -> list[tuple[str, str]]:
-    """Split ``[start, end]`` into consecutive inclusive windows (pure).
+    """Split ``[start, end]`` into overlapping inclusive windows (pure).
 
     Each window spans at most 90 days inclusive, which is the broker's per-query
-    limit. The next window starts the day after the previous one ends.
+    limit. The next window starts on the previous window's end date, so a
+    date-only end can never drop that day's deals. Repeated deals are free:
+    ``fill_id`` dedupes them. The loop ends when a window reaches ``end``.
     Returns ``[]`` when ``start`` is after ``end``.
     """
     windows = []
@@ -121,7 +123,9 @@ def history_windows(start: date, end: date) -> list[tuple[str, str]]:
     while cursor <= end:
         window_end = min(cursor + timedelta(days=_HISTORY_WINDOW_DAYS), end)
         windows.append((cursor.isoformat(), window_end.isoformat()))
-        cursor = window_end + timedelta(days=1)
+        if window_end >= end:
+            break
+        cursor = window_end
     return windows
 
 
@@ -216,7 +220,7 @@ class FillsService:
         """Ingest broker fills incrementally; idempotent per broker deal id.
 
         OpenD answers at most 90 days per deal query, so the pull is split into
-        consecutive windows. The first pull (or a pull whose covered start is
+        overlapping windows (see ``history_windows``). The first pull (or a pull whose covered start is
         later than ``history_start``) backfills from ``history_start``. Later
         pulls start two days before the last success. An explicit ``days`` sets
         the lookback directly. A failed window saves nothing and keeps the
@@ -255,9 +259,11 @@ class FillsService:
 
         windows = history_windows(from_date, today)
         ret_rows = []
-        for window_start, window_end in windows:
+        for index, (window_start, window_end) in enumerate(windows):
+            # The last window is open-ended, so OpenD includes today's deals.
+            query_end = "" if index == len(windows) - 1 else window_end
             try:
-                window_rows = self._connection.get_history_deals(start=window_start, end=window_end)
+                window_rows = self._connection.get_history_deals(start=window_start, end=query_end)
             except Exception as exc:
                 self._record_failure(env, opaque_account, attempt_at, "history_query_failed", coverage)
                 logger.error("Fill ingestion aborted: history query raised %s", type(exc).__name__)
@@ -267,6 +273,13 @@ class FillsService:
                 logger.error("Fill ingestion aborted: history query failed")
                 return {"ok": False, "reason": "history_query_failed", "ingested": 0}
             ret_rows.extend(window_rows)
+
+        # Overlapping windows return the boundary day twice; count and save each deal once.
+        unique_rows = {}
+        for raw in ret_rows:
+            deal_id = str(raw.get("deal_id", "") or "") if isinstance(raw, dict) else ""
+            unique_rows[deal_id or id(raw)] = raw
+        ret_rows = list(unique_rows.values())
 
         rows = []
         for raw in ret_rows:
@@ -428,8 +441,10 @@ class FillsService:
         Each refresh queries at most ``max_days`` weekdays, one clearing date per
         broker call. The forward pass re-pulls from two days before ``latest``
         through today. The backward pass continues from ``earliest - 1`` down to
-        ``history_start``. Forward dates use the budget first. Coverage records
-        only the contiguous run of successful dates.
+        ``history_start``. Forward dates use the budget first. A failed forward
+        pass skips the backward pass in that refresh, because the same broker
+        error would repeat. Coverage records only the contiguous run of
+        successful dates.
         """
         today = today or date.today()
         try:
@@ -453,10 +468,13 @@ class FillsService:
             forward_dates = _weekdays_between(latest - timedelta(days=2), today, descending=False)[:budget]
             forward_ok, forward_failed, used = self._query_cash_flow_dates(forward_dates, env, opaque_account, rows)
             queried += used
-        backward_start = today if earliest is None else earliest - timedelta(days=1)
-        backward_dates = _weekdays_between(floor, backward_start, descending=True)[: budget - queried]
-        backward_ok, backward_failed, used = self._query_cash_flow_dates(backward_dates, env, opaque_account, rows)
-        queried += used
+        backward_ok = []
+        backward_failed = False
+        if not forward_failed:
+            backward_start = today if earliest is None else earliest - timedelta(days=1)
+            backward_dates = _weekdays_between(floor, backward_start, descending=True)[: budget - queried]
+            backward_ok, backward_failed, used = self._query_cash_flow_dates(backward_dates, env, opaque_account, rows)
+            queried += used
 
         new_latest = forward_ok[-1] if forward_ok else latest
         new_earliest = backward_ok[-1] if backward_ok else earliest

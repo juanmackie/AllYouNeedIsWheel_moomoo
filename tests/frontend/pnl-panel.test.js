@@ -26,7 +26,11 @@ function samplePayload(overrides = {}) {
       underlying_count: 3,
       net_pnl_with_income: -5633.0,
     },
-    income: { by_currency: { USD: { 'Cash Dividend': 60.0 } }, usd_total: 232.71 },
+    income: {
+      by_currency: { USD: { 'Cash Dividend': 60.0 } },
+      usd_total: 232.71,
+      unclassified: { USD: { 'Trade Settlement': -12.0 } },
+    },
     capital_movements: { count: 8, by_currency: { AUD: 75313.0 }, last_date: '2026-05-05' },
     nav_since_last_capital_movement: {
       start_at: '2026-05-05T00:00:00',
@@ -128,6 +132,8 @@ describe('P&L panel', () => {
     expect(rows.map((tr) => tr.querySelector('td').textContent)).toEqual(['SOXL', 'UBER', 'AA']);
     expect(rows.map((tr) => tr.children[1].textContent)).toEqual(['Reconciled', 'Partial history', 'Unknown']);
 
+    expect(rows[0].children[4].textContent).toBe('$1.64 (+2 pending)');
+    expect(rows[1].children[4].textContent).toBe('$0.00');
     const soxlNet = rows[0].children[5];
     expect(soxlNet.textContent).toBe('−$2,772.64');
     expect(soxlNet.classList.contains('ft-td-down')).toBe(true);
@@ -150,6 +156,8 @@ describe('P&L panel', () => {
     expect(footnote).toContain('Positions as of 2026-10-20T02:46:59+00:00.');
     expect(footnote).toContain('Fill history from 2026-02-25.');
     expect(footnote).toContain('Deposits/withdrawals excluded: 8.');
+    expect(footnote).toContain('Unclassified cash-flow types not counted: Trade Settlement.');
+    expect(metricValue('Interest & dividends (USD)').textContent).toBe('+$232.71');
   });
 
   it('shows the error text and no rows when the request rejects or returns HTTP 500', async () => {

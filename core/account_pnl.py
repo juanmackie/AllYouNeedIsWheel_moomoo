@@ -16,12 +16,16 @@ contract with strict quantity equality. A contract that is open by fills but
 absent at the broker means a missing fill (usually history older than the
 backfill), so the row is unreconciled. Its P&L is None (unknown), never zero,
 and the notes name the mismatch. Shares held before the fill history
-(partial history) use the broker average cost for the unexplained shares.
+(partial history) are valued at the broker cost basis, which covers the old
+and new lots. This is exact only while no share was sold, so a window share
+sale on partial history makes the row unreconciled.
 
-Interest and dividend cash flows are reported as income. They are kept
-separate from the trading P&L. The NAV change is measured only after the
-last capital movement (deposit or withdrawal). It is marked verified only
-when the cash-flow backfill covers the window.
+Interest and dividend cash flows are reported as income only when the flow
+type names interest or dividends. Other flow types are listed as unclassified
+and are not counted. They are kept separate from the trading P&L. The NAV
+change is measured only after the last capital movement (deposit or
+withdrawal). It is null when that movement has no date. It is marked verified
+only when the cash-flow backfill covers the window.
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ _OPTION_UNDERLYING_RE = re.compile(r"^([A-Z]+)\d{6}[CP]\d+$")
 _SIDE_CASH_SIGN = {"SELL": 1, "BUY": -1}
 _TOLERANCE = 1e-9
 _VERIFY_LAG_DAYS = 4
+OLD_SHARES_SOLD_NOTE = "shares older than the fill history were partly sold; realized share P&L is unknown"
+_INCOME_FLOW_WORDS = ("interest", "dividend")
 
 
 def _money(value: float) -> float:
@@ -88,6 +94,7 @@ def _new_bucket() -> dict:
         "fees_unknown": 0,
         "bad_fills": 0,
         "fill_share_qty": 0.0,
+        "share_sells": 0,
         "broker_share_qty": 0.0,
         "fill_contracts": {},
         "broker_contracts": {},
@@ -135,6 +142,8 @@ def _add_fill(bucket: dict, fill: dict) -> None:
     else:
         bucket["share_cash"] += cash
         bucket["fill_share_qty"] += holding_delta
+        if cash_sign > 0:
+            bucket["share_sells"] += 1
 
 
 def _add_position(bucket: dict, position: dict) -> None:
@@ -195,7 +204,10 @@ def _reconcile(bucket: dict) -> tuple[str, list[str]]:
     if _same(fill_qty, broker_qty):
         pass
     elif broker_qty > fill_qty >= 0:
-        partial = True
+        if bucket["share_sells"]:
+            mismatches.append(OLD_SHARES_SOLD_NOTE)
+        else:
+            partial = True
     else:
         mismatches.append(f"fills show {fill_qty:g} shares, broker holds {broker_qty:g}")
 
@@ -215,11 +227,9 @@ def _share_pnl(bucket: dict, status: str) -> float | None:
         return None
     if status == "reconciled":
         return bucket["share_cash"] + bucket["share_mark"]
-    broker_qty = bucket["broker_share_qty"]
-    price = bucket["share_mark"] / broker_qty
-    avg_cost = bucket["avg_cost_total"] / broker_qty
-    unexplained = broker_qty - bucket["fill_share_qty"]
-    return bucket["share_cash"] + bucket["fill_share_qty"] * price + unexplained * (price - avg_cost)
+    # Partial history with no share sale: the broker cost covers every held lot,
+    # so the window cash is already inside it.
+    return bucket["share_mark"] - bucket["avg_cost_total"]
 
 
 def _build_row(ticker: str, bucket: dict) -> dict:
@@ -228,6 +238,8 @@ def _build_row(ticker: str, bucket: dict) -> dict:
     option_pnl = bucket["option_cash"] + bucket["option_mark"]
     share_pnl = _share_pnl(bucket, status)
     net_pnl = option_pnl + share_pnl - bucket["fees"] if known else None
+    if bucket["fees_unknown"]:
+        notes = [*notes, f"{bucket['fees_unknown']} fill fee(s) not yet known; net excludes them"]
     return {
         "ticker": ticker,
         "status": status,
@@ -262,8 +274,13 @@ def _group_by_underlying(fills, positions) -> dict[str, dict]:
 
 
 def _cash_flow_summary(cash_flows) -> tuple[dict, dict]:
-    """Split cash flows into income (by currency and flow type) and capital movements."""
+    """Split cash flows into income, unclassified flows, and capital movements.
+
+    Only flow types naming interest or dividends are income. Other flow types are
+    kept under ``unclassified`` and are not counted in any total.
+    """
     income: dict[str, dict[str, float]] = {}
+    unclassified: dict[str, dict[str, float]] = {}
     capital = {"count": 0, "by_currency": {}, "last_date": None}
     for row in cash_flows:
         flow_type = str(row.get("flow_type") or "")
@@ -281,7 +298,9 @@ def _cash_flow_summary(cash_flows) -> tuple[dict, dict]:
             continue
         if amount is None:
             continue
-        flows = income.setdefault(currency, {})
+        lowered = flow_type.lower()
+        bucket = income if any(word in lowered for word in _INCOME_FLOW_WORDS) else unclassified
+        flows = bucket.setdefault(currency, {})
         flows[flow_type] = flows.get(flow_type, 0.0) + amount
 
     usd_total = sum(sum(flows.values()) for currency, flows in income.items() if currency == "USD")
@@ -290,6 +309,9 @@ def _cash_flow_summary(cash_flows) -> tuple[dict, dict]:
             currency: {flow: _money(total) for flow, total in flows.items()} for currency, flows in income.items()
         },
         "usd_total": _money(usd_total),
+        "unclassified": {
+            currency: {flow: _money(total) for flow, total in flows.items()} for currency, flows in unclassified.items()
+        },
     }
     capital_out = {
         "count": capital["count"],
@@ -390,14 +412,17 @@ def build_account_pnl(
     rows.sort(key=_sort_key)
 
     income, capital = _cash_flow_summary(cash_flows or ())
+    # A capital movement without a date cannot place the NAV window, so NAV is unknown.
+    undated_capital = capital["count"] > 0 and capital["last_date"] is None
+    nav = None
+    if not undated_capital:
+        nav = _nav_since_last_capital_movement(list(nav_history or ()), capital["last_date"], cash_flow_coverage)
     return {
         "as_of": positions_as_of,
         "history_from": _history_from(fills),
         "totals": _totals(rows, income),
         "income": income,
         "capital_movements": capital,
-        "nav_since_last_capital_movement": _nav_since_last_capital_movement(
-            list(nav_history or ()), capital["last_date"], cash_flow_coverage
-        ),
+        "nav_since_last_capital_movement": nav,
         "underlyings": rows,
     }
