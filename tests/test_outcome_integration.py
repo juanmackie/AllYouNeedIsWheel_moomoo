@@ -391,7 +391,8 @@ class TestIngestToAttributionToSummary(_OutcomeIntegrationBase):
         # Cash movements never enter trading attribution: no fills → no outcomes.
         summary = OutcomeService(self.db).get_outcome_summary(ENV, OPAQUE)
         self.assertEqual(summary["totals"]["sample_size"], 0)
-        self.assertEqual(summary["totals"]["net_dollars"], 0.0)
+        # No measured outcome exists, so the total is unknown, not zero.
+        self.assertIsNone(summary["totals"]["net_dollars"])
 
 
 class TestRouteIntegration(TestIngestToAttributionToSummary):

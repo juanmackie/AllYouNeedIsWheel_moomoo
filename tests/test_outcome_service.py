@@ -607,9 +607,11 @@ class TestAggregateGroup(unittest.TestCase):
         self.assertEqual(agg["unknown_count"], 1)
         self.assertEqual(agg["pending_count"], 1)
         self.assertAlmostEqual(agg["net_dollars"], 100.0)
-        # capital-days denominator includes the evidenced-but-unrealized record:
-        # efficiency must not be flattered by dropping open positions' capital.
-        self.assertAlmostEqual(agg["owner_efficiency"], 100.0 / 14000.0)
+        # capital_days keeps the evidenced-but-unrealized record's capital, so open
+        # positions are never dropped from the total. The efficiency rate uses only
+        # measured records' capital-days, so unknown P&L never sits in the denominator.
+        self.assertAlmostEqual(agg["capital_days"], 14000.0)
+        self.assertAlmostEqual(agg["owner_efficiency"], 100.0 / 7000.0)
         self.assertAlmostEqual(agg["quoted_credit_avg_per_contract"], 110.0)
         self.assertAlmostEqual(agg["filled_credit_avg_per_contract"], 105.0)
         self.assertEqual(agg["fees_unknown_count"], 1)

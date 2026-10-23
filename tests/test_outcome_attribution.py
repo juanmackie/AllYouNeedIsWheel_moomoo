@@ -205,7 +205,53 @@ class TestOwnerSummary(unittest.TestCase):
         empty = owner_summary([])
         self.assertIsNone(empty["owner_efficiency"])
         self.assertIsNone(empty["capital_days"])
-        self.assertAlmostEqual(empty["net_dollars"], 0.0)
+        self.assertIsNone(empty["net_dollars"])
+        self.assertIsNone(empty["drawdown"])
+        self.assertIsNone(empty["open_losses"])
+
+    def test_all_unknown_pnl_reports_unknown_not_zero(self):
+        summary = owner_summary(
+            [
+                {"net_pnl": None, "capital_days": None, "open": False},
+                {"net_pnl": None, "capital_days": 5000.0, "open": True},
+            ]
+        )
+        self.assertIsNone(summary["net_dollars"])
+        self.assertIsNone(summary["owner_efficiency"])
+        self.assertIsNone(summary["drawdown"])
+        self.assertIsNone(summary["open_losses"])
+        self.assertEqual(summary["measured_count"], 0)
+        self.assertEqual(summary["unknown_count"], 2)
+        # Known capital-days stay reported; only the rate is unknown.
+        self.assertAlmostEqual(summary["capital_days"], 5000.0)
+
+    def test_efficiency_denominator_excludes_unknown_pnl_capital_days(self):
+        summary = owner_summary(
+            [
+                {"net_pnl": 73.0, "capital_days": 7000.0 * 31, "open": False},
+                {"net_pnl": None, "capital_days": 100000.0, "open": True},
+            ]
+        )
+        self.assertAlmostEqual(summary["owner_efficiency"], 73.0 / (7000.0 * 31))
+        self.assertAlmostEqual(summary["capital_days"], 7000.0 * 31 + 100000.0)
+
+    def test_efficiency_numerator_excludes_measured_pnl_without_capital_days(self):
+        # A measured call whose capital is unknown must not inflate the rate.
+        summary = owner_summary(
+            [
+                {"net_pnl": 73.0, "capital_days": 7000.0 * 31, "open": False},
+                {"net_pnl": 40.0, "capital_days": None, "open": False},
+            ]
+        )
+        self.assertAlmostEqual(summary["net_dollars"], 113.0)
+        self.assertAlmostEqual(summary["owner_efficiency"], 73.0 / (7000.0 * 31))
+
+    def test_measured_zero_pnl_stays_zero_not_unknown(self):
+        summary = owner_summary([{"net_pnl": 0.0, "capital_days": 1000.0, "open": False}])
+        self.assertAlmostEqual(summary["net_dollars"], 0.0)
+        self.assertAlmostEqual(summary["owner_efficiency"], 0.0)
+        self.assertAlmostEqual(summary["drawdown"], 0.0)
+        self.assertAlmostEqual(summary["open_losses"], 0.0)
 
 
 class TestCashFlowClassification(unittest.TestCase):

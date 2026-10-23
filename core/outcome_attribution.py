@@ -290,16 +290,22 @@ def owner_summary(outcomes) -> dict:
     ``outcomes``: iterable of {"net_pnl": float | None, "capital_days":
     float | None, "open": bool} — one record per recommendation.
 
-    Returns:
-    - ``net_dollars``: sum of measured outcomes (unknowns excluded from the
-      sum but counted in ``unknown_count``);
-    - ``capital_days``: sum of known capital-days;
-    - ``owner_efficiency``: net_dollars / capital_days, or None when
-      capital-days is unknown;
+    Returns (unknown is None, never zero):
+    - ``net_dollars``: sum of measured ``net_pnl``; None when no record is
+      measured. Unknown records are excluded and counted in ``unknown_count``.
+    - ``capital_days``: sum of all known positive capital-days, including
+      records whose P&L is unknown; None when none is known.
+    - ``owner_efficiency``: measured ``net_pnl`` divided by capital-days, both
+      summed over the same measured records that have positive capital-days;
+      None when that denominator is not positive.
     - ``open_losses``: sum of negative measured pnl on still-open positions;
-    - ``drawdown``: max drawdown of the cumulative realized series.
+      None when no record is measured. Measured zero stays 0.0.
+    - ``drawdown``: max drawdown of the cumulative measured series; None when
+      no record is measured.
     """
     net_dollars = 0.0
+    measured_capital_days = 0.0
+    paired_pnl = 0.0
     capital_days = 0.0
     has_capital_days = False
     open_losses = 0.0
@@ -313,29 +319,32 @@ def owner_summary(outcomes) -> dict:
         pnl = outcome.get("net_pnl")
         days = outcome.get("capital_days")
         is_open = bool(outcome.get("open"))
+        days_value = safe_float(days, 0.0) if days is not None else 0.0
+        if days_value > 0:
+            capital_days += days_value
+            has_capital_days = True
         if pnl is None:
             unknown += 1
-        else:
-            measured += 1
-            pnl = safe_float(pnl, 0.0)
-            net_dollars += pnl
-            realized_sequence.append(pnl)
-            if is_open and pnl < 0:
-                open_losses += pnl
-        if days is not None:
-            days = safe_float(days, 0.0)
-            if days > 0:
-                capital_days += days
-                has_capital_days = True
+            continue
+        measured += 1
+        pnl = safe_float(pnl, 0.0)
+        net_dollars += pnl
+        realized_sequence.append(pnl)
+        if is_open and pnl < 0:
+            open_losses += pnl
+        if days_value > 0:
+            measured_capital_days += days_value
+            paired_pnl += pnl
 
+    has_measured = measured > 0
     return {
-        "net_dollars": net_dollars,
+        "net_dollars": net_dollars if has_measured else None,
         "measured_count": measured,
         "unknown_count": unknown,
         "capital_days": capital_days if has_capital_days else None,
-        "owner_efficiency": owner_efficiency(net_dollars, capital_days) if has_capital_days else None,
-        "open_losses": open_losses,
-        "drawdown": max_drawdown(realized_sequence),
+        "owner_efficiency": owner_efficiency(paired_pnl, measured_capital_days) if has_measured else None,
+        "open_losses": open_losses if has_measured else None,
+        "drawdown": max_drawdown(realized_sequence) if has_measured else None,
     }
 
 
