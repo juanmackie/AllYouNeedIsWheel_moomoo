@@ -3,13 +3,14 @@
 Synthetic data only. No broker, network, or options.db access.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from tools.replay_signals import (
     BASE_SLIPPAGE,
+    R5_ORDER,
     SLIPPAGE_LEVELS,
     CandleStore,
     Trade,
@@ -19,13 +20,18 @@ from tools.replay_signals import (
     build_series,
     calibrate_fees,
     cohort_trades,
+    decision_features,
     entry_session,
     make_trade,
+    policy_exit_early,
+    policy_trade,
     pool_contracts,
+    replay,
     select_published,
     select_rules,
     settle_contract,
     to_contract,
+    variant_rules,
     verdict,
     walk_forward,
 )
@@ -74,7 +80,7 @@ def _trade(cohort, expiry, pnl, ticker="AAA"):
         cohort=cohort,
         ticker=ticker,
         expiration=expiry,
-        entry=expiry,
+        entry=expiry - timedelta(days=10),  # hold-style: entry + days == expiry
         strike=50.0,
         capital=5000.0,
         days=10,
@@ -366,3 +372,118 @@ def test_bootstrap_interval_is_deterministic_and_bounded_by_cohort_rates():
     assert first == bootstrap_ci(pairs)
     assert min(rates) <= first[0] <= first[1] <= max(rates)
     assert bootstrap_ci([]) is None
+
+
+def test_decision_features_use_only_bars_before_entry():
+    rows = [((date(2026, 9, 1) + timedelta(days=i)).isoformat(), 100 + i * 0.1, 100 + i * 0.1, None) for i in range(80)]
+    entry = date(2026, 11, 12)
+    pre = _bars(*[(d, o, c, a) for d, o, c, a in rows])
+    full = _bars(
+        *[(d, o, c, a) for d, o, c, a in rows + [("2026-11-13", 500, 480, None), ("2026-11-14", 500, 500, None)]]
+    )
+    contract = to_contract(_raw(strike=95.0, bid=2.0, ask=2.2))
+    a = decision_features(contract, pre, entry)
+    b = decision_features(contract, full, entry)
+    for key in ("rv20", "rv60", "rv_ratio", "mom20", "gap1", "spread_pct", "bs_iv"):
+        assert a[key] == pytest.approx(b[key]), key
+    assert a["closes_n"] == 72  # 09-01..11-11, entry bars excluded
+    assert b["closes_n"] == 72
+
+
+def test_r5_variants_skip_unfeatured_contracts_and_keep_gates():
+    pool = [
+        to_contract(_raw(ticker="AAA", bid=1.0, ask=1.02)),
+        to_contract(_raw(ticker="BBB", bid=1.0, ask=1.02)),
+        to_contract(_raw(ticker="CCC", bid=1.0, ask=1.02)),
+        to_contract(_raw(ticker="SOXL", bid=1.0, ask=1.02)),
+    ]
+    features_by = {
+        pool[0].key: {"rv_ratio": 0.7, "mom20": -0.02, "spread_pct": 0.01},
+        pool[1].key: {"rv_ratio": 1.5, "mom20": 0.04, "spread_pct": 0.05},
+    }
+    variants, reasons = variant_rules(pool, features_by, ["SOXL"])
+    assert [c.ticker for c in variants["R5_calm"]] == ["AAA", "BBB"]
+    assert [c.ticker for c in variants["R5_mom"]] == ["BBB", "AAA"]
+    assert [c.ticker for c in variants["R5_liq"]] == ["AAA"]
+    assert reasons["R5_calm"]["rv_ratio"] == 1
+    assert reasons["R5_liq"]["spread_pct"] == 2  # BBB too wide; CCC missing
+    assert all("SOXL" not in [c.ticker for c in variants[name]] for name in R5_ORDER)
+
+
+def test_policy_stop_exits_early_and_avoids_assignment():
+    contract = to_contract(_raw(strike=50.0, bid=1.0, ask=1.2, dte=14))
+    series = _bars(
+        ("2026-10-23", 55, 55, None),
+        ("2026-10-26", 52, 52, None),
+        ("2026-10-27", 48, 48, None),
+        ("2026-11-06", 44, 44, None),
+    )
+    spy = _bars(("2026-10-23", 100, 100, None), ("2026-11-06", 102, 103, None))
+    settlement = settle_contract(contract, series, spy, ENTRY, EXPIRY)
+    hold = make_trade(0, contract, settlement, FEES)
+    stopped = policy_trade(0, contract, settlement, series, FEES, "stop2")
+    assert isinstance(stopped, Trade)
+    assert stopped.assigned is False
+    assert 0 < stopped.days <= 6  # closed mid-cycle, before expiry
+    assert stopped.pnl[BASE_SLIPPAGE] > hold.pnl[BASE_SLIPPAGE]  # caps the assignment loss
+
+
+def test_policy_exit_early_resolves_future_expiry_on_trigger():
+    contract = to_contract(_raw(strike=50.0, bid=1.0, ask=1.2, dte=21))
+    stock = _bars(
+        ("2026-10-23", 55, 55, None),
+        ("2026-10-26", 52, 52, None),
+        ("2026-10-27", 48, 48, None),
+    )  # expiry 2026-11-13 is after the last observed bar
+    spy = _bars(("2026-10-23", 100, 100, None), ("2026-10-27", 101, 102, None))
+    trade = policy_exit_early(0, contract, stock, spy, ENTRY, FEES, "stop2")
+    assert isinstance(trade, Trade)
+    assert trade.assigned is False
+    assert 0 < trade.days <= 4  # triggered on the 10-27 dip without waiting for expiry
+
+
+def test_policy_exit_early_unresolved_without_trigger():
+    contract = to_contract(_raw(strike=50.0, bid=1.0, ask=1.2, dte=21))
+    stock = _bars(
+        ("2026-10-23", 55, 55, None),
+        ("2026-10-26", 54, 54, None),
+        ("2026-10-27", 53.5, 54, None),
+    )  # benign drift: no stop2 trigger within the observed bars
+    spy = _bars(("2026-10-23", 100, 100, None), ("2026-10-27", 101, 102, None))
+    assert policy_exit_early(0, contract, stock, spy, ENTRY, FEES, "stop2") == "not_expired"
+
+
+def _one_cohort():
+    snapshot = {
+        "snapshot_id": "only",
+        "published_at": datetime(2026, 10, 23, 13, 0, tzinfo=timezone.utc),
+        "signals": [],
+        "candidates": [_raw(expiration="20261113")],
+    }
+    cohorts, _stats = build_cohorts([snapshot], [date(2026, 10, 23), date(2026, 10, 26), date(2026, 10, 27)])
+    assert len(cohorts) == 1
+    return cohorts[0]
+
+
+def test_replay_wf_feed_resolves_roll21_for_unexpired_contract():
+    """Regression: the walk-forward feed must dispatch policy_exit_early with the
+    bare policy name (R1_ prefix is a feed key, not a policy). The prefix bug made
+    every unexpired contract resolve 'not_expired', so policy OOS folds never got
+    test trades."""
+    cohort = _one_cohort()
+    stock = _bars(
+        ("2026-10-23", 51, 51, None),
+        ("2026-10-26", 49.5, 49.5, None),  # below strike and <= 21 DTE: roll21 triggers
+        ("2026-10-27", 49.0, 49.0, None),
+    )
+    spy = _bars(("2026-10-23", 100, 100, None), ("2026-10-26", 101, 101, None), ("2026-10-27", 101, 102, None))
+    result = replay([cohort], {"AAA": stock, "SPY": spy}, FEES, [], date(2026, 10, 27))
+    trades = result["wf_policies"]["trades"]["R1_roll21"]
+    assert [t.ticker for t in trades] == ["AAA"]
+    assert trades[0].cohort == 0
+    assert 0 < trades[0].days <= 4  # resolved on the 10-26 bar, before expiry
+    assert result["wf_policies"]["unresolved"]["R1_roll21"].get("not_expired", 0) == 0
+    # stop2 never fired here: the same fixture must stay unresolved, proving the
+    # feed does not blanket-resolve.
+    assert result["wf_policies"]["trades"]["R1_stop2"] == []
+    assert result["wf_policies"]["unresolved"]["R1_stop2"]["not_expired"] == 1

@@ -2,10 +2,11 @@
 """Walk-forward, out-of-sample replay of past cash-secured-put (CSP) signals.
 
 Reads published run snapshots and option fills from options.db (read-only), prices
-each selection rule with hold-to-expiry settlement, calibrated fees, and entry
-slippage, and compares the rules with stock and SPY baselines. Unresolved trades
-are excluded and counted with a reason; they are never booked as zero. The verdict
-follows the predeclared rule in `verdict`.
+each selection rule with hold-to-expiry settlement and with modeled exit policies
+(credit-target closes, a loss stop, and an ITM roll), using calibrated fees and
+entry slippage, and compares the rules with stock and SPY baselines. Unresolved
+trades are excluded and counted with a reason; they are never booked as zero.
+The verdict follows the predeclared rule in `verdict`.
 
 Run:  .venv/Scripts/python.exe tools/replay_signals.py [--dry-run | --no-fetch]
       Add --yf-check for a diagnostic price comparison and --force to ignore the
@@ -56,12 +57,37 @@ BOOTSTRAP_DRAWS = 2000
 BOOTSTRAP_SEED = 7
 YF_TOLERANCE = 0.005
 FILL_WINDOW_SESSIONS = 3
-ENTRY_WINDOW_BEFORE = timedelta(days=5)
 SPY_WINDOW_BEFORE = timedelta(days=10)
 RULE_ORDER = ("R0_published", "R1_current", "R2_no_tail_gate", "R3_low_delta", "R4_model_ev", "POOL", "POOL_ALL")
+R5_ORDER = ("R5_calm", "R5_mom", "R5_liq")
+RULE_ORDER = RULE_ORDER + R5_ORDER  # variants are measured after the frozen rules
+R6_ORDER = ("R6_no_event",)  # earnings-timing variant; see variant_rules()
+RULE_ORDER = RULE_ORDER + R6_ORDER + ("S_budget",)  # budgeted sizing variant measured last
 WF_RULES = ("R1_current", "R2_no_tail_gate", "R3_low_delta", "R4_model_ev")
+WF_POLICY_RULES = ("R1_stop2", "R1_roll21")  # policy walk-forward candidates (see walk_forward)
+# Exit policies applied to the decision-relevant series. 'hold' is the reference
+# (hold-to-expiry). x50/x80 close when the modeled put value falls to 50%/20% of
+# the entry credit; stop2 closes when it reaches 2x the credit; roll21 closes at
+# the first bar at or below 21 DTE whose stock close is at or below the strike.
+POLICY_ORDER = ("hold", "x50", "x80", "stop2", "roll21")
+POLICY_SERIES = ("R0_published", "R1_current", "POOL")
+POLICY_REALIZE = {"x50": 0.50, "x80": 0.80}  # share of entry credit kept after buy-to-close
+POLICY_STOP_COST = {"stop2": 2.00}  # buy-to-close cost as a multiple of entry credit
+ROLL_DTE = 21
+IV_BRACKET = (0.01, 5.0)
+IV_ITERATIONS = 64
+# R5 rank variants consume decision-time features; see decision_features().
+FEATURE_LOOKBACK = timedelta(days=75)  # pre-entry candles kept for the R5 features
+R5_ORDER = ("R5_calm", "R5_mom", "R5_liq")  # defined here; merged into RULE_ORDER above
+MAX_SPREAD_PCT = 0.03
 LIMITATIONS = (
-    "Hold to expiry only: no early exits, rolls, or stop logic.",
+    "Baseline settlement is hold to expiry; the exit-policy section simulates early closes "
+    "(50%/80% credit targets, 2x-credit stop, ITM roll at 21 DTE) with Black-Scholes value paths "
+    "priced at the entry-implied IV. Those are modeled exit values, not quotes, and promotion "
+    "requires out-of-sample confirmation over policies.",
+    "R5 variants measure decision-time features (realized-vol ratio, 20-day momentum, spread); the "
+    "75-day pre-entry candle window is a replay-instrument extension and features use only bars "
+    "before the entry session.",
     "Quotes are last-session quotes captured while the market was closed, not live fills.",
     "Entry credit is modeled as bid minus slippage times the spread; the slippage grid is 0, 0.25, 0.5.",
     "Covered calls are excluded; only cash-secured puts are replayed.",
@@ -103,6 +129,7 @@ class Cohort:
     signals: list
     candidates: list
     pool: list
+    cash_csp: float = 0.0  # persisted cash_available_for_csp at decision time
 
 
 class Bar(NamedTuple):
@@ -281,6 +308,84 @@ def select_rules(pool: list[Contract], leveraged) -> dict[str, list[Contract]]:
     }
 
 
+# ---------------------------------------------------------------- R5 decision-time features
+
+
+def decision_features(contract: Contract, stock: PriceSeries | None, entry: date) -> dict:
+    """Decision-time features from daily closes strictly before the entry session.
+
+    No bar at or after the entry date is used, so the features are exactly what the
+    evening planning scan could have known. A short history leaves keys None and
+    reports `closes_n`; variants skip such candidates with a counted reason.
+    """
+    if stock is None:
+        return {"closes_n": 0}
+    closes = [bar.close for day, bar in stock.bars.items() if day < entry and bar.close > 0]
+    out: dict = {"closes_n": len(closes)}
+    if len(closes) >= 21:
+        rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+        out["rv20"] = statistics.stdev(rets[-21:]) * math.sqrt(252.0)
+        out["mom20"] = closes[-1] / closes[-21] - 1.0
+        if len(rets) >= 61:
+            out["rv60"] = statistics.stdev(rets[-61:]) * math.sqrt(252.0)
+            out["rv_ratio"] = out["rv20"] / out["rv60"]
+    if len(closes) >= 2:
+        out["gap1"] = closes[-1] / closes[-2] - 1.0
+    last = closes[-1] if closes else 0.0
+    mid = 0.5 * (contract.bid + contract.ask)
+    if mid > 0:
+        out["spread_pct"] = (contract.ask - contract.bid) / mid
+    out["strike_dist"] = contract.strike / last - 1.0 if last > 0 else None
+    out["bs_iv"] = (
+        _implied_vol(mid, last, contract.strike, max(contract.dte, 1) / 365.0, BASE_RATE)
+        if last > 0 and mid > 0
+        else None
+    )
+    out["oi"] = contract.raw.get("open_interest") or contract.raw.get("oi")
+    return out
+
+
+def variant_rules(
+    pool: list[Contract], features_by: dict, leveraged
+) -> tuple[dict[str, list[Contract]], dict[str, Counter]]:
+    """R5 rank variants over the same gated eligibility as R1; missing features skip with a reason.
+
+    R5_calm ranks by ascending 20d/60d realized-vol ratio (calm-underlying preference).
+    R5_mom ranks by descending 20-day momentum (sell into strength).
+    R5_liq drops candidates wider than MAX_SPREAD_PCT and keeps the standard rank.
+    """
+    gated = [c for c in pool if csp_tail_risk_gate(c.raw, leveraged) is None]
+    variants: dict[str, list[Contract]] = {name: [] for name in R5_ORDER + R6_ORDER}
+    reasons: dict[str, Counter] = {name: Counter() for name in R5_ORDER + R6_ORDER}
+
+    def build(name: str, key: str, reverse: bool = False, max_pct: float | None = None):
+        rows = []
+        for contract in gated:
+            value = (features_by.get(contract.key) or {}).get(key)
+            if value is None or (max_pct is not None and value > max_pct):
+                reasons[name][key] += 1
+                continue
+            rows.append((value, contract))
+        rows.sort(key=lambda pair: pair[0], reverse=reverse)
+        variants[name] = top_distinct([contract for _, contract in rows])
+
+    build("R5_calm", "rv_ratio")
+    build("R5_mom", "mom20", reverse=True)
+    build("R5_liq", "spread_pct", max_pct=MAX_SPREAD_PCT)
+
+    # R6_no_event: skip contracts with a scheduled earnings date inside the holding window.
+    # days_to_earnings is the persisted decision-time value; unknown dates stay eligible.
+    rows = []
+    for contract in gated:
+        dte_to = contract.raw.get("days_to_earnings")
+        if dte_to is not None and 0 <= dte_to <= contract.dte:
+            reasons["R6_no_event"]["earnings_in_hold"] += 1
+            continue
+        rows.append(contract)
+    variants["R6_no_event"] = top_distinct(rows)
+    return variants, reasons
+
+
 # ---------------------------------------------------------------- timing and cohorts
 
 
@@ -335,6 +440,7 @@ def build_cohorts(snapshots: list[dict], trading_dates: list[date]) -> tuple[lis
                 signals=list(snap["signals"]),
                 candidates=raws,
                 pool=pool_contracts(raws),
+                cash_csp=float(snap.get("portfolio", {}).get("cash_available_for_csp") or 0.0),
             )
         )
     return cohorts, stats
@@ -461,6 +567,177 @@ def make_trade(cohort: int, contract: Contract, settlement: Settlement, fees: di
     )
 
 
+# ---------------------------------------------------------------- exit policies
+
+
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _bs_put(s: float, k: float, t: float, r: float, sigma: float) -> float:
+    """Black-Scholes put value (mid). t in years; degenerate inputs return intrinsic."""
+    if s <= 0 or k <= 0 or t <= 0 or sigma <= 0:
+        return max(0.0, k - s)
+    vs = sigma * math.sqrt(t)
+    d1 = (math.log(s / k) + (r + 0.5 * sigma * sigma) * t) / vs
+    d2 = d1 - vs
+    return k * math.exp(-r * t) * _norm_cdf(-d2) - s * _norm_cdf(-d1)
+
+
+def _implied_vol(price: float, s: float, k: float, t: float, r: float) -> float | None:
+    """Bisection for the put IV matching `price`; None when out of bracket."""
+    if price <= 0 or t <= 0:
+        return None
+    lo, hi = IV_BRACKET
+    if _bs_put(s, k, t, r, lo) > price or _bs_put(s, k, t, r, hi) < price:
+        return None
+    for _ in range(IV_ITERATIONS):
+        mid = 0.5 * (lo + hi)
+        if _bs_put(s, k, t, r, mid) >= price:
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+@dataclass(frozen=True)
+class _PolicyExit:
+    day: date | None  # None: held to expiry
+    close_cost: float  # per-contract buy-to-close cost (0 when held)
+    assigned: bool
+
+
+def _policy_exit(
+    contract: Contract,
+    settlement: Settlement,
+    stock: PriceSeries,
+    policy: str,
+    credit: float,
+    iv: float,
+    slippage: float,
+) -> _PolicyExit:
+    """First-trigger-wins scan of daily closes between entry and expiry."""
+    if policy == "hold":
+        return _PolicyExit(None, 0.0, settlement.stock_exit < contract.strike)
+    spread = contract.ask - contract.bid
+    for day in stock.dates:
+        if day <= settlement.entry or day >= contract.expiration:
+            continue
+        bar = stock.bars[day]
+        value = _bs_put(bar.close, contract.strike, (contract.expiration - day).days / 365.0, BASE_RATE, iv)
+        if policy in POLICY_REALIZE and value <= (1.0 - POLICY_REALIZE[policy]) * credit:
+            return _PolicyExit(day, value + slippage * spread, False)
+        if policy in POLICY_STOP_COST and value >= POLICY_STOP_COST[policy] * credit:
+            return _PolicyExit(day, value + slippage * spread, False)
+        if policy == "roll21" and (contract.expiration - day).days <= ROLL_DTE and bar.close <= contract.strike:
+            return _PolicyExit(day, value + slippage * spread, False)
+    return _PolicyExit(None, 0.0, settlement.stock_exit < contract.strike)
+
+
+def policy_trade(
+    idx: int, contract: Contract, settlement: Settlement, stock: PriceSeries, fees: dict, policy: str
+) -> Trade | str:
+    """P&L under one exit policy at every slippage level; 'iv_unfit' when IV cannot be backed out.
+
+    Early closes pay a second option fee and never settle stock. `days`/`assigned` follow the
+    base-slippage path; the existing design already holds days fixed across slippage cells.
+    """
+    capital = 100.0 * contract.strike
+    option_fee = fees["option_fee_per_contract"]
+    stock_fee = fees["stock_sale_fee"]
+    t0 = max(1, (contract.expiration - settlement.entry).days) / 365.0
+    iv = _implied_vol(0.5 * (contract.bid + contract.ask), settlement.stock_open, contract.strike, t0, BASE_RATE)
+    if iv is None:
+        return "iv_unfit"
+    pnl: dict = {}
+    days, assigned = settlement.days, False
+    for slippage in SLIPPAGE_LEVELS:
+        credit = contract.bid - slippage * (contract.ask - contract.bid)
+        exit_plan = _policy_exit(contract, settlement, stock, policy, credit, iv, slippage)
+        if exit_plan.day is None:
+            intrinsic = 100.0 * max(0.0, contract.strike - settlement.stock_exit)
+            pnl[slippage] = 100.0 * credit - option_fee - intrinsic - (stock_fee if exit_plan.assigned else 0.0)
+            days, assigned = settlement.days, exit_plan.assigned
+        else:
+            pnl[slippage] = 100.0 * credit - option_fee - exit_plan.close_cost - option_fee
+            if slippage == BASE_SLIPPAGE:
+                days = max(1, (exit_plan.day - settlement.entry).days)
+            assigned = False
+    return Trade(
+        cohort=idx,
+        ticker=contract.ticker,
+        expiration=contract.expiration,
+        entry=settlement.entry,
+        strike=contract.strike,
+        capital=capital,
+        days=days,
+        pnl=pnl,
+        assigned=assigned,
+        stock_pnl=capital / settlement.stock_open * settlement.stock_exit - capital - stock_fee,
+        spy_pnl=capital / settlement.spy_open * settlement.spy_exit - capital - stock_fee,
+    )
+
+
+def policy_exit_early(
+    idx: int, contract: Contract, stock: PriceSeries, spy: PriceSeries, entry: date, fees: dict, policy: str
+) -> Trade | str:
+    """Policy-resolve a contract whose expiry is after the last observed bar.
+
+    The trigger scan bounds itself to observed bars (first-trigger-wins, no lookahead):
+    a trigger fired on a past bar is observable today even though expiry is future;
+    no trigger within the observed bars returns 'not_expired'. Fees and P&L mirror
+    policy_trade; baselines use the trigger-bar close since the expiry bar is absent.
+    """
+    if stock is None or spy is None:
+        return "no_price"
+    stock_open, spy_open = stock.bars.get(entry), spy.bars.get(entry)
+    if stock_open is None or spy_open is None:
+        return "no_price"
+    t0 = max(1, (contract.expiration - entry).days) / 365.0
+    iv = _implied_vol(0.5 * (contract.bid + contract.ask), stock_open.open, contract.strike, t0, BASE_RATE)
+    if iv is None:
+        return "iv_unfit"
+    option_fee = fees["option_fee_per_contract"]
+    stock_fee = fees["stock_sale_fee"]
+    limited = Settlement(
+        entry=entry,
+        expiry=contract.expiration,
+        days=max(1, (contract.expiration - entry).days),
+        stock_open=stock_open.open,
+        stock_exit=stock_open.close,
+        spy_open=spy_open.open,
+        spy_exit=spy_open.close,
+    )
+    pnl: dict = {}
+    base_plan = None
+    for slippage in SLIPPAGE_LEVELS:
+        credit = contract.bid - slippage * (contract.ask - contract.bid)
+        plan = _policy_exit(contract, limited, stock, policy, credit, iv, slippage)
+        if plan.day is None:
+            return "not_expired"
+        pnl[slippage] = 100.0 * credit - option_fee - plan.close_cost - option_fee
+        if slippage == BASE_SLIPPAGE:
+            base_plan = plan
+    assert base_plan is not None
+    exit_bar, spy_bar = stock.bars.get(base_plan.day), spy.bars.get(base_plan.day)
+    if exit_bar is None or spy_bar is None:
+        return "no_price"
+    capital = 100.0 * contract.strike
+    return Trade(
+        cohort=idx,
+        ticker=contract.ticker,
+        expiration=contract.expiration,
+        entry=entry,
+        strike=contract.strike,
+        capital=capital,
+        days=max(1, (base_plan.day - entry).days),
+        pnl=pnl,
+        assigned=False,
+        stock_pnl=capital / stock_open.open * exit_bar.close - capital - stock_fee,
+        spy_pnl=capital / spy_open.open * spy_bar.close - capital - stock_fee,
+    )
+
+
 def cohort_trades(idx: int, entry: date, selections: dict, prices: dict, fees: dict, last_date: date):
     """Settle every selected contract in one cohort. Returns (trades, unresolved counts) by rule."""
     trades: dict[str, list[Trade]] = {rule: [] for rule in selections}
@@ -479,16 +756,57 @@ def replay(cohorts: list[Cohort], prices: dict, fees: dict, leveraged, last_date
     """Run every rule over every cohort. Trades and unresolved counts are kept per rule."""
     trades: dict[str, list[Trade]] = {rule: [] for rule in RULE_ORDER}
     unresolved: dict[str, Counter] = {rule: Counter() for rule in RULE_ORDER}
+    policy_trades: dict[str, dict[str, list[Trade]]] = {
+        rule: {policy: [] for policy in POLICY_ORDER} for rule in POLICY_SERIES
+    }
+    policy_unresolved: dict[str, Counter] = {rule: Counter() for rule in POLICY_SERIES}
+    wf_policy_trades: dict[str, list[Trade]] = {policy: [] for policy in WF_POLICY_RULES}
+    wf_policy_unresolved: dict[str, Counter] = {policy: Counter() for policy in WF_POLICY_RULES}
+    feature_reasons: dict[str, Counter] = {rule: Counter() for rule in R5_ORDER + R6_ORDER}
+    feature_coverage = {"pool_contracts": 0, "with_closes": 0}
+    gate_split = {"research_only": [], "eligible": []}
     cohort_rows = []
     r0_dropped = 0
     for cohort in cohorts:
         published, dropped = select_published(cohort.signals, cohort.pool)
         r0_dropped += dropped
-        selections = {"R0_published": published, **select_rules(cohort.pool, leveraged)}
+        features_by = {c.key: decision_features(c, prices.get(c.ticker), cohort.entry) for c in cohort.pool}
+        feature_coverage["pool_contracts"] += len(features_by)
+        feature_coverage["with_closes"] += sum(1 for f in features_by.values() if f.get("closes_n", 0) >= 2)
+        variants, var_reasons = variant_rules(cohort.pool, features_by, leveraged)
+        for rule, reasons in var_reasons.items():
+            feature_reasons[rule].update(reasons)
+        selections = {"R0_published": published, **select_rules(cohort.pool, leveraged), **variants}
+        # S_budget: greedy budget-constrained deployment in persisted rank order
+        # (sizing variant). A contract fits when its required capital fits the cash
+        # that was actually available at decision time.
+        ranked = sorted(
+            (c for c in cohort.pool if csp_tail_risk_gate(c.raw, leveraged) is None),
+            key=lambda c: (
+                c.raw.get("rank") if isinstance(c.raw.get("rank"), (int, float)) else 1e9,
+                -(c.raw.get("capital_velocity_per_day") or 0.0),
+            ),
+        )
+        fits, used = [], 0.0
+        for contract in ranked:
+            need = (contract.raw.get("capital_required") or 100.0 * contract.strike) * max(
+                1, int(contract.raw.get("recommended_contracts") or 1)
+            )
+            if used + need <= cohort.cash_csp:
+                fits.append(contract)
+                used += need
+        selections["S_budget"] = top_distinct(fits)
         got, missed = cohort_trades(cohort.idx, cohort.entry, selections, prices, fees, last_date)
         for rule in selections:
             trades[rule].extend(got[rule])
             unresolved[rule].update(missed[rule])
+        raw_by = {c.key: c.raw for c in cohort.pool}
+        for trade in got.get("POOL", []):
+            raw = raw_by.get((trade.ticker, trade.expiration, round(trade.strike, 4)))
+            if raw is None:
+                continue
+            name = "research_only" if raw.get("research_only") else "eligible"
+            gate_split[name].append(trade.pnl[BASE_SLIPPAGE] / trade.capital)
         cohort_rows.append(
             {
                 "cohort": cohort.idx,
@@ -500,7 +818,62 @@ def replay(cohorts: list[Cohort], prices: dict, fees: dict, leveraged, last_date
                 "selected": {rule: len(contracts) for rule, contracts in selections.items()},
             }
         )
-    return {"trades": trades, "unresolved": unresolved, "cohorts": cohort_rows, "r0_dropped": r0_dropped}
+        # Exit-policy series for the decision-relevant rules; measurement-only in this tool.
+        for rule in POLICY_SERIES:
+            for contract in selections[rule]:
+                result = settle_contract(
+                    contract, prices.get(contract.ticker), prices.get("SPY"), cohort.entry, last_date
+                )
+                if isinstance(result, str):
+                    policy_unresolved[rule][result] += 1
+                    continue
+                for policy in POLICY_ORDER:
+                    if policy == "hold":
+                        policy_trades[rule][policy].append(make_trade(cohort.idx, contract, result, fees))
+                    else:
+                        made = policy_trade(cohort.idx, contract, result, prices.get(contract.ticker), fees, policy)
+                        if isinstance(made, str):
+                            policy_unresolved[rule][made] += 1
+                        else:
+                            policy_trades[rule][policy].append(made)
+        # Policy walk-forward feed: for R1 contracts whose expiry is after the last
+        # observed bar, resolve via first-trigger-wins on observed bars (no lookahead;
+        # 'not_expired' when no trigger fired). Already-settled contracts are covered
+        # by the policy series above.
+        if "R1_current" in selections:
+            for contract in selections["R1_current"]:
+                outcome = settle_contract(
+                    contract, prices.get(contract.ticker), prices.get("SPY"), cohort.entry, last_date
+                )
+                if outcome != "not_expired":
+                    continue
+                for policy in WF_POLICY_RULES:
+                    made = policy_exit_early(
+                        cohort.idx,
+                        contract,
+                        prices.get(contract.ticker),
+                        prices.get("SPY"),
+                        cohort.entry,
+                        fees,
+                        policy[len("R1_") :],  # _policy_exit dispatches on bare names
+                    )
+                    if isinstance(made, str):
+                        wf_policy_unresolved[policy][made] += 1
+                    else:
+                        wf_policy_trades[policy].append(made)
+    return {
+        "trades": trades,
+        "unresolved": unresolved,
+        "cohorts": cohort_rows,
+        "r0_dropped": r0_dropped,
+        "policies": {"trades": policy_trades, "unresolved": policy_unresolved},
+        "wf_policies": {
+            "trades": wf_policy_trades,
+            "unresolved": {r: dict(c) for r, c in wf_policy_unresolved.items()},
+        },
+        "features": {"coverage": feature_coverage, "skip_reasons": {r: dict(c) for r, c in feature_reasons.items()}},
+        "gate_split": {k: {"n": len(v), "mean_roc": (sum(v) / len(v)) if v else None} for k, v in gate_split.items()},
+    }
 
 
 # ---------------------------------------------------------------- metrics
@@ -613,35 +986,43 @@ def _diff(a: float | None, b: float | None) -> float | None:
 # ---------------------------------------------------------------- walk-forward and verdict
 
 
-def walk_forward(entries: list[date], trades_by_rule: dict) -> dict:
-    """Pick one rule per test cohort from purged, base-case training trades; apply it to the test cohort."""
+def walk_forward(entries: list[date], trades_by_rule: dict, rules: tuple = WF_RULES) -> dict:
+    """Pick one rule per test cohort from purged, base-case training trades; apply it to the test cohort.
+
+    `rules` extends the candidate set (used for the policy walk-forward; the hold walk keeps
+    WF_RULES). Policy candidates resolve early on observed trigger bars, so their test cohorts
+    resolve before expiry — this is what lets the OOS promotion gate advance.
+    """
     folds, oos_trades, oos_cohorts = [], [], []
+    policy_trades: dict[str, list[Trade]] = {rule: [] for rule in rules if rule not in WF_RULES}
     for k, entry in enumerate(entries):
         train = {
-            rule: [t for t in trades_by_rule.get(rule, []) if t.cohort < k and t.expiration < entry]
-            for rule in WF_RULES
+            rule: [t for t in trades_by_rule.get(rule, []) if t.cohort < k and t.entry + timedelta(days=t.days) < entry]
+            for rule in rules
         }
         train_cohorts = {t.cohort for trades in train.values() for t in trades}
         fold = {
             "test_cohort": k,
             "entry": entry.isoformat(),
             "training_cohorts": len(train_cohorts),
-            "training_trades": {rule: len(train[rule]) for rule in WF_RULES},
+            "training_trades": {rule: len(train[rule]) for rule in rules},
         }
         if len(train_cohorts) < MIN_TRAIN_COHORTS:
             folds.append({**fold, "status": "skipped_insufficient_training"})
             continue
-        scores = {rule: pooled_rate(legs_for(train[rule]), BASE_RATE) for rule in WF_RULES}
-        eligible = [rule for rule in WF_RULES if scores[rule] is not None]
+        scores = {rule: pooled_rate(legs_for(train[rule]), BASE_RATE) for rule in rules}
+        eligible = [rule for rule in rules if scores[rule] is not None]
         if not eligible:
             folds.append({**fold, "status": "skipped_no_eligible_rule"})
             continue
-        chosen = max(eligible, key=lambda rule: (scores[rule], -WF_RULES.index(rule)))
+        chosen = max(eligible, key=lambda rule: (scores[rule], -rules.index(rule)))
         test = [t for t in trades_by_rule.get(chosen, []) if t.cohort == k]
         oos_trades.extend(test)
         # Only cohorts with a resolved test trade join the POOL/SPY comparison set.
         if test:
             oos_cohorts.append(k)
+            if chosen in policy_trades:
+                policy_trades[chosen].extend(test)
         folds.append(
             {
                 **fold,
@@ -652,7 +1033,7 @@ def walk_forward(entries: list[date], trades_by_rule: dict) -> dict:
                 "test_excess_pooled": pooled_rate(legs_for(test), BASE_RATE),
             }
         )
-    return {"folds": folds, "oos_trades": oos_trades, "oos_cohorts": oos_cohorts}
+    return {"folds": folds, "oos_trades": oos_trades, "oos_cohorts": oos_cohorts, "policy_trades": policy_trades}
 
 
 def verdict(oos_cohorts: int, ci: list[float] | None, diff_pool: float | None, diff_spy: float | None) -> dict:
@@ -787,9 +1168,56 @@ def oos_cells(
     return out
 
 
+def policies_cells(policy_trades: dict) -> dict:
+    """Base-case metrics per policy on the decision-relevant series, with vs-hold deltas."""
+    out = {}
+    for rule, by_policy in policy_trades.items():
+        hold = summarize(legs_for(by_policy["hold"]), BASE_RATE)
+        cells = {}
+        for policy in POLICY_ORDER:
+            cell = summarize(legs_for(by_policy[policy]), BASE_RATE)
+            cell["vs_hold_pooled"] = _diff(cell["pooled_excess_per_capday"], hold["pooled_excess_per_capday"])
+            cells[policy] = cell
+        out[rule] = cells
+    return out
+
+
 def _fee_note(fees: dict) -> str:
     state = "calibrated from fills" if fees["calibrated"] else "FALLBACK (not calibrated)"
     return f"{state}: option {fees['option_fee_per_contract']:.4f}/contract, stock sale {fees['stock_sale_fee']:.2f}"
+
+
+def _policy_wf_cells(walk_policy: dict, walk_hold: dict) -> dict:
+    """Policy walk-forward summary: per-policy OOS folds/trades/excess vs the hold path.
+
+    Promotion rule (predeclared 2026-10-25): a policy is OOS-confirmed when it was chosen
+    by >= 8 resolved walk-forward folds and its pooled OOS excess per capital-day is above
+    the hold path's pooled OOS excess on the same instrument.
+    """
+    cells = {
+        "hold": {
+            "oos_cohorts": len(walk_hold["oos_cohorts"]),
+            "oos_trades": len(walk_hold["oos_trades"]),
+            "excess_pooled": pooled_rate(legs_for(walk_hold["oos_trades"]), BASE_RATE),
+        },
+        "folds": [
+            {
+                "test_cohort": f["test_cohort"],
+                "status": f["status"],
+                "chosen_rule": f.get("chosen_rule"),
+                "policy_training": {p: f["training_trades"].get(p, 0) for p in WF_POLICY_RULES},
+            }
+            for f in walk_policy["folds"]
+        ],
+    }
+    for policy, trades in walk_policy["policy_trades"].items():
+        cells[policy] = {
+            "chosen_folds": len({t.cohort for t in trades}),
+            "oos_cohorts": len({t.cohort for t in trades}),
+            "oos_trades": len(trades),
+            "excess_pooled": pooled_rate(legs_for(trades), BASE_RATE),
+        }
+    return cells
 
 
 def build_report(**parts) -> dict:
@@ -820,6 +1248,16 @@ def build_report(**parts) -> dict:
         "unresolved": {rule: dict(counter) for rule, counter in parts["unresolved"].items()},
         "trade_counts": {rule: len(trades) for rule, trades in parts["trades"].items()},
         "rules": rule_cells(parts["trades"]),
+        "policies": policies_cells(parts["policies"]["trades"]),
+        "feature_coverage": parts["feature_coverage"],
+        "gate_split": parts["gate_split"],
+        "policy_wf": parts["policy_wf"],
+        "wf_policies_debug": {
+            "trades": {k: len(v) for k, v in parts["wf_policies"]["trades"].items()},
+            "unresolved": parts["wf_policies"]["unresolved"],
+            "tickers": {k: sorted({t.ticker for t in v}) for k, v in parts["wf_policies"]["trades"].items()},
+            "cohorts": {k: sorted({t.cohort for t in v}) for k, v in parts["wf_policies"]["trades"].items()},
+        },
         "walk_forward": {
             "folds": parts["walk_forward"]["folds"],
             "oos_cohorts": len(parts["walk_forward"]["oos_cohorts"]),
@@ -888,6 +1326,40 @@ def render_markdown(report: dict) -> str:
                 cell = cells[_cell_key(slippage, rate)]
                 lines.append(_rule_row(rule, slippage, rate, cell, report["unresolved"].get(rule, {})))
     lines += [
+        "",
+        "## Exit policies (base case; measurement only)",
+        "",
+        "x50/x80 close when the modeled put value falls to 50%/20% of the entry credit; stop2 exits at a "
+        "2x-credit loss; roll21 closes at the first bar 21 DTE or less with the stock at or below the "
+        "strike; all else holds to expiry. Value paths are Black-Scholes at the entry-implied IV; early "
+        "closes pay a second option fee. Measurement-only: promotion requires an out-of-sample "
+        "walk-forward over policies once enough OOS cohorts resolve.",
+        "",
+        "| Series | Policy | Trades | Cohorts | Win | Assigned | Mean ROC | Excess/cap-day | vs hold | 90% CI |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for rule in POLICY_SERIES:
+        for policy in POLICY_ORDER:
+            cell = report["policies"][rule][policy]
+            ci = cell["ci_90"]
+            ci_text = f"{ci[0]:.6f}..{ci[1]:.6f}" if ci else "n/a"
+            lines.append(
+                f"| {rule} | {policy} | {cell['n_trades']} | {cell['n_cohorts']} | "
+                f"{_fmt(cell['win_rate'] * 100, '.0f')}% | "
+                f"{_fmt(cell['assignment_rate'] * 100, '.0f')}% | "
+                f"{_fmt(cell['mean_return_on_capital'], '.4f')} | "
+                f"{_fmt(cell['pooled_excess_per_capday'], '.6f')} | "
+                f"{_fmt(cell['vs_hold_pooled'], '.6f')} | {ci_text} |"
+            )
+    lines += [
+        "",
+        "### R5 feature variants (decision-time; measurement only)",
+        "",
+        f"Feature coverage: {report['feature_coverage']['coverage']['with_closes']}/"
+        f"{report['feature_coverage']['coverage']['pool_contracts']} "
+        "pool contracts had pre-entry closes. Missing-feature skips per variant: "
+        + ", ".join(f"{rule}={sum(v.values())}" for rule, v in report["feature_coverage"]["skip_reasons"].items())
+        + ".",
         "",
         "## Walk-forward folds",
         "",
@@ -959,6 +1431,7 @@ def _read_db(path: Path) -> tuple[list[dict], list[dict]]:
                 "published_at": published_at,
                 "signals": snap.get("signals") or [],
                 "candidates": snap.get("csp_picks") or [],
+                "portfolio": snap.get("portfolio") or {},
             }
         )
     return snapshots, fills
@@ -1110,8 +1583,10 @@ def _dry_run(snapshots: list[dict], fees: dict, leveraged: list, cache: dict) ->
     for cohort in cohorts:
         picks, dropped = select_published(cohort.signals, cohort.pool)
         rules = select_rules(cohort.pool, leveraged)
+        variants, _ = variant_rules(cohort.pool, {}, leveraged)
         counts = " ".join(f"{name}={len(rules[name])}" for name in ("R1_current", "R2_no_tail_gate", "R3_low_delta"))
         counts += f" R4={len(rules['R4_model_ev'])} POOL={len(rules['POOL'])}"
+        counts += " R5=" + "/".join(str(len(variants[name])) for name in R5_ORDER) + " (no prices on dry run)"
         top = ",".join(c.ticker for c in rules["R1_current"])
         print(
             f"  {cohort.idx:>3} entry={cohort.entry} src={cohort.decision_source:<9} "
@@ -1196,7 +1671,7 @@ def main(argv: list[str] | None = None) -> int:
             print("no cohorts could be placed in a trading session")
             return 1
         symbols = _cohort_symbols(cohorts)
-        window_start = cohorts[0].entry - ENTRY_WINDOW_BEFORE
+        window_start = cohorts[0].entry - FEATURE_LOOKBACK
         store.ensure({symbol: window_start for symbol in symbols}, today)
     except _Abort as exc:
         print(exc)
@@ -1211,6 +1686,18 @@ def main(argv: list[str] | None = None) -> int:
     last_date = spy.dates[-1]
     result = replay(cohorts, prices, fees, leveraged, last_date)
     walk = walk_forward([c.entry for c in cohorts], result["trades"])
+    # Policy candidates = trigger-resolved settled trades (expired cohorts) plus
+    # early-resolved unexpired trades; hold stays in result["trades"].
+    walk_policy_trades = dict(result["trades"])
+    for policy in WF_POLICY_RULES:
+        # Settled-path trades live under the bare policy name (POLICY_ORDER key).
+        inner = result["policies"]["trades"]["R1_current"].get(policy[len("R1_") :], [])
+        walk_policy_trades[policy] = inner + result["wf_policies"]["trades"].get(policy, [])
+    walk_policy = walk_forward(
+        [c.entry for c in cohorts],
+        walk_policy_trades,
+        rules=WF_RULES + WF_POLICY_RULES,
+    )
     report = build_report(
         inputs={
             "snapshots": len(snapshots),
@@ -1235,8 +1722,13 @@ def main(argv: list[str] | None = None) -> int:
         },
         unresolved=result["unresolved"],
         trades=result["trades"],
+        policies=result["policies"],
+        feature_coverage=result["features"],
+        gate_split=result["gate_split"],
         walk_forward=walk,
         oos=oos_cells(walk["oos_trades"], result["trades"]["POOL"], walk["oos_cohorts"], result["trades"]["POOL_ALL"]),
+        policy_wf=_policy_wf_cells(walk_policy, walk),
+        wf_policies=result["wf_policies"],
         fill_check=owner_fill_check(fills, cohorts, list(spy.dates)),
         price_check=price_check,
         cohorts=result["cohorts"],
