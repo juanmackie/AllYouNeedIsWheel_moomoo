@@ -1,0 +1,1 @@
+{"fixture":{"broker":"up","clock":"closed","evidence":{"option":null,"quote_age_sec":7200,"source":"broker"},"refresh":{"duration_ms":1200,"fail_message":"simulated engine failure (e2e)","mode":"fast"},"scan":{"complete":true,"scanned":2,"total":2}},"ok":true}
