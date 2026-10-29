@@ -6,6 +6,8 @@ Extracted from the monolithic options_service.py for maintainability.
 import logging
 from typing import Any
 
+import core.moomoo_sdk_log  # noqa: F401 - prepares the SDK log dir before the moomoo import below
+
 try:
     from moomoo import RET_ERROR, RET_OK
 except ImportError:

@@ -73,7 +73,8 @@
         "api/__init__.py",
         "api/services/config.py",
         "core/context_factory.py",
-        "core/logging_config.py"
+        "core/logging_config.py",
+        "core/moomoo_sdk_log.py"
       ],
       "tests": [
         "tests/test_app_startup.py",

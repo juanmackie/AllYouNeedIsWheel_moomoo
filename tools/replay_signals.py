@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+import core.moomoo_sdk_log  # noqa: E402,F401 - prepares the SDK log dir before moomoo imports
 from api.services.recommendation_ranking import candidate_field, csp_tail_risk_gate, rank_key  # noqa: E402
 from config import Config  # noqa: E402
 from core.scoring_factors import parse_broker_timestamp  # noqa: E402

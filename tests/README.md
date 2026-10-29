@@ -63,11 +63,12 @@ establish closed-market capability. No account balances or orders are queried.
 ### Signal replay and return reconciliation (query-only)
 
 Both tools read `options.db` read-only and write private output to the git-ignored
-`_tmp/` folder. Set the SDK log paths first, because the running app locks the
-default AppData log:
+`_tmp/` folder. No SDK log path must be set first: the app redirects the moomoo SDK
+client log to `logs/moomoo_sdk/` by itself when the default AppData location is not
+writable. Set it anyway to keep every SDK log inside the repository:
 
 ```powershell
-$env:APPDATA = "$PWD\_tmpppdata"; $env:MOOMOO_LOG_PATH = "$PWD\_tmp\moomoo_logs"
+$env:APPDATA = "$PWD\_tmp\appdata"
 .venv/Scripts/python tools/replay_signals.py --yf-check   # first run fetches daily candles
 .venv/Scripts/python tools/replay_signals.py --no-fetch   # later runs use the candle cache
 .venv/Scripts/python tools/verify_returns.py

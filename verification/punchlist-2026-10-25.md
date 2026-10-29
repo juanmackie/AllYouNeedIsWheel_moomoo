@@ -5,14 +5,18 @@ Gate state before this review: `verification/run.sh` GREEN
 
 ## Punchlist
 
-1. **[env/robustness] Standalone boot still dies on the moomoo SDK log dir.**
-   The SDK writes `%APPDATA%\com.moomoo.OpenD\Log\py_*.log` at import time; in
-   this sandbox that raises `PermissionError` and the app never starts.
-   Evidence: first boot attempt traceback; the redirect exists only in tests
-   (`tests/conftest.py:25`, `tests/README.md:70`), not in the app or fixture
-   server. `verification/run.sh` works around it. Fix at the right level: move
-   the redirection into the fixture server / app boot so any harness boots
-   cleanly (matches the "fix the factory, not the agent" rule).
+1. **[env/robustness] RESOLVED — Standalone boot no longer dies on the moomoo SDK log dir.**
+   The SDK writes `%APPDATA%\com.moomoo.OpenD\Log\py_*.log` at import time; a
+   denied write raised `PermissionError` and the app never started. Fixed at the
+   factory, not the harness: `core/moomoo_sdk_log.py` probes that directory and
+   redirects the SDK's `APPDATA`/`HOME` lookup to `logs/moomoo_sdk/` only when the
+   SDK cannot write its own location. Every module that imports `moomoo` imports
+   it first; `tests/test_import_side_effects.py` fails if that order regresses and
+   covers the writable (no redirect) and unwritable (redirect) paths. Evidence:
+   `python run_api.py` from a profile-unwritable process now serves
+   `GET /health` (`degraded`, OpenD down) and `GET /` returns 200 where it
+   previously exited with `[Errno 13]`. The harness redirects in
+   `verification/run.sh` and `tests/conftest.py` stay as deliberate isolation.
 
 2. **[gate coverage] honest-unknown-outcomes not yet driven by the control.**
    `verification/features/honest-unknown-outcomes.md` is mapped but the drive

@@ -4,11 +4,18 @@ Verifies that importing modules does not trigger moomoo SDK side effects
 (e.g., file logging to C:\\Users\\...\\py_*.log).
 """
 
+import ast
 import importlib
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+from core import moomoo_sdk_log
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestCoreImport(unittest.TestCase):
@@ -155,6 +162,89 @@ class TestConnectionImports(unittest.TestCase):
                 guarded,
                 f"core/connection_manager.py:{node.lineno} must keep its moomoo import inside try/except",
             )
+
+
+class TestMoomooSdkLogDirBootstrap(unittest.TestCase):
+    """The moomoo SDK log directory must never stop the app from booting.
+
+    ``moomoo.common.ft_logger`` opens ``%APPDATA%\\com.moomoo.OpenD\\Log\\
+    py_<date>.log`` during ``import moomoo``. Where that write is denied the
+    import raised ``PermissionError`` and every entry point died at boot
+    (``[Errno 13] Permission denied ... py_2026_10_29.log``).
+    """
+
+    def test_writable_sdk_log_dir_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as profile:
+            with patch.dict(os.environ, {"APPDATA": profile}):
+                resolved = moomoo_sdk_log.ensure_sdk_log_dir()
+
+                self.assertEqual(os.environ["APPDATA"], profile, "a writable SDK log dir must not be redirected")
+            expected = Path(profile) / moomoo_sdk_log.SDK_LOG_PARENT / moomoo_sdk_log.SDK_LOG_LEAF
+            self.assertEqual(Path(resolved), expected)
+            self.assertTrue(Path(resolved).is_dir())
+
+    def test_unwritable_sdk_log_dir_redirects_to_a_fallback(self):
+        with tempfile.TemporaryDirectory() as profile:
+            blocked = Path(profile) / moomoo_sdk_log.SDK_LOG_PARENT / moomoo_sdk_log.SDK_LOG_LEAF
+            real_is_writable = moomoo_sdk_log._is_writable
+
+            def fake_writable(directory):
+                if Path(directory) == blocked:
+                    return False
+                return real_is_writable(directory)
+
+            with patch.dict(os.environ, {"APPDATA": profile}):
+                with patch.object(moomoo_sdk_log, "_is_writable", side_effect=fake_writable):
+                    resolved = moomoo_sdk_log.ensure_sdk_log_dir()
+
+                fallback_base = os.path.join(moomoo_sdk_log.LOGS_DIR, moomoo_sdk_log.FALLBACK_DIR_NAME)
+                self.assertEqual(os.environ["APPDATA"], fallback_base)
+                self.assertEqual(resolved, os.path.join(fallback_base, "com.moomoo.OpenD", "Log"))
+                self.assertTrue(os.path.isdir(resolved), "the fallback SDK log dir must exist and be writable")
+
+    def test_every_module_that_imports_moomoo_prepares_the_log_dir_first(self):
+        """A module that imports the SDK before the bootstrap reintroduces the boot crash."""
+        bootstrap_names = {"core.moomoo_sdk_log"}
+        offenders = []
+        for path in _runtime_python_files():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            bootstrap_lines = []
+            moomoo_lines = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "moomoo" or alias.name.startswith("moomoo."):
+                            moomoo_lines.append(node.lineno)
+                        elif alias.name in bootstrap_names:
+                            bootstrap_lines.append(node.lineno)
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if module == "moomoo" or module.startswith("moomoo."):
+                        moomoo_lines.append(node.lineno)
+                    elif module in bootstrap_names:
+                        bootstrap_lines.append(node.lineno)
+            if not moomoo_lines:
+                continue
+            first = min(bootstrap_lines) if bootstrap_lines else None
+            if first is None or first > min(moomoo_lines):
+                rel = path.relative_to(_REPO_ROOT).as_posix()
+                offenders.append(f"{rel}: import core.moomoo_sdk_log before moomoo")
+        self.assertEqual(offenders, [], "modules must prepare the SDK log dir before importing moomoo")
+
+
+def _runtime_python_files():
+    roots = [
+        _REPO_ROOT / "api",
+        _REPO_ROOT / "core",
+        _REPO_ROOT / "db",
+        _REPO_ROOT / "tools",
+    ]
+    files = []
+    for name in ("app.py", "run_api.py"):
+        files.append(_REPO_ROOT / name)
+    for root in roots:
+        files.extend(sorted(root.rglob("*.py")))
+    return [path for path in files if "__pycache__" not in path.parts]
 
 
 if __name__ == "__main__":

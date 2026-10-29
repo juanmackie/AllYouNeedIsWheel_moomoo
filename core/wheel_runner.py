@@ -22,6 +22,7 @@ import threading
 import uuid
 from copy import deepcopy
 
+import core.moomoo_sdk_log  # noqa: F401 - prepares the SDK log dir before moomoo imports
 from core.run_model import RefreshAttempt, RunMetadata, WheelRunSnapshot, utc_now_iso
 from core.utils import is_market_open
 

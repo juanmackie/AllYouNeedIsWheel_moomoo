@@ -22,6 +22,13 @@ sample is small, and it shows no edge.
 
 New query-only tools: `tools/replay_signals.py` and `tools/verify_returns.py`.
 
+Boot no longer dies when the moomoo SDK cannot write its client log. The SDK
+creates `%APPDATA%\com.moomoo.OpenD\Log\py_<date>.log` while it is imported and
+the app aborted with `[Errno 13] Permission denied` when that write was denied
+(sandboxed launcher, locked file, read-only profile). The app now probes the
+directory first and, only when the SDK cannot use it, points the SDK at
+`logs/moomoo_sdk/`, so it starts normally and the SDK keeps its client log.
+
 ## Unreleased — Broker-truth P&L, full history, and a CSP tail-risk gate
 
 The dashboard gains an Account P&L panel (`GET /api/options/analytics/pnl`):

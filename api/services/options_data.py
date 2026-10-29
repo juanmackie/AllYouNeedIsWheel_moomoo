@@ -7,6 +7,7 @@ import logging
 import time
 from datetime import datetime
 
+import core.moomoo_sdk_log  # noqa: F401 - prepares the SDK log dir before moomoo imports
 from api.services.recommendation_ranking import rank_candidates
 from api.services.utils import clean_yfinance_ticker
 from core.growth_mode import should_block_for_data_quality

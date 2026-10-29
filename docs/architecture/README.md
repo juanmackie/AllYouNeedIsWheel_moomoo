@@ -108,7 +108,7 @@ Do not edit this section by hand.
 
 Entry points, Flask app factory, service registry, environment/config, logging, and loopback trust boundary.
 
-- **Owned modules:** `app.py`, `run_api.py`, `config.py`, `api/__init__.py`, `api/services/config.py`, `core/context_factory.py`, `core/logging_config.py`
+- **Owned modules:** `app.py`, `run_api.py`, `config.py`, `api/__init__.py`, `api/services/config.py`, `core/context_factory.py`, `core/logging_config.py`, `core/moomoo_sdk_log.py`
 - **Entry points:** `python app.py`, `python run_api.py`, `GET /health`, `GET /api/system/opend-status`
 - **Focused tests:** `tests/test_app_startup.py`, `tests/test_api_health.py`, `tests/test_api_config.py`, `tests/test_config_env.py`, `tests/test_import_side_effects.py`, `tests/test_service_registry.py`, `tests/test_loopback_trust_boundary.py`, `tests/test_logging_config.py`
 - **Verify:** `uv run python scripts/ci_pytest.py tests/test_app_startup.py tests/test_api_health.py tests/test_api_config.py tests/test_config_env.py tests/test_import_side_effects.py tests/test_service_registry.py tests/test_loopback_trust_boundary.py tests/test_logging_config.py -q`

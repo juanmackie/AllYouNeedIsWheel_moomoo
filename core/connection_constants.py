@@ -5,10 +5,15 @@ Extracted from the decomposed connection modules for maintainability.
 
 import re
 
+# isort: off
+import core.moomoo_sdk_log  # noqa: F401 - prepares the SDK log dir before the moomoo import below
+
 from moomoo import (
     SecurityFirm,
     TrdEnv,
 )
+
+# isort: on
 
 from core.logging_config import get_logger
 from core.utils import safe_float

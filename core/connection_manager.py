@@ -15,6 +15,8 @@ import traceback
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import core.moomoo_sdk_log  # noqa: F401 - prepares the SDK log dir before the moomoo import below
+
 try:
     from moomoo import (
         RET_ERROR,
