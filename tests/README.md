@@ -81,6 +81,42 @@ until at least 8 out-of-sample cohorts resolve. The candle fetch checks the
 P&L with an independent recomputation from raw deals. Differences on the same
 day usually come from after-hours mark changes since the last snapshot.
 
+The replay also writes a **SIMULATED wheel lifecycle** section to `report.json`
+(`wheel_lifecycles`) and `report.md`. It uses the same commands and price cache.
+It adds no provider, subscription, or package. Keep data access within existing
+free entitlements; this tool does not purchase or upgrade market data.
+
+Each published CSP starts an independent one-contract path. Expiry below the
+strike buys 100 shares at the strike in the model. After assignment, the model
+uses the first later published covered call for the same environment, account,
+and ticker, in persisted order, with strike at least the original put strike.
+Calls expire or sell the shares at their strike when in the money. It repeats
+until call-away or the end of the cached history. Repair calls and rolls are
+outside this measurement policy. The production call-selection rules stay as is.
+
+The report shows premium plus share P&L, estimated fees, three slippage cases,
+capital-days, and stock/SPY comparisons on the same dates and starting capital.
+It charges the calibrated stock-sale fee estimate on both assignment purchase
+and call-away sale. Fees use fills from the path's account/environment; missing
+samples use the labeled replay fallback. Open shares use the final broker close;
+open options without marks have unknown P&L. Missing settlement candles and
+detected corporate actions also produce unknown results. Missing account scope,
+broker provenance, or quote time excludes evidence with a counted reason.
+
+These are hypothetical paths using captured quotes, not verified fills or a
+portfolio backtest. Paths can overlap: do not sum their P&L. Dividends, interest,
+taxes, and early exercise are excluded. Sparse captured calls limit coverage;
+the tool does not fabricate missing quotes. This section leaves the predeclared
+CSP walk-forward verdict and the G1 production capability gate unchanged.
+
+Offline verification uses synthetic SQLite history and cached prices through
+the real CLI, including a byte-for-byte check that the input database stays
+unchanged:
+
+```bash
+uv run python -u scripts/ci_pytest.py tests/test_replay_wheel.py tests/test_replay_signals.py -q
+```
+
 
 1. Start OpenD, log in, launch the app, and confirm the operational strip shows
    the environment, read-only state, market state, run status, coverage, and

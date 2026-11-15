@@ -7,6 +7,8 @@ each selection rule with hold-to-expiry settlement and with modeled exit policie
 entry slippage, and compares the rules with stock and SPY baselines. Unresolved
 trades are excluded and counted with a reason; they are never booked as zero.
 The verdict follows the predeclared rule in `verdict`.
+The separate SIMULATED wheel section follows published CSPs through modeled
+assignment and later captured covered calls. It does not change that verdict.
 
 Run:  .venv/Scripts/python.exe tools/replay_signals.py [--dry-run | --no-fetch]
       Add --yf-check for a diagnostic price comparison and --force to ignore the
@@ -39,6 +41,7 @@ from api.services.recommendation_ranking import candidate_field, csp_tail_risk_g
 from config import Config  # noqa: E402
 from core.scoring_factors import parse_broker_timestamp  # noqa: E402
 from core.utils import safe_float  # noqa: E402
+from tools.replay_wheel import render_wheel, replay_wheel  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
@@ -91,7 +94,7 @@ LIMITATIONS = (
     "before the entry session.",
     "Quotes are last-session quotes captured while the market was closed, not live fills.",
     "Entry credit is modeled as bid minus slippage times the spread; the slippage grid is 0, 0.25, 0.5.",
-    "Covered calls are excluded; only cash-secured puts are replayed.",
+    "The walk-forward verdict covers CSPs only; simulated wheel lifecycles are reported separately.",
     "Small sample: few cohorts, so confidence intervals are wide and tiny_n flags thin cohort counts.",
     "Owner selection bias is not modeled: the owner chose which signals to act on.",
     "Fees are calibrated from the owner's fills; a fallback is used only when no fills exist.",
@@ -1270,6 +1273,7 @@ def build_report(**parts) -> dict:
         "verdict": verdict_result,
         "owner_fill_check": parts["fill_check"],
         "price_check": parts["price_check"],
+        "wheel_lifecycles": parts["wheel_lifecycles"],
         "cohorts": parts["cohorts"],
         "limitations": list(LIMITATIONS),
     }
@@ -1346,8 +1350,8 @@ def render_markdown(report: dict) -> str:
             ci_text = f"{ci[0]:.6f}..{ci[1]:.6f}" if ci else "n/a"
             lines.append(
                 f"| {rule} | {policy} | {cell['n_trades']} | {cell['n_cohorts']} | "
-                f"{_fmt(cell['win_rate'] * 100, '.0f')}% | "
-                f"{_fmt(cell['assignment_rate'] * 100, '.0f')}% | "
+                f"{_fmt(cell['win_rate'], '.0%')} | "
+                f"{_fmt(cell['assignment_rate'], '.0%')} | "
                 f"{_fmt(cell['mean_return_on_capital'], '.4f')} | "
                 f"{_fmt(cell['pooled_excess_per_capday'], '.6f')} | "
                 f"{_fmt(cell['vs_hold_pooled'], '.6f')} | {ci_text} |"
@@ -1395,6 +1399,7 @@ def render_markdown(report: dict) -> str:
         *[f"- {item}" for item in report["limitations"]],
         "",
     ]
+    lines.extend(render_wheel(report["wheel_lifecycles"]))
     return "\n".join(lines)
 
 
@@ -1410,17 +1415,19 @@ def _read_db(path: Path) -> tuple[list[dict], list[dict]]:
     conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         conn.execute("PRAGMA temp_store=memory")
-        runs = conn.execute("SELECT run_id, published_at, status, snapshot_json FROM run_metadata").fetchall()
+        runs = conn.execute(
+            "SELECT run_id, published_at, status, snapshot_json, env, account_id FROM run_metadata"
+        ).fetchall()
         cursor = conn.execute(
-            "SELECT security_type, side, qty, price, fees, ticker, option_type, strike, expiration, captured_at "
-            "FROM option_fills"
+            "SELECT security_type, side, qty, price, fees, ticker, option_type, strike, expiration, captured_at, "
+            "env, account_id FROM option_fills"
         )
         columns = [column[0] for column in cursor.description]
         fills = [dict(zip(columns, row)) for row in cursor.fetchall()]
     finally:
         conn.close()
     snapshots = []
-    for run_id, published, status, blob in runs:
+    for run_id, published, status, blob, env, account_id in runs:
         snap = json.loads(blob)
         published_at = datetime.fromisoformat(published or (snap.get("run") or {}).get("published_at"))
         if published_at.tzinfo is None:
@@ -1429,6 +1436,8 @@ def _read_db(path: Path) -> tuple[list[dict], list[dict]]:
             {
                 "snapshot_id": run_id,
                 "status": status,
+                "env": env,
+                "account_id": account_id,
                 "published_at": published_at,
                 "signals": snap.get("signals") or [],
                 "candidates": snap.get("csp_picks") or [],
@@ -1607,7 +1616,7 @@ def _cohort_symbols(cohorts: list[Cohort]) -> list[str]:
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Walk-forward replay of past CSP signals (read-only).")
+    parser = argparse.ArgumentParser(description="Walk-forward CSP replay and simulated wheel paths (read-only).")
     parser.add_argument("--db", help="options.db path (default: db_path from config)")
     parser.add_argument("--out-dir", help="output directory (default: _tmp/replay)")
     parser.add_argument("--dry-run", action="store_true", help="cohorts, selections, and fees from the DB only")
@@ -1671,7 +1680,17 @@ def main(argv: list[str] | None = None) -> int:
         if not cohorts:
             print("no cohorts could be placed in a trading session")
             return 1
-        symbols = _cohort_symbols(cohorts)
+        # The wheel section uses publication time, not the older CSP quote-time
+        # cohorts. Include every captured signal it can reach in the same fetch.
+        symbols = sorted(
+            set(_cohort_symbols(cohorts))
+            | {
+                str(signal.get("ticker") or "").upper()
+                for snap in snapshots
+                for signal in snap["signals"]
+                if signal.get("ticker")
+            }
+        )
         window_start = cohorts[0].entry - FEATURE_LOOKBACK
         store.ensure({symbol: window_start for symbol in symbols}, today)
     except _Abort as exc:
@@ -1732,6 +1751,16 @@ def main(argv: list[str] | None = None) -> int:
         wf_policies=result["wf_policies"],
         fill_check=owner_fill_check(fills, cohorts, list(spy.dates)),
         price_check=price_check,
+        wheel_lifecycles=replay_wheel(
+            snapshots,
+            prices,
+            fees,
+            last_date,
+            fees_by_scope={
+                scope: calibrate_fees([f for f in fills if (f["env"], f["account_id"]) == scope])
+                for scope in {(s["env"], s["account_id"]) for s in snapshots}
+            },
+        ),
         cohorts=result["cohorts"],
     )
     _print_summary(report, _write_outputs(out_dir, report))
