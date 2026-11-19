@@ -317,7 +317,7 @@ class TestRunnerBrokerPortfolioReadFailure(unittest.TestCase):
             runner.refresh()
 
         self.assertIsNone(runner.latest())
-        db.save_run_snapshot.assert_not_called()
+        db.save_run_publication.assert_not_called()
         db.save_portfolio_transition.assert_not_called()
         engine.get_top_recommendations.assert_not_called()
         saved = [c.args[0] for c in db.save_refresh_attempt.call_args_list]
@@ -435,7 +435,7 @@ class TestRunnerEventRefreshDoesNotBlockScan(unittest.TestCase):
             runner.refresh()
             self.assertEqual(scan_calls, [True, True])
             self.assertEqual(provider_calls, ["AAPL"])
-            self.assertEqual(db.save_run_snapshot.call_count, 2)
+            self.assertEqual(db.save_run_publication.call_count, 2)
         finally:
             release_provider.set()
             refresh_thread.join(timeout=3)
@@ -905,6 +905,61 @@ class TestActiveWatchlistSnapshot(unittest.TestCase):
         self.assertEqual(snap.run.status, "planning")
         self.assertEqual(snap.active_watchlist["last_successful_sync"], "")
         self.assertTrue(snap.active_watchlist["explanation"])
+
+
+class TestRunnerPublishesOneCaptureWithEvidence(unittest.TestCase):
+    """C10/C11: one captured book per run, and the decision names its evidence."""
+
+    def _runner(self):
+        db = MagicMock()
+        service = MagicMock()
+        conn = MagicMock()
+        conn._get_available_accounts.return_value = [{"acc_id": "P1", "trd_env": "SIMULATE"}]
+        service._ensure_connection.return_value = conn
+        captured = {
+            "positions": {},
+            "cash_balance": 0.0,
+            "fetched_at": "2026-01-01T00:00:00+00:00",
+        }
+        service._get_portfolio_context.return_value = captured
+        engine = MagicMock()
+        engine.get_top_recommendations.return_value = {
+            "generated_at": "2026-01-01T00:00:05+00:00",
+            "scan_coverage": {"scanned": 1, "total": 1, "complete": True},
+            "errors": [],
+            "signals": [],
+            "blocked_signals": [],
+            "watchlist_csps": {"signals": []},
+            "covered_calls": {"signals": []},
+            "quote_fetched_at": {"AAPL": "2026-01-01T00:00:05+00:00"},
+            "watchlist_origins": {"AAPL": {"origin": "watchlist"}},
+            "active_watchlist": {"tickers": [{"symbol": "AAPL", "status": "ok"}], "group_status": "ok"},
+            "preset": {"key": "balanced", "version": 9},
+            "deployment_plan": {"lines": []},
+        }
+        service.recommendation_engine = engine
+        runner = WheelRunner(db, service, {"portfolio_env": "SIMULATE", "account_id": ""}, max_tradeable_age_sec=120)
+        return runner, db, engine, captured
+
+    def test_engine_receives_the_captured_portfolio(self):
+        runner, db, engine, captured = self._runner()
+        runner.refresh()
+
+        self.assertIs(engine.get_top_recommendations.call_args.kwargs["portfolio_context"], captured)
+        # The broker book was read exactly once for the whole run.
+        self.assertEqual(runner._options_service._get_portfolio_context.call_count, 1)
+
+    def test_published_snapshot_names_its_observation_and_policy(self):
+        runner, db, engine, captured = self._runner()
+        snapshot = runner.refresh()
+
+        evidence = snapshot.evidence
+        self.assertEqual(evidence["account_observation"]["run_id"], snapshot.run.run_id)
+        self.assertEqual(evidence["account_observation"]["source"], "moomoo_opend")
+        self.assertEqual(evidence["policy"]["preset"], "balanced@v9")
+        self.assertEqual(evidence["scan_coverage"], {"scanned": 1, "total": 1, "complete": True})
+        self.assertEqual(db.save_run_publication.call_args.kwargs["portfolio_snapshot"]["run_id"], snapshot.run.run_id)
+        self.assertEqual(snapshot.to_dict()["evidence"]["policy"]["preset"], "balanced@v9")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,4 @@
-"""
-Signals module - handles top options signals.
-Extracted from the monolithic options_service.py for maintainability.
-"""
+"""Signals engine: watchlist-union scan, ranking and deployment plan."""
 
 import logging
 import time
@@ -308,6 +305,17 @@ class RecommendationEngine:
         if context.get("portfolio_error"):
             # Never price signals from a zeroed book; the scan's handler returns {"error": ...}.
             raise RuntimeError(f"Broker portfolio unavailable: {context['portfolio_error']}")
+        return context
+
+    def _resolve_run_portfolio_context(self, portfolio_context):
+        """C10: one account capture per run; an injected observation is used as-is."""
+        if portfolio_context is not None:
+            if portfolio_context.get("portfolio_error"):
+                raise RuntimeError(f"Broker portfolio unavailable: {portfolio_context['portfolio_error']}")
+            return portfolio_context
+        started = time.time()
+        context = self._get_portfolio_context()
+        logger.info(f"[TIMING] Portfolio context: {time.time() - started:.2f}s")
         return context
 
     def _get_portfolio_service(self):
@@ -802,22 +810,23 @@ class RecommendationEngine:
             "reason_text": reason_text,
         }
 
-    def get_top_recommendations(self, limit=3, progress_callback=None):
+    def get_top_recommendations(self, limit=3, progress_callback=None, portfolio_context=None):
         """
         Get top N option signals across all portfolio positions and watchlist.
 
         Returns a unified signal payload ranked by premium velocity.
 
-        Filters options by capital availability:
-        - CALLs: Only if user has 100+ shares
-        - PUTs: All qualifying contracts; insufficient cash blocks copy only
+        ``portfolio_context`` is this run's ONE account observation: a caller that
+        already captured the broker book must pass it, and it is never re-read.
 
-        Uses CSP cash as the affordability constraint:
-        - CSP cash is true cash not tied up by open short-put collateral
-        - Broker buying power is returned separately as account context
+        Filters options by capital availability: CALLs need 100+ shares; every PUT
+        is assessed and insufficient cash blocks copy only. CSP cash (true cash, not
+        short-put collateral) is the affordability constraint; broker buying power is
+        returned separately as account context.
 
         Args:
             limit (int): Number of top signals to return (default: 3, max: 10)
+            portfolio_context (dict|None): This run's already-captured account observation.
 
         Returns:
             dict: {
@@ -865,10 +874,7 @@ class RecommendationEngine:
                     logger.debug("Scan ledger write skipped (connection failure)", exc_info=True)
                 return {"error": "Failed to establish connection to moomoo"}
 
-            # Get portfolio context for positions and cash balance
-            ctx_start = time.time()
-            portfolio_context = self._get_portfolio_context()
-            logger.info(f"[TIMING] Portfolio context: {time.time() - ctx_start:.2f}s")
+            portfolio_context = self._resolve_run_portfolio_context(portfolio_context)
             positions = portfolio_context.get("positions", {})
             broker_buying_power = float(portfolio_context.get("broker_buying_power", 0) or 0)
             cash_available_for_csp = float(portfolio_context.get("cash_available_for_csp", 0) or 0)

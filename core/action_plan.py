@@ -1,7 +1,26 @@
-"""Deterministic next steps from published broker evidence; manual tickets only."""
+"""Deterministic next steps from published broker evidence; manual tickets only.
+
+Every action carries a STABLE identity and a content revision:
+
+* ``action_id`` names the subject (the held contract, the free share lot, the
+  odd lot, or the one cash allocation). Reordering the list never changes it.
+* ``revision`` hashes the material fields (verdict, quantity, price, deadline,
+  risk). A revision change is a real change to the decision.
+* ``rank`` is display order only and is never part of the identity.
+
+That separation is what makes a reliable "what changed since last visit" view
+possible: reordering alone creates zero new actions.
+"""
+
+import hashlib
+import json
 
 from core.ticker_utils import earnings_underlying_ticker
 from core.utils import safe_float
+
+# A cash allocation or a free share lot has no contract expiry to wait for; it is
+# reviewed against the next broker session.
+DEADLINE_NEXT_SESSION = "next_session"
 
 
 def _ticker(row):
@@ -20,6 +39,70 @@ def _leg(row, side, quantity=None):
         "executable_price": price,
         "limit_target": price,
     }
+
+
+def _material_fields(action):
+    """The fields that make this decision different from another revision of it."""
+    ticket = action.get("ticket") or {}
+    legs = ticket.get("legs") or []
+    return {
+        "verdict": action.get("verdict"),
+        "urgency": action.get("urgency"),
+        "wheel_state": action.get("wheel_state"),
+        "deadline": action.get("deadline"),
+        "ticket_kind": ticket.get("kind"),
+        "quantity": sorted(int(safe_float(leg.get("quantity"), 0) or 0) for leg in legs),
+        "limit_target": sorted(
+            round(safe_float(leg.get("limit_target")), 4)
+            for leg in legs
+            if safe_float(leg.get("limit_target"), None) is not None
+        ),
+        "loss_if_called": action.get("loss_if_called"),
+        "if_called_pnl_vs_basis": action.get("if_called_pnl_vs_basis"),
+        "reason_codes": sorted(str(code) for code in (action.get("reason_codes") or [])),
+    }
+
+
+def _subject_id(action):
+    """Stable subject for the decision; identical across reordering and revisions."""
+    ticker = str(action.get("underlying") or "").upper()
+    state = str(action.get("wheel_state") or "").upper()
+    if state == "CASH":
+        return "CASH"
+    source = action.get("held_contract") or {}
+    if safe_float(source.get("strike"), None) is None:
+        legs = (action.get("ticket") or {}).get("legs") or []
+        source = next((leg for leg in legs if str(leg.get("side")).upper() == "SELL"), {})
+    right = str(source.get("option_type") or "").upper()
+    strike = safe_float(source.get("strike"), None)
+    expiration = str(source.get("expiration") or "")
+    if right and strike is not None and expiration:
+        return f"{ticker}:{right}:{strike:g}:{expiration}"
+    return f"{ticker}:{state}"
+
+
+def _deadline(action):
+    """When this decision must be reconsidered (contract expiry or next session)."""
+    state = str(action.get("wheel_state") or "").upper()
+    if state == "ODD_LOT":
+        return None
+    if state == "CASH":
+        return DEADLINE_NEXT_SESSION
+    for candidate in (action.get("held_contract"), action.get("follow_up")):
+        expiration = str((candidate or {}).get("expiration") or "")
+        if expiration:
+            return expiration
+    legs = (action.get("ticket") or {}).get("legs") or []
+    for leg in legs:
+        expiration = str(leg.get("expiration") or "")
+        if expiration:
+            return expiration
+    return DEADLINE_NEXT_SESSION
+
+
+def _revision(material) -> str:
+    payload = json.dumps(material, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def build_next_actions(
@@ -162,6 +245,11 @@ def build_next_actions(
                 "deployment_plan": plan,
             }
         )
+    return _rank(actions)
+
+
+def _rank(actions):
+    """Order by priority, then stamp display rank and stable decision identity."""
     priorities = {
         "CLOSE": 1,
         "TAKE_PROFIT": 3,
@@ -187,7 +275,8 @@ def build_next_actions(
     for rank, action in enumerate(sorted(actions, key=key), 1):
         action.update(
             rank=rank,
-            action_id=f"{action['underlying']}:{action['wheel_state']}:{rank}",
+            subject_id=_subject_id(action),
+            deadline=_deadline(action),
             urgency="now"
             if key(action)[0] <= 1
             else "this_week"
@@ -196,5 +285,8 @@ def build_next_actions(
             if action["wheel_state"] == "ODD_LOT"
             else "routine",
         )
+        action["material"] = _material_fields(action)
+        action["revision"] = _revision(action["material"])
+        action["action_id"] = action["subject_id"]
         action.setdefault("reason_codes", [])
     return sorted(actions, key=lambda a: a["rank"])

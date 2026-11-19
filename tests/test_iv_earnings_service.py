@@ -930,7 +930,7 @@ class TestWheelRunnerEventContextHook(unittest.TestCase):
         }
         db = MagicMock()
         db.get_latest_portfolio_snapshot.return_value = None
-        db.save_portfolio_transition.return_value = True
+        db.save_run_publication.return_value = "run-1"
         runner = WheelRunner(
             db=db,
             options_service=options,

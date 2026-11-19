@@ -42,6 +42,27 @@ def _positive_nav_history(history):
     return result
 
 
+def _typed_read(database, reader_name, default, **kwargs):
+    """Call an optional repository reader and enforce the expected container type.
+
+    A missing reader, a rejected call, or an unexpected return type yields
+    ``default`` so the growth contract degrades to an explicit gap instead of
+    failing the whole history read.
+    """
+    reader = getattr(database, reader_name, None)
+    if reader is None:
+        return default
+    try:
+        value = reader(**kwargs)
+    except (TypeError, AttributeError):
+        return default
+    if isinstance(default, list) and not isinstance(value, list):
+        return default
+    if isinstance(default, dict) and not isinstance(value, dict):
+        return default
+    return value
+
+
 def _growth_baseline_key(env, account_id):
     """Opaque, durable setting key scoped to one broker environment/account."""
     identity = f"{str(env or '').strip().upper()}|{str(account_id or '').strip()}"
@@ -251,11 +272,45 @@ def get_portfolio_history():
             }
             for snap in history
         ]
+        # C13: two different questions, two different answers.
+        # - ``pace`` is the ACCOUNT-SIZE milestone (balance vs baseline * target).
+        # - ``investment`` is flow-adjusted PERFORMANCE, so a deposit cannot
+        #   read as growth.
+        # Unadjusted annualized pace, ETA and a "required premium per day" are
+        # retired from the default response: with no target date there is no
+        # independently defined daily requirement, and annualizing a short NAV
+        # move is what turned a deposit into a fabricated trading target.
+        from core.growth_accounting import flow_adjusted_growth
+
+        pace = growth_pace(pace_history, target_multiple=target_multiple, baseline=baseline)
+        for retired in ("annualized_pace", "eta_days", "required_premium_per_day", "on_track"):
+            pace[retired] = None
+        pace["retired_reason"] = (
+            "Unadjusted NAV pace, ETA and a required premium per day are not reported. "
+            "Use investment for flow-adjusted performance."
+        )
+        pace["measure"] = "unadjusted_nav_change"
+
+        cash_flows = _typed_read(db, "get_cash_flows", [], env=identity_env, account_id=identity_account, limit=100000)
+        cash_flow_coverage = _typed_read(
+            db, "get_cash_flow_coverage", {}, env=identity_env, account_id=identity_account
+        )
+        investment = flow_adjusted_growth(pace_history, cash_flows=cash_flows, coverage=cash_flow_coverage)
+
         payload = {
             "count": len(history),
             "series": series,
             "snapshots": history,
-            "pace": growth_pace(pace_history, target_multiple=target_multiple, baseline=baseline),
+            "pace": pace,
+            "investment": investment,
+            "goal": {
+                "target_multiple": target_multiple,
+                "baseline_nav": pace.get("baseline_nav"),
+                "baseline_at": pace.get("first_captured_at"),
+                "target_nav": pace.get("target_nav"),
+                "balance_milestone_reached": bool(pace.get("reached")),
+                "investment_measured": investment.get("status") == "measured",
+            },
             "target_multiple": target_multiple,
         }
         return jsonify(attach_source_policy(payload, build_account_source_policy("portfolio_history"))), 200

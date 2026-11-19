@@ -178,9 +178,11 @@ uv run python -u scripts/ci_pytest.py tests/test_replay_wheel.py tests/test_repl
 10. Confirm no UI or API path places, unlocks, cancels, or modifies an order.
 11. Verify signal yield is labelled gross premium, outcome efficiency is a rate
     (e.g. $73 / ($7,000 × 31 days) = 3.36 bp/day, not $0.00/day), and Growth
-    warns that NAV is not adjusted for deposits/withdrawals. Block history and
-    journal API reads after a successful load: stale pace/ETA/counts must clear
-    and history must say unavailable, not imply deletion. Restore the API and
+    separates account size from flow-adjusted investment performance: a deposit
+    raises the size progress but not the investment multiple, and an uncovered
+    cash-flow window shows "unknown" with a named reason. Block history and
+    journal API reads after a successful load: stale investment/contribution/
+    counts must clear and history must say unavailable, not imply deletion. Restore the API and
     confirm the persisted values reappear. Restart against the same private DB
     and configured account; verify saved NAV, fills, fees, cash flows and links
     against a private backup. Never commit that backup or broker exports.

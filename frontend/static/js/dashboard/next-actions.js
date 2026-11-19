@@ -127,16 +127,20 @@ function renderCampaigns(root, campaigns, actions) {
     return true;
 }
 
-function makeActionCard(action, snapshot) {
+function makeActionCard(action, snapshot, changeStatus = null) {
     const ticker = String(action?.underlying || '—').toUpperCase();
     const card = document.createElement('article');
     card.className = 'next-action-card border p-3';
+    if (changeStatus) card.dataset.change = changeStatus;
     const head = document.createElement('div');
     head.className = 'd-flex flex-wrap align-items-center gap-2 mb-2';
     text(head, 'strong', `${action?.rank ?? ''}. ${ticker}`, 'me-1');
     text(head, 'span', action?.verdict || 'REVIEW', 'badge bg-secondary');
+    if (changeStatus === 'new') text(head, 'span', 'NEW', 'badge bg-primary action-change-badge');
+    if (changeStatus === 'changed') text(head, 'span', 'CHANGED', 'badge bg-warning text-dark action-change-badge');
     if (action?.urgency) text(head, 'span', String(action.urgency).replaceAll('_', ' '), 'badge bg-info text-dark');
     if (action?.wheel_state) text(head, 'span', String(action.wheel_state).replaceAll('_', ' '), 'small text-muted');
+    if (action?.deadline) text(head, 'span', `by ${String(action.deadline).replaceAll('_', ' ')}`, 'small text-muted');
     card.appendChild(head);
 
     const reasons = normalizeReasons(action);
@@ -202,6 +206,108 @@ function makeActionCard(action, snapshot) {
     return card;
 }
 
+function changeStatusMap(changes) {
+    const statuses = new Map();
+    if (!changes) return statuses;
+    (changes.new || []).forEach((item) => {
+        if (item?.action_id) statuses.set(item.action_id, 'new');
+    });
+    (changes.changed || []).forEach((item) => {
+        if (item?.action_id) statuses.set(item.action_id, 'changed');
+    });
+    return statuses;
+}
+
+/**
+ * One-line answer to "what changed since I last looked?". Reordering alone
+ * produces no change (stable action identity + revision from the backend).
+ */
+function renderChangeSummary(root, changes) {
+    const block = document.createElement('p');
+    block.id = 'next-actions-changes';
+    block.className = 'small mb-2 text-muted';
+    block.setAttribute('role', 'status');
+    if (!changes) {
+        block.textContent = '';
+        root.appendChild(block);
+        return;
+    }
+    if (changes.first_publication) {
+        block.textContent = 'First published run for this account — there is nothing to compare yet.';
+        root.appendChild(block);
+        return;
+    }
+    if (changes.comparable === false) {
+        block.textContent = `Cannot compare with the previous run: ${changes.reason || 'its content was not revision-tracked'}. Review the list below in full.`;
+        root.appendChild(block);
+        return;
+    }
+    const parts = [];
+    if ((changes.new || []).length) parts.push(`${changes.new.length} new`);
+    if ((changes.changed || []).length) parts.push(`${changes.changed.length} changed`);
+    if ((changes.resolved || []).length) parts.push(`${changes.resolved.length} resolved`);
+    const stampMs = Date.parse(changes.previous_published_at || '');
+    const stamp = Number.isFinite(stampMs)
+        ? new Date(stampMs).toISOString().replace('T', ' ').slice(0, 16) + 'Z'
+        : 'the previous run';
+    if (!parts.length) {
+        block.textContent = `No material change since ${stamp}. ${changes.unchanged_count || 0} action(s) unchanged — nothing to do unless a due time below has passed.`;
+        root.appendChild(block);
+        return;
+    }
+    const changedLabels = (changes.changed || [])
+        .flatMap((item) => (item.labels || []).map((label) => `${String(item.underlying || '').toUpperCase()}: ${label}`));
+    block.textContent =
+        `Since ${stamp}: ${parts.join(' · ')}. Unchanged: ${changes.unchanged_count || 0}.` +
+        (changedLabels.length ? ` ${changedLabels.join('; ')}.` : '');
+    root.appendChild(block);
+}
+
+function loadStrategyEvidence() {
+    // Read-only, local file behind the route. Rendered once per publication, so
+    // no cache and no stale evidence.
+    return Promise.resolve()
+        .then(() => fetch('/api/run/strategy-evidence', { headers: { 'Cache-Control': 'no-cache' } }))
+        .then((resp) => (resp.ok ? resp.json() : null))
+        .catch(() => null);
+}
+
+function describeEvidence(evidence) {
+    if (!evidence) return '';
+    if (evidence.status !== 'available') {
+        const reason = (evidence.reasons || [])[0] || 'no replay report has been generated';
+        return `Ranking evidence: none yet — ${reason}. Ranking in use: ${evidence.objective}.`;
+    }
+    const sample = evidence.sample || {};
+    const outcome = evidence.outcome || {};
+    const excess = outcome.excess_per_capital_day;
+    const excessText = Number.isFinite(Number(excess))
+        ? `${Number(excess) >= 0 ? '+' : ''}${(Number(excess) * 1e4).toFixed(2)} bps per capital-day`
+        : 'outcome not measurable';
+    const cohorts = Number.isFinite(Number(sample.oos_cohorts))
+        ? `${sample.oos_cohorts}/${sample.min_oos_cohorts ?? '?'} resolved out-of-sample cohorts`
+        : 'no resolved out-of-sample cohorts';
+    return (
+        `Ranking evidence: ${evidence.verdict || 'unknown'} · ${cohorts} · ${excessText} ` +
+        `(simulated, after cost, ${evidence.age_days != null ? `${evidence.age_days}d old` : 'undated'}). ` +
+        `Ranking in use: ${evidence.objective}.`
+    );
+}
+
+function renderEvidenceNote(root) {
+    const block = document.createElement('p');
+    block.id = 'next-actions-evidence';
+    block.className = 'small mb-2 text-muted';
+    root.appendChild(block);
+    loadStrategyEvidence()
+        .then((evidence) => {
+            block.textContent = describeEvidence(evidence);
+        })
+        .catch(() => {
+            block.textContent = '';
+        });
+}
+
 export function renderNextActions(snapshot) {
     const root = document.getElementById('next-actions-content');
     if (!root) return;
@@ -212,12 +318,16 @@ export function renderNextActions(snapshot) {
         return;
     }
     root.replaceChildren();
+    const changes = snapshot?.changes || null;
+    const statuses = changeStatusMap(changes);
+    renderChangeSummary(root, changes);
+    renderEvidenceNote(root);
     const active = actions.filter((item) => !['HOLD', 'WAIT'].includes(String(item?.verdict || '').toUpperCase()));
     const noAction = actions.filter((item) => ['HOLD', 'WAIT'].includes(String(item?.verdict || '').toUpperCase()));
     if (active.length) {
         const grid = document.createElement('div');
         grid.className = 'd-grid gap-2 mb-3';
-        active.forEach((item) => grid.appendChild(makeActionCard(item, snapshot)));
+        active.forEach((item) => grid.appendChild(makeActionCard(item, snapshot, statuses.get(item?.action_id))));
         root.appendChild(grid);
     }
     renderCampaigns(root, snapshot?.campaigns, actions);
@@ -228,7 +338,7 @@ export function renderNextActions(snapshot) {
         summary.tabIndex = 0;
         const list = document.createElement('div');
         list.className = 'd-grid gap-2 mt-3';
-        noAction.forEach((item) => list.appendChild(makeActionCard(item, snapshot)));
+        noAction.forEach((item) => list.appendChild(makeActionCard(item, snapshot, statuses.get(item?.action_id))));
         disclosure.appendChild(list);
         root.appendChild(disclosure);
     }

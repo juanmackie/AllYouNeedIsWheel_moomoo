@@ -8,7 +8,7 @@
             <div id="growth-track-badge" class="badge bg-secondary">LOADING…</div>
         </div>
 
-        <p class="text-muted small">Account value history, not strategy return. Deposits and withdrawals are not removed; NAV can rise without trading profits. Pace and projections are not evidence of a profitable signal.</p>
+        <p class="text-muted small">Two different measures, kept apart. <strong>Account size</strong> is net liquidation against the starting capital, and a deposit can raise it. <strong>Investment growth</strong> removes deposits and withdrawals from the returns, so it only moves when the money already in the account gained or lost. When cash-flow evidence does not cover the window, investment growth is reported as unknown.</p>
 
         <div class="summary-metrics-grid" role="group" aria-label="Growth metrics">
             <div class="summary-metric-cell">
@@ -16,22 +16,27 @@
                 <h3 class="summary-metric-value" id="growth-current-nav">—</h3>
             </div>
             <div class="summary-metric-cell">
-                <p class="summary-metric-label">Target (<span id="growth-target-label">5x</span>)</p>
+                <p class="summary-metric-label">Starting capital</p>
+                <h3 class="summary-metric-value" id="growth-starting-nav">—</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Net contributions</p>
+                <h3 class="summary-metric-value" id="growth-contributed">—</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Investment growth (flow-adjusted)</p>
+                <h3 class="summary-metric-value" id="growth-investment">—</h3>
+            </div>
+            <div class="summary-metric-cell">
+                <p class="summary-metric-label">Account size target (<span id="growth-target-label">5x</span>)</p>
                 <h3 class="summary-metric-value" id="growth-target-nav">—</h3>
             </div>
             <div class="summary-metric-cell">
-                <p class="summary-metric-label">Progress</p>
+                <p class="summary-metric-label">Account size progress</p>
                 <h3 class="summary-metric-value" id="growth-progress">—</h3>
             </div>
-            <div class="summary-metric-cell">
-                <p class="summary-metric-label">Annualized NAV change (unadjusted)</p>
-                <h3 class="summary-metric-value" id="growth-annualized">—</h3>
-            </div>
-            <div class="summary-metric-cell">
-                <p class="summary-metric-label" id="growth-eta-label">ETA to 5x</p>
-                <h3 class="summary-metric-value" id="growth-eta">—</h3>
-            </div>
         </div>
+        <p class="text-muted small mt-1 mb-0" id="growth-investment-note" role="status"></p>
 
         <div class="summary-leverage-panel">
             <div class="progress leverage-bar-height">
@@ -107,9 +112,10 @@
         <p class="text-muted small mt-1 mb-0" id="journal-counts-note">Journal counts are inferred from position changes.</p>
 
         <p class="text-muted small mt-2 mb-0">
-            Pace math uses persisted portfolio snapshots only (Moomoo/OpenD truth,
-            captured at each completed run). No fixed deadline — ETA extrapolates
-            unadjusted NAV change, not realized investment performance.
+            Account size comes from persisted portfolio snapshots (Moomoo/OpenD truth,
+            captured at each completed run). Investment growth chains flow-adjusted
+            interval returns from the same snapshots and the ingested broker cash
+            flows; it is unknown when the cash-flow backfill does not cover the window.
         </p>
     </div>
 </section>

@@ -6,9 +6,16 @@
 # I/O is stubbed at the service boundary (that is the point at which the app
 # would dial out to OpenD).
 #
-# Proves the fail-closed guarantee documented in CHANGELOG.md (2026-08-30
-# incident): a refresh whose broker portfolio read fails must keep the last
-# published run. The old behavior published a $0-cash run with an empty book.
+# Proves, through the real HTTP surface:
+#   1. the account observation behind a decision is readable and committed with
+#      it (history count grows per publication);
+#   2. the polling token moves on publish, and the change view reports NO
+#      material change for an unchanged book (stable action identity, so
+#      reordering cannot create false "new" work);
+#   3. every published action names its evidence and carries a stable identity;
+#   4. the fail-closed guarantee documented in CHANGELOG.md (2026-08-30
+#      incident): a refresh whose broker portfolio read fails must keep the last
+#      published run, instead of publishing a $0-cash run with an empty book.
 #
 # Exit 0 only when every assertion holds. Evidence goes to
 # verification/evidence/ayniw-verify-<stamp>/.
@@ -75,6 +82,64 @@ curl -sf -X POST "$BASE/__e2e/publish-run" \
 RUN_ID="$(python -c "import json; print(json.load(open('$EVIDENCE_WIN/publish.json'))['run_id'])")"
 [[ -n "$RUN_ID" ]] || fail "publish-run returned no run_id"
 log "seeded published run: $RUN_ID"
+
+# C11/C14/P6: publish a second run and prove the first-screen contracts through
+# the real HTTP surface — the account observation is readable, the change view
+# answers "what happened since last time", and the polling token moves on publish.
+curl -sf "$BASE/api/run/revision" -o "$EVIDENCE/revision-before.json" || fail "GET /api/run/revision failed"
+curl -sf -X POST "$BASE/__e2e/publish-run" \
+  -H "Content-Type: application/json" \
+  -d '{"scene":"complete_closed","preset":"balanced"}' \
+  -o "$EVIDENCE/publish-second.json" || fail "second publish-run control failed"
+SECOND_RUN_ID="$(python -c "import json; print(json.load(open('$EVIDENCE_WIN/publish-second.json'))['run_id'])")"
+[[ -n "$SECOND_RUN_ID" && "$SECOND_RUN_ID" != "$RUN_ID" ]] || fail "second publish reused the first run_id"
+curl -sf "$BASE/api/run/revision" -o "$EVIDENCE/revision-after.json" || fail "GET /api/run/revision failed after publish"
+curl -sf "$BASE/api/run" -o "$EVIDENCE/run-changes.json" || fail "GET /api/run failed after second publish"
+curl -sf "$BASE/api/portfolio/history?limit=10" -o "$EVIDENCE/history.json" || fail "GET /api/portfolio/history failed"
+python - "$EVIDENCE_WIN" "$RUN_ID" "$SECOND_RUN_ID" <<'PY'
+import json, os, sys
+
+evidence, first_run, second_run = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def read(name):
+    with open(os.path.join(evidence, name), encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+before, after = read("revision-before.json"), read("revision-after.json")
+assert before.get("revision") != after.get("revision"), "poll token did not move on publish"
+assert after.get("run_id") == second_run, f"token run_id {after.get('run_id')} != {second_run}"
+
+snapshot = read("run-changes.json").get("snapshot") or {}
+assert (snapshot.get("run") or {}).get("run_id") == second_run, "run view is not the new publication"
+changes = snapshot.get("changes") or {}
+assert changes.get("first_publication") is False, f"expected a comparison, got {changes}"
+assert changes.get("previous_run_id") == first_run, f"compared against {changes.get('previous_run_id')}, not {first_run}"
+# Same fixture book on both publications: no material change, and no false "new".
+assert changes.get("material_change_count") == 0, f"unchanged book reported changes: {changes}"
+assert changes.get("new") == [], f"unchanged book reported new actions: {changes.get('new')}"
+assert changes.get("unchanged_count") >= 1, f"unchanged actions not counted: {changes}"
+
+# Every published action names its evidence and has a stable identity.
+actions = snapshot.get("next_actions") or []
+assert actions, "published run carries no next actions"
+for action in actions:
+    assert action.get("action_id") == action.get("subject_id"), f"unstable action identity: {action.get('action_id')}"
+    assert action.get("revision"), "action has no revision"
+    evidence_ref = action.get("evidence") or {}
+    assert evidence_ref.get("run_id") == second_run, f"action evidence points at {evidence_ref}"
+assert snapshot.get("evidence", {}).get("account_observation", {}).get("run_id") == second_run, "missing account observation"
+
+history = read("history.json")
+investment = history.get("investment") or {}
+assert investment.get("status") in ("measured", "unknown", "insufficient"), f"unexpected investment status: {investment}"
+# Two persisted observations exist (proves the publish writes the observation atomically).
+assert history.get("count", 0) >= 2, f"history did not record both published observations: {history.get('count')}"
+PY
+
+# The latest publication is now the one the fail-closed scenario must preserve.
+RUN_ID="$SECOND_RUN_ID"
 
 # Record the published snapshot BEFORE the failing refresh.
 curl -sf "$BASE/api/run" -o "$EVIDENCE/run-before.json" || fail "GET /api/run failed before refresh"

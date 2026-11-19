@@ -290,6 +290,38 @@ class TestRecommendationEngine(unittest.TestCase):
         self.assertIs(engine.config, self.mock_config_provider.config)
         self.assertIs(engine.db, self.mock_db)
 
+    def test_injected_portfolio_context_is_the_only_capture(self):
+        """C10: a run may capture the book once; evaluation must not re-read it.
+
+        The provider would answer with a DIFFERENT book on a second read, so a
+        hidden re-read would change sizing and make the published decision
+        describe two different books.
+        """
+        alternate = dict(self.mock_portfolio_context)
+        alternate["cash_available_for_csp"] = 1.0
+        alternate["positions"] = {}
+        self.mock_portfolio_context_provider.get_portfolio_context.side_effect = [
+            self.mock_portfolio_context,
+            alternate,
+        ]
+        engine = self._import_engine()
+
+        result = engine.get_top_recommendations(limit=5, portfolio_context=self.mock_portfolio_context)
+
+        self.assertTrue(result.get("success"), result)
+        self.assertEqual(self.mock_portfolio_context_provider.get_portfolio_context.call_count, 0)
+        self.assertEqual(result.get("cash_available_for_csp"), 50_000.0)
+
+    def test_injected_portfolio_error_is_fatal(self):
+        engine = self._import_engine()
+
+        result = engine.get_top_recommendations(
+            limit=5, portfolio_context={"portfolio_error": "Failed to load portfolio"}
+        )
+
+        self.assertIn("Broker portfolio unavailable", result.get("error", ""))
+        self.mock_portfolio_context_provider.get_portfolio_context.assert_not_called()
+
     def test_get_top_recommendations_no_connection(self):
         self.mock_connection_provider._ensure_connection.return_value = None
         engine = self._import_engine()

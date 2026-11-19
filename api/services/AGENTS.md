@@ -16,7 +16,8 @@
 - Moomoo/OpenD remains authoritative for portfolio, positions, cash, account state, and option-chain truth.
 - Optional providers such as yfinance (fallback quotes) and Alpha Vantage (bulk earnings calendar) may enrich or widen context, but must not silently replace broker truth.
 - Services must degrade gracefully when external providers fail, rate-limit, or return partial data.
-- `PortfolioContext.get_portfolio_context(refresh=True)` sets `portfolio_error` (a short reason) when the broker summary or positions read fails; the key is absent on success. `WheelRunner.refresh` and `RecommendationEngine.get_top_recommendations` treat it as fatal (the engine's `_get_portfolio_context` raises, so the scan records a failed ledger entry and returns `{"error": ...}` with no signals); other callers still receive the zeroed defaults.
+- `PortfolioContext.get_portfolio_context(refresh=True)` sets `portfolio_error` (a short reason) when the broker summary or positions read fails; the key is absent on success. `WheelRunner.refresh` and `RecommendationEngine.get_top_recommendations` treat it as fatal (the scan records a failed ledger entry and returns `{"error": ...}` with no signals); other callers still receive the zeroed defaults.
+- `RecommendationEngine.get_top_recommendations(..., portfolio_context=...)` takes the ONE account observation for the run. `WheelRunner` captures the broker book once and passes it, so sizing, held-position guidance and the published snapshot describe the same book; the engine never re-reads the book mid-evaluation (`_resolve_run_portfolio_context`). An injected context that carries `portfolio_error` is equally fatal.
 - Keep caches and TTLs explicit so stale market data is not presented as fresh.
 - Do not introduce production mocks or simulated account data.
 - When a signal can remain visible only as research-only data, keep that label and caveat explicit rather than silently dropping it.

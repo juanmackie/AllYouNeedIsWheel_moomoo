@@ -406,6 +406,40 @@ class RunMetadata:
         return self.coverage_total > 0 and self.coverage_scanned >= self.coverage_total
 
 
+def build_snapshot_evidence(
+    *,
+    run: "RunMetadata",
+    account_id: str,
+    published_at: str,
+    generated_at: str,
+    portfolio: dict | None,
+    coverage: dict,
+    max_tradeable_age_sec: int,
+) -> dict:
+    """What a published decision was computed from (pure).
+
+    C11: the account observation, policy version, scan coverage and clock behind
+    one publication. Older snapshots without this block stay readable (empty).
+    """
+    return {
+        "account_observation": {
+            "source": "moomoo_opend",
+            "run_id": run.run_id,
+            "account_id": account_id,
+            "captured_at": published_at,
+            "position_count": len((portfolio or {}).get("positions") or {}),
+        },
+        "policy": {
+            "preset": f"{run.preset_key}@v{run.preset_version}",
+            "ranking": "capital_velocity_per_day",
+            "max_tradeable_age_sec": int(max_tradeable_age_sec),
+        },
+        "scan_coverage": dict(coverage),
+        "decided_at": generated_at,
+        "published_at": published_at,
+    }
+
+
 @dataclass(frozen=True)
 class WheelRunSnapshot:
     run: RunMetadata
@@ -437,6 +471,10 @@ class WheelRunSnapshot:
     roll_candidates: tuple[dict, ...] = ()
     deployment_plan: dict = field(default_factory=dict)
     next_actions: tuple[dict, ...] = ()
+    # C11: what this decision was computed from. Every actionable row can name
+    # its account observation, policy version and clock through these
+    # references; defaults keep pre-field snapshots loadable.
+    evidence: dict = field(default_factory=dict)
 
     @property
     def tradeable(self) -> bool:
@@ -497,6 +535,7 @@ class WheelRunSnapshot:
             "roll_candidates": list(self.roll_candidates),
             "deployment_plan": dict(self.deployment_plan or {}),
             "next_actions": list(self.next_actions),
+            "evidence": dict(self.evidence or {}),
         }
 
 

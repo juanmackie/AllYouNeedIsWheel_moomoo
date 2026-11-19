@@ -17,10 +17,10 @@ let signalsData = null;
 // (from /api/run `taken_links`). Card state only — the backend owns the link.
 let takenRecommendedKeys = new Set();
 
-// Daily premium needed to stay on the active preset's 5x pace (from portfolio history).
-// Fetched lazily once; null when history is insufficient.
-let requiredPremiumPerDay = null;
-let requiredPaceFetched = false;
+// C13: the "required premium per day" contribution is retired. With no target
+// date there is no independently defined daily requirement, and the old figure
+// compared a trade's gross credit against an unadjusted NAV pace — it rewarded a
+// larger credit even when assignment or share losses left the account poorer.
 let autoRefreshInterval = null;
 let isVisible = true;
 let listenersBound = false;
@@ -670,20 +670,8 @@ function createRecommendationCard(rec) {
             cashAfterEl.classList.toggle('text-warning', cashAfter != null && cashAfter < 0);
         }
 
-        // Contribution to the active preset goal: this trade's credit vs the
-        // required daily pace derived from persisted portfolio history.
-        const contributionEl = clone.querySelector('.csp-pace-contribution');
-        if (contributionEl) {
-            if (incomeAtSize != null && requiredPremiumPerDay != null && requiredPremiumPerDay > 0) {
-                const coverage = (incomeAtSize / requiredPremiumPerDay) * 100;
-                const targetMultiple = Number(signalsData?.preset?.screener_profile?.target_account_multiple || 5);
-                contributionEl.textContent = `Covers ${coverage.toFixed(1)}% of the daily pace to ${targetMultiple}x`;
-                contributionEl.classList.remove('d-none');
-            } else {
-                contributionEl.textContent = '';
-                contributionEl.classList.add('d-none');
-            }
-        }
+        // C13: no "% of daily pace" line. Gross credit is shown above; the only
+        // performance measure lives in the Growth panel, flow-adjusted.
         clone.querySelector('.csp-breakeven-buffer').textContent = breakevenBuffer != null ? `${breakevenBuffer.toFixed(1)}%` : 'N/A';
         clone.querySelector('.csp-expected-move').textContent = expectedMove != null ? `${expectedMove.toFixed(1)}%` : 'N/A';
         // Show active preset profile on CSP card (read-only)
@@ -1324,28 +1312,6 @@ function getSignalType(rec) {
 }
 
 /**
- * Lazily load the required daily premium pace from portfolio history.
- * Resolves true only when a usable pace value was found (one-shot).
- */
-async function fetchRequiredPace() {
-    requiredPaceFetched = true;
-    try {
-        const resp = await fetch('/api/portfolio/history?limit=365');
-        if (resp.ok) {
-            const data = await resp.json();
-            const pace = data?.pace?.required_premium_per_day;
-            if (typeof pace === 'number' && pace > 0) {
-                requiredPremiumPerDay = pace;
-                return true;
-            }
-        }
-    } catch (err) {
-        console.debug('Pace contribution unavailable:', err);
-    }
-    return false;
-}
-
-/**
  * Render the active preset's actual strategy rules (read-only, from the
  * backend snapshot). Replaces the former Call/Put filter tabs with the
  * effective thresholds the listed signals were screened under.
@@ -1407,16 +1373,6 @@ function renderStrategyRules(result) {
 function renderLaneSections(result) {
     renderLane('csp', result?.csp_picks || []);
     renderLane('cc', result?.cc_decisions || []);
-    // Pace data loads once; refresh the lanes a single time when it arrives so
-    // per-card pace contributions populate without a second network request.
-    if (!requiredPaceFetched) {
-        fetchRequiredPace().then((found) => {
-            if (found && signalsData) {
-                renderLane('csp', signalsData.csp_picks || []);
-                renderLane('cc', signalsData.cc_decisions || []);
-            }
-        });
-    }
 }
 
 /**
@@ -1595,12 +1551,6 @@ function renderFilteredSignals() {
         applyGrowthFieldsToCard(card, rec);
         cardsContainer.appendChild(card);
     });
-    // Pace data loads once; re-render a single time when it arrives.
-    if (!requiredPaceFetched) {
-        fetchRequiredPace().then((found) => {
-            if (found && cardsContainer && signalsData) renderFilteredSignals();
-        });
-    }
     if (allSignals.length > 0) {
         showContent();
     }

@@ -37,6 +37,76 @@ DEFAULT_RETENTION_DAYS = {
 }
 
 
+def _insert_portfolio_snapshot_row(conn, snapshot: dict) -> int:
+    """Insert one portfolio snapshot row; returns 0 when run_id already exists."""
+    positions = snapshot.get("positions", [])
+    positions_json = json.dumps(positions) if isinstance(positions, list) else "[]"
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO portfolio_snapshots (
+            run_id, captured_at, env, account_id,
+            net_liquidation, cash_available, cash_reserved_for_csp,
+            cash_available_for_csp, broker_buying_power, positions_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(snapshot.get("run_id", "") or ""),
+            str(snapshot.get("captured_at", "") or ""),
+            str(snapshot.get("env", "") or ""),
+            str(snapshot.get("account_id", "") or ""),
+            float(snapshot.get("net_liquidation", 0) or 0),
+            float(snapshot.get("cash_available", 0) or 0),
+            float(snapshot.get("cash_reserved_for_csp", 0) or 0),
+            float(snapshot.get("cash_available_for_csp", 0) or 0),
+            float(snapshot.get("broker_buying_power", 0) or 0),
+            positions_json,
+        ),
+    )
+    return cur.rowcount
+
+
+def _insert_trade_event_rows(conn, snapshot: dict, events) -> None:
+    """Insert inferred trade events for one snapshot inside the caller's transaction."""
+    for event in events or ():
+        pnl = event.get("pnl")
+        if pnl is not None:
+            pnl = float(pnl)
+        details = event.get("details", {})
+        if isinstance(details, dict):
+            details = json.dumps(details)
+        conn.execute(
+            """
+            INSERT INTO trade_events (
+                timestamp, event_type, ticker, option_type, strike, expiration,
+                from_strike, from_expiration, to_strike, to_expiration,
+                premium_in, premium_out, pnl, leakage, reason,
+                env, account_id, provenance, details
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(event.get("timestamp", "") or ""),
+                event.get("event_type", ""),
+                event.get("ticker", ""),
+                event.get("option_type", ""),
+                float(event.get("strike", 0) or 0),
+                event.get("expiration", ""),
+                float(event.get("from_strike", 0) or 0),
+                event.get("from_expiration", ""),
+                float(event.get("to_strike", 0) or 0),
+                event.get("to_expiration", ""),
+                float(event.get("premium_in", 0) or 0),
+                float(event.get("premium_out", 0) or 0),
+                pnl,
+                float(event.get("leakage", 0) or 0),
+                event.get("reason", ""),
+                str(snapshot.get("env", "") or ""),
+                str(snapshot.get("account_id", "") or ""),
+                event.get("provenance", "inferred") or "inferred",
+                details,
+            ),
+        )
+
+
 class OptionsDatabase:
     def __init__(self, db_name=None):
         self._closed = False
@@ -230,6 +300,20 @@ class OptionsDatabase:
         The persistence layer itself enforces immutability: an already-published
         ``run_id`` is never overwritten (F-C7).
         """
+        return self.save_run_publication(snapshot)
+
+    def save_run_publication(self, snapshot, portfolio_snapshot=None, events=()):
+        """Publish one run, the account observation it used, and inferred events.
+
+        C11: the decision and the account observation behind it commit in ONE
+        transaction. A reader never sees a published decision next to a missing
+        or older growth record, and a failure rolls back both rows so a retry
+        cannot duplicate facts. Every insert is idempotent on its identity
+        (``run_id``), so a repeated publish writes nothing new.
+
+        ``portfolio_snapshot``/``events`` are optional so existing callers that
+        persist only the decision keep working.
+        """
         payload = snapshot.to_dict()
         run = snapshot.run
         with pooled_connection(self.db_path) as conn:
@@ -251,13 +335,33 @@ class OptionsDatabase:
             )
             inserted = cur.rowcount > 0
             if not inserted:
-                import logging
-
-                logging.getLogger("db.database").warning(
-                    "Run %s already published; snapshot left immutable", run.run_id
-                )
+                logger.warning("Run %s already published; snapshot left immutable", run.run_id)
+            if portfolio_snapshot:
+                if _insert_portfolio_snapshot_row(conn, portfolio_snapshot):
+                    _insert_trade_event_rows(conn, portfolio_snapshot, events)
             conn.commit()
         return run.run_id
+
+    def get_latest_publication_identity(self, env=None, account_id=None):
+        """Cheap identity of the published run (no snapshot JSON parse).
+
+        Powers the polling client: it compares one small token and fetches the
+        full snapshot only when something was actually published.
+        """
+        sql = "SELECT run_id, published_at, status FROM run_metadata"
+        params: list = []
+        if env:
+            sql += " WHERE env = ?"
+            params.append(env)
+            if account_id:
+                sql += " AND account_id = ?"
+                params.append(account_id)
+        sql += " ORDER BY published_at DESC, generated_at DESC LIMIT 1"
+        with pooled_connection(self.db_path) as conn:
+            row = conn.execute(sql, params).fetchone()
+        if row is None:
+            return None
+        return {"run_id": row[0], "published_at": row[1], "status": row[2]}
 
     def get_latest_snapshot(self, env=None, account_id=None):
         """Return the most recently published snapshot dict for env + account (or any)."""
@@ -463,68 +567,11 @@ class OptionsDatabase:
         transaction (C12). On any failure everything rolls back so a retry can
         reconstruct the transition without duplication or loss."""
         try:
-            positions = snapshot.get("positions", [])
-            positions_json = json.dumps(positions) if isinstance(positions, list) else "[]"
             with pooled_connection(self.db_path) as conn:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO portfolio_snapshots (
-                        run_id, captured_at, env, account_id,
-                        net_liquidation, cash_available, cash_reserved_for_csp,
-                        cash_available_for_csp, broker_buying_power, positions_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(snapshot.get("run_id", "") or ""),
-                        str(snapshot.get("captured_at", "") or ""),
-                        str(snapshot.get("env", "") or ""),
-                        str(snapshot.get("account_id", "") or ""),
-                        float(snapshot.get("net_liquidation", 0) or 0),
-                        float(snapshot.get("cash_available", 0) or 0),
-                        float(snapshot.get("cash_reserved_for_csp", 0) or 0),
-                        float(snapshot.get("cash_available_for_csp", 0) or 0),
-                        float(snapshot.get("broker_buying_power", 0) or 0),
-                        positions_json,
-                    ),
-                )
-                for event in events:
-                    pnl = event.get("pnl")
-                    if pnl is not None:
-                        pnl = float(pnl)
-                    details = event.get("details", {})
-                    if isinstance(details, dict):
-                        details = json.dumps(details)
-                    conn.execute(
-                        """
-                        INSERT INTO trade_events (
-                            timestamp, event_type, ticker, option_type, strike, expiration,
-                            from_strike, from_expiration, to_strike, to_expiration,
-                            premium_in, premium_out, pnl, leakage, reason,
-                            env, account_id, provenance, details
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            str(event.get("timestamp", "") or ""),
-                            event.get("event_type", ""),
-                            event.get("ticker", ""),
-                            event.get("option_type", ""),
-                            float(event.get("strike", 0) or 0),
-                            event.get("expiration", ""),
-                            float(event.get("from_strike", 0) or 0),
-                            event.get("from_expiration", ""),
-                            float(event.get("to_strike", 0) or 0),
-                            event.get("to_expiration", ""),
-                            float(event.get("premium_in", 0) or 0),
-                            float(event.get("premium_out", 0) or 0),
-                            pnl,
-                            float(event.get("leakage", 0) or 0),
-                            event.get("reason", ""),
-                            str(snapshot.get("env", "") or ""),
-                            str(snapshot.get("account_id", "") or ""),
-                            event.get("provenance", "inferred") or "inferred",
-                            details,
-                        ),
-                    )
+                # Events describe a transition; only a newly written baseline can
+                # own them, so a retry never duplicates the same inference.
+                if _insert_portfolio_snapshot_row(conn, snapshot):
+                    _insert_trade_event_rows(conn, snapshot, events)
                 conn.commit()
                 return True
         except Exception as exc:

@@ -45,7 +45,6 @@
       "api/services/options_data.py::OptionsDataService._build_candidate": 217,
       "api/services/outcome_service.py::_build_record": 152,
       "api/services/recommendations.py::RecommendationEngine.get_top_recommendations": 855,
-      "core/action_plan.py::build_next_actions": 176,
       "core/exit_playbook.py::evaluate_exit": 214,
       "core/monte_carlo.py::project_nav": 170,
       "core/position_scorer.py::score_existing_position": 161,
@@ -179,7 +178,8 @@
         "api/services/recommendation_ranking.py",
         "api/services/options_data.py",
         "api/services/options_service.py",
-        "api/routes/run.py"
+        "api/routes/run.py",
+        "core/strategy_evidence.py"
       ],
       "tests": [
         "tests/test_recommendations.py",
@@ -195,12 +195,13 @@
         "tests/test_sizing.py",
         "tests/test_greeks.py",
         "tests/test_scan_ledger.py",
-        "tests/test_raw_scan_replay.py"
+        "tests/test_raw_scan_replay.py",
+        "tests/test_strategy_evidence.py"
       ]
     },
     {
       "id": "portfolio-and-growth",
-      "summary": "Portfolio context, holdings basis/campaigns, position monitor, exit playbook, growth pace, Monte Carlo projection, and next actions.",
+      "summary": "Portfolio context, holdings basis/campaigns, position monitor, exit playbook, flow-adjusted growth accounting, next-action identity and run-to-run change diffing, and the growth/roll-pressure HTTP surface.",
       "entry_points": [
         "GET /api/portfolio",
         "GET /api/portfolio/history",
@@ -222,7 +223,9 @@
         "api/services/roll_diagnostics.py",
         "api/routes/portfolio.py",
         "api/routes/roll_pressure.py",
-        "api/routes/alerts.py"
+        "api/routes/alerts.py",
+        "core/growth_accounting.py",
+        "core/run_changes.py"
       ],
       "tests": [
         "tests/test_portfolio_service.py",
@@ -237,7 +240,9 @@
         "tests/test_action_plan.py",
         "tests/test_routes_portfolio.py",
         "tests/test_routes_alerts.py",
-        "tests/test_projection_route.py"
+        "tests/test_projection_route.py",
+        "tests/test_growth_accounting.py",
+        "tests/test_run_changes.py"
       ]
     },
     {

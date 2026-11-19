@@ -23,7 +23,13 @@ import uuid
 from copy import deepcopy
 
 import core.moomoo_sdk_log  # noqa: F401 - prepares the SDK log dir before moomoo imports
-from core.run_model import RefreshAttempt, RunMetadata, WheelRunSnapshot, utc_now_iso
+from core.run_model import (
+    RefreshAttempt,
+    RunMetadata,
+    WheelRunSnapshot,
+    build_snapshot_evidence,
+    utc_now_iso,
+)
 from core.utils import is_market_open
 
 logger = logging.getLogger("core.wheel_runner")
@@ -257,7 +263,7 @@ class WheelRunner:
                 )
 
             result = self._options_service.recommendation_engine.get_top_recommendations(
-                limit=3, progress_callback=progress
+                limit=3, progress_callback=progress, portfolio_context=portfolio_context
             )
 
             if "error" in result:
@@ -293,19 +299,18 @@ class WheelRunner:
                 roll_decisions=roll_decisions,
             )
 
-            # Persist snapshot, then publish (in-memory + DB latest).
-            self._db.save_run_snapshot(snapshot)
-            self._latest_snapshot = snapshot
-
-            # Persist a portfolio snapshot for equity history and trade-event
-            # inference. Never blocks or fails the run publish.
-            self._persist_portfolio_state(
+            # C11: publish the decision together with the account observation it
+            # used, in one transaction. Analytics derived from that observation
+            # can no longer lag behind the decision it belongs to.
+            observation, events = self._build_portfolio_observation(
                 run_id=snapshot.run.run_id,
                 env=env,
                 opaque_account=opaque,
                 captured_at=snapshot.run.published_at,
                 portfolio_context=portfolio_context,
             )
+            self._db.save_run_publication(snapshot, portfolio_snapshot=observation, events=events)
+            self._latest_snapshot = snapshot
 
             self._persist_attempt(
                 RefreshAttempt(
@@ -460,6 +465,17 @@ class WheelRunner:
             coverage_scanned=scanned,
             coverage_total=total,
         )
+        evidence = build_snapshot_evidence(
+            run=run,
+            account_id=opaque_account,
+            published_at=published_at,
+            generated_at=generated_at,
+            portfolio=portfolio,
+            coverage={"scanned": scanned, "total": total, "complete": complete},
+            max_tradeable_age_sec=self._max_tradeable_age_sec,
+        )
+        for action in actions:
+            action["evidence"] = {"run_id": run.run_id, "policy": evidence["policy"]["preset"]}
         return WheelRunSnapshot(
             run=run,
             portfolio=portfolio,
@@ -481,24 +497,20 @@ class WheelRunner:
             roll_candidates=tuple(result.get("roll_candidates") or []),
             deployment_plan=deployment,
             next_actions=tuple(actions),
+            evidence=evidence,
         )
 
     def latest(self) -> WheelRunSnapshot | None:
         return self._latest_snapshot
 
-    def _persist_portfolio_state(
-        self,
-        run_id: str,
-        env: str,
-        opaque_account: str,
-        captured_at: str,
-        portfolio_context: dict,
-    ) -> None:
-        """Persist one portfolio snapshot per completed run.
+    def _build_portfolio_observation(self, run_id, env, opaque_account, captured_at, portfolio_context):
+        """Build the account observation row and inferred events for one run.
 
-        Also diffs positions against the previous snapshot to infer trade
-        events (entry/exit/roll/assignment). Best-effort: any failure is logged
-        and never fails the run publish.
+        Also diffs positions against the previous snapshot to infer trade events
+        (entry/exit/roll/assignment). Returns ``(None, [])`` when the observation
+        cannot be built, so a decision is still published without inventing
+        growth history. The caller commits the observation in the SAME
+        transaction as the run (C11).
         """
         try:
             from core.portfolio_snapshot import build_portfolio_snapshot
@@ -520,15 +532,10 @@ class WheelRunner:
                 # C05: inference never knows fill prices — provenance is
                 # "inferred" and pnl stays NULL (unknown), never fabricated.
                 event["provenance"] = "inferred"
-            # C12: snapshot baseline plus its event batch commit atomically, so a
-            # missing transition is never silently lost between writes.
-            if not self._db.save_portfolio_transition(snapshot, events):
-                logger.warning("Portfolio state not persisted for run %s", run_id)
-                return
-            if events:
-                logger.info("Inferred %d trade event(s) from position diff (run %s)", len(events), run_id)
+            return snapshot, events
         except Exception as exc:
-            logger.warning("Portfolio state persistence skipped for run %s: %s", run_id, exc)
+            logger.warning("Portfolio observation unavailable for run %s: %s", run_id, exc)
+            return None, []
 
 
 def start_background_refresh(runner: WheelRunner) -> RefreshAttempt | None:

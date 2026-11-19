@@ -1,6 +1,39 @@
 # Changelog
 
-## Unreleased — Failed-read guard, honest unknowns, and signal evidence tools
+## Unreleased — Truthful growth measures, one capture per run, decisions first
+
+The 5x indicator no longer mistakes a deposit for performance. `GET
+/api/portfolio/history` now returns two separate measures: `pace` (account size
+against the starting capital, which a deposit can move) and `investment`
+(flow-adjusted multiple from persisted NAV plus ingested broker cash flows,
+where a $40k deposit into a $10k book reports 1.00x and a real loss stays below
+1.00x). When cash-flow coverage does not span the window, or a capital movement
+is undated or non-USD, the multiple is `null` with a named gap. The unadjusted
+annualized pace, ETA and "required premium per day" are retired: a short NAV move
+can no longer be annualized into a fabricated trading target, and the premium
+quota is gone from signal cards.
+
+A refresh now captures the broker book once. `WheelRunner` passes that
+observation into `RecommendationEngine.get_top_recommendations`, so sizing,
+held-position guidance and the published snapshot describe the same book instead
+of two reads that may differ. The decision, its account observation and inferred
+trade events commit in one SQLite transaction, and each snapshot carries an
+`evidence` block naming the observation, `preset@version`, ranking, coverage and
+clock. Republishing is idempotent.
+
+Next actions gained stable identities and revisions: `action_id` is the subject
+(held contract, share lot, odd lot, or `CASH`), `revision` hashes the material
+fields, `deadline` says when to reconsider, and `rank` is display order only.
+`GET /api/run` therefore returns `changes` against the previous publication, and
+the dashboard leads with one line: what is new, what changed, what resolved, or
+that an unchanged book needs nothing. `GET /api/run/strategy-evidence` reports the
+walk-forward evidence behind the ranking currently in use (or that none exists),
+display-only. Polling now reads a small `GET /api/run/revision` token and fetches
+the full snapshot only when it changes.
+
+The encoding check no longer scans the private `_tmp/` scratch directory, where
+baseline copies and replay reports are not user-facing source.
+
 
 A refresh whose broker portfolio read fails now fails the attempt and keeps the
 last published run. Before, it published a $0-cash run and stored a zero NAV

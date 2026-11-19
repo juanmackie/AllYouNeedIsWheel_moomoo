@@ -2,8 +2,11 @@
 Wheel run API — immutable snapshot + refresh attempt state.
 
 GET  /api/run               -> latest attempt + latest completed snapshot
+GET  /api/run/revision      -> cheap change token for the polling client
 POST /api/run/refresh       -> start one background refresh (serialized)
 GET  /api/run/copy-check    -> read-only copy revalidation before a clipboard write
+GET  /api/run/strategy-evidence -> read-only replay/promotion evidence for the
+                                   ranking currently in use
 """
 
 import logging
@@ -55,6 +58,11 @@ def get_run_state():
     identity_env, identity_account = get_current_identity()
     snapshot = db.get_latest_snapshot(env=identity_env, account_id=identity_account) if db is not None else None
     view = recompute_effective_snapshot(snapshot)
+    # C14: read-time derived field, like eligibility — only what changed since
+    # the previous publication, so an unchanged book costs one line of attention.
+    changes = _changes_for_run(db, view, identity_env, identity_account)
+    if isinstance(view, dict):
+        view["changes"] = changes
     return jsonify(
         {
             "attempt": attempt,
@@ -64,6 +72,117 @@ def get_run_state():
             "taken_links": _taken_links_for_run(db, view, identity_env, identity_account),
         }
     )
+
+
+def _changes_for_run(db, view, env, account_id) -> dict | None:
+    """Material changes between the run on screen and the previous publication.
+
+    Read-only over stored snapshots. Stable action identity means rank movement
+    alone produces no change; a verdict, quantity, price, deadline or blocking
+    reason change is reported as a revision of the same action.
+    """
+    from core.run_changes import diff_actions
+
+    run = (view or {}).get("run") or {}
+    current_run_id = str(run.get("run_id") or "")
+    if db is None or not current_run_id or not hasattr(db, "get_run_snapshots"):
+        return None
+    previous = None
+    try:
+        for stored in db.get_run_snapshots(env=env, account_id=account_id, limit=2) or []:
+            candidate = recompute_effective_snapshot(stored)
+            candidate_run = (candidate or {}).get("run") or {}
+            candidate_run_id = str(candidate_run.get("run_id") or "")
+            if candidate_run_id and candidate_run_id != current_run_id:
+                previous = candidate
+                break
+    except Exception as exc:  # a diff must never break the run view
+        logger.warning("Run change diff unavailable: %s", exc)
+        return None
+    if previous is None:
+        return {
+            "first_publication": True,
+            "new": [],
+            "changed": [],
+            "resolved": [],
+            "unchanged_count": 0,
+            "material_change_count": 0,
+            "current_action_count": len((view or {}).get("next_actions") or []),
+            "current_run_id": current_run_id,
+        }
+    diff = diff_actions(previous.get("next_actions"), (view or {}).get("next_actions"))
+    previous_run = previous.get("run") or {}
+    diff.update(
+        first_publication=False,
+        previous_run_id=str(previous_run.get("run_id") or ""),
+        previous_published_at=previous_run.get("published_at"),
+        current_run_id=current_run_id,
+    )
+    return diff
+
+
+@bp.route("/revision", methods=["GET"])
+def get_run_revision():
+    """Cheap change token for the shared poll (no snapshot JSON parse).
+
+    P6: the dashboard polls this small response and fetches the full run state
+    only when the token changes. The token covers the published run identity and
+    the refresh attempt's state/stage plus a coarse progress bucket, so a scan is
+    still watchable without re-sending the whole snapshot every few seconds.
+    """
+    db = _get_db()
+    from api.services.config import get_current_identity
+
+    identity_env, identity_account = get_current_identity()
+    attempt = db.get_latest_attempt() if db is not None else None
+    identity = None
+    if db is not None and hasattr(db, "get_latest_publication_identity"):
+        try:
+            identity = db.get_latest_publication_identity(env=identity_env, account_id=identity_account)
+        except Exception as exc:
+            logger.warning("Publication identity unavailable: %s", exc)
+    attempt_state = str((attempt or {}).get("state") or "idle")
+    attempt_stage = str((attempt or {}).get("stage") or "")
+    try:
+        progress_bucket = int(round(float((attempt or {}).get("progress") or 0.0) * 10))
+    except (TypeError, ValueError):
+        progress_bucket = 0
+    if attempt_state not in ("queued", "refreshing"):
+        progress_bucket = 0
+    revision = "|".join(
+        [
+            str((identity or {}).get("run_id") or ""),
+            str((identity or {}).get("published_at") or ""),
+            str((attempt or {}).get("attempt_id") or ""),
+            attempt_state,
+            attempt_stage,
+            str(progress_bucket),
+        ]
+    )
+    return jsonify(
+        {
+            "revision": revision,
+            "run_id": (identity or {}).get("run_id"),
+            "published_at": (identity or {}).get("published_at"),
+            "status": (identity or {}).get("status"),
+            "attempt": attempt,
+        }
+    )
+
+
+@bp.route("/strategy-evidence", methods=["GET"])
+def get_strategy_evidence():
+    """Read-only strategy evidence behind the ranking currently in use.
+
+    Answers "has this ranking been shown to make money?" from the offline replay
+    report (``tools/replay_signals.py`` + ``tools/promotion_check.py``). When no
+    report exists the answer is an explicit empty result with the reason — never
+    a fabricated track record. Offline analysis only; it cannot change a rank,
+    a gate or a published decision.
+    """
+    from core.strategy_evidence import load_strategy_evidence
+
+    return jsonify(load_strategy_evidence()), 200
 
 
 def _taken_links_for_run(db, view, env, account_id) -> list:

@@ -1084,6 +1084,113 @@ class TestPortfolioTransitionAtomic(unittest.TestCase):
         self.assertEqual(len(self.db.get_trade_events(env="REAL", account_id="acct1")), 0)
 
 
+class TestRunPublicationAtomicity(unittest.TestCase):
+    """C11: the decision and the account observation behind it are one commit."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "test_publish.db")
+        self.db = OptionsDatabase(self.db_path)
+
+    def tearDown(self):
+        self.db.close()
+        close_connection_pool(self.db_path)
+        for name in os.listdir(self.temp_dir):
+            os.remove(os.path.join(self.temp_dir, name))
+        os.rmdir(self.temp_dir)
+
+    def _run_snapshot(self, run_id="run-1"):
+        from core.run_model import RunMetadata, WheelRunSnapshot
+
+        return WheelRunSnapshot(
+            run=RunMetadata(
+                run_id=run_id,
+                generated_at="2026-01-01T00:00:00+00:00",
+                published_at="2026-01-01T00:00:01+00:00",
+                env="REAL",
+                account_id="acct1",
+                preset_key="balanced",
+                preset_version=1,
+                market_state="open",
+                status="ready",
+                quote_fetched_at={"AAPL": "2026-01-01T00:00:00+00:00"},
+                coverage_scanned=1,
+                coverage_total=1,
+            ),
+            portfolio={"account_value": 1000.0, "positions": []},
+            csp_picks=(),
+            cc_decisions=(),
+            roll_decisions=(),
+            rejected=(),
+            preset={},
+            watchlist_origins={"AAPL": {"origin": "watchlist"}},
+        )
+
+    def _observation(self, run_id="run-1", nav=1000.0):
+        return {
+            "run_id": run_id,
+            "captured_at": "2026-01-01T00:00:01+00:00",
+            "env": "REAL",
+            "account_id": "acct1",
+            "net_liquidation": nav,
+            "cash_available": nav,
+            "cash_reserved_for_csp": 0,
+            "cash_available_for_csp": nav,
+            "broker_buying_power": nav,
+            "positions": [],
+        }
+
+    def _event(self):
+        return {
+            "event_type": "entry",
+            "ticker": "AAPL",
+            "option_type": "PUT",
+            "strike": 150,
+            "expiration": "20240419",
+            "premium_in": 250.0,
+            "provenance": "inferred",
+        }
+
+    def _counts(self):
+        with sqlite3.connect(self.db_path) as conn:
+            return (
+                conn.execute("SELECT COUNT(*) FROM run_metadata").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM portfolio_snapshots").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM trade_events").fetchone()[0],
+            )
+
+    def test_decision_and_observation_commit_together(self):
+        self.db.save_run_publication(self._run_snapshot(), self._observation(), [self._event()])
+
+        self.assertIsNotNone(self.db.get_latest_snapshot(env="REAL", account_id="acct1"))
+        self.assertIsNotNone(self.db.get_latest_portfolio_snapshot(env="REAL", account_id="acct1"))
+        self.assertEqual(self._counts(), (1, 1, 1))
+
+    def test_republishing_is_idempotent(self):
+        self.db.save_run_publication(self._run_snapshot(), self._observation(), [self._event()])
+        self.db.save_run_publication(self._run_snapshot(), self._observation(), [self._event()])
+
+        self.assertEqual(self._counts(), (1, 1, 1))
+
+    def test_failure_rolls_back_decision_and_observation(self):
+        bad = self._event()
+        bad["strike"] = "not-a-number"
+
+        with self.assertRaises(Exception):
+            self.db.save_run_publication(self._run_snapshot(), self._observation(), [bad])
+
+        # Neither half is visible: no decision without its observation.
+        self.assertIsNone(self.db.get_latest_snapshot(env="REAL", account_id="acct1"))
+        self.assertIsNone(self.db.get_latest_portfolio_snapshot(env="REAL", account_id="acct1"))
+        self.assertEqual(self._counts(), (0, 0, 0))
+
+    def test_publication_without_observation_still_publishes_decision(self):
+        self.db.save_run_publication(self._run_snapshot())
+
+        self.assertIsNotNone(self.db.get_latest_snapshot(env="REAL", account_id="acct1"))
+        self.assertIsNone(self.db.get_latest_portfolio_snapshot(env="REAL", account_id="acct1"))
+
+
 class TestIvHistoryStrikeMigration(unittest.TestCase):
     """Schema v12: `iv_history.strike` enables the daily closest-to-ATM series.
 

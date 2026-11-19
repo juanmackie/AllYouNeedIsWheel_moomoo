@@ -239,35 +239,25 @@ def _engine_result(preset_key, overrides=None):
     ts = _fresh_ts()
     quote_fetched_at = {t: ts for t in tickers}
     csp = next(signal for signal in signals if signal["option_type"] == "PUT")
-    next_actions = [
-        {
-            "action_id": f"cash:{csp['ticker']}",
-            "rank": 1,
-            "urgency": "routine",
-            "underlying": "CASH",
-            "wheel_state": "CASH",
-            "verdict": "DEPLOY_CASH",
-            "reason_codes": [],
-            "reasons": ["Allocate free broker cash in rank order."],
-            "ticket": {
-                "kind": "open",
-                "lane": "csp_picks",
-                "net_credit": 125.0,
-                "legs": [
-                    {
-                        "ticker": csp["ticker"],
-                        "side": "SELL",
-                        "option_type": "PUT",
-                        "strike": csp["strike"],
-                        "expiration": csp["expiration"],
-                        "quantity": 1,
-                        "executable_price": csp["bid_premium_per_contract"],
-                        "limit_target": csp["limit_target_per_contract"],
-                    }
-                ],
-            },
-        }
-    ]
+    # Build the next actions with the REAL planner, so the fixture publishes the
+    # same stable identities, revisions, deadlines and evidence the app does.
+    from core.action_plan import build_next_actions
+
+    deployment_plan = {
+        "lines": [
+            {
+                "ticker": csp["ticker"],
+                "option_type": "PUT",
+                "strike": csp["strike"],
+                "expiration": csp["expiration"],
+                "bid": csp["bid_premium_per_contract"],
+                "deployment_contracts": 1,
+            }
+        ],
+        "total_credit": 125.0,
+        "cash_left": 0.0,
+    }
+    next_actions = build_next_actions(deployment_plan=deployment_plan)
     return {
         "generated_at": ts,
         "state": overrides.get("state", "planning"),
@@ -289,7 +279,7 @@ def _engine_result(preset_key, overrides=None):
         "cash_reserved_for_csp": 0.0,
         "campaigns": [],
         "roll_candidates": [],
-        "deployment_plan": {"lines": []},
+        "deployment_plan": deployment_plan,
         "next_actions": next_actions,
     }
 
@@ -597,16 +587,33 @@ def _seed_run(db, scene, preset_key="balanced"):
         quote_fetched_at=quote_fetched_at,
         max_tradeable_age_sec=300,
     )
+    from core.run_model import build_snapshot_evidence
+
+    portfolio = {
+        "account_value": 100000.0,
+        "cash_balance": 78500.0,
+        "positions": [],
+        "fetched_at": published_at,
+    }
+    evidence = build_snapshot_evidence(
+        run=run,
+        account_id=opaque,
+        published_at=published_at,
+        generated_at=published_at,
+        portfolio=portfolio,
+        coverage={
+            "scanned": coverage["scanned"],
+            "total": coverage["total"],
+            "complete": coverage["complete"],
+        },
+        max_tradeable_age_sec=run.max_tradeable_age_sec,
+    )
+    actions = [dict(action) for action in result["next_actions"]]
+    for action in actions:
+        action["evidence"] = {"run_id": run_id, "policy": evidence["policy"]["preset"]}
     snapshot = WheelRunSnapshot(
         run=run,
-        portfolio=result
-        if False
-        else {
-            "account_value": 100000.0,
-            "cash_balance": 78500.0,
-            "positions": [],
-            "fetched_at": published_at,
-        },
+        portfolio=portfolio,
         csp_picks=tuple(s for s in signals if s["option_type"] == "PUT"),
         cc_decisions=tuple(s for s in signals if s["option_type"] == "CALL"),
         roll_decisions=(),
@@ -620,9 +627,27 @@ def _seed_run(db, scene, preset_key="balanced"):
         campaigns=tuple(result["campaigns"]),
         roll_candidates=tuple(result["roll_candidates"]),
         deployment_plan=result["deployment_plan"],
-        next_actions=tuple(result["next_actions"]),
+        next_actions=tuple(actions),
+        evidence=evidence,
     )
-    db.save_run_snapshot(snapshot)
+    # C11: publish the decision and the account observation it used in one
+    # transaction, exactly like WheelRunner, so the fixture exercises the real
+    # publish path (growth history is available to /api/portfolio/history).
+    db.save_run_publication(
+        snapshot,
+        portfolio_snapshot={
+            "run_id": run_id,
+            "captured_at": published_at,
+            "env": env,
+            "account_id": opaque,
+            "net_liquidation": 100000.0,
+            "cash_available": 78500.0,
+            "cash_reserved_for_csp": 0.0,
+            "cash_available_for_csp": 78500.0,
+            "broker_buying_power": 74000.0,
+            "positions": [],
+        },
+    )
     db.save_refresh_attempt(
         RefreshAttempt(
             # '!' sorts below any real hex attempt_id (ASCII 33 < '0'), so in a

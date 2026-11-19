@@ -22,6 +22,7 @@ vi.mock('../../frontend/static/js/dashboard/run-strip.js', () => ({
   initRunStrip: vi.fn(),
   loadRunStrip: vi.fn().mockResolvedValue(undefined),
   renderRunStrip: vi.fn(),
+  renderRunCommunicationError: vi.fn(),
 }));
 
 vi.mock('../../frontend/static/js/dashboard/growth-panel.js', () => ({
@@ -129,15 +130,21 @@ describe('dashboard signal-panel initialization', () => {
     const accountLoad = new Promise((resolve) => { releaseAccountLoad = resolve; });
     const { loadPortfolioData } = await import('../../frontend/static/js/dashboard/account.js');
     loadPortfolioData.mockReturnValueOnce(accountLoad);
-    global.fetch = vi.fn(async (url) => url === '/api/run'
-      ? {
-        ok: true,
-        json: async () => ({
-          attempt: { state: 'succeeded' },
-          snapshot: { tradeable: true, run: { run_id: 'startup-run', status: 'ready' } },
-        }),
+    global.fetch = vi.fn(async (url) => {
+      if (url === '/api/run/revision') {
+        return { ok: true, json: async () => ({ revision: 'startup-run|succeeded|publish|10', run_id: 'startup-run' }) };
       }
-      : { ok: true, json: async () => ({ positions: [] }) });
+      if (url === '/api/run') {
+        return {
+          ok: true,
+          json: async () => ({
+            attempt: { state: 'succeeded' },
+            snapshot: { tradeable: true, run: { run_id: 'startup-run', status: 'ready' } },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ positions: [] }) };
+    });
 
     const { initializeTopRecommendations, loadTopRecommendations } = await import('../../frontend/static/js/dashboard/top-recommendations.js');
     const { loadRunStrip } = await import('../../frontend/static/js/dashboard/run-strip.js');
@@ -151,7 +158,7 @@ describe('dashboard signal-panel initialization', () => {
     expect(initializeTopRecommendations).toHaveBeenCalledTimes(1);
     expect(loadRunStrip).toHaveBeenCalledTimes(1);
     expect(startPoll).toHaveBeenCalledTimes(1);
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
     expect(loadPortfolioData).toHaveBeenCalledTimes(1);
     expect(loadTopRecommendations).toHaveBeenCalledWith(false);
 
@@ -175,6 +182,12 @@ describe('dashboard signal-panel initialization', () => {
     // (completion before the first tick) — the shared poll adopts it once and
     // fans out reloads to every panel via read-only fetches.
     global.fetch = vi.fn(async (url) => {
+      if (url === '/api/run/revision') {
+        return {
+          ok: true,
+          json: async () => ({ revision: 'run-xyz|succeeded|publish|10', run_id: 'run-xyz' }),
+        };
+      }
       if (url === '/api/run') {
         return {
           ok: true,
@@ -221,6 +234,12 @@ describe('dashboard signal-panel initialization', () => {
     optionsTableState.tickersData = { AAPL: { data: { data: { AAPL: { stock_price: 190 } } } } };
 
     global.fetch = vi.fn(async (url) => {
+      if (url === '/api/run/revision') {
+        return {
+          ok: true,
+          json: async () => ({ revision: 'run-abc|succeeded|publish|10', run_id: 'run-abc' }),
+        };
+      }
       if (url === '/api/run') {
         return {
           ok: true,

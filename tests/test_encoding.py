@@ -25,7 +25,9 @@ def _get_source_files(base_dir, extensions=(".py", ".js", ".html", ".css", ".md"
     for root, dirs, files in os.walk(base_dir):
         # Skip hidden and virtual environment dirs
         dirs[:] = [
-            d for d in dirs if not d.startswith(".") and d not in ("venv", ".venv", "node_modules", "__pycache__")
+            d
+            for d in dirs
+            if not d.startswith(".") and d not in ("venv", ".venv", "node_modules", "__pycache__", "_tmp")
         ]
         for f in files:
             if any(f.endswith(ext) for ext in extensions):

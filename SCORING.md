@@ -296,16 +296,31 @@ blowout) and final 30 minutes (MOC/pinning), midday is fair, mid-session is
 good, outside hours the app directs you to stage limit tickets. Earnings risk
 before entry is already enforced by event tiers.
 
-## Growth pace (path to target)
+## Growth: account size vs investment performance
 
 One portfolio snapshot is persisted per completed run (NAV, cash, reserved
-collateral, full position book). `GET /api/portfolio/history` serves the
-series plus a `pace` payload from `core.growth_mode.growth_pace`: progress
-toward the active preset's 5x `target_account_multiple`, annualized change in
-unadjusted NAV (market change plus deposits/withdrawals), ETA to target, required
-premium/day, and an on-track verdict derived from that NAV change — never a
-cash-flow-adjusted strategy return or promised date. The dashboard labels this
-unadjusted NAV change, not strategy compounding.
+collateral, full position book) in the same transaction as the decision that
+used it. `GET /api/portfolio/history` serves two deliberately separate measures:
+
+- `pace` — the **account size** milestone (`core.growth_mode.growth_pace`):
+  baseline, target (`baseline × target_account_multiple`) and progress. Any
+  deposit can move it. Its unadjusted annualized pace, ETA and
+  `required_premium_per_day` are retired (returned `null`): a deposit could be
+  annualized into a fabricated growth rate, and with no target date there is no
+  independently defined daily premium requirement.
+- `investment` — **investment performance** (`core.growth_accounting`): chained
+  Modified-Dietz returns over persisted NAV intervals after removing dated
+  external capital movements (deposit minus withdrawal, time-weighted). A $40k
+  deposit into a $10k book reports `1.00×`, a withdrawal alone leaves it
+  unchanged, and a real loss stays below `1.00×`. When the ingested cash-flow
+  backfill does not span the window, or a capital movement is undated or in
+  another currency, the multiple is `null` with a named `gaps` reason — unknown,
+  never an unadjusted ratio.
+
+The dashboard shows both, labels which is which, and never presents gross
+premium as progress toward the goal. Strategy evidence for the ranking itself is
+served by `GET /api/run/strategy-evidence` from the offline replay report and is
+display-only.
 
 ## Expected trajectory (Monte Carlo, Moomoo-calibrated)
 

@@ -1,0 +1,1 @@
+{"attempt_error":"StubRecommendationEngine.get_top_recommendations() got an unexpected keyword argument 'portfolio_context'","attempt_state":"failed","ok":true,"preset_key":"balanced","run_id":"e2e-a0c5a9bb9b1c","run_status":"planning"}

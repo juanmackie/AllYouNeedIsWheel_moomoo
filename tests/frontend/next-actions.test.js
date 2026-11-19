@@ -16,6 +16,8 @@ const run = {
     ],
 };
 
+const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe('next actions desk', () => {
     beforeEach(() => {
         document.body.innerHTML = '<div id="next-actions-content"></div>';
@@ -85,5 +87,106 @@ describe('next actions desk', () => {
         expect(records.textContent).toContain('−$1.06');
         expect(records.textContent).toContain('311 weeks');
         expect(records.textContent).toContain('Assumes a flat share price. Not a forecast.');
+    });
+
+    it('answers "what changed" in one line and badges the changed actions', () => {
+        const snapshot = structuredClone(run);
+        snapshot.next_actions[0].action_id = 'AA:CALL:45.5:20261023';
+        snapshot.next_actions[1].action_id = 'SOFI:SHARES_FREE';
+        snapshot.changes = {
+            first_publication: false,
+            previous_published_at: '2026-01-01T00:00:00+00:00',
+            new: [],
+            changed: [{
+                action_id: 'AA:CALL:45.5:20261023',
+                underlying: 'AA',
+                previous_verdict: 'HOLD',
+                labels: ['action changed'],
+            }],
+            resolved: [],
+            unchanged_count: 2,
+        };
+        renderNextActions(snapshot);
+        const summary = document.getElementById('next-actions-changes');
+        expect(summary.textContent).toContain('1 changed');
+        expect(summary.textContent).toContain('Unchanged: 2');
+        expect(summary.textContent).toContain('AA: action changed');
+        expect(document.querySelector('[data-change="changed"] .action-change-badge').textContent).toBe('CHANGED');
+    });
+
+    it('states an unchanged book in one line instead of asking for a review', () => {
+        const snapshot = structuredClone(run);
+        snapshot.changes = {
+            first_publication: false,
+            previous_published_at: '2026-01-01T00:00:00+00:00',
+            new: [], changed: [], resolved: [], unchanged_count: 3,
+        };
+        renderNextActions(snapshot);
+        const summary = document.getElementById('next-actions-changes');
+        expect(summary.textContent).toContain('No material change');
+        expect(summary.textContent).toContain('3 action(s) unchanged');
+        expect(document.querySelectorAll('.action-change-badge')).toHaveLength(0);
+    });
+
+    it('says so when nothing can be compared yet', () => {
+        const snapshot = structuredClone(run);
+        snapshot.changes = { first_publication: true, new: [], changed: [], resolved: [], unchanged_count: 0 };
+        renderNextActions(snapshot);
+        expect(document.getElementById('next-actions-changes').textContent).toContain('First published run');
+    });
+
+    it('shows the ranking objective and honest evidence status', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            json: async () => ({
+                status: 'available',
+                ranking: 'capital_velocity_per_day',
+                objective: 'executable return on deployed capital per day',
+                verdict: 'inconclusive',
+                age_days: 12,
+                sample: { oos_cohorts: 4, min_oos_cohorts: 8 },
+                outcome: { excess_per_capital_day: -0.002 },
+                reasons: ['only 4 out-of-sample resolved cohorts (need at least 8)'],
+            }),
+        })));
+        renderNextActions(run);
+        await flushPromises();
+        const note = document.getElementById('next-actions-evidence');
+        expect(note.textContent).toContain('Ranking evidence: inconclusive');
+        expect(note.textContent).toContain('4/8 resolved out-of-sample cohorts');
+        expect(note.textContent).toContain('simulated, after cost');
+        expect(note.textContent).toContain('Ranking in use: executable return on deployed capital per day');
+        vi.unstubAllGlobals();
+    });
+
+    it('reports missing evidence instead of a track record', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            json: async () => ({
+                status: 'no_evidence',
+                objective: 'executable return on deployed capital per day',
+                reasons: ['no replay report has been generated'],
+            }),
+        })));
+        renderNextActions(run);
+        await flushPromises();
+        const note = document.getElementById('next-actions-evidence');
+        expect(note.textContent).toContain('none yet');
+        expect(note.textContent).toContain('no replay report has been generated');
+        vi.unstubAllGlobals();
+    });
+
+    it('says a comparison is impossible when the previous run predates revision tracking', () => {
+        const snapshot = structuredClone(run);
+        snapshot.changes = {
+            comparable: false,
+            reason: 'the previous publication predates change tracking',
+            new: [], changed: [], resolved: [], unchanged_count: 0,
+        };
+        renderNextActions(snapshot);
+        const summary = document.getElementById('next-actions-changes');
+        expect(summary.textContent).toContain('Cannot compare with the previous run');
+        expect(summary.textContent).toContain('predates change tracking');
+        expect(summary.textContent).toContain('Review the list below in full');
     });
 });

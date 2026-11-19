@@ -163,6 +163,130 @@ class TestRunRoute(unittest.TestCase):
         self.assertIn("eligibility", payload["csp_picks"][0])
         self.assertIn("quote_age_sec", payload["cc_decisions"][0])
 
+    def _run_snapshot(self, run_id, actions, fetched=None):
+        fetched = fetched or datetime.now(timezone.utc).isoformat()
+        return {
+            "run": {
+                "run_id": run_id,
+                "published_at": fetched,
+                "status": "ready",
+                "errors": [],
+                "coverage_complete": True,
+                "quote_fetched_at": {"AAPL": fetched},
+                "max_tradeable_age_sec": 600,
+                "market_state": "open",
+            },
+            "tradeable": True,
+            "signals": [],
+            "next_actions": actions,
+        }
+
+    def test_run_reports_material_changes_since_previous_publication(self):
+        held = {
+            "action_id": "AAPL:CALL:100:20261218",
+            "subject_id": "AAPL:CALL:100:20261218",
+            "revision": "rev-new",
+            "underlying": "AAPL",
+            "wheel_state": "SHARES_COVERED",
+            "verdict": "CLOSE",
+            "deadline": "20261218",
+            "material": {"verdict": "CLOSE", "quantity": [1]},
+        }
+        previous_held = {
+            "action_id": "AAPL:CALL:100:20261218",
+            "subject_id": "AAPL:CALL:100:20261218",
+            "revision": "rev-old",
+            "underlying": "AAPL",
+            "wheel_state": "SHARES_COVERED",
+            "verdict": "HOLD",
+            "deadline": "20261218",
+            "material": {"verdict": "HOLD", "quantity": [1]},
+            "rank": 1,
+        }
+        resolved = {
+            "action_id": "MSFT:CALL:200:20261218",
+            "subject_id": "MSFT:CALL:200:20261218",
+            "revision": "rev-msft",
+            "underlying": "MSFT",
+            "verdict": "CLOSE",
+            "material": {"verdict": "CLOSE"},
+        }
+        current = self._run_snapshot("run-b", [held])
+        previous = self._run_snapshot("run-a", [previous_held, resolved])
+        self.db.get_latest_attempt.return_value = None
+        self.db.get_latest_snapshot.return_value = current
+        self.db.get_run_snapshots.return_value = [current, previous]
+
+        with self.app.test_client() as client:
+            payload = client.get("/api/run").get_json()
+
+        changes = payload["snapshot"]["changes"]
+        self.assertFalse(changes["first_publication"])
+        self.assertEqual(changes["new"], [])
+        self.assertEqual([item["action_id"] for item in changes["changed"]], ["AAPL:CALL:100:20261218"])
+        self.assertIn("verdict", changes["changed"][0]["fields"])
+        self.assertEqual([item["underlying"] for item in changes["resolved"]], ["MSFT"])
+        self.assertEqual(changes["unchanged_count"], 0)
+        self.assertEqual(changes["previous_run_id"], "run-a")
+
+    def test_run_marks_a_first_publication(self):
+        current = self._run_snapshot("run-only", [])
+        self.db.get_latest_attempt.return_value = None
+        self.db.get_latest_snapshot.return_value = current
+        self.db.get_run_snapshots.return_value = [current]
+
+        with self.app.test_client() as client:
+            payload = client.get("/api/run").get_json()
+
+        self.assertTrue(payload["snapshot"]["changes"]["first_publication"])
+
+    def test_revision_token_tracks_publication_and_attempt_stage(self):
+        self.db.get_latest_publication_identity.return_value = {
+            "run_id": "run-a",
+            "published_at": "2026-01-01T00:00:00+00:00",
+            "status": "ready",
+        }
+        self.db.get_latest_attempt.return_value = RefreshAttempt(
+            attempt_id="attempt-1", run_id=None, state="refreshing", stage="scan", progress=0.44
+        ).to_dict()
+
+        with self.app.test_client() as client:
+            payload = client.get("/api/run/revision").get_json()
+
+        self.assertEqual(payload["run_id"], "run-a")
+        self.assertEqual(payload["revision"], "run-a|2026-01-01T00:00:00+00:00|attempt-1|refreshing|scan|4")
+        self.assertEqual(payload["attempt"]["stage"], "scan")
+        self.assertNotIn("snapshot", payload)
+
+    def test_revision_token_is_stable_without_changes(self):
+        self.db.get_latest_publication_identity.return_value = {
+            "run_id": "run-a",
+            "published_at": "t",
+            "status": "ready",
+        }
+        self.db.get_latest_attempt.return_value = None
+
+        with self.app.test_client() as client:
+            first = client.get("/api/run/revision").get_json()
+            second = client.get("/api/run/revision").get_json()
+
+        self.assertEqual(first["revision"], second["revision"])
+        self.assertTrue(first["revision"].startswith("run-a|t|"))
+
+    def test_strategy_evidence_route_reports_missing_evidence(self):
+        with patch(
+            "core.strategy_evidence.DEFAULT_REPORT_PATH",
+            new_callable=lambda: __import__("pathlib").Path("/nonexistent/replay/report.json"),
+        ):
+            with self.app.test_client() as client:
+                response = client.get("/api/run/strategy-evidence")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "no_evidence")
+        self.assertEqual(payload["ranking"], "capital_velocity_per_day")
+        self.assertIn("no replay report has been generated", payload["reasons"])
+
 
 def _run_dict(now_utc, **overrides):
     run = {

@@ -278,10 +278,28 @@ function renderEquityCurve(container, series) {
     container.appendChild(caption);
 }
 
+const INVESTMENT_GAP_TEXT = {
+    cash_flow_coverage_incomplete: 'Cash-flow history does not yet cover this window, so deposits cannot be separated from returns.',
+    undated_capital_movement: 'A deposit or withdrawal has no date, so the window cannot be measured.',
+    unsupported_currency: 'A cash flow in another currency cannot be combined with a USD account value.',
+    nonpositive_capital_base: 'The capital base was not positive after a flow, so a return is undefined.',
+    fewer_than_two_nav_observations: 'At least two NAV observations are needed.',
+};
+
+function describeInvestmentGaps(investment) {
+    const gaps = Array.isArray(investment?.gaps) ? investment.gaps : [];
+    const texts = gaps.map((gap) => INVESTMENT_GAP_TEXT[gap] || gap).filter(Boolean);
+    return texts.join(' ');
+}
+
 function renderPace(payload, series) {
     const badge = document.getElementById('growth-track-badge');
     const navEl = document.getElementById('growth-current-nav');
     const targetEl = document.getElementById('growth-target-nav');
+    const startingEl = document.getElementById('growth-starting-nav');
+    const contributedEl = document.getElementById('growth-contributed');
+    const investmentEl = document.getElementById('growth-investment');
+    const investmentNote = document.getElementById('growth-investment-note');
     if (!badge && !navEl && !targetEl) return; // panel not present in this DOM
     // Server-declared target multiple (active preset); falls back to the
     // project-wide 5x goal.
@@ -289,9 +307,7 @@ function renderPace(payload, series) {
     // S04: render every target label from the server objective, including
     // initial/empty states.
     const headingEl = document.getElementById('growth-heading');
-    const etaLabelEl = document.getElementById('growth-eta-label');
     if (headingEl) headingEl.textContent = `Path to ${targetMultiple}x`;
-    if (etaLabelEl) etaLabelEl.textContent = `ETA to ${targetMultiple}x`;
     const validSeries = (Array.isArray(series) ? series : []).filter((point) =>
         Number.isFinite(Number(point?.net_liquidation)) && Number(point.net_liquidation) > 0,
     );
@@ -302,13 +318,15 @@ function renderPace(payload, series) {
             badge.textContent = payload ? 'NO HISTORY' : 'HISTORY UNAVAILABLE';
             badge.className = 'badge bg-secondary';
         }
-        for (const id of ['growth-current-nav', 'growth-target-nav', 'growth-progress', 'growth-annualized', 'growth-eta']) {
+        for (const id of ['growth-current-nav', 'growth-target-nav', 'growth-progress',
+            'growth-starting-nav', 'growth-contributed', 'growth-investment']) {
             const el = document.getElementById(id);
             if (el) {
                 el.textContent = '—';
                 el.classList.remove('text-success', 'text-danger');
             }
         }
+        if (investmentNote) investmentNote.textContent = '';
         const bar = document.getElementById('growth-progress-bar');
         if (bar) {
             bar.style.width = '0%';
@@ -319,69 +337,84 @@ function renderPace(payload, series) {
 
     const currentNav = Number(latest.net_liquidation);
     // C07/S04: render the server's durable target and status — never recompute a
-    // moving target from current NAV on the client.
-    const serverPace0 = payload?.pace || {};
-    const targetNav = Number(serverPace0.target_nav);
-    const reached = Boolean(serverPace0.reached);
+    // moving target from current NAV on the client. C13: the two measures are
+    // separate; a reached SIZE milestone says nothing about performance.
+    const serverPace = payload?.pace || {};
+    const investment = payload?.investment || {};
+    const targetNav = Number(serverPace.target_nav);
+    const startingNav = Number(serverPace.baseline_nav);
+    const reached = Boolean(serverPace.reached);
     if (navEl) navEl.textContent = formatCurrency(currentNav);
     if (targetEl) targetEl.textContent = Number.isFinite(targetNav) ? formatCurrency(targetNav) : '—';
+    if (startingEl) startingEl.textContent = Number.isFinite(startingNav) ? formatCurrency(startingNav) : '—';
     const targetLabel = document.getElementById('growth-target-label');
     if (targetLabel) targetLabel.textContent = `${targetMultiple}x`;
 
-    // Server-side pace math (core.growth_mode.growth_pace) is the single
-    // source of truth — the client never recomputes pace.
-    const serverPace = payload && payload.pace ? payload.pace : null;
-    const progressPct = Number(serverPace?.progress_pct) || 0;
-    const pace = serverPace && serverPace.annualized_pace !== null ? Number(serverPace.annualized_pace) : null;
-    const etaDays = serverPace && serverPace.eta_days !== null ? Number(serverPace.eta_days) : null;
-    const statusReached = Boolean(serverPace?.reached);
+    const contributed = investment?.contributed;
+    if (contributedEl) {
+        if (contributed && Number.isFinite(Number(contributed.net))) {
+            const amount = formatCurrency(Math.abs(Number(contributed.net)));
+            const sign = Number(contributed.net) < 0 ? '−' : '+';
+            contributedEl.textContent = `${sign}${amount}${contributed.complete === false ? '*' : ''}`;
+            contributedEl.classList.toggle('text-muted', contributed.complete === false);
+        } else {
+            contributedEl.textContent = '—';
+        }
+    }
 
+    const multiple = investment?.investment_multiple;
+    const measured = investment?.status === 'measured' && Number.isFinite(Number(multiple));
+    if (investmentEl) {
+        investmentEl.classList.remove('text-success', 'text-danger', 'text-muted');
+        if (measured) {
+            investmentEl.textContent = `${Number(multiple).toFixed(2)}×`;
+            investmentEl.classList.add(Number(multiple) >= 1 ? 'text-success' : 'text-danger');
+        } else {
+            investmentEl.textContent = 'unknown';
+            investmentEl.classList.add('text-muted');
+        }
+    }
+    if (investmentNote) {
+        const gaps = describeInvestmentGaps(investment);
+        if (measured) {
+            const pct = Number(investment.investment_return_pct);
+            const since = investment?.since_last_capital_movement;
+            const sinceText = since && since.verified
+                ? ` Since the last capital movement: ${Number(since.change_pct).toFixed(2)}%.`
+                : '';
+            investmentNote.textContent =
+                `Flow-adjusted return ${Number.isFinite(pct) && pct > 0 ? '+' : ''}${Number.isFinite(pct) ? pct.toFixed(2) : '0.00'}% ` +
+                `over ${investment.window?.days ?? '?'} days.${sinceText}` +
+                (contributed?.complete === false ? ' * Contributions are a lower bound; cash-flow coverage is incomplete.' : '');
+        } else {
+            investmentNote.textContent = gaps
+                ? `Investment growth is unknown. ${gaps}${contributed?.complete === false ? ' *' : ''}`
+                : 'Investment growth is unknown; there is no measured window yet.';
+        }
+    }
+
+    const progressPct = Number(serverPace.progress_pct) || 0;
     const progressEl = document.getElementById('growth-progress');
     const barEl = document.getElementById('growth-progress-bar');
     if (progressEl) {
-        progressEl.textContent = `${Math.max(0, Math.min(progressPct, 100)).toFixed(1)}% of the way to ${targetMultiple}x`;
+        progressEl.textContent = `${Math.max(0, Math.min(progressPct, 100)).toFixed(1)}% of the way to ${targetMultiple}x account size`;
     }
     if (barEl) {
         barEl.style.width = `${Math.max(0, Math.min(progressPct, 100)).toFixed(1)}%`;
         barEl.setAttribute('aria-valuenow', progressPct.toFixed(1));
     }
 
-    const paceEl = document.getElementById('growth-annualized');
-    if (!paceEl) return;
-    if (pace === null) {
-        paceEl.textContent = '—';
-    } else {
-        paceEl.textContent = `${(pace * 100).toFixed(1)}%/yr`;
-        paceEl.classList.toggle('text-success', pace > 0);
-        paceEl.classList.toggle('text-danger', pace < 0);
-    }
-
-    const etaEl = document.getElementById('growth-eta');
-    if (etaDays === null) {
-        etaEl.textContent = '—';
-    } else if (statusReached) {
-        etaEl.textContent = 'Reached';
-    } else if (etaDays > 365.25 * 40) {
-        etaEl.textContent = '>40y';
-    } else {
-        const years = Math.floor(etaDays / 365.25);
-        const months = Math.round((etaDays % 365.25) / 30.44);
-        etaEl.textContent = years > 0 ? `~${years}y ${months}m` : `~${months}m`;
-    }
-
     if (badge) {
-        if (statusReached) {
-            badge.textContent = 'TARGET REACHED';
-            badge.className = 'badge bg-success';
-        } else if (pace === null) {
-            badge.textContent = 'COLLECTING DATA';
-            badge.className = 'badge bg-secondary';
-        } else if (pace > 0) {
-            badge.textContent = 'NAV RISING';
+        if (measured) {
+            const up = Number(multiple) >= 1;
+            badge.textContent = up ? 'INVESTMENT GROWTH MEASURED' : 'INVESTMENT DOWN';
+            badge.className = up ? 'badge bg-success' : 'badge bg-warning text-dark';
+        } else if (reached) {
+            badge.textContent = 'SIZE TARGET REACHED';
             badge.className = 'badge bg-success';
         } else {
-            badge.textContent = 'FLAT/DOWN';
-            badge.className = 'badge bg-warning text-dark';
+            badge.textContent = 'PERFORMANCE UNKNOWN';
+            badge.className = 'badge bg-secondary';
         }
     }
 }

@@ -279,6 +279,107 @@ class TestPortfolioHistoryRoute(unittest.TestCase):
         self.assertEqual(small["pace"]["target_nav"], 5000.0)
 
     @patch("api.services.config.get_config", return_value={"portfolio_env": "SIMULATE", "account_id": ""})
+    def test_deposit_is_not_reported_as_investment_growth(self, mock_get_config):
+        """C13: a deposit raises NAV but must not read as performance."""
+        mock_db = MagicMock()
+        mock_db.get_portfolio_history.return_value = [
+            {
+                "run_id": "r1",
+                "captured_at": "2026-01-01T15:00:00+00:00",
+                "net_liquidation": 10_000.0,
+                "cash_available": 0,
+                "cash_reserved_for_csp": 0,
+                "cash_available_for_csp": 0,
+            },
+            {
+                "run_id": "r2",
+                "captured_at": "2026-01-03T15:00:00+00:00",
+                "net_liquidation": 50_000.0,
+                "cash_available": 0,
+                "cash_reserved_for_csp": 0,
+                "cash_available_for_csp": 0,
+            },
+        ]
+        mock_db.get_cash_flows.return_value = [
+            {
+                "flow_type": "Deposit",
+                "clearing_date": "2026-01-03",
+                "amount": 40_000.0,
+                "currency": "USD",
+                "remark": "",
+            },
+        ]
+        mock_db.get_cash_flow_coverage.return_value = {"earliest": "2025-12-01", "latest": "2026-12-31"}
+        self.app.config["database"] = mock_db
+
+        payload = json.loads(self.client.get("/api/portfolio/history").data)
+        investment = payload["investment"]
+        self.assertEqual(investment["status"], "measured")
+        self.assertAlmostEqual(investment["investment_multiple"], 1.0, places=6)
+        self.assertEqual(investment["contributed"]["net"], 40_000.0)
+        # The account-size milestone may be reached; performance is not.
+        self.assertTrue(payload["pace"]["reached"])
+        self.assertTrue(payload["goal"]["investment_measured"])
+
+    @patch("api.services.config.get_config", return_value={"portfolio_env": "SIMULATE", "account_id": ""})
+    def test_retired_pace_fields_are_not_reported(self, mock_get_config):
+        mock_db = MagicMock()
+        mock_db.get_portfolio_history.return_value = [
+            {
+                "run_id": "r1",
+                "captured_at": "2026-01-01T15:00:00+00:00",
+                "net_liquidation": 10_000.0,
+                "cash_available": 0,
+                "cash_reserved_for_csp": 0,
+                "cash_available_for_csp": 0,
+            },
+            {
+                "run_id": "r2",
+                "captured_at": "2026-06-01T15:00:00+00:00",
+                "net_liquidation": 20_000.0,
+                "cash_available": 0,
+                "cash_reserved_for_csp": 0,
+                "cash_available_for_csp": 0,
+            },
+        ]
+        self.app.config["database"] = mock_db
+
+        pace = json.loads(self.client.get("/api/portfolio/history").data)["pace"]
+        for retired in ("annualized_pace", "eta_days", "required_premium_per_day", "on_track"):
+            self.assertIsNone(pace[retired], retired)
+        self.assertEqual(pace["measure"], "unadjusted_nav_change")
+
+    @patch("api.services.config.get_config", return_value={"portfolio_env": "SIMULATE", "account_id": ""})
+    def test_missing_cash_flow_evidence_makes_investment_unknown(self, mock_get_config):
+        mock_db = MagicMock()
+        mock_db.get_portfolio_history.return_value = [
+            {
+                "run_id": "r1",
+                "captured_at": "2026-01-01T15:00:00+00:00",
+                "net_liquidation": 10_000.0,
+                "cash_available": 0,
+                "cash_reserved_for_csp": 0,
+                "cash_available_for_csp": 0,
+            },
+            {
+                "run_id": "r2",
+                "captured_at": "2026-01-03T15:00:00+00:00",
+                "net_liquidation": 50_000.0,
+                "cash_available": 0,
+                "cash_reserved_for_csp": 0,
+                "cash_available_for_csp": 0,
+            },
+        ]
+        # The default MagicMock get_cash_flows return is not a list -> no evidence.
+        self.app.config["database"] = mock_db
+
+        payload = json.loads(self.client.get("/api/portfolio/history").data)
+        self.assertEqual(payload["investment"]["status"], "unknown")
+        self.assertIsNone(payload["investment"]["investment_multiple"])
+        self.assertIn("cash_flow_coverage_incomplete", payload["investment"]["gaps"])
+        self.assertFalse(payload["goal"]["investment_measured"])
+
+    @patch("api.services.config.get_config", return_value={"portfolio_env": "SIMULATE", "account_id": ""})
     def test_nonpositive_nav_is_excluded_from_equity_curve(self, mock_get_config):
         mock_db = MagicMock()
         mock_db.get_setting.return_value = '{"net_liquidation": 1000, "captured_at": "2026-01-01T00:00:00"}'

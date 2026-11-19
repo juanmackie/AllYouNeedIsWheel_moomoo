@@ -50,4 +50,5 @@
 - `e2e/AGENTS.md` - Browser smoke tests.
 - `fixtures/AGENTS.md` - Shared deterministic scenarios.
 
-- Wheel-desk verification covers pure action order, allocation reserves/caps, basis confidence and reconciliation, repair earnings/delta gates, LET_ASSIGN, immutable schema-3 defaults, all-leg copy checks, and staged manual tickets without execution controls. G1 live measurements remain separate from synthetic tests.
+- Wheel-desk verification covers pure action order, allocation reserves/caps, basis confidence and reconciliation, repair earnings/delta gates, LET_ASSIGN, immutable schema-3 defaults, all-leg copy checks, and staged manual tickets without execution controls. `test_run_changes.py` pins stable action identity/revisions and the "reordering alone is not a change" rule; `test_growth_accounting.py` pins flow-adjusted growth (a deposit is not performance, missing coverage is unknown); `test_strategy_evidence.py` pins the display-only evidence summary. G1 live measurements remain separate from synthetic tests.
+- `verification/run.sh` drives the real app for the account observation/change-view/polling-token contracts and the fail-closed refresh guarantee; keep it green before claiming completion.
