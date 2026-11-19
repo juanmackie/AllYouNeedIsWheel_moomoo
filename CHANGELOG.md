@@ -47,6 +47,10 @@ minute while a run exists (quote freshness can flip a view to stale without a
 publication) and when an owner taken-link is recorded, so an open tab cannot
 keep showing a stale actionable view.
 
+One transition effect: the first publication after this upgrade may show one
+free share lot as resolved plus new (older snapshots keyed that lot on its
+quoted call). It settles on the next publication; nothing is lost.
+
 
 A refresh whose broker portfolio read fails now fails the attempt and keeps the
 last published run. Before, it published a $0-cash run and stored a zero NAV
