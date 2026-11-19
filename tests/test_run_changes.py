@@ -129,7 +129,8 @@ class TestDiffActions(unittest.TestCase):
             build_next_actions(deployment_plan=plan_one), build_next_actions(deployment_plan=plan_three)
         )
         self.assertEqual(len(diff["changed"]), 1)
-        self.assertIn("quantity", diff["changed"][0]["fields"])
+        self.assertIn("legs", diff["changed"][0]["fields"])
+        self.assertIn("ticket changed", diff["changed"][0]["labels"][0])
 
     def test_resolved_subject_is_reported(self):
         before = build_next_actions(roll_decisions=[_roll("AAPL", 100, "20261218", "CLOSE")])
@@ -164,6 +165,80 @@ class TestDiffActions(unittest.TestCase):
     def test_comparable_flag_is_true_for_tracked_publications(self):
         current = build_next_actions(roll_decisions=[_roll("AAPL", 100, "20261218", "HOLD")])
         self.assertTrue(diff_actions(current, current)["comparable"])
+
+    def test_free_share_lot_keeps_its_identity_when_a_call_appears(self):
+        """The SHARES_FREE subject is the lot, not this run's recommended call."""
+        campaign = {"ticker": "AAA", "shares": 100, "adjusted_basis": 70, "market_price": 42}
+        call = {
+            "ticker": "AAA",
+            "option_type": "CALL",
+            "strike": 75,
+            "expiration": "20261218",
+            "bid": 0.4,
+            "ask": 0.5,
+            "dte": 30,
+        }
+        waiting = build_next_actions(campaigns=[campaign])
+        selling = build_next_actions(campaigns=[campaign], cc_decisions=[call])
+        before = next(action for action in waiting if action["underlying"] == "AAA")
+        after = next(action for action in selling if action["underlying"] == "AAA")
+
+        self.assertEqual(before["action_id"], "AAA:SHARES_FREE")
+        self.assertEqual(after["action_id"], "AAA:SHARES_FREE")
+        self.assertEqual(before["verdict"], "WAIT")
+        self.assertEqual(after["verdict"], "SELL_CALL")
+
+        diff = diff_actions(waiting, selling)
+        self.assertEqual(diff["new"], [])
+        self.assertEqual(diff["resolved"], [])
+        self.assertEqual(len(diff["changed"]), 1)
+        self.assertEqual(diff["changed"][0]["previous_verdict"], "WAIT")
+
+    def test_two_legs_swapping_values_change_the_revision(self):
+        """Paired legs: identical multisets from different legs must not collide."""
+        plan_a = {
+            "lines": [
+                {
+                    "ticker": "AAA",
+                    "option_type": "PUT",
+                    "strike": 10,
+                    "expiration": "20261023",
+                    "bid": 0.5,
+                    "deployment_contracts": 1,
+                },
+                {
+                    "ticker": "BBB",
+                    "option_type": "PUT",
+                    "strike": 20,
+                    "expiration": "20261023",
+                    "bid": 0.5,
+                    "deployment_contracts": 2,
+                },
+            ]
+        }
+        plan_b = {
+            "lines": [
+                {
+                    "ticker": "AAA",
+                    "option_type": "PUT",
+                    "strike": 10,
+                    "expiration": "20261023",
+                    "bid": 0.5,
+                    "deployment_contracts": 2,
+                },
+                {
+                    "ticker": "BBB",
+                    "option_type": "PUT",
+                    "strike": 20,
+                    "expiration": "20261023",
+                    "bid": 0.5,
+                    "deployment_contracts": 1,
+                },
+            ]
+        }
+        diff = diff_actions(build_next_actions(deployment_plan=plan_a), build_next_actions(deployment_plan=plan_b))
+        self.assertEqual(len(diff["changed"]), 1)
+        self.assertIn("legs", diff["changed"][0]["fields"])
 
 
 if __name__ == "__main__":

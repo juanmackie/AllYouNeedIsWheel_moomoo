@@ -34,6 +34,19 @@ the full snapshot only when it changes.
 The encoding check no longer scans the private `_tmp/` scratch directory, where
 baseline copies and replay reports are not user-facing source.
 
+Review findings on that change are applied. A capital movement dated on the
+window's first observation day is now charged to the first interval (weight 1),
+so a deposit cannot reappear as performance; an interior boundary-day movement
+is charged to exactly one interval; an unreadable amount or an empty currency
+makes the window unknown with a named gap instead of passing silently. A free
+share lot keeps its identity (`TICKER:SHARES_FREE`) when the recommended call
+appears, disappears, or changes strike, so that reads as one changed decision
+rather than a resolved plus a new one, and ticket legs are hashed as paired rows
+so a leg swap cannot collide. The polling token now also moves every read-time
+minute while a run exists (quote freshness can flip a view to stale without a
+publication) and when an owner taken-link is recorded, so an open tab cannot
+keep showing a stale actionable view.
+
 
 A refresh whose broker portfolio read fails now fails the attempt and keeps the
 last published run. Before, it published a $0-cash run and stored a zero NAV

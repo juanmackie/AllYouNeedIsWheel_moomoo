@@ -10,6 +10,7 @@ GET  /api/run/strategy-evidence -> read-only replay/promotion evidence for the
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
@@ -149,14 +150,35 @@ def get_run_revision():
         progress_bucket = 0
     if attempt_state not in ("queued", "refreshing"):
         progress_bucket = 0
+    current_run_id = str((identity or {}).get("run_id") or "")
+    # Read-time freshness flips a published run from tradeable to stale with no
+    # new publication and no attempt, so an open tab must re-read periodically.
+    # A one-minute bucket bounds how long a stale actionable view can survive.
+    freshness_bucket = str(int(time.time() // 60)) if current_run_id else ""
+    taken_signature = ""
+    if db is not None and current_run_id:
+        try:
+            from api.services.taken_links import read_taken_links
+
+            links = [
+                link
+                for link in read_taken_links(db, identity_env, identity_account)
+                if str(link.get("run_id") or "") == current_run_id
+            ]
+            latest = max((str(link.get("recorded_at") or "") for link in links), default="")
+            taken_signature = f"{len(links)}@{latest}"
+        except Exception as exc:  # a token read must never fail the poll
+            logger.warning("Taken-link token unavailable: %s", exc)
     revision = "|".join(
         [
-            str((identity or {}).get("run_id") or ""),
+            current_run_id,
             str((identity or {}).get("published_at") or ""),
             str((attempt or {}).get("attempt_id") or ""),
             attempt_state,
             attempt_stage,
             str(progress_bucket),
+            freshness_bucket,
+            taken_signature,
         ]
     )
     return jsonify(

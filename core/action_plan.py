@@ -51,11 +51,18 @@ def _material_fields(action):
         "wheel_state": action.get("wheel_state"),
         "deadline": action.get("deadline"),
         "ticket_kind": ticket.get("kind"),
-        "quantity": sorted(int(safe_float(leg.get("quantity"), 0) or 0) for leg in legs),
-        "limit_target": sorted(
-            round(safe_float(leg.get("limit_target")), 4)
+        # Legs are hashed as paired rows (side, right, strike, expiry, quantity,
+        # price). Separate sorted lists would collide when two legs swap values.
+        "legs": sorted(
+            (
+                str(leg.get("side") or "").upper(),
+                str(leg.get("option_type") or "").upper(),
+                safe_float(leg.get("strike"), None),
+                str(leg.get("expiration") or ""),
+                int(safe_float(leg.get("quantity"), 0) or 0),
+                safe_float(leg.get("limit_target"), None),
+            )
             for leg in legs
-            if safe_float(leg.get("limit_target"), None) is not None
         ),
         "loss_if_called": action.get("loss_if_called"),
         "if_called_pnl_vs_basis": action.get("if_called_pnl_vs_basis"),
@@ -69,6 +76,11 @@ def _subject_id(action):
     state = str(action.get("wheel_state") or "").upper()
     if state == "CASH":
         return "CASH"
+    if state in {"SHARES_FREE", "ODD_LOT"}:
+        # The subject is the share lot, not this run's candidate call: otherwise
+        # a call appearing/disappearing (or a different strike) would read as a
+        # resolved decision plus a new one instead of one changed decision.
+        return f"{ticker}:{state}"
     source = action.get("held_contract") or {}
     if safe_float(source.get("strike"), None) is None:
         legs = (action.get("ticket") or {}).get("legs") or []

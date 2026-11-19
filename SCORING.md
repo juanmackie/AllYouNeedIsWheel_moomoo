@@ -311,11 +311,13 @@ used it. `GET /api/portfolio/history` serves two deliberately separate measures:
 - `investment` — **investment performance** (`core.growth_accounting`): chained
   Modified-Dietz returns over persisted NAV intervals after removing dated
   external capital movements (deposit minus withdrawal, time-weighted). A $40k
-  deposit into a $10k book reports `1.00×`, a withdrawal alone leaves it
-  unchanged, and a real loss stays below `1.00×`. When the ingested cash-flow
-  backfill does not span the window, or a capital movement is undated or in
-  another currency, the multiple is `null` with a named `gaps` reason — unknown,
-  never an unadjusted ratio.
+  deposit into a $10k book reports `1.00×` (including when the deposit is dated
+  on the first observation day), a withdrawal alone leaves it unchanged, and a
+  real loss stays below `1.00×`. A movement dated on an interior observation day
+  is charged to exactly one interval, never two. When the ingested cash-flow
+  backfill does not span the window, or a capital movement is undated,
+  unreadable in amount, or in another/unknown currency, the multiple is `null`
+  with a named `gaps` reason — unknown, never an unadjusted ratio.
 
 The dashboard shows both, labels which is which, and never presents gross
 premium as progress toward the goal. Strategy evidence for the ranking itself is

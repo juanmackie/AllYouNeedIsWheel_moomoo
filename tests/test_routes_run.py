@@ -254,7 +254,12 @@ class TestRunRoute(unittest.TestCase):
             payload = client.get("/api/run/revision").get_json()
 
         self.assertEqual(payload["run_id"], "run-a")
-        self.assertEqual(payload["revision"], "run-a|2026-01-01T00:00:00+00:00|attempt-1|refreshing|scan|4")
+        parts = payload["revision"].split("|")
+        self.assertEqual(parts[:6], ["run-a", "2026-01-01T00:00:00+00:00", "attempt-1", "refreshing", "scan", "4"])
+        # A freshness bucket keeps a read-time stale view discoverable while the
+        # publication is unchanged; the taken-link signature follows it.
+        self.assertTrue(parts[6].isdigit(), parts)
+        self.assertTrue(parts[7].startswith("0@"), parts)
         self.assertEqual(payload["attempt"]["stage"], "scan")
         self.assertNotIn("snapshot", payload)
 
@@ -268,10 +273,51 @@ class TestRunRoute(unittest.TestCase):
 
         with self.app.test_client() as client:
             first = client.get("/api/run/revision").get_json()
-            second = client.get("/api/run/revision").get_json()
 
-        self.assertEqual(first["revision"], second["revision"])
         self.assertTrue(first["revision"].startswith("run-a|t|"))
+        # Same publication, same attempt, same minute: the token is stable.
+        with patch("api.routes.run.time.time", return_value=2_000_000_000.0):
+            with self.app.test_client() as client:
+                third = client.get("/api/run/revision").get_json()
+                fourth = client.get("/api/run/revision").get_json()
+        self.assertEqual(third["revision"], fourth["revision"])
+
+    def test_revision_token_moves_when_the_freshness_window_turns(self):
+        """A published view becomes stale by the clock alone; the token must show it."""
+        self.db.get_latest_publication_identity.return_value = {
+            "run_id": "run-a",
+            "published_at": "2026-01-01T00:00:00+00:00",
+            "status": "ready",
+        }
+        self.db.get_latest_attempt.return_value = None
+
+        with patch("api.routes.run.time.time", return_value=2_000_000_000.0):
+            with self.app.test_client() as client:
+                first = client.get("/api/run/revision").get_json()
+        with patch("api.routes.run.time.time", return_value=2_000_000_061.0):
+            with self.app.test_client() as client:
+                second = client.get("/api/run/revision").get_json()
+
+        self.assertNotEqual(first["revision"], second["revision"])
+
+    def test_revision_token_moves_when_a_taken_link_is_recorded(self):
+        self.db.get_latest_publication_identity.return_value = {
+            "run_id": "run-a",
+            "published_at": "2026-01-01T00:00:00+00:00",
+            "status": "ready",
+        }
+        self.db.get_latest_attempt.return_value = None
+        link = {"run_id": "run-a", "recorded_at": "2026-01-02T00:00:00+00:00"}
+
+        with patch("api.services.taken_links.read_taken_links", return_value=[]):
+            with self.app.test_client() as client:
+                before = client.get("/api/run/revision").get_json()
+        with patch("api.services.taken_links.read_taken_links", return_value=[link]):
+            with self.app.test_client() as client:
+                after = client.get("/api/run/revision").get_json()
+
+        self.assertNotEqual(before["revision"], after["revision"])
+        self.assertTrue(after["revision"].endswith("1@2026-01-02T00:00:00+00:00"), after["revision"])
 
     def test_strategy_evidence_route_reports_missing_evidence(self):
         with patch(

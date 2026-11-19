@@ -42,6 +42,7 @@ from core.utils import safe_float
 COVERAGE_LAG_DAYS = 4
 
 GAP_UNDATED_CAPITAL_MOVEMENT = "undated_capital_movement"
+GAP_UNPARSEABLE_CAPITAL_MOVEMENT = "unparseable_capital_movement_amount"
 GAP_UNSUPPORTED_CURRENCY = "unsupported_currency"
 GAP_COVERAGE_INCOMPLETE = "cash_flow_coverage_incomplete"
 GAP_NONPOSITIVE_CAPITAL_BASE = "nonpositive_capital_base"
@@ -118,6 +119,9 @@ def _capital_movements(cash_flows) -> tuple[list[dict], list[str]]:
             continue
         amount = safe_float(row.get("amount"), None)
         if amount is None:
+            # A movement we cannot value makes the window unmeasurable: dropping
+            # it silently would let the flow reappear as performance.
+            gaps.append(GAP_UNPARSEABLE_CAPITAL_MOVEMENT)
             continue
         movement = {
             "day": _parse_day(row.get("clearing_date")),
@@ -151,11 +155,21 @@ def _window(points: list[dict]) -> dict:
 def _chained_dietz(points: list[dict], movements: list[dict]) -> tuple[float | None, list[str]]:
     """Chain per-interval Modified-Dietz returns; None when any interval is unusable."""
     multiple = 1.0
-    for start, end in zip(points, points[1:]):
+    for index, (start, end) in enumerate(zip(points, points[1:])):
         total_days = float((end["day"] - start["day"]).days)
         if total_days <= 0:
             continue
-        flows = [m for m in movements if m["day"] is not None and start["day"] < m["day"] <= end["day"]]
+        # A movement dated on the window's FIRST observation day is inside the
+        # first interval: the start NAV cannot have included it without the
+        # start value already showing it, so counting it as return would be the
+        # deposit-as-growth bug. A movement on an interior boundary day belongs
+        # to the interval that ends there (weight 0), never to both.
+        flows = [
+            m
+            for m in movements
+            if m["day"] is not None
+            and ((index == 0 and m["day"] == start["day"]) or start["day"] < m["day"] <= end["day"])
+        ]
         net_flow = sum(m["amount"] for m in flows)
         weighted = 0.0
         for movement in flows:
@@ -226,8 +240,10 @@ def flow_adjusted_growth(nav_points, cash_flows=(), coverage=None, currency: str
     base["window"] = window
     base["balance_change"] = _balance_block(points)
 
-    in_window = [m for m in movements if m["day"] is not None and points[0]["day"] < m["day"] <= points[-1]["day"]]
-    if any(m["currency"] and m["currency"] != currency for m in movements):
+    in_window = [m for m in movements if m["day"] is not None and points[0]["day"] <= m["day"] <= points[-1]["day"]]
+    # An empty currency is unknown, not assumed: it cannot be shown to be the
+    # measured currency, so the window is not measurable.
+    if any(m["currency"] != currency for m in movements):
         unique_gaps.append(GAP_UNSUPPORTED_CURRENCY)
     verified = coverage_spans(coverage, points[0]["day"], points[-1]["day"])
     base["coverage"]["verified"] = verified

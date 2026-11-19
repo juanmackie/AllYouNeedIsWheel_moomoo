@@ -120,7 +120,9 @@ async function tick() {
     }
     if (!running) { inFlight = false; return; }
     if (!revision || typeof revision.revision !== 'string') {
-        // Keep retained results, visibly warn, and retry on the next tick.
+        // Keep retained results, visibly warn, and retry on the next tick. A
+        // persistent failure must NOT count as "confirmed idle": without a token
+        // we cannot prove there is nothing to watch, so the retry continues.
         inFlight = false;
         renderRunCommunicationError();
         scheduleNext();

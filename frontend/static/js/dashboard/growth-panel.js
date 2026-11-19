@@ -281,7 +281,8 @@ function renderEquityCurve(container, series) {
 const INVESTMENT_GAP_TEXT = {
     cash_flow_coverage_incomplete: 'Cash-flow history does not yet cover this window, so deposits cannot be separated from returns.',
     undated_capital_movement: 'A deposit or withdrawal has no date, so the window cannot be measured.',
-    unsupported_currency: 'A cash flow in another currency cannot be combined with a USD account value.',
+    unparseable_capital_movement_amount: 'A deposit or withdrawal has no readable amount, so the window cannot be measured.',
+    unsupported_currency: 'A cash flow in another or unknown currency cannot be combined with a USD account value.',
     nonpositive_capital_base: 'The capital base was not positive after a flow, so a return is undefined.',
     fewer_than_two_nav_observations: 'At least two NAV observations are needed.',
 };

@@ -10,6 +10,7 @@ from core.growth_accounting import (
     GAP_COVERAGE_INCOMPLETE,
     GAP_TOO_FEW_OBSERVATIONS,
     GAP_UNDATED_CAPITAL_MOVEMENT,
+    GAP_UNPARSEABLE_CAPITAL_MOVEMENT,
     GAP_UNSUPPORTED_CURRENCY,
     coverage_spans,
     flow_adjusted_growth,
@@ -158,6 +159,50 @@ class TestFlowAdjustedGrowth(unittest.TestCase):
         since = result["since_last_capital_movement"]
         self.assertEqual(since["verified"], True)
         self.assertAlmostEqual(since["change_pct"], 1.0, places=2)
+
+    def test_deposit_dated_on_the_first_observation_day_is_not_growth(self):
+        """A flow dated on the window's first NAV day cannot be return.
+
+        The start NAV cannot have included it without already showing it, so the
+        first interval must subtract it (weight 1.0). Excluding it would turn a
+        deposit into the exact fabricated 5x this contract forbids.
+        """
+        points = [point(10_000, "2026-01-01T15:00:00+00:00"), point(50_000, "2026-01-03T15:00:00+00:00")]
+        result = flow_adjusted_growth(points, [flow(40_000, "2026-01-01")], COVERED)
+        self.assertEqual(result["status"], "measured")
+        self.assertAlmostEqual(result["investment_multiple"], 1.0, places=6)
+        self.assertEqual(result["contributed"]["net"], 40_000.0)
+        self.assertEqual(result["unexplained_change"], 0.0)
+
+    def test_interior_boundary_flow_is_counted_in_exactly_one_interval(self):
+        # $10k deposit dated on the middle observation day: interval 1 subtracts
+        # it at weight 0, interval 2 must not subtract it again.
+        points = [
+            point(10_000, "2026-01-01T15:00:00+00:00"),
+            point(20_000, "2026-01-11T15:00:00+00:00"),
+            point(22_000, "2026-01-21T15:00:00+00:00"),
+        ]
+        result = flow_adjusted_growth(points, [flow(10_000, "2026-01-11")], COVERED)
+        self.assertEqual(result["status"], "measured")
+        self.assertAlmostEqual(result["investment_multiple"], 1.1, places=6)
+        self.assertEqual(result["contributed"]["net"], 10_000.0)
+
+    def test_unparseable_capital_movement_blocks_measurement(self):
+        points = [point(10_000, "2026-01-01T15:00:00+00:00"), point(50_000, "2026-01-03T15:00:00+00:00")]
+        result = flow_adjusted_growth(
+            points,
+            [{"flow_type": "Deposit", "clearing_date": "2026-01-02", "amount": None, "currency": "USD"}],
+            COVERED,
+        )
+        self.assertEqual(result["status"], "unknown")
+        self.assertIn(GAP_UNPARSEABLE_CAPITAL_MOVEMENT, result["gaps"])
+        self.assertIsNone(result["investment_multiple"])
+
+    def test_empty_currency_is_not_assumed_to_be_the_measured_currency(self):
+        points = [point(10_000, "2026-01-01T15:00:00+00:00"), point(12_000, "2026-01-11T15:00:00+00:00")]
+        result = flow_adjusted_growth(points, [flow(2_000, "2026-01-05", currency="")], COVERED)
+        self.assertEqual(result["status"], "unknown")
+        self.assertIn(GAP_UNSUPPORTED_CURRENCY, result["gaps"])
 
 
 if __name__ == "__main__":
